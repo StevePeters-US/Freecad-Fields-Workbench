@@ -1,0 +1,6 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource>
+    <file alias="icons/DirectModeling.svg">icons/DirectModeling.svg</file>
+    <file alias="icons/CreateBox.svg">icons/CreateBox.svg</file>
+</qresource>
+</RCC>
