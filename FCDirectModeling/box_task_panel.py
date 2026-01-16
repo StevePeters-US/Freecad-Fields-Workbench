@@ -1,10 +1,13 @@
 
+import FreeCAD
 from PySide import QtCore, QtGui
 
 class PanelWidget(QtGui.QWidget):
     def __init__(self, panel):
         super(PanelWidget, self).__init__()
         self.panel = panel
+        # Install filter on self to catch keys when the widget itself has focus (e.g. after clear_focus)
+        self.installEventFilter(self)
 
     def eventFilter(self, source, event):
         if event.type() == QtCore.QEvent.KeyPress:
@@ -14,6 +17,11 @@ class PanelWidget(QtGui.QWidget):
             # Check for Esc
             if key == QtCore.Qt.Key_Escape:
                 self.panel.reject()
+                return True
+            
+            # Check for C (Cutter Mode)
+            if text == 'C':
+                self.panel.creator.toggle_cutter_mode()
                 return True
                 
             # Check for X, Y, Z

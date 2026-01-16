@@ -28,9 +28,8 @@ class BoxCreator:
         
         # Material
         self.material = coin.SoMaterial()
-        self.material.diffuseColor.setValue(0.2, 0.6, 0.8) 
-        self.material.transparency.setValue(0.5)
         self.sg.addChild(self.material)
+        self.is_cutter = False
         
         # Coordinates
         self.coords = coin.SoCoordinate3()
@@ -54,6 +53,31 @@ class BoxCreator:
         
         self.view.getSceneGraph().addChild(self.sg)
         
+        # Initial Material Update
+        self.update_material()
+
+    def update_material(self):
+        # Force update by explicitly setting fields
+        # Ideally we shouldn't need to remove/add, but if ghosts appear, 
+        # let's try ensuring the transparency is correctly applied.
+        if self.is_cutter:
+            # Red for Cut
+            self.material.diffuseColor.setValue(1.0, 0.0, 0.0) 
+            self.material.transparency.setValue(0.6)
+        else:
+            # Blue for Create
+            self.material.diffuseColor.setValue(0.2, 0.6, 0.8) 
+            self.material.transparency.setValue(0.5)
+            
+    def toggle_cutter_mode(self):
+         self.is_cutter = not self.is_cutter
+         self.update_material()
+         # Nuclear option: remove and re-add material to force SceneGraph update
+         self.sg.removeChild(self.material)
+         self.sg.insertChild(self.material, 0) # Insert at beginning
+         
+         self.view.redraw()
+
     def terminate(self):
         if self.callback:
             self.view.removeEventCallback("SoEvent", self.callback)
@@ -230,18 +254,27 @@ class BoxCreator:
             
         elif event_type == "SoKeyboardEvent":
             if event_dict["State"] == "DOWN":
-                self.handle_keyboard(event_dict)
+                handled = self.handle_keyboard(event_dict)
+                if handled:
+                    return True
             
         return False
         
     def handle_keyboard(self, event_dict):
-        key = event_dict["Key"]
+        key = str(event_dict["Key"]).upper()
         
         # ESC to cancel
         if key == "ESCAPE":
             QtCore.QTimer.singleShot(0, self.terminate)
             return
             
+        # Toggle Cutter Mode (C)
+        if key == "C":
+             self.is_cutter = not self.is_cutter
+             self.update_material()
+             self.view.redraw()
+             return
+
         # Axis Toggles -> Focus Panel
         target_axis = None
         if key == "X": target_axis = "x"
