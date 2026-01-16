@@ -29,8 +29,20 @@
 import os
 import FreeCAD
 import FreeCADGui
+import DirectModeling
+import FCDirectModeling
 
-ICON_PATH = os.path.join(os.path.dirname(__file__), "DirectModeling", "resources", "icons")
+# Register the icon path at module level
+wb_path = os.path.dirname(FCDirectModeling.__file__)
+# DirectModeling is now just the package. But we moved Resources UP one level from the package 'DirectModeling'?
+# Wait, let's verify where 'Resources' ended up. 
+# I moved 'DirectModeling/resources' to 'Freecad-Direct-Modeling/Resources'.
+# And 'DirectModeling/__init__.py' is in 'Freecad-Direct-Modeling/DirectModeling'.
+# So 'os.path.dirname(DirectModeling.__file__)' is 'Freecad-Direct-Modeling/DirectModeling'.
+# So we need to go up one level.
+root_path = os.path.dirname(os.path.dirname(FCDirectModeling.__file__))
+icon_path = os.path.join(root_path, "Resources", "icons")
+FreeCADGui.addIconPath(icon_path)
 
 class DirectModelingWorkbench(FreeCADGui.Workbench):
     """
@@ -39,15 +51,16 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
 
     MenuText = "Direct Modeling"
     ToolTip = "Direct Modeling workbench"
-    Icon = os.path.join(ICON_PATH, "DirectModeling.svg")
+    Icon = "DirectModeling.svg"
 
     def Initialize(self):
         """
         This function is called during FreeCAD initialization
         """
-        from DirectModeling.commands import command_create_box, command_open_task_panel
+        from commands import command_create_box, command_open_task_panel, command_draw_box
 
         self.list = [
+            "DM_DrawBox",
             "DM_CreateBox",
             "DM_OpenTaskPanel",
         ]

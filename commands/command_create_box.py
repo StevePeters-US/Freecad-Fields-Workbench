@@ -23,39 +23,34 @@
 # *                                                                         *
 # ***************************************************************************
 
-import os
-import sys
+
+"""Create a box"""
+
 import FreeCAD
 import FreeCADGui
-from PySide import QtGui
-from .. import task_panel
 
-path = ""
-if "DirectModeling" in sys.modules:
-    mod = sys.modules["DirectModeling"]
-    if hasattr(mod, "__file__"):
-        path = os.path.dirname(mod.__file__)
-
-ICON_PATH = os.path.join(path, "resources", "icons")
-
-class OpenTaskPanelCommand:
+class CreateBoxCommand:
     """
-    Open the Direct Modeling task panel
+    Create a box in the current document
     """
 
     def GetResources(self):
         return {
-            "Pixmap": os.path.join(ICON_PATH, "OpenTaskPanel.svg"),
-            "MenuText": "Open Task Panel",
-            "ToolTip": "Opens the Direct Modeling task panel",
+            "Pixmap": "CreateBox.svg",
+            "MenuText": "Create Box",
+            "ToolTip": "Creates a box in the current document",
         }
 
     def Activated(self):
-        panel = task_panel.create_task_panel()
-        FreeCADGui.Control.showDialog(panel)
+        doc = FreeCAD.activeDocument()
+        if not doc:
+            doc = FreeCAD.newDocument()
+        
+        doc.addObject("Part::Box", "Box")
+        doc.recompute()
 
     def IsActive(self):
-        return True
+        return FreeCAD.activeDocument() is not None
 
 
-FreeCADGui.addCommand("DM_OpenTaskPanel", OpenTaskPanelCommand())
+FreeCADGui.addCommand("DM_CreateBox", CreateBoxCommand())

@@ -16,7 +16,7 @@ The FreeCAD Mod directory is typically located at:
 
 ## Structure
 
-*   `DirectModeling/`: The main module directory.
+*   `FCDirectModeling/`: The main package directory (renamed from DirectModeling to avoid conflicts).
     *   `Init.py`: Initializes the module.
     *   `InitGUI.py`: Initializes the workbench GUI, menus, and toolbars.
     *   `__init__.py`: Module initializer.
