@@ -1,41 +1,58 @@
 import FreeCAD
 import FreeCADGui
+import Part
 from pivy import coin
 from PySide import QtCore, QtGui
-# box_input_dialog import removed
 
 class BoxCreator:
     def __init__(self):
         self.view = FreeCADGui.ActiveDocument.ActiveView
         self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
-        self.state = 0 # 0: Waiting, 1: Dragging Base, 2: Dragging Height
+        
         self.start_point = None
         self.current_point = None
+        
+        self.state = 0
         self.height = 0.0
         
-        # UI Reference (Side Panel)
-        self.panel = None 
-        
-        # Interactive Inputs
         self.active_axis = None
         self.locked_length = None
         self.locked_width = None
         self.locked_height = None
         
-        # Scenegraph
+        self.panel = None
+
         self.sg = coin.SoSeparator()
-        self.sg.ref() # Reference counting to prevent premature deletion
+        self.sg.ref() 
         
-        # Material
+        # Material (for Tool)
         self.material = coin.SoMaterial()
         self.sg.addChild(self.material)
         self.is_cutter = False
         
-        # Coordinates
+        # Preview Intersection Nodes
+        self.preview_sep = coin.SoSeparator()
+        self.preview_mat = coin.SoMaterial()
+        # Bright Yellow/Orange for cut intersection
+        self.preview_mat.diffuseColor.setValue(1.0, 0.8, 0.0) 
+        self.preview_mat.transparency.setValue(0.2)
+        self.preview_sep.addChild(self.preview_mat)
+        
+        self.preview_coords = coin.SoCoordinate3()
+        self.preview_sep.addChild(self.preview_coords)
+        
+        self.preview_face_set = coin.SoIndexedFaceSet()
+        self.preview_sep.addChild(self.preview_face_set)
+        
+        self.sg.addChild(self.preview_sep)
+        
+
+        
+        # Coordinates (Tool Box)
         self.coords = coin.SoCoordinate3()
         self.sg.addChild(self.coords)
         
-        # Faces
+        # Faces (Tool Box)
         self.face_set = coin.SoIndexedFaceSet()
         self.sg.addChild(self.face_set)
         
@@ -260,6 +277,101 @@ class BoxCreator:
             
         return False
         
+    def preview_cut(self):
+        # Update preview only if cutter mode is active
+        if not self.is_cutter:
+            return
+
+        doc = FreeCAD.activeDocument()
+        if not doc or not self.current_point:
+             return
+
+        # 1. Create Temporary Box Shape
+        p1 = self.start_point
+        p2 = self.current_point
+        
+        min_x = min(p1.x, p2.x)
+        max_x = max(p1.x, p2.x)
+        min_y = min(p1.y, p2.y)
+        max_y = max(p1.y, p2.y)
+        
+        width = max_x - min_x
+        length = max_y - min_y
+        
+        # Avoid zero dimensions for shape creation
+        if width < 0.001: width = 0.001
+        if length < 0.001: length = 0.001
+        
+        raw_height = self.height if abs(self.height) > 0.001 else 1.0
+        
+        # Part.makeBox requires positive dimensions
+        box_h = abs(raw_height)
+        z_offset = 0.0
+        if raw_height < 0:
+            z_offset = raw_height
+            
+        try:
+            # Debug Box Creation
+            # FreeCAD.Console.PrintMessage(f"Preview Box: W={width:.2f}, L={length:.2f}, H={box_h:.2f}, Z={z_offset:.2f}\n")
+            box_shape = Part.makeBox(width, length, box_h)
+            box_shape.translate(FreeCAD.Vector(min_x, min_y, z_offset))
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"Preview Box Creation Failed: {e}\n")
+            return
+        
+        # 2. Find Intersections (Volume to be removed)
+        intersecting_shapes = []
+        for obj in doc.Objects:
+             if hasattr(obj, "Shape") and obj.Shape.isValid() and hasattr(obj, "ViewObject") and obj.ViewObject.Visibility:
+                 try:
+                     # Check BBox first
+                     if not obj.Shape.BoundBox.intersect(box_shape.BoundBox):
+                         continue
+                     
+                     # Check Common
+                     # FreeCAD.Console.PrintMessage(f"Checking intersection with {obj.Name}...\n")
+                     common = obj.Shape.common(box_shape)
+                     if common.Volume > 1e-6:
+                         intersecting_shapes.append(common)
+                 except Exception as e:
+                     # Don't spam console for expected failures on weird shapes, but log once if needed
+                     # FreeCAD.Console.PrintError(f"Preview Check Failed for {obj.Name}: {e}\n")
+                     continue
+
+        if not intersecting_shapes:
+            # Clear preview
+            self.preview_coords.point.setNum(0)
+            self.preview_face_set.coordIndex.setNum(0)
+            return
+            
+        # 3. Fuse intersections for visualization
+        try:
+            visual_shape = intersecting_shapes[0]
+            if len(intersecting_shapes) > 1:
+                for s in intersecting_shapes[1:]:
+                    visual_shape = visual_shape.fuse(s)
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"Preview Fuse Failed: {e}\n")
+            return
+                
+        # 4. Tessellate and Update Node
+        try:
+            # Use simple deflection
+            tess = visual_shape.tessellate(0.5) 
+            verts = tess[0]
+            faces = tess[1]
+            
+            self.preview_coords.point.setValues(0, len(verts), verts)
+            
+            coord_indices = []
+            for f in faces:
+                coord_indices.extend(f)
+                coord_indices.append(-1)
+                
+            self.preview_face_set.coordIndex.setValues(0, len(coord_indices), coord_indices)
+        except Exception as e:
+             FreeCAD.Console.PrintError(f"Preview Tessellation Failed: {e}\n")
+            
     def handle_keyboard(self, event_dict):
         key = str(event_dict["Key"]).upper()
         
@@ -359,6 +471,12 @@ class BoxCreator:
             self.update_geometry()
             self.update_ui()
             
+            if self.is_cutter:
+                self.preview_cut()
+            else:
+                self.preview_coords.point.setNum(0)
+                self.preview_face_set.coordIndex.setNum(0)
+            
         elif self.state == 2:
             # Handle height
             current_screen_y = event_dict["Position"][1]
@@ -372,6 +490,12 @@ class BoxCreator:
             
             self.update_geometry()
             self.update_ui()
+            
+            if self.is_cutter:
+                self.preview_cut()
+            else:
+                self.preview_coords.point.setNum(0)
+                self.preview_face_set.coordIndex.setNum(0)
 
     def finish(self):
         if not self.start_point or (not self.current_point and self.state == 0):
@@ -411,5 +535,47 @@ class BoxCreator:
         box.Placement.Base = FreeCAD.Vector(min_x, min_y, 0)
         
         doc.recompute()
+        
+        # Boolean Cut Logic
+        if self.is_cutter:
+            intersecting_objs = []
+            for obj in doc.Objects:
+                if obj == box:
+                    continue
+                # Simple check: does it have a Shape?
+                if hasattr(obj, "Shape") and obj.Shape.isValid():
+                    try:
+                        # Check collision/intersection
+                        # common volume check is robust
+                        # Ensure box shape is valid?
+                        if not box.Shape.isValid():
+                             continue
+                             
+                        common = box.Shape.common(obj.Shape)
+                        if common.Volume > 1e-5:
+                            intersecting_objs.append(obj)
+                    except Exception as e:
+                        FreeCAD.Console.PrintError(f"Boolean Check Failed for {obj.Name}: {e}\n")
+                        continue
+            
+            if intersecting_objs:
+                for target in intersecting_objs:
+                    try:
+                        name = f"Cut_{target.Name}"
+                        cut = doc.addObject("Part::Cut", name)
+                        cut.Base = target
+                        cut.Tool = box
+                        
+                        # hide original objects
+                        if hasattr(target, "ViewObject") and target.ViewObject:
+                            target.ViewObject.Visibility = False
+                    except Exception as e:
+                        FreeCAD.Console.PrintError(f"Failed to create Cut for {target.Name}: {e}\n")
+                        
+                # Hide the tool (box) if it made cuts
+                if hasattr(box, "ViewObject") and box.ViewObject:
+                     box.ViewObject.Visibility = False
+                     
+                doc.recompute()
         # Defer termination
         QtCore.QTimer.singleShot(0, self.terminate)
