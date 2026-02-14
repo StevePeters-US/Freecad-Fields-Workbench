@@ -20,6 +20,15 @@ class BoxCreator:
         self.locked_width = None
         self.locked_height = None
         
+        self.locked_height = None
+        
+        self.locked_height = None
+        
+        self.manual_mode_override = False
+        
+        self.working_plane = None # FreeCAD.Placement
+        self.snap_face = None # (obj, face_name)
+        
         self.panel = None
 
         self.sg = coin.SoSeparator()
@@ -88,6 +97,7 @@ class BoxCreator:
             
     def toggle_cutter_mode(self):
          self.is_cutter = not self.is_cutter
+         self.manual_mode_override = True
          self.update_material()
          # Nuclear option: remove and re-add material to force SceneGraph update
          self.sg.removeChild(self.material)
@@ -109,8 +119,21 @@ class BoxCreator:
 
     def set_panel(self, panel):
         self.panel = panel
+        
+    def get_face_under_mouse(self, event_dict):
+        pos = event_dict["Position"]
+        # getObjectInfo returns a dict with 'Object', 'Component', etc.
+        # It takes pixel coordinates (x, y)
+        try:
+            info = self.view.getObjectInfo((pos[0], pos[1]))
+        except Exception:
+            return None, None
             
-    def get_mouse_point_on_plane(self, event_dict):
+        if info and "Object" in info and "Component" in info:
+             return info["Object"], info["Component"]
+        return None, None
+
+    def get_mouse_point_on_plane(self, event_dict, plane_placement=None):
         pos = event_dict["Position"]
         
         # Get point on focal plane and view direction
@@ -135,15 +158,20 @@ class BoxCreator:
             ray_dir = point_on_focal_plane - ray_origin
             ray_dir.normalize()
 
-        # Intersect with Z=0 plane (Normal=(0,0,1), Point=(0,0,0))
-        plane_normal = FreeCAD.Vector(0,0,1)
-        plane_point = FreeCAD.Vector(0,0,0)
+        # Plane Definition
+        if plane_placement:
+            plane_normal = plane_placement.Rotation.multVec(FreeCAD.Vector(0,0,1))
+            plane_point = plane_placement.Base
+        else:
+            # Default to Z=0
+            plane_normal = FreeCAD.Vector(0,0,1)
+            plane_point = FreeCAD.Vector(0,0,0)
         
         denom = ray_dir.dot(plane_normal)
         
         if abs(denom) < 1e-6:
-            # Ray is parallel to plane, return focal point projected to Z=0 as fallback
-            return FreeCAD.Vector(point_on_focal_plane.x, point_on_focal_plane.y, 0)
+            # Ray is parallel to plane, return focal point projected to Z=0 or plane base as fallback
+            return plane_point
             
         t = (plane_point - ray_origin).dot(plane_normal) / denom
         return ray_origin + ray_dir * t
@@ -211,12 +239,25 @@ class BoxCreator:
         if self.panel:
              self.panel.update_values(length, width, height)
 
+    def to_local(self, p):
+        if not self.working_plane:
+            return p
+        # inverse matrix
+        mat = self.working_plane.toMatrix()
+        mat.invert()
+        return mat.multVec(p)
+
+    def to_global(self, p):
+        if not self.working_plane:
+            return p
+        return self.working_plane.toMatrix().multVec(p)
+
     def update_geometry(self):
         if not self.start_point or not self.current_point:
             return
             
-        p1 = self.start_point
-        p2 = self.current_point
+        p1 = self.to_local(self.start_point)
+        p2 = self.to_local(self.current_point)
         h = self.height
         
         # Min/Max for geometry creation (doesn't care about direction, just bounds)
@@ -225,11 +266,16 @@ class BoxCreator:
         min_y = min(p1.y, p2.y)
         max_y = max(p1.y, p2.y)
         
-        # 8 Coordinates
-        coords = [
-            [min_x, min_y, 0], [max_x, min_y, 0], [max_x, max_y, 0], [min_x, max_y, 0],
-            [min_x, min_y, h], [max_x, min_y, h], [max_x, max_y, h], [min_x, max_y, h]
+        # 8 Coordinates in LOCAL
+        local_coords = [
+            FreeCAD.Vector(min_x, min_y, 0), FreeCAD.Vector(max_x, min_y, 0), 
+            FreeCAD.Vector(max_x, max_y, 0), FreeCAD.Vector(min_x, max_y, 0),
+            FreeCAD.Vector(min_x, min_y, h), FreeCAD.Vector(max_x, min_y, h), 
+            FreeCAD.Vector(max_x, max_y, h), FreeCAD.Vector(min_x, max_y, h)
         ]
+        
+        # Convert to GLOBAL for Coin3D
+        coords = [[v.x, v.y, v.z] for v in [self.to_global(lp) for lp in local_coords]]
         
         self.coords.point.setValues(0, 8, coords)
         self.line_coords.point.setValues(0, 8, coords)
@@ -287,8 +333,9 @@ class BoxCreator:
              return
 
         # 1. Create Temporary Box Shape
-        p1 = self.start_point
-        p2 = self.current_point
+        # Calculate in Local
+        p1 = self.to_local(self.start_point)
+        p2 = self.to_local(self.current_point)
         
         min_x = min(p1.x, p2.x)
         max_x = max(p1.x, p2.x)
@@ -311,10 +358,19 @@ class BoxCreator:
             z_offset = raw_height
             
         try:
-            # Debug Box Creation
-            # FreeCAD.Console.PrintMessage(f"Preview Box: W={width:.2f}, L={length:.2f}, H={box_h:.2f}, Z={z_offset:.2f}\n")
+            # Create box in local coords
             box_shape = Part.makeBox(width, length, box_h)
-            box_shape.translate(FreeCAD.Vector(min_x, min_y, z_offset))
+            
+            # Apply local translation (offset to min_x, min_y, z_offset)
+            local_pos = FreeCAD.Vector(min_x, min_y, z_offset)
+            box_shape.translate(local_pos)
+            
+            # Apply Working Plane (Global Transform)
+            if self.working_plane:
+                # box_shape is currently 'aligned' to local system.
+                # We need to transform it to global.
+                box_shape.transformShape(self.working_plane.toMatrix())
+                
         except Exception as e:
             FreeCAD.Console.PrintError(f"Preview Box Creation Failed: {e}\n")
             return
@@ -421,7 +477,7 @@ class BoxCreator:
     def handle_click(self, event_dict):
         # If left click, proceed with drawing logic
         
-        pt = self.get_mouse_point_on_plane(event_dict)
+        pt = self.get_mouse_point_on_plane(event_dict, self.working_plane)
         
         if self.state == 0: # Start
             self.start_point = pt
@@ -443,15 +499,38 @@ class BoxCreator:
 
     def handle_move(self, event_dict):
         if self.state == 0:
+            # Detect face under mouse
+            obj, subname = self.get_face_under_mouse(event_dict)
+            if obj and subname and "Face" in subname:
+                try:
+                    face = obj.Shape.getElement(subname)
+                    # Use GeomPlane check via TypeId or isinstance if available. 
+                    # Assuming Part.GeomPlane logic. Safe mostly to check TypeId.
+                    if hasattr(face, "Surface") and "GeomPlane" in face.Surface.TypeId:
+                        self.working_plane = face.Surface.Position
+                        self.snap_face = (obj, subname)
+                        # Optional: Highlight face? existing preselection might be enough.
+                    else:
+                        self.working_plane = None
+                        self.snap_face = None
+                except Exception:
+                    self.working_plane = None
+                    self.snap_face = None
+            else:
+                self.working_plane = None
+                self.snap_face = None
             return
             
         if self.state == 1:
-            raw_pt = self.get_mouse_point_on_plane(event_dict)
-            p1 = self.start_point
+            raw_pt = self.get_mouse_point_on_plane(event_dict, self.working_plane)
             
-            # Raw Signed Deltas from Mouse
-            dx_mouse = raw_pt.x - p1.x
-            dy_mouse = raw_pt.y - p1.y
+            # Work in Local Coords for standard delta logic
+            local_raw_pt = self.to_local(raw_pt)
+            local_p1 = self.to_local(self.start_point)
+            
+            # Raw Signed Deltas from Mouse (Local)
+            dx_mouse = local_raw_pt.x - local_p1.x
+            dy_mouse = local_raw_pt.y - local_p1.y
             
             # Final Deltas (Lock Overrides)
             new_dx = dx_mouse
@@ -463,10 +542,16 @@ class BoxCreator:
             if self.locked_width is not None:
                  new_dy = self.locked_width
             
-            new_x = p1.x + new_dx
-            new_y = p1.y + new_dy
+            if self.locked_width is not None:
+                 new_dy = self.locked_width
             
-            self.current_point = FreeCAD.Vector(new_x, new_y, 0)
+            # Reconstruct (Local)
+            new_local_x = local_p1.x + new_dx
+            new_local_y = local_p1.y + new_dy
+            
+            # Back to Global
+            new_local_pt = FreeCAD.Vector(new_local_x, new_local_y, 0)
+            self.current_point = self.to_global(new_local_pt)
             
             self.update_geometry()
             self.update_ui()
@@ -487,6 +572,20 @@ class BoxCreator:
                 if hasattr(self, 'drag_start_screen_y'):
                     delta = current_screen_y - self.drag_start_screen_y
                     self.height = delta / 2.0 
+            
+            # Auto-Cutter / Fuse Logic
+            # If manual override is OFF, and we have a snap face:
+            # Height < 0 (into face) -> Cut
+            # Height > 0 (out of face) -> Fuse (Create)
+            if not self.manual_mode_override and self.snap_face:
+                if self.height < -1e-4:
+                     if not self.is_cutter:
+                         self.is_cutter = True
+                         self.update_material()
+                else:
+                     if self.is_cutter:
+                         self.is_cutter = False
+                         self.update_material()
             
             self.update_geometry()
             self.update_ui()
@@ -513,8 +612,8 @@ class BoxCreator:
         if not self.current_point:
              self.current_point = self.start_point
              
-        p1 = self.start_point
-        p2 = self.current_point
+        p1 = self.to_local(self.start_point)
+        p2 = self.to_local(self.current_point)
         
         min_x = min(p1.x, p2.x)
         max_x = max(p1.x, p2.x)
@@ -532,9 +631,39 @@ class BoxCreator:
         box.Width = length
         box.Height = self.height if abs(self.height) > 0.001 else 1.0
         
-        box.Placement.Base = FreeCAD.Vector(min_x, min_y, 0)
+        # Placement
+        # Base in Local
+        local_base = FreeCAD.Vector(min_x, min_y, 0)
+        
+        # Final Placement
+        if self.working_plane:
+             local_placement = FreeCAD.Placement(local_base, FreeCAD.Rotation())
+             # Correct: Global = Plane * Local
+             final_placement = self.working_plane.multiply(local_placement)
+             box.Placement = final_placement
+        else:
+             box.Placement.Base = local_base
         
         doc.recompute()
+        
+        # Auto Fuse Logic
+        if not self.is_cutter and self.snap_face:
+             # Fuse box with base object
+             base_obj = self.snap_face[0]
+             if base_obj:
+                 try:
+                     fused_name = f"Result"
+                     fuse = doc.addObject("Part::MultiFuse", fused_name)
+                     fuse.Shapes = [base_obj, box]
+                     
+                     if hasattr(base_obj, "ViewObject") and base_obj.ViewObject:
+                        base_obj.ViewObject.Visibility = False
+                     if hasattr(box, "ViewObject") and box.ViewObject:
+                        box.ViewObject.Visibility = False
+                        
+                     doc.recompute()
+                 except Exception as e:
+                     FreeCAD.Console.PrintError(f"Auto-Fuse Failed: {e}\n")
         
         # Boolean Cut Logic
         if self.is_cutter:
