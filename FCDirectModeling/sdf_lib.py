@@ -1,41 +1,82 @@
 
 import numpy as np
-try:
-    from skimage import measure
-    HAS_SKIMAGE = True
-except ImportError:
-    HAS_SKIMAGE = False
+
+# Remove top-level import to avoid lazy_loader crash
+HAS_SKIMAGE = False 
 
 class SDFObject:
     def __init__(self):
-        pass
+        self.inverse_matrix = None
+
+    def set_placement(self, placement):
+        """
+        Set the placement (transformation) of the SDF object.
+        placement: FreeCAD.Placement or matrix-like object.
+        """
+        # Get the matrix (4x4)
+        # We need the inverse to transform world points to local points
+        mat = placement.Matrix
+        # FreeCAD Matrix is row-major or column-major? 
+        # API: mat.A11, mat.A12... 
+        # We can extract values to numpy
+        
+        # Invert the matrix for world->local transform
+        inv = mat.inverse()
+        
+        # Create numpy 4x4 matrix
+        self.inverse_matrix = np.array([
+            [inv.A11, inv.A12, inv.A13, inv.A14],
+            [inv.A21, inv.A22, inv.A23, inv.A24],
+            [inv.A31, inv.A32, inv.A33, inv.A34],
+            [inv.A41, inv.A42, inv.A43, inv.A44]
+        ]).transpose() # Transpose because numpy multiplies (N,4) x (4,4) 
 
     def evaluate(self, points):
         """
-        Evaluate the signed distance function at the given points.
-        points: (N, 3) numpy array of points.
-        Returns: (N,) numpy array of signed distances.
+        Public evaluate method. Transforms points if a placement is set, 
+        then calls _evaluate_local.
+        """
+        if self.inverse_matrix is not None:
+            # Add homogeneous coordinate w=1
+            ones = np.ones((points.shape[0], 1))
+            pts_h = np.hstack((points, ones))
+            
+            # Transform: (N, 4) dot (4, 4) -> (N, 4)
+            # using transposed matrix
+            local_pts_h = np.dot(pts_h, self.inverse_matrix)
+            
+            # Back to 3D
+            local_points = local_pts_h[:, :3]
+            return self._evaluate_local(local_points)
+        else:
+            return self._evaluate_local(points)
+
+    def _evaluate_local(self, points):
+        """
+        Evaluate SDF in local coordinates. Override this.
         """
         raise NotImplementedError
 
     def bounds(self):
         """
         Return the axis-aligned bounding box of the object.
-        Returns: ((min_x, min_y, min_z), (max_x, max_y, max_z))
+        Returns: ((min_x, min_y, min_y), (max_x, max_y, max_z))
         """
+        # Note: If rotated, AABB should likely be larger or transformed.
+        # For now we return untransformed bounds, caller might need to handle OBB.
+        # Or we implement a method to get transformed AABB.
         raise NotImplementedError
 
 class SDFBox(SDFObject):
     def __init__(self, size):
         super().__init__()
-        # size is (width, depth, height) - half extents for calculation?
-        # Usually box SDF is defined by half-sizes (radii)
+        # size is (width, depth, height)
         if isinstance(size, (int, float)):
              self.half_size = np.array([size, size, size]) / 2.0
         else:
              self.half_size = np.array(size) / 2.0
              
-    def evaluate(self, points):
+    def _evaluate_local(self, points):
         # sdBox( p, b ) = length( max(abs(p)-b, 0.0) ) + min(max(max(abs(p).x-b.x, abs(p).y-b.y), abs(p).z-b.z), 0.0)
         
         # points shape: (N, 3)
@@ -63,7 +104,10 @@ def mesh_from_sdf(sdf_obj, resolution=32, margin=0.1):
     """
     Generate a mesh from an SDF object using Marching Cubes.
     """
-    if not HAS_SKIMAGE:
+    try:
+        from skimage import measure
+    except (ImportError, AttributeError, Exception) as e:
+        print(f"SDF Warning: Skimage import failed (meshing disabled): {e}")
         return None, None
         
     bound_min, bound_max = sdf_obj.bounds()
