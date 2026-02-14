@@ -1,95 +1,97 @@
-import sys
-import os
-import datetime
-import traceback
-import FreeCAD
-import FreeCADGui
-
-# --- DEBUG LOGGING SETUP ---
-LOG_FILE = "/tmp/dm_debug.log"
-
-def log(msg):
-    try:
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        with open(LOG_FILE, "a") as f:
-            f.write(f"[{timestamp}] {msg}\n")
-    except:
-        print(f"DM LOG FAIL: {msg}")
-
-log("----------------------------------------------------------------")
-log("InitGUI.py execution started")
+# DirectModeling/InitGui.py
 
 try:
-    # --- PATH FIX ---
-    # Explicitly add the current directory to sys.path to ensure local imports work
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    if current_dir not in sys.path:
-        sys.path.append(current_dir)
-        log(f"Added {current_dir} to sys.path")
-    else:
-        log(f"{current_dir} already in sys.path")
+    import shapely
+except ImportError:
+    from PySide.QtGui import QMessageBox
+    from PySide import QtCore
 
-    # --- IMPORTS ---
-    log("Attempting to import FCDirectModeling...")
-    import FCDirectModeling
-    log("FCDirectModeling imported successfully")
+    title = "Direct Modeling Workbench - Missing Dependency"
+    message = """
+<p>The 'shapely' library is not installed.</p>
+<p>This is a required dependency for the Direct Modeling Workbench to function correctly.</p>
+<p><b>Instructions:</b></p>
+<ol>
+<li>Open a terminal (Command Prompt on Windows).</li>
+<li>Navigate to the 'bin' directory of your FreeCAD installation (C:\\Program Files\\FreeCAD 1.0\\bin).</li>
+<li>If 'pip' is not available, first run: <code>python -m ensurepip</code></li>
+<li>Install shapely by running: <code>python -m pip install shapely</code></li>
+</ol>
+<p>Please restart FreeCAD after the installation is complete.</p>
+"""
+    msgBox = QMessageBox()
+    msgBox.setWindowTitle(title)
+    msgBox.setTextFormat(QtCore.Qt.RichText)
+    msgBox.setText(message)
+    msgBox.setStandardButtons(QMessageBox.Ok)
+    msgBox.exec_()
 
-    # Register the icon path
-    wb_path = os.path.dirname(os.path.dirname(FCDirectModeling.__file__))
-    icon_path = os.path.join(wb_path, 'Resources', 'icons')
-    log(f"Icon path calculated: {icon_path}")
-    
-    if os.path.exists(icon_path):
-        FreeCADGui.addIconPath(icon_path)
-    else:
-        log(f"ERROR: Icon path does not exist: {icon_path}")
 
-    class DirectModelingWorkbench(FreeCADGui.Workbench):
-        """
-        Defines the Direct Modeling Workbench.
-        """
-        MenuText = "Direct Modeling"
-        ToolTip = "Direct Modeling workbench"
-        Icon = "DirectModeling.svg"
+import FreeCAD
+import FreeCADGui
+import os
+import sys
+import inspect
+import FCDirectModeling
 
-        def GetClassName(self):
-            return "Gui::PythonWorkbench"
-
-        def Initialize(self):
-            log("Initialize() called")
-            try:
-                from dm_commands import command_create_box
-                from dm_commands import command_open_task_panel
-                from dm_commands import command_draw_box
-                log("Commands imported")
-                
-                self.appendToolbar("Direct Modeling", [
-                    'DM_DrawBox',
-                    'DM_CreateBox',
-                    'DM_OpenTaskPanel',
-                ])
-                self.appendMenu("Direct Modeling", [
-                    'DM_DrawBox',
-                    'DM_CreateBox',
-                    'DM_OpenTaskPanel',
-                ])
-                log("Menu/Toolbar appended")
-            except Exception as e:
-                log(f"ERROR in Initialize: {e}\n{traceback.format_exc()}")
-                FreeCAD.Console.Error(f"Direct Modeling Init Error: {e}\n")
-
-        def Activated(self):
-            log("Activated() called")
-            return
-
-        def Deactivated(self):
-            log("Deactivated() called")
-            return
-
-    # Add the workbench
-    FreeCADGui.addWorkbench(DirectModelingWorkbench())
-    log("Workbench registered")
-
+# Ensure local imports work by adding the workbench directory to sys.path
+# This is often needed if FreeCAD doesn't add it automatically
+try:
+    # Use inspect to get the file path since __file__ might not be defined
+    wb_root = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
+    if wb_root not in sys.path:
+        sys.path.append(wb_root)
 except Exception as e:
-    log(f"CRITICAL ERROR in InitGUI.py: {e}\n{traceback.format_exc()}")
-    FreeCAD.Console.Error(f"Direct Modeling Critical Error: {e}\n")
+    FreeCAD.Console.Error("DirectModeling: Error setting up sys.path: " + str(e) + "\n")
+
+# Register the icon path at module level so it's available immediately
+# Use FCDirectModeling module location to reliably find the workbench root
+wb_path = os.path.dirname(os.path.dirname(FCDirectModeling.__file__))
+icon_path = os.path.join(wb_path, 'Resources', 'icons')
+FreeCADGui.addIconPath(icon_path)
+
+class DirectModelingWorkbench(FreeCADGui.Workbench):
+    """
+    Defines the Direct Modeling Workbench.
+    """
+    MenuText = "Direct Modeling"
+    ToolTip = "Direct Modeling workbench"
+    Icon = "DirectModeling.svg"
+
+    def GetClassName(self):
+        return "Gui::PythonWorkbench"
+
+    def Initialize(self):
+        """This function is executed when the workbench is activated."""
+        # Import the command modules. This executes the FreeCADGui.addCommand()
+        # in each file, making the commands available to FreeCAD.
+        try:
+            from dm_commands import command_create_box
+            from dm_commands import command_open_task_panel
+            from dm_commands import command_draw_box
+            
+            self.appendToolbar("Direct Modeling", [
+                'DM_DrawBox',
+                'DM_CreateBox',
+                'DM_OpenTaskPanel',
+            ])
+            self.appendMenu("Direct Modeling", [
+                'DM_DrawBox',
+                'DM_CreateBox',
+                'DM_OpenTaskPanel',
+            ])
+        except Exception as e:
+            FreeCAD.Console.Error(f"Error importing Direct Modeling commands: {e}\n")
+            import traceback
+            traceback.print_exc()
+
+    def Activated(self):
+        """This function is executed when the workbench is activated."""
+        return
+
+    def Deactivated(self):
+        """This function is executed when the workbench is deactivated."""
+        return
+
+# Add the workbench to FreeCAD's list of available workbenches
+FreeCADGui.addWorkbench(DirectModelingWorkbench())
