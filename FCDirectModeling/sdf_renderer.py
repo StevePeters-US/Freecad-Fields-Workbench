@@ -16,6 +16,74 @@ if wb_path not in sys.path:
 
 from FCDirectModeling import sdf_lib
 
+def create_sdf_from_obj(obj):
+    """
+    Factory to create an sdf_lib.SDFObject from a FreeCAD FeaturePython object.
+    Handles Boxes and Booleans recursively.
+    """
+    if not obj:
+        return None
+
+    # Helper to safe-get values
+    def get_val(obj, name, default=None):
+        if hasattr(obj, name):
+            val = getattr(obj, name)
+            if hasattr(val, "Value"): return val.Value # Base.Quantity
+            try: return float(val) 
+            except: return default
+        return default
+
+    sdf = None
+    
+    # 1. Boolean Operations
+    if hasattr(obj, "Operation") and hasattr(obj, "Base") and hasattr(obj, "Tool"):
+        base = obj.Base
+        tool = obj.Tool
+        op = getattr(obj, "Operation", "Union") # Enum property usually string
+        
+        # FreeCAD Link property returns None if empty, or the object
+        if base and tool:
+            sdf_base = create_sdf_from_obj(base)
+            sdf_tool = create_sdf_from_obj(tool)
+            
+            if sdf_base and sdf_tool:
+                if op == "Union":
+                    sdf = sdf_lib.SDFUnion(sdf_base, sdf_tool)
+                elif op == "Difference":
+                    sdf = sdf_lib.SDFDifference(sdf_base, sdf_tool)
+                elif op == "Intersection":
+                    sdf = sdf_lib.SDFIntersection(sdf_base, sdf_tool)
+    
+    # 2. Box Primitive (Fallback)
+    elif hasattr(obj, "Length") and hasattr(obj, "Width") and hasattr(obj, "Height"):
+        l = get_val(obj, "Length", 10.0)
+        w = get_val(obj, "Width", 10.0)
+        h = get_val(obj, "Height", 10.0)
+        
+        sdf = sdf_lib.SDFBox(size=(l, w, h))
+        
+        # Center Offset Logic
+        # Box is defined 0..L, SDF is -L/2..L/2
+        # Apply offset to placement
+        import FreeCAD
+        offset = FreeCAD.Placement(FreeCAD.Vector(l/2.0, w/2.0, h/2.0), FreeCAD.Rotation())
+        
+        # We need to apply this offset as a 'child' transform of the object placement
+        # But SDFObject only has one matrix.
+        # We must multiply them.
+        # Total = Obj.Placement * Offset
+        
+        total_p = obj.Placement.multiply(offset)
+        sdf.set_placement(total_p)
+        return sdf # Return early because we handled placement
+
+    # Default return
+    if sdf and hasattr(obj, "Placement"):
+        sdf.set_placement(obj.Placement)
+        
+    return sdf
+
+
 class SDFRenderer:
     def __init__(self, vobj):
         vobj.Proxy = self
@@ -130,22 +198,22 @@ class SDFRenderer:
                     return default
             return default
 
-        l = get_val("Length", 10.0)
-        w = get_val("Width", 10.0)
-        h = get_val("Height", 10.0)
-        res = getattr(self.sobj, "Resolution", 32) # Usually int
-        margin = get_val("Margin", 0.1)
-        
         # Create SDF Object
-        sdf = sdf_lib.SDFBox(size=(l, w, h))
+        sdf = create_sdf_from_obj(self.sobj)
+        if not sdf:
+             # If creation failed, clear everything
+             self.coords.point.setNum(0)
+             self.face_set.coordIndex.setNum(0)
+             self.box_coords.point.setNum(0)
+             self.box_lines.coordIndex.setNum(0)
+             self.box_points.numPoints.setValue(0)
+             return
         
-        # Center the SDF Box to match FreeCAD Part::Box (which is corner-based)
-        # Part::Box is 0..L, SDFBox is -L/2..L/2
-        # We need to move SDFBox by L/2, W/2, H/2
-        import FreeCAD
-        m = FreeCAD.Matrix()
-        m.move(FreeCAD.Vector(l/2.0, w/2.0, h/2.0))
-        sdf.set_placement(FreeCAD.Placement(m))
+        # Note: Placement is already handled inside create_sdf_from_obj
+
+        # Get Parameters for Mesh Generation
+        res = getattr(self.sobj, "Resolution", 32)
+        margin = get_val("Margin", 0.1)
         
         # Generate Mesh
         # This can be slow! For interactive dragging we might want lower res
@@ -185,59 +253,53 @@ class SDFRenderer:
                 else:
                     self.norms.vector.setNum(0)
                 
-                # Faces
+                # Indices
                 n_faces = faces.shape[0]
                 indices = np.full((n_faces, 4), -1, dtype=np.int32)
                 indices[:, :3] = faces
                 self.face_set.coordIndex.setValues(0, indices.size, indices.flatten().tolist())
             
-            # Update Wireframe Box
-            # Box is 0..L, 0..W, 0..H (Standard FreeCAD convention)
-            # The SDF object center was moved to L/2, W/2, H/2 to align with this.
-            # So the visual representation should be a box from 0,0,0 to L,W,H
-            
-            # Wait, our mesh vertices (real_verts) are already in World Coordinates relative to the object placement.
-            # 'real_verts' from mesh_from_sdf matches the grid which matches SDFBox (which is -L/2..L/2).
-            # But we applied a placement to the SDFBox in `update` to move it by +L/2.
-            # The `mesh_from_sdf` logic applies `sdf.set_placement`.
-            # BUT `mesh_from_sdf` returns vertices *transformed by that placement*?
-            # Let's check mesh_from_sdf... 
-            # It uses `grid_min` which comes from `bound_min`. `bound_min` comes from `sdf.bounds()`.
-            # `sdf.bounds()` applies the matrix.
-            # So `real_verts` are already shifted to 0..L.
-            
-            # So we just need to draw a box 0..L, 0..W, 0..H.
-            
-            b_coords = [
-                [0,0,0], [l,0,0], [l,w,0], [0,w,0],
-                [0,0,h], [l,0,h], [l,w,h], [0,w,h]
-            ]
-            self.box_coords.point.setValues(0, 8, b_coords)
-            
-            b_lines = [
-                0,1,2,3,0,-1, # Base
-                4,5,6,7,4,-1, # Top
-                0,4,-1, 1,5,-1, 2,6,-1, 3,7,-1 # Sides
-            ]
-            self.box_lines.coordIndex.setValues(0, len(b_lines), b_lines)
-            
-            # Wireframe Style & Points
-            wf_color = getattr(self.sobj, "WireframeColor", (1.0, 1.0, 0.0))
-            if hasattr(wf_color, "__len__") and len(wf_color) > 3:
-                wf_color = wf_color[:3]
+            # Update Wireframe Box (Only for Box type)
+            if hasattr(self.sobj, "Length") and hasattr(self.sobj, "Width") and hasattr(self.sobj, "Height"):
+                l = get_val("Length", 10.0)
+                w = get_val("Width", 10.0)
+                h = get_val("Height", 10.0)
                 
-            wf_width = getattr(self.sobj, "WireframeWidth", 2.0)
-            show_verts = getattr(self.sobj, "ShowVertices", True)
-            vert_size = getattr(self.sobj, "VertexSize", 5.0)
-            
-            self.box_mat.diffuseColor.setValue(wf_color)
-            self.box_style.lineWidth.setValue(wf_width)
-            self.box_style.pointSize.setValue(vert_size)
-            
-            if show_verts:
-                self.box_points.startIndex.setValue(0)
-                self.box_points.numPoints.setValue(8)
+                b_coords = [
+                    [0,0,0], [l,0,0], [l,w,0], [0,w,0],
+                    [0,0,h], [l,0,h], [l,w,h], [0,w,h]
+                ]
+                self.box_coords.point.setValues(0, 8, b_coords)
+                
+                b_lines = [
+                    0,1,2,3,0,-1, # Base
+                    4,5,6,7,4,-1, # Top
+                    0,4,-1, 1,5,-1, 2,6,-1, 3,7,-1 # Sides
+                ]
+                self.box_lines.coordIndex.setValues(0, len(b_lines), b_lines)
+                
+                # Wireframe Style & Points
+                wf_color = getattr(self.sobj, "WireframeColor", (1.0, 1.0, 0.0))
+                if hasattr(wf_color, "__len__") and len(wf_color) > 3:
+                     wf_color = wf_color[:3]
+                    
+                wf_width = getattr(self.sobj, "WireframeWidth", 2.0)
+                show_verts = getattr(self.sobj, "ShowVertices", True)
+                vert_size = getattr(self.sobj, "VertexSize", 5.0)
+                
+                self.box_mat.diffuseColor.setValue(wf_color)
+                self.box_style.lineWidth.setValue(wf_width)
+                self.box_style.pointSize.setValue(vert_size)
+                
+                if show_verts:
+                    self.box_points.startIndex.setValue(0)
+                    self.box_points.numPoints.setValue(8)
+                else:
+                    self.box_points.numPoints.setValue(0)
             else:
+                # Hide box for non-box objects (e.g. Booleans)
+                self.box_coords.point.setNum(0)
+                self.box_lines.coordIndex.setNum(0)
                 self.box_points.numPoints.setValue(0)
                 
             # Removed SDF Slices mode as per user request
@@ -264,3 +326,17 @@ class SDFBoxFeature:
     def onDocumentRestored(self, obj):
         # Re-initialize anything if needed
         pass
+
+class SDFBooleanFeature:
+    def __init__(self, obj):
+        obj.Proxy = self
+        self.obj = obj
+        
+    def execute(self, obj):
+        # Trigger recompute of dependent objects if needed
+        # Visuals are handled by ViewProvider (SDFRenderer)
+        pass
+
+    def onDocumentRestored(self, obj):
+        pass
+

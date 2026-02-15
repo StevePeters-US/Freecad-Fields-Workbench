@@ -308,3 +308,47 @@ def contours_from_sdf(sdf_obj, resolution=32, margin=0.1, axis='z', slices=5):
             
     return lines
 
+
+class SDFOperation(SDFObject):
+    def __init__(self, sdf_a, sdf_b):
+        super().__init__()
+        self.sdf_a = sdf_a
+        self.sdf_b = sdf_b
+        
+    def _evaluate_local(self, points):
+        d1 = self.sdf_a.evaluate(points)
+        d2 = self.sdf_b.evaluate(points)
+        return self._combine(d1, d2)
+
+    def _combine(self, d1, d2):
+        raise NotImplementedError
+        
+    def _bounds_local(self):
+        raise NotImplementedError
+
+class SDFUnion(SDFOperation):
+    def _combine(self, d1, d2):
+        return np.minimum(d1, d2)
+        
+    def _bounds_local(self):
+        min_a, max_a = self.sdf_a.bounds()
+        min_b, max_b = self.sdf_b.bounds()
+        return np.minimum(min_a, min_b), np.maximum(max_a, max_b)
+
+class SDFDifference(SDFOperation):
+    def _combine(self, d1, d2):
+        return np.maximum(d1, -d2)
+        
+    def _bounds_local(self):
+        # Difference bounds is at most A logic (conservative)
+        return self.sdf_a.bounds()
+
+class SDFIntersection(SDFOperation):
+    def _combine(self, d1, d2):
+        return np.maximum(d1, d2)
+        
+    def _bounds_local(self):
+        min_a, max_a = self.sdf_a.bounds()
+        min_b, max_b = self.sdf_b.bounds()
+        return np.maximum(min_a, min_b), np.minimum(max_a, max_b)
+
