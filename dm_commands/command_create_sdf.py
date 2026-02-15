@@ -32,6 +32,13 @@ class CreateSDFCommand:
         obj.addProperty("App::PropertyInteger", "Resolution", "SDF", "Grid resolution").Resolution = 32
         obj.addProperty("App::PropertyFloat", "Margin", "SDF", "Grid margin").Margin = 0.2
         
+        # Slicing Properties
+        obj.addProperty("App::PropertyEnumeration", "SliceAxis", "SDF", "Axis to slice along")
+        obj.SliceAxis = ["X", "Y", "Z"]
+        obj.SliceAxis = "Z"
+        
+        obj.addProperty("App::PropertyInteger", "SliceCount", "SDF", "Number of slices").SliceCount = 10
+        
         # Attach ViewProvider
         if FreeCAD.GuiUp:
             sdf_renderer.SDFRenderer(obj.ViewObject)

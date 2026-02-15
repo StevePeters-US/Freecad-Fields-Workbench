@@ -10,7 +10,7 @@ class ConvertToSDFCommand:
 
     def GetResources(self):
         return {
-            "Pixmap": "Part_Box", # Use standard Part Box icon for now or similar
+            "Pixmap": "CreateBox.svg", # Use standard Part Box icon for now or similar
             "MenuText": "Convert to SDF",
             "ToolTip": "Converts selected Part object to a Signed Distance Field",
         }
