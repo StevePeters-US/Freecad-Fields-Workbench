@@ -336,7 +336,7 @@ class BoxCreator:
                 # Dimensions must be positive for SDF
                 w = max(0.001, width)
                 l = max(0.001, length)
-                h = max(0.001, abs(height))
+                h = max(0.001, abs(h))
                 
                 # Create SDF (Centering is handled by SDFBox usually being centered at 0,0,0)
                 # We need to map the mesh from that centered space to our box position.
@@ -349,7 +349,7 @@ class BoxCreator:
                 sdf = sdf_lib.SDFBox(size=(w, l, h))
                 
                 # Generate mesh (Low Res for speed)
-                verts, faces, normals = sdf.generate_mesh(resolution=16, margin=0.1)
+                verts, faces, normals = sdf_lib.mesh_from_sdf(sdf, resolution=16, margin=0.1)
                 
                 if verts is not None and len(verts) > 0:
                     # Translate vertices to correct position
