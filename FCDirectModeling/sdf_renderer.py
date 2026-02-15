@@ -56,7 +56,32 @@ class SDFRenderer:
         self.root.addChild(self.face_set)
         
         vobj.addDisplayMode(self.root, "SDF Mesh")
+        vobj.addDisplayMode(self.root, "SDF Mesh")
         vobj.addDisplayMode(self.root, "SDF Slices")
+        
+        # Wireframe Box (Always visible or separate mode? For now always visible semi-transparent or overlay)
+        # Actually, let's make it part of the root group so it overlays
+        self.box_sep = coin.SoSeparator()
+        self.root.addChild(self.box_sep)
+        
+        self.box_mat = coin.SoMaterial()
+        self.box_mat.diffuseColor.setValue(1.0, 1.0, 0.0) # Yellow
+        self.box_mat.transparency.setValue(0.5)
+        self.box_sep.addChild(self.box_mat)
+        
+        self.box_style = coin.SoDrawStyle()
+        self.box_style.lineWidth = 2.0
+        self.box_style.pointSize = 5.0
+        self.box_sep.addChild(self.box_style)
+        
+        self.box_coords = coin.SoCoordinate3()
+        self.box_sep.addChild(self.box_coords)
+        
+        self.box_lines = coin.SoIndexedLineSet()
+        self.box_sep.addChild(self.box_lines)
+        
+        self.box_points = coin.SoPointSet()
+        self.box_sep.addChild(self.box_points)
         
         # Slices
         self.slice_sep = coin.SoSeparator()
@@ -76,11 +101,12 @@ class SDFRenderer:
         self.update()
 
     def updateData(self, fp, prop):
-        if prop in ["Length", "Width", "Height", "Resolution", "Margin", "SliceAxis", "SliceCount"]:
+        if prop in ["Length", "Width", "Height", "Resolution", "Margin", "SliceAxis", 
+                    "WireframeColor", "WireframeWidth", "ShowVertices", "VertexSize"]:
             self.update()
 
     def getDisplayModes(self, vobj):
-        return ["SDF Mesh", "SDF Slices"]
+        return ["SDF Mesh"]
 
     def getDefaultDisplayMode(self):
         return "SDF Mesh"
@@ -164,41 +190,57 @@ class SDFRenderer:
                 indices = np.full((n_faces, 4), -1, dtype=np.int32)
                 indices[:, :3] = faces
                 self.face_set.coordIndex.setValues(0, indices.size, indices.flatten().tolist())
+            
+            # Update Wireframe Box
+            # Box is 0..L, 0..W, 0..H (Standard FreeCAD convention)
+            # The SDF object center was moved to L/2, W/2, H/2 to align with this.
+            # So the visual representation should be a box from 0,0,0 to L,W,H
+            
+            # Wait, our mesh vertices (real_verts) are already in World Coordinates relative to the object placement.
+            # 'real_verts' from mesh_from_sdf matches the grid which matches SDFBox (which is -L/2..L/2).
+            # But we applied a placement to the SDFBox in `update` to move it by +L/2.
+            # The `mesh_from_sdf` logic applies `sdf.set_placement`.
+            # BUT `mesh_from_sdf` returns vertices *transformed by that placement*?
+            # Let's check mesh_from_sdf... 
+            # It uses `grid_min` which comes from `bound_min`. `bound_min` comes from `sdf.bounds()`.
+            # `sdf.bounds()` applies the matrix.
+            # So `real_verts` are already shifted to 0..L.
+            
+            # So we just need to draw a box 0..L, 0..W, 0..H.
+            
+            b_coords = [
+                [0,0,0], [l,0,0], [l,w,0], [0,w,0],
+                [0,0,h], [l,0,h], [l,w,h], [0,w,h]
+            ]
+            self.box_coords.point.setValues(0, 8, b_coords)
+            
+            b_lines = [
+                0,1,2,3,0,-1, # Base
+                4,5,6,7,4,-1, # Top
+                0,4,-1, 1,5,-1, 2,6,-1, 3,7,-1 # Sides
+            ]
+            self.box_lines.coordIndex.setValues(0, len(b_lines), b_lines)
+            
+            # Wireframe Style & Points
+            wf_color = getattr(self.sobj, "WireframeColor", (1.0, 1.0, 0.0))
+            if hasattr(wf_color, "__len__") and len(wf_color) > 3:
+                wf_color = wf_color[:3]
                 
-            elif mode == "SDF Slices":
-                # Clear Mesh
-                self.coords.point.setNum(0)
-                self.face_set.coordIndex.setNum(0)
-                self.norms.vector.setNum(0)
+            wf_width = getattr(self.sobj, "WireframeWidth", 2.0)
+            show_verts = getattr(self.sobj, "ShowVertices", True)
+            vert_size = getattr(self.sobj, "VertexSize", 5.0)
+            
+            self.box_mat.diffuseColor.setValue(wf_color)
+            self.box_style.lineWidth.setValue(wf_width)
+            self.box_style.pointSize.setValue(vert_size)
+            
+            if show_verts:
+                self.box_points.startIndex.setValue(0)
+                self.box_points.numPoints.setValue(8)
+            else:
+                self.box_points.numPoints.setValue(0)
                 
-                # Get Slice Properties
-                axis = getattr(self.sobj, "SliceAxis", "Z")
-                count = getattr(self.sobj, "SliceCount", 10)
-                # Ensure count is int
-                count = int(count) if count else 10
-                
-                lines = sdf_lib.contours_from_sdf(sdf, resolution=res, margin=margin, axis=axis.lower(), slices=count)
-                
-                if not lines:
-                    self.slice_coords.point.setNum(0)
-                    self.slice_lines.numVertices.setNum(0)
-                    return
-                    
-                # Flatten lines
-                all_pts = []
-                num_verts = []
-                for line in lines:
-                    all_pts.extend(line.tolist())
-                    num_verts.append(len(line))
-                
-                if not all_pts:
-                    self.slice_coords.point.setNum(0)
-                    self.slice_lines.numVertices.setNum(0)
-                    return
-
-                self.slice_coords.point.setValues(0, len(all_pts), all_pts)
-                self.slice_lines.numVertices.setValues(0, len(num_verts), num_verts)
-                
+            # Removed SDF Slices mode as per user request
             
         except Exception as e:
             FreeCAD.Console.PrintError(f"SDF Update Failed: {e}\n")

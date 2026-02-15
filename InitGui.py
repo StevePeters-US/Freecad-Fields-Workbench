@@ -66,22 +66,16 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
         # Import the command modules. This executes the FreeCADGui.addCommand()
         # in each file, making the commands available to FreeCAD.
         try:
-            from dm_commands import command_create_box
             from dm_commands import command_open_task_panel
-            from dm_commands import command_draw_box
             from dm_commands import command_create_sdf
             from dm_commands import command_convert_to_sdf
             
             self.appendToolbar("Direct Modeling", [
-                'DM_DrawBox',
-                'DM_CreateBox',
                 'DM_CreateSDF',
                 'DM_ConvertToSDF',
                 'DM_OpenTaskPanel',
             ])
             self.appendMenu("Direct Modeling", [
-                'DM_DrawBox',
-                'DM_CreateBox',
                 'DM_CreateSDF',
                 'DM_ConvertToSDF',
                 'DM_OpenTaskPanel',
