@@ -70,9 +70,13 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
             from dm_commands import command_create_sdf
             from dm_commands import command_convert_to_sdf
             from dm_commands import command_sdf_boolean
+            from dm_commands import command_create_primitives
             
             self.appendToolbar("Direct Modeling", [
                 'DM_CreateSDF',
+                'SDF_Sphere',
+                'SDF_Cone',
+                'SDF_Torus',
                 'DM_ConvertToSDF',
                 'DM_OpenTaskPanel',
                 "Separator",
@@ -82,6 +86,9 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
             ])
             self.appendMenu("Direct Modeling", [
                 'DM_CreateSDF',
+                'SDF_Sphere',
+                'SDF_Cone',
+                'SDF_Torus',
                 'DM_ConvertToSDF',
                 'DM_OpenTaskPanel',
                 "Separator",

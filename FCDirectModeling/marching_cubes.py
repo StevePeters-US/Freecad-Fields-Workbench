@@ -350,6 +350,9 @@ def find_contours(image, level=0.0):
     
     segments = []
     
+    # Collect all segments first
+    collected_segments = []
+    
     # Lookup table for 0-15
     # Edges: 0:T, 1:R, 2:B, 3:L
     table = {
@@ -386,16 +389,74 @@ def find_contours(image, level=0.0):
                     a, b = v0[r,c], v3[r,c]
                     pa, pb = (r,c), (r+1,c)
                 
-                t = (level - a) / (b - a) if b != a else 0.5
+                denom = b - a
+                if abs(denom) < 1e-9: t = 0.5
+                else: t = (level - a) / denom
+                
                 pr = pa[0] + t * (pb[0] - pa[0])
                 pc = pa[1] + t * (pb[1] - pa[1])
-                return np.array([pr, pc])
+                return (pr, pc)
             
             p1 = get_p(e1, r, c)
             p2 = get_p(e2, r, c)
-            # Create a contour logic? 
-            # `find_contours` returns list of (N, 2) arrays.
-            # We will return list of (2, 2) arrays (segments).
-            segments.append(np.array([p1, p2]))
+            collected_segments.append((p1, p2))
+
+    # Chain segments into contours
+    # Use a dictionary mapping endpoints to segments
+    # Key: point tuple, Value: list of other point tuples
+    adj = {}
+    
+    for p1, p2 in collected_segments:
+        if p1 not in adj: adj[p1] = []
+        if p2 not in adj: adj[p2] = []
+        adj[p1].append(p2)
+        adj[p2].append(p1)
+        
+    contours = []
+    visited = set()
+    
+    # Iterate over all points in adj to find loops
+    for start_node in list(adj.keys()):
+        if start_node in visited:
+            continue
             
-    return segments
+        # Start a new contour
+        # It might be a loop or an open line
+        # Marching squares usually produces loops for closed internal shapes, 
+        # but could be open if hitting boundary? 
+        # We'll traverse.
+        
+        poly = [start_node]
+        visited.add(start_node)
+        
+        curr = start_node
+        # Greedy walk
+        while True:
+            neighbors = adj.get(curr, [])
+            # Find an unvisited neighbor, OR the start node if valid loop
+            next_node = None
+            for n in neighbors:
+                if n == start_node and len(poly) > 2:
+                    # Closing the loop
+                    # We don't add start_node again to poly usually, or do we?
+                    # Let's just stop.
+                    next_node = "CLOSED"
+                    break
+                if n not in visited:
+                    next_node = n
+                    break
+            
+            if next_node == "CLOSED":
+                break
+            elif next_node is None:
+                # Dead end
+                break
+            else:
+                curr = next_node
+                poly.append(curr)
+                visited.add(curr)
+                
+        if len(poly) >= 3:
+             contours.append(np.array(poly))
+             
+    return contours

@@ -316,12 +316,183 @@ class SDFOperation(SDFObject):
         self.sdf_b = sdf_b
         
     def _evaluate_local(self, points):
-        d1 = self.sdf_a.evaluate(points)
-        d2 = self.sdf_b.evaluate(points)
+        # points are in Local coordinates of this Boolean object.
+        # But sdf_a and sdf_b are independent objects with their own transforms,
+        # so they expect World coordinates.
+        # We must transform points: Local -> World
+        
+        world_points = points
+        if self.matrix is not None:
+            # Add homogeneous coord
+            ones = np.ones((points.shape[0], 1))
+            pts_h = np.hstack((points, ones))
+            # Local -> World: dot(pts, matrix) (since matrix is transposed storage of FreeCAD matrix?)
+            # Wait, set_placement stores:
+            # self.matrix = np.array(...).transpose()
+            # self.inverse_matrix = np.array(...).transpose()
+            # evaluate() uses: np.dot(pts_h, self.inverse_matrix)
+            # This implies row-vector * matrix. (1x4 * 4x4)
+            # So self.inverse_matrix is indeed the transpose of the standard column-major matrix?
+            # FreeCAD Matrix is Row-Major? No, usually Column-Major in OpenGL, but logic here says:
+            # v' = v * M. This is row-vector convention.
+            # So we use self.matrix for Local->World.
+            
+            w_pts_h = np.dot(pts_h, self.matrix)
+            world_points = w_pts_h[:, :3]
+
+        d1 = self.sdf_a.evaluate(world_points)
+        d2 = self.sdf_b.evaluate(world_points)
         return self._combine(d1, d2)
 
-    def _combine(self, d1, d2):
-        raise NotImplementedError
+class SDFSphere(SDFObject):
+    def __init__(self, radius):
+        super().__init__()
+        self.radius = radius
+
+    def _evaluate_local(self, points):
+        # length(p) - r
+        return np.linalg.norm(points, axis=1) - self.radius
+
+    def _bounds_local(self):
+        r = self.radius
+        return (np.array([-r, -r, -r]), np.array([r, r, r]))
+
+class SDFCone(SDFObject):
+    def __init__(self, radius, height):
+        super().__init__()
+        self.radius = radius # Base radius
+        self.height = height # Total height
+        # Defined with base at z=0? Or centered?
+        # Standard IQ cone is infinite? No, capped cone.
+        # Let's assume standard Cone primitive: Base at Z=0, Tip at Z=H?
+        # Or centered at Z=0 (from -H/2 to H/2).
+        # FreeCAD Cone usually allows placement.
+        # Let's define it: Tip at (0,0,H), Base at (0,0,0) radius R.
+        # Or Tip at (0,0,0)...
+        # In SDF logic (Inigo Quilez), a cone is usually p.xy vs p.z.
+        
+        # solid cone
+        # float sdCone( vec3 p, vec2 c, float h )
+        # c is (sin/cos) of angle, but we have R, H.
+        # angle alpha: tan(alpha) = r/h.
+        
+        # Let's use a simpler Cylinder approximation if Cone is hard?
+        # No, implementing capped cone.
+        
+        self.q = np.array([radius/height, -1.0]) # Gradient?
+        # Precompute sin/cos?
+        hyp = np.sqrt(radius*radius + height*height)
+        self.sin_a = radius / hyp
+        self.cos_a = height / hyp
+        
+    def _evaluate_local(self, points):
+        # Capped Cone: Base at Z=0, Tip at Z=H, Radius R at Base, 0 at Tip.
+        # IQ sdCone adapted for Z-up
+        
+        # p = points (N, 3)
+        # q = vec2( length(p.xy), p.z )
+        xy = points[:, :2] # N, 2
+        q_x = np.linalg.norm(xy, axis=1) # Radial dist
+        q_y = points[:, 2] # Height (Z)
+        
+        # We want to shift it so it's centered for the standard formula? 
+        # Standard formula usually has center at 0.
+        # Let's shift Z by -h/2 so it's from -h/2 to h/2
+        # h in formula is half-height?
+        # IQ: "h is height" (likely half dimension if using abs?)
+        # Let's use the explicit logic from a reliable source or derivation.
+        
+        # Capped Cone (Inigo Quilez) defined by 2 points? 
+        # sdRoundCone(vec3 p, vec3 a, vec3 b, float r1, float r2)
+        # Point A: (0,0,0), R1: radius
+        # Point B: (0,0,height), R2: 0.0
+        
+        # Vectorized RoundCone:
+        a = np.array([0.0, 0.0, 0.0])
+        b = np.array([0.0, 0.0, self.height])
+        r1 = self.radius
+        r2 = 0.0
+        
+        # pa = p - a
+        pa = points - a
+        # ba = b - a
+        ba = b - a # (0,0,h)
+        
+        # l2 = dot(ba,ba)
+        l2 = np.dot(ba, ba) # h^2
+        
+        # rr = r1 - r2
+        rr = r1 - r2 # r1
+        
+        # a2 = l2 - rr*rr
+        a2 = l2 - rr*rr
+        
+        # il2 = 1.0/l2
+        il2 = 1.0 / (l2 + 1e-9)
+        
+        # pa * ba (dot product per row)
+        pa_ba = np.dot(pa, ba) # (N,)
+        
+        # y = pa_ba
+        y = pa_ba
+        
+        # x = sqrt( dot(pa,pa)*l2 - y*y )
+        dot_pa_pa = np.sum(pa*pa, axis=1)
+        x = np.sqrt(np.maximum(dot_pa_pa * l2 - y*y, 0.0))
+        
+        # y = y - l2 * clamp( (y*l2 + x*rr*sqrt(a2)) / (l2*a2), 0.0, 1.0 )
+        if a2 < 1e-6:
+             # Cylinder case or error
+             k = 0.0
+        else:
+             k = np.clip((y * l2 + x * rr * np.sqrt(a2)) / (l2 * a2), 0.0, 1.0)
+             
+        # New p = pa - ba * k
+        # ba * k needs shape (N, 3)
+        k_vec = k.reshape(-1, 1)
+        p_new = pa - ba * k_vec
+        
+        # d = length(p_new) - mix(r1, r2, k)
+        d = np.linalg.norm(p_new, axis=1) - (r1 * (1.0 - k) + r2 * k)
+        
+        return d
+
+    def _bounds_local(self):
+        r = self.radius
+        h = self.height
+        return (np.array([-r, -r, 0]), np.array([r, r, h]))
+
+class SDFTorus(SDFObject):
+    def __init__(self, major_radius, minor_radius):
+        super().__init__()
+        self.R = major_radius
+        self.r = minor_radius
+        
+    def _evaluate_local(self, points):
+        # sdTorus(p, vec2(t.x, t.y)) = length( vec2(length(p.xz)-t.x, p.y) ) - t.y
+        # FreeCAD Torus is usually in XY plane (Axis Z).
+        # So Major Ring is in XY. Cross section in Z.
+        # SDF formula `length(p.xz)-t.x` assumes ring in XZ plane.
+        
+        # Adapted for Ring in XY:
+        # length(p.xy) - R
+        
+        xy = points[:, :2] # Shape (N, 2)
+        len_xy = np.linalg.norm(xy, axis=1)
+        
+        q_x = len_xy - self.R
+        q_y = points[:, 2] # Z component
+        
+        q = np.stack([q_x, q_y], axis=1)
+        return np.linalg.norm(q, axis=1) - self.r
+
+    def _bounds_local(self):
+        # Box containing torus
+        # XY: -(R+r) to (R+r)
+        # Z: -r to r
+        lim = self.R + self.r
+        return (np.array([-lim, -lim, -self.r]), np.array([lim, lim, self.r]))
+
         
     def _bounds_local(self):
         raise NotImplementedError

@@ -10,7 +10,7 @@ class ConvertToSDFCommand:
 
     def GetResources(self):
         return {
-            "Pixmap": "CreateBox.svg", # Use standard Part Box icon for now or similar
+            "Pixmap": "Part_Shape_from_Mesh", # Existing FreeCAD icon that seems appropriate
             "MenuText": "Convert to SDF",
             "ToolTip": "Converts selected Part object to a Signed Distance Field",
         }

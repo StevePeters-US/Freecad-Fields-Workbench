@@ -54,7 +54,28 @@ def create_sdf_from_obj(obj):
                 elif op == "Intersection":
                     sdf = sdf_lib.SDFIntersection(sdf_base, sdf_tool)
     
-    # 2. Box Primitive (Fallback)
+    # 2. Primitives
+    # We attempt to detect type by properties, or explicit "SDFType" property if we add one.
+    # For now, we infer.
+    
+    # Torus
+    if hasattr(obj, "MajorRadius") and hasattr(obj, "MinorRadius"):
+        R = get_val(obj, "MajorRadius", 10.0)
+        r = get_val(obj, "MinorRadius", 2.0)
+        sdf = sdf_lib.SDFTorus(major_radius=R, minor_radius=r)
+
+    # Cone (Radius and Height, but NO Length/Width)
+    elif hasattr(obj, "Radius") and hasattr(obj, "Height") and not hasattr(obj, "Length"):
+        r = get_val(obj, "Radius", 5.0)
+        h = get_val(obj, "Height", 10.0)
+        sdf = sdf_lib.SDFCone(radius=r, height=h)
+
+    # Sphere (Radius only, no Height)
+    elif hasattr(obj, "Radius") and not hasattr(obj, "Height") and not hasattr(obj, "MajorRadius"):
+        r = get_val(obj, "Radius", 5.0)
+        sdf = sdf_lib.SDFSphere(radius=r)
+
+    # Box
     elif hasattr(obj, "Length") and hasattr(obj, "Width") and hasattr(obj, "Height"):
         l = get_val(obj, "Length", 10.0)
         w = get_val(obj, "Width", 10.0)
@@ -62,26 +83,41 @@ def create_sdf_from_obj(obj):
         
         sdf = sdf_lib.SDFBox(size=(l, w, h))
         
-        # Center Offset Logic
-        # Box is defined 0..L, SDF is -L/2..L/2
-        # Apply offset to placement
+        # Center Offset Logic (Box only? Or all?)
+        # Box matches centered logic in lib, but FreeCAD Box is corner-based usually.
+        # Implemented offset for Box previously.
+        # Other primitives (Sphere, Torus) are usually centered in FreeCAD Part primitives too, 
+        # except Cone (often base at 0).
+        # My SDFCone implementation expects Base at 0.
+        # SDFSphere/Torus are centered.
+        
+        # Apply offset to placement ONLY for Box if needed to match FreeCAD convention.
+        # FreeCAD Box: Corner at placement.
+        # SDFBox: Center at 0.
+        # So we shift by +Size/2.
+        
         import FreeCAD
         offset = FreeCAD.Placement(FreeCAD.Vector(l/2.0, w/2.0, h/2.0), FreeCAD.Rotation())
         
-        # We need to apply this offset as a 'child' transform of the object placement
-        # But SDFObject only has one matrix.
-        # We must multiply them.
-        # Total = Obj.Placement * Offset
+        # Check if we already have a placement set on 'sdf'.
+        # We will handle placement generically at the end, but this offset is specific to Box shape definition.
         
         total_p = obj.Placement.multiply(offset)
         sdf.set_placement(total_p)
-        return sdf # Return early because we handled placement
+        return sdf 
 
-    # Default return
+    # If we created a non-Box primitive, we might need to handle placement.
+    # Sphere, Torus, Cone are usually centered or have defined origin matching SDF lib (or close enough).
+    # Sphere: Center at 0. FreeCAD Sphere: Center at 0. Match.
+    # Torus: Center at 0. FreeCAD Torus: Center at 0. Match.
+    # Cone: Base at 0. FreeCAD Cone: Base at 0. Match.
+    
     if sdf and hasattr(obj, "Placement"):
         sdf.set_placement(obj.Placement)
+        return sdf
         
-    return sdf
+    FreeCAD.Console.PrintError(f"create_sdf_from_obj: Could not detect SDF type for {obj.Name}. Props: {dir(obj)}\n")
+    return None # Failed to detect
 
 
 class SDFRenderer:
@@ -199,8 +235,10 @@ class SDFRenderer:
             return default
 
         # Create SDF Object
+        FreeCAD.Console.PrintMessage(f"SDFRenderer.update: Creating SDF for {self.sobj.Name}\n")
         sdf = create_sdf_from_obj(self.sobj)
         if not sdf:
+             FreeCAD.Console.PrintError(f"SDFRenderer.update: Failed to create SDF for {self.sobj.Name}\n")
              # If creation failed, clear everything
              self.coords.point.setNum(0)
              self.face_set.coordIndex.setNum(0)
@@ -238,6 +276,7 @@ class SDFRenderer:
                 
                 if verts is None:
                     # No surface found
+                    FreeCAD.Console.PrintWarning(f"SDFRenderer.update: No surface generated for {self.sobj.Name}. Check bounds/resolution.\n")
                     self.coords.point.setNum(0)
                     self.face_set.coordIndex.setNum(0)
                     self.norms.vector.setNum(0)
@@ -260,52 +299,24 @@ class SDFRenderer:
                 self.face_set.coordIndex.setValues(0, indices.size, indices.flatten().tolist())
             
             # Update Wireframe Box (Only for Box type)
-            if hasattr(self.sobj, "Length") and hasattr(self.sobj, "Width") and hasattr(self.sobj, "Height"):
-                l = get_val("Length", 10.0)
-                w = get_val("Width", 10.0)
-                h = get_val("Height", 10.0)
-                
-                b_coords = [
-                    [0,0,0], [l,0,0], [l,w,0], [0,w,0],
-                    [0,0,h], [l,0,h], [l,w,h], [0,w,h]
-                ]
-                self.box_coords.point.setValues(0, 8, b_coords)
-                
-                b_lines = [
-                    0,1,2,3,0,-1, # Base
-                    4,5,6,7,4,-1, # Top
-                    0,4,-1, 1,5,-1, 2,6,-1, 3,7,-1 # Sides
-                ]
-                self.box_lines.coordIndex.setValues(0, len(b_lines), b_lines)
-                
-                # Wireframe Style & Points
-                wf_color = getattr(self.sobj, "WireframeColor", (1.0, 1.0, 0.0))
-                if hasattr(wf_color, "__len__") and len(wf_color) > 3:
-                     wf_color = wf_color[:3]
-                    
-                wf_width = getattr(self.sobj, "WireframeWidth", 2.0)
-                show_verts = getattr(self.sobj, "ShowVertices", True)
-                vert_size = getattr(self.sobj, "VertexSize", 5.0)
-                
-                self.box_mat.diffuseColor.setValue(wf_color)
-                self.box_style.lineWidth.setValue(wf_width)
-                self.box_style.pointSize.setValue(vert_size)
-                
-                if show_verts:
-                    self.box_points.startIndex.setValue(0)
-                    self.box_points.numPoints.setValue(8)
-                else:
-                    self.box_points.numPoints.setValue(0)
-            else:
-                # Hide box for non-box objects (e.g. Booleans)
-                self.box_coords.point.setNum(0)
-                self.box_lines.coordIndex.setNum(0)
-                self.box_points.numPoints.setValue(0)
+            # DISABLED FOR DEBUGGING SPHERE CRASH
+            # if hasattr(self.sobj, "Length") and hasattr(self.sobj, "Width") and hasattr(self.sobj, "Height"):
+            #    pass
+            # else:
+            #    pass
+            
+            # Ensure wireframe is hidden
+            self.box_coords.point.setNum(0)
+            self.box_lines.coordIndex.setNum(0)
+            self.box_points.numPoints.setValue(0)
                 
             # Removed SDF Slices mode as per user request
             
         except Exception as e:
-            FreeCAD.Console.PrintError(f"SDF Update Failed: {e}\n")
+            import traceback
+            FreeCAD.Console.PrintError(f"SDF Update Failed: {repr(e)}\n")
+            traceback.print_exc()
+            self.root.removeAllChildren()
 
     def __getstate__(self):
         return None

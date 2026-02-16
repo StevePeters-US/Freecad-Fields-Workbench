@@ -9,7 +9,7 @@ class CreateSDFCommand:
 
     def GetResources(self):
         return {
-            "Pixmap": "CreateBox.svg", # Reuse box icon
+            "Pixmap": "Part_Box_Parametric", # Standard Box Icon
             "MenuText": "Create SDF Box",
             "ToolTip": "Creates a signed distance field box",
         }

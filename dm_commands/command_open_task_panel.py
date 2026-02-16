@@ -34,9 +34,9 @@ class OpenTaskPanelCommand:
 
     def GetResources(self):
         return {
-            "Pixmap": "OpenTaskPanel.svg",
-            "MenuText": "Open Task Panel",
-            "ToolTip": "Opens the Direct Modeling task panel",
+            "Pixmap": "preferences-part_design", # Existing preferences icon
+            "MenuText": "Change Global SDF Settings",
+            "ToolTip": "Change Global SDF parameters",
         }
 
     def Activated(self):

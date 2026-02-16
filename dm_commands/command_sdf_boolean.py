@@ -84,7 +84,7 @@ class SDFBooleanBase:
 class SDFUnionCommand(SDFBooleanBase):
     OPERATION = "Union"
     def GetResources(self):
-        return {'Pixmap': 'Part_Union', 'MenuText': 'SDF Union', 'ToolTip': 'Union of two SDF objects'}
+        return {'Pixmap': 'Part_Fuse', 'MenuText': 'SDF Union', 'ToolTip': 'Union of two SDF objects'}
 
 class SDFDifferenceCommand(SDFBooleanBase):
     OPERATION = "Difference"
