@@ -24,7 +24,7 @@ class CreateSDFSphere:
         importlib.reload(primitive_creators)
         importlib.reload(sdf_utils)
         
-        FreeCAD.Console.PrintMessage("CreateSDFSphere: Activated! (Reloaded modules v5)\n")
+        FreeCAD.Console.PrintMessage("CreateSDFSphere: Activated! (Reloaded modules v14)\n")
         try:
             self.creator = primitive_creators.SphereCreator()
         except Exception as e:

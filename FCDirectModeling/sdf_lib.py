@@ -215,8 +215,11 @@ def mesh_from_sdf(sdf_obj, resolution=32, margin=0.1):
         # Replace bad values with a large positive distance (outside)
         values = np.nan_to_num(values, nan=100.0, posinf=100.0, neginf=100.0)
     
-    # Reshape back to grid
+    # Reshape back to grid (x, y, z)
     vol = values.reshape((resolution, resolution, resolution))
+    
+    # Transpose to (z, y, x) for marching_cubes which expects Axis 0 as Z
+    vol = vol.transpose((2, 1, 0))
     
     # Marching Cubes
     # level=0.0 is the surface
@@ -232,6 +235,48 @@ def mesh_from_sdf(sdf_obj, resolution=32, margin=0.1):
         step = (grid_max - grid_min) / (resolution - 1)
         world_verts = verts * step + grid_min
         
+        # ---------------------------------------------------------
+        # VERTEX PROJECTION (Sharp Edges Improvement)
+        # ---------------------------------------------------------
+        # Project vertices onto the exact zero-isosurface to improve
+        # representation of sharp features and flat surfaces.
+        # Iterative Gradient Descent: v = v - d * gradient(v)
+        
+        # We need a gradient function
+        def calc_gradients(pts, epsilon=1e-5):
+            # Central difference
+            # x
+            pts_x0 = pts - [epsilon, 0, 0]
+            pts_x1 = pts + [epsilon, 0, 0]
+            dx = sdf_obj.evaluate(pts_x1) - sdf_obj.evaluate(pts_x0)
+            
+            # y
+            pts_y0 = pts - [0, epsilon, 0]
+            pts_y1 = pts + [0, epsilon, 0]
+            dy = sdf_obj.evaluate(pts_y1) - sdf_obj.evaluate(pts_y0)
+            
+            # z
+            pts_z0 = pts - [0, 0, epsilon]
+            pts_z1 = pts + [0, 0, epsilon]
+            dz = sdf_obj.evaluate(pts_z1) - sdf_obj.evaluate(pts_z0)
+            
+            grads = np.stack([dx, dy, dz], axis=1)
+            # Normalize
+            norms = np.linalg.norm(grads, axis=1, keepdims=True)
+            # Avoid div by zero
+            return grads / (norms + 1e-9)
+
+        # Iterate (2-3 times is usually enough)
+        for _ in range(3):
+            dists = sdf_obj.evaluate(world_verts)
+            grads = calc_gradients(world_verts)
+            # Move towards surface: v - d * grad
+            # Note: SDF is positive outside. Gradient points outside.
+            # To go to 0: v - d * grad
+            world_verts = world_verts - grads * dists.reshape(-1, 1)
+
+        # ---------------------------------------------------------
+
         # Transform World -> Local
         # Because FreeCAD ViewProvider already applies the object's Placement,
         # we need the mesh to be in local coordinates (centered at origin, etc.)
@@ -249,7 +294,7 @@ def mesh_from_sdf(sdf_obj, resolution=32, margin=0.1):
              # self.inverse_matrix = np.array([inv.A...]).transpose()
              # evaluate() uses: np.dot(pts_h, self.inverse_matrix)
              
-             l_verts_h = np.dot(w_verts_h, sdf_obj.inverse_matrix)
+             l_verts_h = np.dot(w_verts_h, sdf_obj.inverse_matrix) 
              real_verts = l_verts_h[:, :3]
         else:
              real_verts = world_verts
@@ -388,105 +433,116 @@ class SDFCone(SDFObject):
         super().__init__()
         self.radius = radius # Base radius
         self.height = height # Total height
-        # Defined with base at z=0? Or centered?
-        # Standard IQ cone is infinite? No, capped cone.
-        # Let's assume standard Cone primitive: Base at Z=0, Tip at Z=H?
-        # Or centered at Z=0 (from -H/2 to H/2).
-        # FreeCAD Cone usually allows placement.
-        # Let's define it: Tip at (0,0,H), Base at (0,0,0) radius R.
-        # Or Tip at (0,0,0)...
-        # In SDF logic (Inigo Quilez), a cone is usually p.xy vs p.z.
         
-        # solid cone
-        # float sdCone( vec3 p, vec2 c, float h )
-        # c is (sin/cos) of angle, but we have R, H.
-        # angle alpha: tan(alpha) = r/h.
+        # Avoid division by zero
+        h_safe = height if abs(height) > 1e-6 else 1e-6
+        r_safe = radius
         
-        # Let's use a simpler Cylinder approximation if Cone is hard?
-        # No, implementing capped cone.
+        self.q = np.array([r_safe/h_safe, -1.0]) 
         
-        self.q = np.array([radius/height, -1.0]) # Gradient?
-        # Precompute sin/cos?
-        hyp = np.sqrt(radius*radius + height*height)
-        self.sin_a = radius / hyp
-        self.cos_a = height / hyp
+        hyp = np.sqrt(r_safe*r_safe + h_safe*h_safe)
+        if hyp < 1e-9: hyp = 1e-9
+        
+        self.sin_a = r_safe / hyp
+        self.cos_a = h_safe / hyp
         
     def _evaluate_local(self, points):
-        # Capped Cone: Base at Z=0, Tip at Z=H, Radius R at Base, 0 at Tip.
-        # IQ sdCone adapted for Z-up
+        # Capped Cone (Inigo Quilez sdCappedCone)
+        # Adapted for Z-up: p.z is height, p.xy is radius.
+        # We treat base at Z=0 (r1=Radius) and tip at Z=Height (r2=0).
         
-        # p = points (N, 3)
-        # q = vec2( length(p.xy), p.z )
-        xy = points[:, :2] # N, 2
-        q_x = np.linalg.norm(xy, axis=1) # Radial dist
-        q_y = points[:, 2] # Height (Z)
-        
-        # We want to shift it so it's centered for the standard formula? 
-        # Standard formula usually has center at 0.
-        # Let's shift Z by -h/2 so it's from -h/2 to h/2
-        # h in formula is half-height?
-        # IQ: "h is height" (likely half dimension if using abs?)
-        # Let's use the explicit logic from a reliable source or derivation.
-        
-        # Capped Cone (Inigo Quilez) defined by 2 points? 
-        # sdRoundCone(vec3 p, vec3 a, vec3 b, float r1, float r2)
-        # Point A: (0,0,0), R1: radius
-        # Point B: (0,0,height), R2: 0.0
-        
-        # Vectorized RoundCone:
-        a = np.array([0.0, 0.0, 0.0])
-        b = np.array([0.0, 0.0, self.height])
+        p = points
+        h = self.height
         r1 = self.radius
-        r2 = 0.0
+        r2 = 0.0 # Tip
         
-        # pa = p - a
-        pa = points - a
-        # ba = b - a
-        ba = b - a # (0,0,h)
+        # In IQ formula:
+        # p is vec3, h is height (center to tip?? No, usually full height if defined by 2 points)
+        # But standard function: float sdCappedCone( vec3 p, float h, float r1, float r2 )
+        # usually centered at 0.
+        
+        # Let's use the Vectorized version of:
+        # float sdCappedCone(vec3 p, vec3 a, vec3 b, float ra, float rb)
+        # a=(0,0,0), b=(0,0,h)
+        
+        ba = np.array([0, 0, h])
+        pa = p # since a is 0
         
         # l2 = dot(ba,ba)
-        l2 = np.dot(ba, ba) # h^2
+        l2 = h*h
         
-        # rr = r1 - r2
-        rr = r1 - r2 # r1
+        # rr = ra - rb (r1 - 0 = r1)
+        rr = r1
         
-        # a2 = l2 - rr*rr
-        a2 = l2 - rr*rr
+        # a2 = l2 - rr*rr  <-- This was the crash source in RoundCone if l2 < rr*rr
+        # But we are NOT using RoundCone anymore. We use exact CappedCone.
         
-        # il2 = 1.0/l2
-        il2 = 1.0 / (l2 + 1e-9)
+        # Vectorized implementation of IQ sdCappedCone (exact):
+        # https://www.shadertoy.com/view/tsq3ft
         
-        # pa * ba (dot product per row)
-        pa_ba = np.dot(pa, ba) # (N,)
+        # float sdCappedCone(vec3 p, vec3 a, vec3 b, float ra, float rb)
+        # {
+        #     float rba  = rb-ra;
+        #     float baba = dot(b-a,b-a);
+        #     float papa = dot(p-a,p-a);
+        #     float paba = dot(p-a,b-a)/baba;
+        #     float x = sqrt( papa - paba*paba*baba );
+        #     float cax = max(0.0,x-((paba<0.5)?ra:rb));
+        #     float cay = abs(paba-0.5)-0.5;
+        #     float k = rba*rba + baba;
+        #     float f = clamp( (rba*(x-ra)+paba*baba)/k, 0.0, 1.0 );
+        #     float cbx = x-ra - f*rba;
+        #     float cby = paba - f;
+        #     float s = (cbx < 0.0 && cby < 0.0) ? -1.0 : 1.0;
+        #     return s*sqrt( min(cax*cax + cay*cay*baba, cbx*cbx*k + cby*cby*baba) );
+        # }
         
-        # y = pa_ba
-        y = pa_ba
+        # Mapping to our variables:
+        # a = (0,0,0), b = (0,0,h)
+        # ra = r1, rb = 0
         
-        # x = sqrt( dot(pa,pa)*l2 - y*y )
-        dot_pa_pa = np.sum(pa*pa, axis=1)
-        x = np.sqrt(np.maximum(dot_pa_pa * l2 - y*y, 0.0))
+        rba = r2 - r1 # -r1
+        baba = l2 # h^2
+        papa = np.sum(pa*pa, axis=1) # dot(p, p)
         
-        # y = y - l2 * clamp( (y*l2 + x*rr*sqrt(a2)) / (l2*a2), 0.0, 1.0 )
-        if a2 < 1e-6:
-             # Cylinder case or error
-             k = 0.0
-        else:
-             k = np.clip((y * l2 + x * rr * np.sqrt(a2)) / (l2 * a2), 0.0, 1.0)
-             
-        # New p = pa - ba * k
-        # ba * k needs shape (N, 3)
-        k_vec = k.reshape(-1, 1)
-        p_new = pa - ba * k_vec
+        paba = np.dot(pa, ba) / (baba + 1e-9) # height projection ratio
         
-        # d = length(p_new) - mix(r1, r2, k)
-        d = np.linalg.norm(p_new, axis=1) - (r1 * (1.0 - k) + r2 * k)
+        # x = sqrt( papa - paba*paba*baba ) -> Replace with numerical safe version
+        # Dist from axis
+        # x is actually length(p - projection_on_axis)
+        # simplified: length(p.xy) if axis is Z
+        x = np.linalg.norm(pa[:, :2], axis=1)
         
-        return d
+        # cax = max(0.0, x - ((paba<0.5)?ra:rb))
+        # ternary vectorization
+        target_r = np.where(paba < 0.5, r1, r2)
+        cax = np.maximum(0.0, x - target_r)
+        
+        cay = np.abs(paba - 0.5) - 0.5
+        
+        k = rba*rba + baba 
+        
+        if k < 1e-9: k = 1e-9
+        
+        f = np.clip( (rba*(x - r1) + paba * baba) / k, 0.0, 1.0 )
+        
+        cbx = x - r1 - f * rba
+        cby = paba - f
+        
+        s = np.where( (cbx < 0.0) & (cby < 0.0), -1.0, 1.0 )
+        
+        term1 = cax*cax + cay*cay*baba
+        term2 = cbx*cbx*k + cby*cby*baba # (paba-f)^2 * h^2
+        
+        res = s * np.sqrt( np.minimum(term1, term2) )
+        return res
 
     def _bounds_local(self):
         r = self.radius
         h = self.height
-        return (np.array([-r, -r, 0]), np.array([r, r, h]))
+        z_min = min(0, h)
+        z_max = max(0, h)
+        return (np.array([-r, -r, z_min]), np.array([r, r, z_max]))
 
 class SDFTorus(SDFObject):
     def __init__(self, major_radius, minor_radius):
@@ -519,17 +575,79 @@ class SDFTorus(SDFObject):
         lim = self.R + self.r
         return (np.array([-lim, -lim, -self.r]), np.array([lim, lim, self.r]))
 
+class SDFOperation(SDFObject):
+    def __init__(self, sdf_a, sdf_b):
+        super().__init__()
+        self.sdf_a = sdf_a
+        self.sdf_b = sdf_b
         
-    def _bounds_local(self):
+    def _combine(self, d1, d2):
         raise NotImplementedError
+        
+    def _evaluate_local(self, points):
+        # points are in Local coordinates of this Boolean object.
+        # But sdf_a and sdf_b are independent objects with their own transforms,
+        # so they expect World coordinates.
+        # We must transform points: Local -> World
+        
+        world_points = points
+        if self.matrix is not None:
+             # Add homogeneous w=1
+             ones = np.ones((points.shape[0], 1))
+             pts_h = np.hstack((points, ones))
+             # Local -> World: dot(pts, matrix)
+             w_pts_h = np.dot(pts_h, self.matrix)
+             world_points = w_pts_h[:, :3]
+
+        d1 = self.sdf_a.evaluate(world_points)
+        d2 = self.sdf_b.evaluate(world_points)
+        return self._combine(d1, d2)
+
+    def _get_child_bounds_in_local(self, child):
+        """
+        Helper to get child's world bounds and transform them into 
+        this operation's local coordinate system.
+        """
+        c_min, c_max = child.bounds() # World Bounds
+        
+        if self.inverse_matrix is None:
+            return c_min, c_max
+            
+        # Transform World Bounds -> Local
+        # Note: Bounds are AABB. Rotating AABB is complex.
+        # We transform the 8 corners of the World AABB and find new Local AABB.
+        
+        corners = [
+            [c_min[0], c_min[1], c_min[2]],
+            [c_min[0], c_min[1], c_max[2]],
+            [c_min[0], c_max[1], c_min[2]],
+            [c_min[0], c_max[1], c_max[2]],
+            [c_max[0], c_min[1], c_min[2]],
+            [c_max[0], c_min[1], c_max[2]],
+            [c_max[0], c_max[1], c_min[2]],
+            [c_max[0], c_max[1], c_max[2]]
+        ]
+        
+        corners = np.array(corners)
+        ones = np.ones((8, 1))
+        corners_h = np.hstack((corners, ones))
+        
+        # World -> Local
+        l_corners_h = np.dot(corners_h, self.inverse_matrix)
+        l_corners = l_corners_h[:, :3]
+        
+        l_min = np.min(l_corners, axis=0)
+        l_max = np.max(l_corners, axis=0)
+        
+        return l_min, l_max
 
 class SDFUnion(SDFOperation):
     def _combine(self, d1, d2):
         return np.minimum(d1, d2)
         
     def _bounds_local(self):
-        min_a, max_a = self.sdf_a.bounds()
-        min_b, max_b = self.sdf_b.bounds()
+        min_a, max_a = self._get_child_bounds_in_local(self.sdf_a)
+        min_b, max_b = self._get_child_bounds_in_local(self.sdf_b)
         return np.minimum(min_a, min_b), np.maximum(max_a, max_b)
 
 class SDFDifference(SDFOperation):
@@ -537,15 +655,15 @@ class SDFDifference(SDFOperation):
         return np.maximum(d1, -d2)
         
     def _bounds_local(self):
-        # Difference bounds is at most A logic (conservative)
-        return self.sdf_a.bounds()
+        # Difference bounds is at most A
+        return self._get_child_bounds_in_local(self.sdf_a)
 
 class SDFIntersection(SDFOperation):
     def _combine(self, d1, d2):
         return np.maximum(d1, d2)
         
     def _bounds_local(self):
-        min_a, max_a = self.sdf_a.bounds()
-        min_b, max_b = self.sdf_b.bounds()
+        min_a, max_a = self._get_child_bounds_in_local(self.sdf_a)
+        min_b, max_b = self._get_child_bounds_in_local(self.sdf_b)
         return np.maximum(min_a, min_b), np.minimum(max_a, max_b)
 
