@@ -209,6 +209,12 @@ def mesh_from_sdf(sdf_obj, resolution=32, margin=0.1):
     # Evaluate
     values = sdf_obj.evaluate(points)
     
+    # Check for NaNs/Infs
+    if np.any(np.isnan(values)) or np.any(np.isinf(values)):
+        FreeCAD.Console.PrintWarning("mesh_from_sdf: NaN or Inf detected in SDF evaluation!\n")
+        # Replace bad values with a large positive distance (outside)
+        values = np.nan_to_num(values, nan=100.0, posinf=100.0, neginf=100.0)
+    
     # Reshape back to grid
     vol = values.reshape((resolution, resolution, resolution))
     
@@ -222,12 +228,32 @@ def mesh_from_sdf(sdf_obj, resolution=32, margin=0.1):
         if verts.shape[0] == 0:
             return None, None, None
             
-        # Transform verts from grid indices to world coordinates
-        # Grid step
+        # Transform verts from grid indices to World coordinates
         step = (grid_max - grid_min) / (resolution - 1)
+        world_verts = verts * step + grid_min
         
-        real_verts = verts * step + grid_min
+        # Transform World -> Local
+        # Because FreeCAD ViewProvider already applies the object's Placement,
+        # we need the mesh to be in local coordinates (centered at origin, etc.)
+        # otherwise we get double transformation.
         
+        if sdf_obj.inverse_matrix is not None:
+             # Add homogeneous w=1
+             ones = np.ones((world_verts.shape[0], 1))
+             w_verts_h = np.hstack((world_verts, ones))
+             
+             # Apply inverse matrix: World -> Local
+             # Dot with Transpose of Inverse (which is just 'inverse_matrix' stored in SDFObject)
+             # SDFObject stores:
+             # self.matrix = np.array([mat.A...]).transpose() <-- Column-Major logic?
+             # self.inverse_matrix = np.array([inv.A...]).transpose()
+             # evaluate() uses: np.dot(pts_h, self.inverse_matrix)
+             
+             l_verts_h = np.dot(w_verts_h, sdf_obj.inverse_matrix)
+             real_verts = l_verts_h[:, :3]
+        else:
+             real_verts = world_verts
+             
         return real_verts, faces, normals
         
     except ValueError:

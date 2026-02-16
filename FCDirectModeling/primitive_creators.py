@@ -6,6 +6,7 @@ from pivy import coin
 from PySide import QtCore, QtGui
 import FCDirectModeling.sdf_renderer as sdf_renderer
 import FCDirectModeling.sdf_lib as sdf_lib
+import FCDirectModeling.sdf_utils as sdf_utils
 import numpy as np
 import math
 
@@ -144,9 +145,14 @@ class SphereCreator(PrimitiveCreatorBase):
             self.state = 1
         elif self.state == 1:
             # Finish
-            log_to_file("SphereCreator: Finishing interaction...")
+            self.handle_move(event_dict) # Final update
+            
+            log_to_file(f"{self.__class__.__name__}: Finishing interaction...")
             self.create_object()
-            self.terminate()
+            
+            # Defer termination to avoid crashing Coin3D while handling event
+            QtCore.QTimer.singleShot(0, self.terminate)
+            return True
             
     def handle_move(self, event_dict):
         if self.state == 1:
@@ -162,27 +168,25 @@ class SphereCreator(PrimitiveCreatorBase):
             if not doc: doc = FreeCAD.newDocument()
             
             log_to_file("SphereCreator: Adding Object...")
-            obj = doc.addObject("Part::FeaturePython", "SDF_Sphere")
-            sdf_renderer.SDFBoxFeature(obj) 
+            log_to_file("SphereCreator: Adding Object...")
+            # Use Factory
+            obj = sdf_utils.SDFObjectFactory.create_sdf_object(doc, "SDF_Sphere", sdf_renderer.SDFBoxFeature)
             
             log_to_file("SphereCreator: Adding Properties...")
-            obj.addProperty("App::PropertyLength", "Radius", "SDF", "Sphere Radius").Radius = self.radius
-            # Common
-            obj.addProperty("App::PropertyInteger", "Resolution", "SDF", "Grid resolution").Resolution = 32
-            obj.addProperty("App::PropertyFloat", "Margin", "SDF", "Grid margin").Margin = 0.2
-             # Wireframe Props
-            obj.addProperty("App::PropertyColor", "WireframeColor", "SDF", "Wireframe Color").WireframeColor = (1.0, 1.0, 0.0)
-            obj.addProperty("App::PropertyFloat", "WireframeWidth", "SDF", "Wireframe Width").WireframeWidth = 2.0
-            obj.addProperty("App::PropertyBool", "ShowVertices", "SDF", "Show Vertices").ShowVertices = True
-            obj.addProperty("App::PropertyFloat", "VertexSize", "SDF", "Vertex Size").VertexSize = 5.0
+            obj.addProperty("App::PropertyLength", "Radius", "SDF", "Sphere Radius")
+            
+            # Common Properties
+            sdf_utils.SDFObjectFactory.add_common_properties(obj)
             
             log_to_file("SphereCreator: Setting Placement...")
             obj.Placement.Base = self.center
             
             log_to_file("SphereCreator: Attaching ViewProvider...")
-            if FreeCAD.GuiUp:
-                sdf_renderer.SDFRenderer(obj.ViewObject)
+            sdf_utils.SDFObjectFactory.setup_view_provider(obj)
             
+            # Trigger update by setting main property LAST
+            obj.Radius = self.radius
+
             log_to_file("SphereCreator: Recomputing...")
             doc.recompute()
             log_to_file("SphereCreator: Object created successfully.")
@@ -264,24 +268,23 @@ class ConeCreator(PrimitiveCreatorBase):
         doc = FreeCAD.activeDocument()
         if not doc: doc = FreeCAD.newDocument()
         
-        obj = doc.addObject("Part::FeaturePython", "SDF_Cone")
-        sdf_renderer.SDFBoxFeature(obj)
+        # Use Factory
+        obj = sdf_utils.SDFObjectFactory.create_sdf_object(doc, "SDF_Cone", sdf_renderer.SDFBoxFeature)
         
-        obj.addProperty("App::PropertyLength", "Radius", "SDF", "Base Radius").Radius = self.radius
-        obj.addProperty("App::PropertyLength", "Height", "SDF", "Cone Height").Height = self.height
+        obj.addProperty("App::PropertyLength", "Radius", "SDF", "Base Radius")
+        obj.addProperty("App::PropertyLength", "Height", "SDF", "Cone Height")
         
         # Common
-        obj.addProperty("App::PropertyInteger", "Resolution", "SDF", "Grid resolution").Resolution = 32
-        obj.addProperty("App::PropertyFloat", "Margin", "SDF", "Grid margin").Margin = 0.2
-        obj.addProperty("App::PropertyColor", "WireframeColor", "SDF", "Wireframe Color").WireframeColor = (1.0, 1.0, 0.0)
-        obj.addProperty("App::PropertyFloat", "WireframeWidth", "SDF", "Wireframe Width").WireframeWidth = 2.0
-        obj.addProperty("App::PropertyBool", "ShowVertices", "SDF", "Show Vertices").ShowVertices = True
-        obj.addProperty("App::PropertyFloat", "VertexSize", "SDF", "Vertex Size").VertexSize = 5.0
+        sdf_utils.SDFObjectFactory.add_common_properties(obj)
 
         obj.Placement.Base = self.center
         
-        if FreeCAD.GuiUp:
-            sdf_renderer.SDFRenderer(obj.ViewObject)
+        sdf_utils.SDFObjectFactory.setup_view_provider(obj)
+            
+        # Trigger Update
+        obj.Radius = self.radius
+        obj.Height = self.height
+
         doc.recompute()
 
 class TorusCreator(PrimitiveCreatorBase):
@@ -369,22 +372,21 @@ class TorusCreator(PrimitiveCreatorBase):
         doc = FreeCAD.activeDocument()
         if not doc: doc = FreeCAD.newDocument()
         
-        obj = doc.addObject("Part::FeaturePython", "SDF_Torus")
-        sdf_renderer.SDFBoxFeature(obj)
-        
-        obj.addProperty("App::PropertyLength", "MajorRadius", "SDF", "Major Radius (R)").MajorRadius = self.R
-        obj.addProperty("App::PropertyLength", "MinorRadius", "SDF", "Minor Radius (r)").MinorRadius = self.r
+        # Use Factory
+        obj = sdf_utils.SDFObjectFactory.create_sdf_object(doc, "SDF_Torus", sdf_renderer.SDFBoxFeature)
+
+        obj.addProperty("App::PropertyLength", "MajorRadius", "SDF", "Major Radius (R)")
+        obj.addProperty("App::PropertyLength", "MinorRadius", "SDF", "Minor Radius (r)")
         
         # Common
-        obj.addProperty("App::PropertyInteger", "Resolution", "SDF", "Grid resolution").Resolution = 32
-        obj.addProperty("App::PropertyFloat", "Margin", "SDF", "Grid margin").Margin = 0.2
-        obj.addProperty("App::PropertyColor", "WireframeColor", "SDF", "Wireframe Color").WireframeColor = (1.0, 1.0, 0.0)
-        obj.addProperty("App::PropertyFloat", "WireframeWidth", "SDF", "Wireframe Width").WireframeWidth = 2.0
-        obj.addProperty("App::PropertyBool", "ShowVertices", "SDF", "Show Vertices").ShowVertices = True
-        obj.addProperty("App::PropertyFloat", "VertexSize", "SDF", "Vertex Size").VertexSize = 5.0
+        sdf_utils.SDFObjectFactory.add_common_properties(obj)
 
         obj.Placement.Base = self.center
         
-        if FreeCAD.GuiUp:
-            sdf_renderer.SDFRenderer(obj.ViewObject)
+        sdf_utils.SDFObjectFactory.setup_view_provider(obj)
+        
+        # Trigger Update
+        obj.MajorRadius = self.R
+        obj.MinorRadius = self.r
+        
         doc.recompute()

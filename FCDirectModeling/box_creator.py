@@ -5,6 +5,7 @@ from pivy import coin
 from PySide import QtCore, QtGui
 import FCDirectModeling.sdf_renderer as sdf_renderer
 import FCDirectModeling.sdf_lib as sdf_lib
+import FCDirectModeling.sdf_utils as sdf_utils
 import numpy as np
 
 class BoxCreator:
@@ -709,9 +710,8 @@ class BoxCreator:
             doc = FreeCAD.newDocument()
             
         if self.create_sdf_mode:
-            # Create SDF Box
-            box = doc.addObject("Part::FeaturePython", "SDF_Box")
-            sdf_renderer.SDFBoxFeature(box)
+            # Create SDF Box using Factory
+            box = sdf_utils.SDFObjectFactory.create_sdf_object(doc, "SDF_Box", sdf_renderer.SDFBoxFeature)
             
             # Add Properties (matches command_create_sdf.py)
             if not hasattr(box, "Length"): 
@@ -720,28 +720,17 @@ class BoxCreator:
                 box.addProperty("App::PropertyLength", "Width", "SDF", "Width of the box")
             if not hasattr(box, "Height"):
                 box.addProperty("App::PropertyLength", "Height", "SDF", "Height of the box")
-            if not hasattr(box, "Resolution"):
-                box.addProperty("App::PropertyInteger", "Resolution", "SDF", "Grid resolution").Resolution = 32
-            if not hasattr(box, "Margin"):
-                box.addProperty("App::PropertyFloat", "Margin", "SDF", "Grid margin").Margin = 0.2
+            
+            # Common Properties
+            sdf_utils.SDFObjectFactory.add_common_properties(box)
             
             # Slicing
             if not hasattr(box, "SliceAxis"):
                 box.addProperty("App::PropertyEnumeration", "SliceAxis", "SDF", "Axis to slice along")
                 box.SliceAxis = ["X", "Y", "Z"]
                 box.SliceAxis = "Z"
-            # Wireframe Properties
-            if not hasattr(box, "WireframeColor"):
-                box.addProperty("App::PropertyColor", "WireframeColor", "SDF", "Color of the wireframe").WireframeColor = (1.0, 1.0, 0.0)
-            if not hasattr(box, "WireframeWidth"):
-                box.addProperty("App::PropertyFloat", "WireframeWidth", "SDF", "Width of the wireframe lines").WireframeWidth = 5.0
-            if not hasattr(box, "ShowVertices"):
-                box.addProperty("App::PropertyBool", "ShowVertices", "SDF", "Show wireframe vertices").ShowVertices = True
-            if not hasattr(box, "VertexSize"):
-                box.addProperty("App::PropertyFloat", "VertexSize", "SDF", "Size of the vertices").VertexSize = 10.0
             
-            if FreeCAD.GuiUp:
-                sdf_renderer.SDFRenderer(box.ViewObject)
+            sdf_utils.SDFObjectFactory.setup_view_provider(box)
         else:
             # Create Standard Box
             box = doc.addObject("Part::Box", "Box")
@@ -772,6 +761,10 @@ class BoxCreator:
         # Placement
         # Base in Local
         local_base = FreeCAD.Vector(min_x, min_y, 0)
+        
+        if self.create_sdf_mode:
+            # SDF Box is centered at origin, so move placement to center of the drawn box
+            local_base += FreeCAD.Vector(width/2.0, length/2.0, (self.height if abs(self.height) > 0.001 else 1.0)/2.0)
         
         # Final Placement
         if self.working_plane:

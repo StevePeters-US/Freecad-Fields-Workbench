@@ -15,6 +15,13 @@ class CreateSDFCommand:
         }
 
     def Activated(self):
+        import importlib
+        from FCDirectModeling import sdf_renderer, box_creator, box_task_panel, sdf_utils
+        importlib.reload(sdf_utils)
+        importlib.reload(sdf_renderer)
+        importlib.reload(box_creator)
+        importlib.reload(box_task_panel)
+
         # Instantiate the creator. It attaches itself to the view.
         self.creator = box_creator.BoxCreator()
         self.creator.create_sdf_mode = True

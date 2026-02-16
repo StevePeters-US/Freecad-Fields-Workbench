@@ -1,5 +1,17 @@
 
 import numpy as np
+import sys
+import os
+
+def log_debug(msg):
+    try:
+        with open("/tmp/fc_debug.log", "a") as f:
+            f.write(f"[MC] {msg}\n")
+            f.flush()
+            os.fsync(f.fileno())
+    except:
+        pass
+
 
 def marching_cubes(volume, level=0.0):
     """
@@ -11,6 +23,8 @@ def marching_cubes(volume, level=0.0):
     level: isosurface value
     Returns: (verts, faces, normals, values)
     """
+    log_debug(f"marching_cubes start. Volume shape: {volume.shape}, Level: {level}")
+
     
     # Dimensions
     dim_z, dim_y, dim_x = volume.shape
@@ -316,7 +330,9 @@ def marching_cubes(volume, level=0.0):
     faces = np.arange(num_verts).reshape(-1, 3)
     values = np.full(num_verts, level)
 
+    log_debug(f"marching_cubes end. Generated {num_verts} verts, {faces.shape[0]} faces.")
     return check_verts, faces, check_norms, values
+
 
 # Marching Squares Table & Logic (reused from above)
 def find_contours(image, level=0.0):
