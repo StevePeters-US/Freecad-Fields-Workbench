@@ -151,11 +151,15 @@ class SDFRenderer:
         self.mat.shininess.setValue(0.2)
         self.root.addChild(self.mat)
         
-        # Shape Hints (Commented out due to Pivy AttributeError on Linux)
-        # hints = coin.SoShapeHints()
-        # hints.vertexOrdering = coin.SoShapeHints.COUNTER_CLOCKWISE
-        # hints.shapeType = coin.SoShapeHints.SOLID
-        # self.root.addChild(hints)
+        # Shape Hints (Enable smooth shading)
+        try:
+            hints = coin.SoShapeHints()
+            hints.vertexOrdering = coin.SoShapeHints.COUNTER_CLOCKWISE
+            hints.shapeType = coin.SoShapeHints.SOLID
+            hints.creaseAngle = 0.8 # Approx 45 degrees
+            self.root.addChild(hints)
+        except Exception as e:
+            FreeCAD.Console.PrintWarning(f"SDFRenderer: Failed to create SoShapeHints: {e}\n")
         
         # Coordinates
         self.coords = coin.SoCoordinate3()

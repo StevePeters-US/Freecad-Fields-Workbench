@@ -107,7 +107,7 @@ class SDFBox(SDFObject):
         if isinstance(size, (int, float)):
              self.half_size = np.array([size, size, size]) / 2.0
         else:
-             self.half_size = np.array(size) / 2.0
+             self.half_size = np.abs(np.array(size)) / 2.0
              
     def _evaluate_local(self, points):
         # sdBox( p, b ) = length( max(abs(p)-b, 0.0) ) + min(max(max(abs(p).x-b.x, abs(p).y-b.y), abs(p).z-b.z), 0.0)
@@ -235,48 +235,10 @@ def mesh_from_sdf(sdf_obj, resolution=32, margin=0.1):
         step = (grid_max - grid_min) / (resolution - 1)
         world_verts = verts * step + grid_min
         
-        # ---------------------------------------------------------
-        # VERTEX PROJECTION (Sharp Edges Improvement)
-        # ---------------------------------------------------------
-        # Project vertices onto the exact zero-isosurface to improve
-        # representation of sharp features and flat surfaces.
-        # Iterative Gradient Descent: v = v - d * gradient(v)
+        # Transform verts from grid indices to World coordinates
+        step = (grid_max - grid_min) / (resolution - 1)
+        world_verts = verts * step + grid_min
         
-        # We need a gradient function
-        def calc_gradients(pts, epsilon=1e-5):
-            # Central difference
-            # x
-            pts_x0 = pts - [epsilon, 0, 0]
-            pts_x1 = pts + [epsilon, 0, 0]
-            dx = sdf_obj.evaluate(pts_x1) - sdf_obj.evaluate(pts_x0)
-            
-            # y
-            pts_y0 = pts - [0, epsilon, 0]
-            pts_y1 = pts + [0, epsilon, 0]
-            dy = sdf_obj.evaluate(pts_y1) - sdf_obj.evaluate(pts_y0)
-            
-            # z
-            pts_z0 = pts - [0, 0, epsilon]
-            pts_z1 = pts + [0, 0, epsilon]
-            dz = sdf_obj.evaluate(pts_z1) - sdf_obj.evaluate(pts_z0)
-            
-            grads = np.stack([dx, dy, dz], axis=1)
-            # Normalize
-            norms = np.linalg.norm(grads, axis=1, keepdims=True)
-            # Avoid div by zero
-            return grads / (norms + 1e-9)
-
-        # Iterate (2-3 times is usually enough)
-        for _ in range(3):
-            dists = sdf_obj.evaluate(world_verts)
-            grads = calc_gradients(world_verts)
-            # Move towards surface: v - d * grad
-            # Note: SDF is positive outside. Gradient points outside.
-            # To go to 0: v - d * grad
-            world_verts = world_verts - grads * dists.reshape(-1, 1)
-
-        # ---------------------------------------------------------
-
         # Transform World -> Local
         # Because FreeCAD ViewProvider already applies the object's Placement,
         # we need the mesh to be in local coordinates (centered at origin, etc.)
@@ -418,7 +380,7 @@ class SDFOperation(SDFObject):
 class SDFSphere(SDFObject):
     def __init__(self, radius):
         super().__init__()
-        self.radius = radius
+        self.radius = abs(radius)
 
     def _evaluate_local(self, points):
         # length(p) - r
@@ -431,12 +393,12 @@ class SDFSphere(SDFObject):
 class SDFCone(SDFObject):
     def __init__(self, radius, height):
         super().__init__()
-        self.radius = radius # Base radius
+        self.radius = abs(radius) # Base radius
         self.height = height # Total height
         
         # Avoid division by zero
         h_safe = height if abs(height) > 1e-6 else 1e-6
-        r_safe = radius
+        r_safe = self.radius
         
         self.q = np.array([r_safe/h_safe, -1.0]) 
         
@@ -540,6 +502,8 @@ class SDFCone(SDFObject):
     def _bounds_local(self):
         r = self.radius
         h = self.height
+        # Height goes from 0 to h. 
+        # If h is negative, range is [h, 0].
         z_min = min(0, h)
         z_max = max(0, h)
         return (np.array([-r, -r, z_min]), np.array([r, r, z_max]))

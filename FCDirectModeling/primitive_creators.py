@@ -31,7 +31,8 @@ class PrimitiveCreatorBase:
         self.sg = coin.SoSeparator()
         self.sg.ref()
         
-        # Guide Material
+        
+        # Guide Material (for non-SDF or wireframe guides)
         self.material = coin.SoMaterial()
         self.material.diffuseColor.setValue(0.2, 0.6, 0.8)
         self.material.transparency.setValue(0.5)
@@ -40,6 +41,26 @@ class PrimitiveCreatorBase:
         # Shape Nodes (To be added by subclasses)
         self.preview_sep = coin.SoSeparator()
         self.sg.addChild(self.preview_sep)
+        
+        # SDF Preview Nodes
+        self.sdf_sep = coin.SoSeparator()
+        self.sg.addChild(self.sdf_sep)
+        
+        self.sdf_mat = coin.SoMaterial()
+        self.sdf_mat.diffuseColor.setValue(0.7, 0.7, 0.7) # Light Gray
+        self.sdf_sep.addChild(self.sdf_mat)
+        
+        self.sdf_trans = coin.SoTransform()
+        self.sdf_sep.addChild(self.sdf_trans)
+        
+        self.sdf_coords = coin.SoCoordinate3()
+        self.sdf_sep.addChild(self.sdf_coords)
+        
+        self.sdf_norm = coin.SoNormal()
+        self.sdf_sep.addChild(self.sdf_norm)
+        
+        self.sdf_faces = coin.SoIndexedFaceSet()
+        self.sdf_sep.addChild(self.sdf_faces)
         
         self.view.getSceneGraph().addChild(self.sg)
         
@@ -118,6 +139,35 @@ class PrimitiveCreatorBase:
 
     def handle_click(self, event_dict): pass
     def handle_move(self, event_dict): pass
+
+    def update_sdf_preview(self, sdf_obj):
+        """
+        Updates the SDF preview mesh from the given SDF object.
+        """
+        try:
+            # Generate mesh (Low Res for speed)
+            verts, faces, normals = sdf_lib.mesh_from_sdf(sdf_obj, resolution=16, margin=0.1)
+            
+            if verts is not None and len(verts) > 0:
+                self.sdf_coords.point.setValues(0, len(verts), verts)
+                if normals is not None:
+                    self.sdf_norm.vector.setValues(0, len(normals), normals)
+                
+                # Faces
+                # Flatten faces (M, 3) -> list with -1 separator
+                flat_faces = []
+                for f in faces:
+                    flat_faces.extend([f[0], f[1], f[2], -1])
+                
+                self.sdf_faces.coordIndex.setValues(0, len(flat_faces), flat_faces)
+            else:
+                self.sdf_coords.point.setNum(0)
+                self.sdf_faces.coordIndex.setNum(0)
+
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"SDF Preview Error: {e}\n")
+            self.sdf_faces.coordIndex.setNum(0)
+
 
     def get_closest_point_on_axis(self, event_dict, axis_start, axis_dir):
         """
@@ -229,14 +279,6 @@ class SphereCreator(SDFPrimitiveCreator):
         super().__init__()
         log_to_file("SphereCreator: Initializing...")
         self.radius = 1.0
-        
-        # Coin3D Sphere
-        self.sphere = coin.SoSphere()
-        self.sphere.radius.setValue(0) # Start invisible/zero
-        self.trans = coin.SoTranslation()
-        
-        self.preview_sep.addChild(self.trans)
-        self.preview_sep.addChild(self.sphere)
         log_to_file("SphereCreator: Scene graph created.")
         
     def handle_click(self, event_dict):
@@ -245,7 +287,9 @@ class SphereCreator(SDFPrimitiveCreator):
         
         if self.state == 0:
             self.center = pt
-            self.trans.translation.setValue(pt.x, pt.y, pt.z)
+            # Move SDF Preview to center
+            # self.sdf_trans is available from Base
+            self.sdf_trans.translation.setValue(pt.x, pt.y, pt.z)
             self.state = 1
         elif self.state == 1:
             # Finish
@@ -259,7 +303,11 @@ class SphereCreator(SDFPrimitiveCreator):
         if self.state == 1:
             pt = self.get_point_on_plane(event_dict)
             self.radius = (pt - self.center).Length
-            self.sphere.radius.setValue(self.radius)
+            
+            # Update SDF
+            # Create temp SDF object
+            sdf = sdf_lib.SDFSphere(self.radius)
+            self.update_sdf_preview(sdf)
             self.view.redraw()
             
     def create_object(self):
@@ -285,34 +333,11 @@ class ConeCreator(SDFPrimitiveCreator):
         self.radius = 0.1 # Default internal
         self.height = 0.1
         
-        self.cone = coin.SoCone()
-        self.cone.bottomRadius.setValue(0) # Start invisible
-        self.cone.height.setValue(0)
-        
-        self.trans = coin.SoTranslation()
-        
-        self.rot = coin.SoRotation() # To align standard Cone (Y-up?) to FreeCAD (Z-up?)
-        # Coin SoCone is Y-aligned. FreeCAD Cone is Z-aligned.
-        # We need to rotate +90 deg around X (Y -> Z).
-        # Previous -90 (Y -> -Z) caused upside-down cone.
-        self.rot.rotation.setValue(coin.SbVec3f(1,0,0), 1.5708)
-        
-        # Center of Coin Cone is at height/2.
-        # FreeCAD Cone Base is at 0.
-        # So we need to shift Coin Cone up by height/2 in its Y-axis (which is Z after rotation)
-        # Or just handle translation.
-        
-        self.preview_sep.addChild(self.trans)
-        self.preview_sep.addChild(self.rot)
-        self.mid_trans = coin.SoTranslation() # For centering offset
-        self.preview_sep.addChild(self.mid_trans)
-        self.preview_sep.addChild(self.cone)
-        
     def handle_click(self, event_dict):
         pt = self.get_point_on_plane(event_dict)
         if self.state == 0: # Center
             self.center = pt
-            self.trans.translation.setValue(pt.x, pt.y, pt.z)
+            self.sdf_trans.translation.setValue(pt.x, pt.y, pt.z)
             self.state = 1
         elif self.state == 1: # Radius
             self.state = 2
@@ -324,8 +349,12 @@ class ConeCreator(SDFPrimitiveCreator):
         if self.state == 1:
             pt = self.get_point_on_plane(event_dict)
             self.radius = (pt - self.center).Length
-            self.cone.bottomRadius.setValue(self.radius)
+            
+            # Update SDF
+            sdf = sdf_lib.SDFCone(self.radius, self.height)
+            self.update_sdf_preview(sdf)
             self.view.redraw()
+            
         elif self.state == 2:
             # 3D Height Logic
             # Axis is Z
@@ -339,25 +368,47 @@ class ConeCreator(SDFPrimitiveCreator):
             
             if abs(self.height) < 0.1: self.height = 0.1 if self.height >= 0 else -0.1
             
-            self.cone.height.setValue(abs(self.height))
-            
-            # Offset logic to keep base fixed at center
-            offset = abs(self.height) / 2.0
-            if self.height < 0:
-                offset = -abs(self.height) / 2.0
-                
-            self.mid_trans.translation.setValue(0, offset, 0) 
+            # Update SDF
+            sdf = sdf_lib.SDFCone(self.radius, self.height)
+            self.update_sdf_preview(sdf)
             self.view.redraw()
 
     def create_object(self):
-        self.create_generic_sdf(
-            "SDF_Cone",
-            [
-                ("App::PropertyLength", "Radius", "SDF", "Base Radius"),
-                ("App::PropertyLength", "Height", "SDF", "Cone Height")
-            ],
-            {"Radius": self.radius, "Height": self.height}
-        )
+        log_to_file("ConeCreator: Creating object...")
+        try:
+            obj = self.create_generic_sdf(
+                "SDF_Cone",
+                [
+                    ("App::PropertyLength", "Radius", "SDF", "Cone Radius"),
+                    ("App::PropertyLength", "Height", "SDF", "Cone Height")
+                ],
+                {
+                    "Radius": self.radius,
+                    "Height": abs(self.height)
+                }
+            )
+            
+            # If height was negative (Down), user expects Cone pointing Down.
+            # SDFCone is Z-up (0 to H).
+            # We need to rotate the Object by 180 degrees around X or Y to flip Z.
+            # Base (0) stays at 0. Tip (H) becomes (-H).
+            if self.height < 0:
+                # Apply rotation to Placement
+                # Get current placement (has Base/Center)
+                pl = obj.Placement
+                # Rotate 180 around X
+                rot = FreeCAD.Rotation(FreeCAD.Vector(1,0,0), 180)
+                pl.Rotation = rot
+                obj.Placement = pl
+                
+            log_to_file("ConeCreator: Object created successfully.")
+        except Exception as e:
+            msg = f"ConeCreator: Error creating object: {e}"
+            log_to_file(msg)
+            FreeCAD.Console.PrintError(msg + "\n")
+            import traceback
+            traceback.print_exc()
+
 
 class TorusCreator(SDFPrimitiveCreator):
     def __init__(self):
@@ -365,54 +416,14 @@ class TorusCreator(SDFPrimitiveCreator):
         self.R = 1.0 # Major
         self.r = 0.5 # Minor
         
-        # FreeCAD Torus is Z-axis aligned (Ring in XY)
-        # Coin SoTube assumes Y axis? No, SoTorus doesn't exist.
-        # Let's use a SoGroup with a custom implementation or approximation?
-        # For preview, maybe just a Circle (SoLineSet) and another Circle?
-        # Or just use SoSphere for center and rely on final object.
-        # Actually, let doesn't matter much for crash.
-        # Let's assume we want a Ring.
-        # For now, let's just use Two Concentric Circles using SoLineSet for preview (XY plane)?
-        # Or just a placeholder SoSphere.
-        # Let's keep it simple: A Sphere for center, and maybe a Circle.
-        
-        self.trans = coin.SoTranslation()
-        self.preview_sep.addChild(self.trans)
-        
-        # Visual guide: Major Radius Ring
-        # We can construct a simple circle using Coordinate3 and LineSet
-        self.major_circle_sep = coin.SoSeparator()
-        self.major_coords = coin.SoCoordinate3()
-        self.major_lines = coin.SoLineSet()
-        self.major_circle_sep.addChild(self.major_coords)
-        self.major_circle_sep.addChild(self.major_lines)
-        self.preview_sep.addChild(self.major_circle_sep)
-        
-        # Minor Radius circle (rotated 90 deg)? 
-        # For preview, just showing the Major Ring size is usually enough.
-        
-    def _update_circle(self, radius):
-        # Generate points for a circle in XY plane
-        num_pts = 64
-        pts = []
-        for i in range(num_pts + 1):
-            angle = 2.0 * math.pi * i / num_pts
-            x = radius * math.cos(angle)
-            y = radius * math.sin(angle)
-            pts.append([x, y, 0.0])
-            
-        self.major_coords.point.setValues(pts)
-        self.major_lines.numVertices.setValue(num_pts + 1)
-        
     def handle_click(self, event_dict):
         pt = self.get_point_on_plane(event_dict)
         if self.state == 0: # Center
             self.center = pt
-            self.trans.translation.setValue(pt.x, pt.y, pt.z)
+            self.sdf_trans.translation.setValue(pt.x, pt.y, pt.z)
             self.state = 1
         elif self.state == 1: # Major Radius
             self.state = 2
-            self.drag_start_pt = pt
         elif self.state == 2: # Minor Radius
             self.finish()
 
@@ -421,16 +432,23 @@ class TorusCreator(SDFPrimitiveCreator):
         if self.state == 1:
             self.R = (pt - self.center).Length
             if self.R < 0.1: self.R = 0.1
-            self._update_circle(self.R)
+            
+            # Update SDF
+            sdf = sdf_lib.SDFTorus(self.R, self.r)
+            self.update_sdf_preview(sdf)
             self.view.redraw()
+            
         elif self.state == 2:
             # Distance from Major Ring?
             # Or just distance from center minus R?
             dist = (pt - self.center).Length
             self.r = abs(dist - self.R)
             if self.r < 0.01: self.r = 0.01
-            # Redraw? We don't have minor visual.
-            FreeCAD.Console.PrintMessage(f"Torus Minor R: {self.r}\r")
+            
+            # Update SDF
+            sdf = sdf_lib.SDFTorus(self.R, self.r)
+            self.update_sdf_preview(sdf)
+            self.view.redraw()
 
     def create_object(self):
         self.create_generic_sdf(
