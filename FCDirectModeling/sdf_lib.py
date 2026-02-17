@@ -1,5 +1,7 @@
 
 import numpy as np
+import FreeCAD
+import FreeCADGui
 
 # Remove top-level import to avoid lazy_loader crash
 HAS_SKIMAGE = False 
@@ -631,3 +633,191 @@ class SDFIntersection(SDFOperation):
         min_b, max_b = self._get_child_bounds_in_local(self.sdf_b)
         return np.maximum(min_a, min_b), np.minimum(max_a, max_b)
 
+
+def detect_features(sdf_obj, resolution=32, threshold=0.5, algorithm="Laplacian"):
+    """
+    Detects features (high curvature points) on the SDF surface.
+    Returns: (points, scores)
+    """
+    # 1. Generate mesh vertices to get candidate surface points
+    verts, faces, normals = mesh_from_sdf(sdf_obj, resolution=resolution, margin=0.1)
+    
+    if verts is None or len(verts) == 0:
+        print("detect_features: No vertices found.")
+        return None, None
+        
+    FreeCAD.Console.PrintMessage(f"detect_features: {len(verts)} vertices. Algo: {algorithm}, Thresh: {threshold}\n")
+        
+    if algorithm == "Laplacian":
+        return _detect_laplacian(sdf_obj, verts, threshold)
+    elif algorithm == "Normal Variance":
+        # Pass normals if available? We can compute them locally or use mesh normals.
+        # Ideally we sample fresh.
+        return _detect_variance(sdf_obj, verts, threshold)
+    else:
+        FreeCAD.Console.PrintError(f"Unknown Algorithm: {algorithm}\n")
+        return None, None
+
+def _detect_laplacian(sdf_obj, points, threshold):
+    # We use numerical Laplacian of SDF: L = d_xx + d_yy + d_zz
+    eps = 1e-4
+    n = len(points)
+    
+    dx = np.array([eps, 0, 0])
+    dy = np.array([0, eps, 0])
+    dz = np.array([0, 0, eps])
+    
+    p = points
+    
+    # 7 evaluations per point
+    # Center, X+, X-, Y+, Y-, Z+, Z-
+    
+    batch = np.vstack([
+        p + dx, p - dx,
+        p + dy, p - dy,
+        p + dz, p - dz,
+        p
+    ])
+    
+    vals = sdf_obj.evaluate(batch)
+    
+    v_xp = vals[0:n]
+    v_xm = vals[n:2*n]
+    v_yp = vals[2*n:3*n]
+    v_ym = vals[3*n:4*n]
+    v_zp = vals[4*n:5*n]
+    v_zm = vals[5*n:6*n]
+    v_c = vals[6*n:7*n]
+    
+    d_xx = (v_xp - 2*v_c + v_xm) / (eps*eps)
+    d_yy = (v_yp - 2*v_c + v_ym) / (eps*eps)
+    d_zz = (v_zp - 2*v_c + v_zm) / (eps*eps)
+    
+    laplacian = d_xx + d_yy + d_zz
+    scores = np.abs(laplacians)
+    
+    # Debug
+    msg = f"Laplacian Scores: Min={np.min(scores):.4f}, Max={np.max(scores):.4f}, Mean={np.mean(scores):.4f}"
+    # print(msg)
+    FreeCAD.Console.PrintMessage(msg + "\n")
+    
+    mask = scores > threshold
+    return points[mask], scores[mask]
+
+def _detect_variance(sdf_obj, points, threshold):
+    """
+    Sample points in a small radius around each candidate.
+    Compute normals at samples.
+    Variance of normals (1 - length of mean vector) indicates curvature.
+    """
+    n_points = len(points)
+    radius = 0.5 # Sampling radius. Needs to be tuned relative to object scale/resolution?
+    # Maybe relative to grid spacing?
+    # Grid spacing is roughly (Size+Margin)/Resolution.
+    # We don't have grid spacing handy here easily without recomputing bounds.
+    # Let's assume a small fixed radius or derive from points density.
+    # If resolution=32 on a size 10 box, step is ~0.3.
+    # So radius 0.2-0.5 is good.
+    
+    # Generate random offsets in sphere
+    # For speed, we just use fixed axis offsets? 
+    # Better: 6 neighbors at radius R.
+    
+    r = 0.2
+    offsets = np.array([
+        [r, 0, 0], [-r, 0, 0],
+        [0, r, 0], [0, -r, 0],
+        [0, 0, r], [0, 0, -r]
+    ])
+    
+    # Shape: (6, 3)
+    n_samples = len(offsets)
+    
+    # We need to evaluate gradients (normals) at p + offset
+    # Gradient = finite difference
+    eps = 1e-4
+    
+    # Total evaluations: n_points * n_samples * 6 (for grad) -> Expensive.
+    # 1000 points * 6 samples * 6 evals = 36k evals. Doable.
+    
+    # 1. Batch all sample points
+    # (n_points, n_samples, 3)
+    # p[:, None, :] + offsets[None, :, :]
+    
+    samples = points[:, np.newaxis, :] + offsets[np.newaxis, :, :]
+    samples_flat = samples.reshape(-1, 3) # (N*6, 3)
+    total_samples = len(samples_flat)
+    
+    # 2. Compute Normals at all samples
+    # We need SDF at (samples +/- eps)
+    
+    sx = np.array([eps, 0, 0])
+    sy = np.array([0, eps, 0])
+    sz = np.array([0, 0, eps])
+    
+    # 6 evals per sample for central difference gradient
+    # Or 4 if we use forward/backward? Central is better.
+    
+    grad_batch = np.vstack([
+        samples_flat + sx, samples_flat - sx,
+        samples_flat + sy, samples_flat - sy,
+        samples_flat + sz, samples_flat - sz
+    ])
+    
+    g_vals = sdf_obj.evaluate(grad_batch)
+    
+    gx_p = g_vals[0:total_samples]
+    gx_m = g_vals[total_samples:2*total_samples]
+    gy_p = g_vals[2*total_samples:3*total_samples]
+    gy_m = g_vals[3*total_samples:4*total_samples]
+    gz_p = g_vals[4*total_samples:5*total_samples]
+    gz_m = g_vals[5*total_samples:6*total_samples]
+    
+    nx = (gx_p - gx_m)
+    ny = (gy_p - gy_m)
+    nz = (gz_p - gz_m)
+    
+    # Stack normals
+    norms = np.stack([nx, ny, nz], axis=1) # (N*6, 3)
+    
+    # Normalize
+    mag = np.linalg.norm(norms, axis=1, keepdims=True)
+    norms = norms / (mag + 1e-9)
+    
+    # Reshape back to (N, 6, 3)
+    norms_grouped = norms.reshape(n_points, n_samples, 3)
+    
+    # 3. Compute Variance
+    # Mean normal vector
+    mean_norm = np.mean(norms_grouped, axis=1) # (N, 3)
+    
+    # Length of mean normal
+    # If all normals align, length is 1.0.
+    # If they scatter, length < 1.0.
+    # If they oppose (sharp edge), length is much less.
+    
+    len_mean = np.linalg.norm(mean_norm, axis=1)
+    
+    # Score = 1 - length
+    # Flat = 0
+    # Edge (90 deg) -> normals (1,0,0) and (0,1,0). Mean (0.5, 0.5, 0). Len 0.707. Score ~0.3
+    scor = 1.0 - len_mean
+    
+    # Boost score for thresholding convenience? 
+    # Scores are usually 0.0 to 1.0
+    # Threshold 0.1 is usually good for edges.
+    
+    # Map to similar range as Laplacian? 
+    # Laplacian was high (e.g. 5, 10).
+    # Let's multiply by 10 to make 0.5 roughly significant.
+    
+    scores = scor * 100.0 # Scale up so threshold 5.0 works
+    
+    # Debug
+    msg = f"Variance Scores: Min={np.min(scores):.4f}, Max={np.max(scores):.4f}, Mean={np.mean(scores):.4f}"
+    # print(msg)
+    # import FreeCAD
+    FreeCAD.Console.PrintMessage(msg + "\n")
+    
+    mask = scores > threshold
+    return points[mask], scores[mask]

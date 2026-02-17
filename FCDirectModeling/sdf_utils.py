@@ -33,6 +33,16 @@ class SDFObjectFactory:
             obj.addProperty("App::PropertyBool", "ShowVertices", "SDF", "Show Vertices").ShowVertices = True
         if not hasattr(obj, "VertexSize"):
             obj.addProperty("App::PropertyFloat", "VertexSize", "SDF", "Vertex Size").VertexSize = 5.0
+            
+        # Feature Detection Properties
+        if not hasattr(obj, "ShowFeatures"):
+            obj.addProperty("App::PropertyBool", "ShowFeatures", "SDF", "Show Features").ShowFeatures = False
+        if not hasattr(obj, "FeatureThreshold"):
+            obj.addProperty("App::PropertyFloat", "FeatureThreshold", "SDF", "Feature Threshold").FeatureThreshold = 5.0
+        if not hasattr(obj, "FeatureAlgo"):
+            obj.addProperty("App::PropertyEnumeration", "FeatureAlgo", "SDF", "Feature Detection Algorithm")
+            obj.FeatureAlgo = ["Laplacian", "Normal Variance"]
+            obj.FeatureAlgo = "Normal Variance" # Default to new better algo
 
     @staticmethod
     def setup_view_provider(obj, compute_mesh=True):

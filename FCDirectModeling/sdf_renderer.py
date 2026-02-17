@@ -154,8 +154,21 @@ class SDFRenderer:
         # Shape Hints (Enable smooth shading)
         try:
             hints = coin.SoShapeHints()
-            hints.vertexOrdering = coin.SoShapeHints.COUNTER_CLOCKWISE
-            hints.shapeType = coin.SoShapeHints.SOLID
+            # Safe enum access
+            if hasattr(coin, "SoShapeHints") and hasattr(coin.SoShapeHints, "COUNTER_CLOCKWISE"):
+                hints.vertexOrdering = coin.SoShapeHints.COUNTER_CLOCKWISE
+            elif hasattr(coin, "COUNTER_CLOCKWISE"):
+                hints.vertexOrdering = coin.COUNTER_CLOCKWISE
+            else:
+                hints.vertexOrdering = 0
+                
+            if hasattr(coin, "SoShapeHints") and hasattr(coin.SoShapeHints, "SOLID"):
+                hints.shapeType = coin.SoShapeHints.SOLID
+            elif hasattr(coin, "SOLID"):
+                hints.shapeType = coin.SOLID
+            else:
+                hints.shapeType = 1
+                
             hints.creaseAngle = 0.8 # Approx 45 degrees
             self.root.addChild(hints)
         except Exception as e:
@@ -223,7 +236,8 @@ class SDFRenderer:
         log_to_file(f"SDFRenderer.updateData: {fp.Name} - {prop}")
         if prop in ["Length", "Width", "Height", "Resolution", "Margin", "SliceAxis", 
                     "WireframeColor", "WireframeWidth", "ShowVertices", "VertexSize",
-                    "Radius", "MajorRadius", "MinorRadius"]:
+                    "Radius", "MajorRadius", "MinorRadius",
+                    "ShowFeatures", "FeatureThreshold", "FeatureAlgo"]:
             self.update()
 
     def getDisplayModes(self, vobj):
@@ -244,6 +258,32 @@ class SDFRenderer:
         if hasattr(self.sobj, "Tool") and self.sobj.Tool:
             children.append(self.sobj.Tool)
         return children
+        
+    def _create_feature_nodes(self):
+        # Helper to ensure feature nodes exist
+        if not hasattr(self, 'feature_sep'):
+            self.feature_sep = coin.SoSeparator()
+            self.root.addChild(self.feature_sep)
+            
+            self.feature_mat = coin.SoMaterial()
+            self.feature_mat.diffuseColor.setValue(1.0, 0.0, 0.0) # Red
+            # self.feature_mat.pointSize.setValue(5.0) # Removing invalid attribute
+            self.feature_sep.addChild(self.feature_mat)
+            
+            # Material Binding for Per-Vertex Color
+            self.feature_mat_binding = coin.SoMaterialBinding()
+            self.feature_mat_binding.value = coin.SoMaterialBinding.OVERALL # Default
+            self.feature_sep.addChild(self.feature_mat_binding)
+            
+            self.feature_style = coin.SoDrawStyle()
+            self.feature_style.pointSize.setValue(5.0)
+            self.feature_sep.addChild(self.feature_style)
+            
+            self.feature_coords = coin.SoCoordinate3()
+            self.feature_sep.addChild(self.feature_coords)
+            
+            self.feature_points = coin.SoPointSet()
+            self.feature_sep.addChild(self.feature_points)
 
     def update(self):
         try:
@@ -276,7 +316,8 @@ class SDFRenderer:
                  self.box_coords.point.setNum(0)
                  self.box_lines.coordIndex.setNum(0)
                  self.box_points.numPoints.setValue(0)
-                 return
+                 # Don't return, we might need to clear features too
+                 # return # Removed return to allow feature clearing
             
             # Note: Placement is already handled inside create_sdf_from_obj
 
@@ -289,6 +330,13 @@ class SDFRenderer:
             
             mode = self.vobj.DisplayMode
             
+            # --- Feature Detection (Gradient Analysis) ---
+            # Define function first so we can use verts
+            
+            verts = None
+            faces = None
+            normals = None
+
             if mode == "SDF Mesh":
                 # Clear Slices
                 self.slice_coords.point.setNum(0)
@@ -300,54 +348,117 @@ class SDFRenderer:
                 log_to_file(f"SDFRenderer.update: Mesh Generated. Verts: {len(verts) if verts is not None else 'None'}")
                 
                 if verts is None:
-                    # No surface found
+                    # No surface found - Suppress spammy warning if empty
                     log_to_file("SDFRenderer.update: No surface found.")
-                    FreeCAD.Console.PrintWarning(f"SDFRenderer.update: No surface generated for {self.sobj.Name}. Check bounds/resolution.\n")
+                    # Only warn if resolution is reasonably high, otherwise it might just be empty space
+                    # FreeCAD.Console.PrintMessage(f"SDFRenderer: No surface generated for {self.sobj.Name}. (Check bounds/resolution)\n")
                     self.coords.point.setNum(0)
                     self.face_set.coordIndex.setNum(0)
                     self.norms.vector.setNum(0)
-                    return
-                    
-                # Update Coin3D
-                log_to_file("SDFRenderer.update: Updating Coin3D Nodes...")
-                
-                # Vertices
-                if verts is not None:
-                     log_to_file(f"SDFRenderer.update: Setting {len(verts)} vertices...")
-                     self.coords.point.setValues(0, len(verts), verts.tolist())
-                
-                # Normals
-                if normals is not None and len(normals) > 0:
-                    log_to_file(f"SDFRenderer.update: Setting {len(normals)} normals...")
-                    self.norms.vector.setValues(0, len(normals), normals.tolist())
+                    # Don't return, we might need to clear features too
                 else:
-                    self.norms.vector.setNum(0)
-                
-                # Indices
-                n_faces = faces.shape[0]
-                log_to_file(f"SDFRenderer.update: Preparing indices for {n_faces} faces...")
-                indices = np.full((n_faces, 4), -1, dtype=np.int32)
-                indices[:, :3] = faces
-                log_to_file(f"SDFRenderer.update: Setting coordIndex...")
-                self.face_set.coordIndex.setValues(0, indices.size, indices.flatten().tolist())
-                
-
-                
-                log_to_file("SDFRenderer.update: Coin3D Update Complete.")
+                    # Update Coin3D
+                    log_to_file("SDFRenderer.update: Updating Coin3D Nodes...")
+                    
+                    # Vertices
+                    if verts is not None:
+                         self.coords.point.setValues(0, len(verts), verts.tolist())
+                    
+                    # Normals
+                    if normals is not None and len(normals) > 0:
+                        self.norms.vector.setValues(0, len(normals), normals.tolist())
+                    else:
+                        self.norms.vector.setNum(0)
+                    
+                    # Indices
+                    n_faces = faces.shape[0]
+                    indices = np.full((n_faces, 4), -1, dtype=np.int32)
+                    indices[:, :3] = faces
+                    self.face_set.coordIndex.setValues(0, indices.size, indices.flatten().tolist())
+                    
             
             # Wireframe disabled for now
             self.box_coords.point.setNum(0)
             self.box_lines.coordIndex.setNum(0)
             self.box_points.numPoints.setValue(0)
+            
+            
+            # Check for "ShowFeatures"
+            show_features = False
+            if hasattr(self.sobj, "ShowFeatures"):
+                show_features = self.sobj.ShowFeatures
+            
+            # Create nodes if needed
+            self._create_feature_nodes()
+            
+            if show_features and verts is not None and len(verts) > 0:
+                threshold = getattr(self.sobj, "FeatureThreshold", 5.0)
+                algo = getattr(self.sobj, "FeatureAlgo", "Laplacian")
+                # Handle Enum potentially returning index or string depending on FreeCAD version?
+                # Usually string if accessed via getattr on Python object wrapping App::PropertyEnumeration
+                if isinstance(algo, int):
+                   # Map index to string if needed, but usually it returns string.
+                   pass
                 
+                log_to_file(f"SDFRenderer: Detecting ({algo}, Thresh={threshold})...")
+                # FreeCAD.Console.PrintMessage(f"SDFRenderer: Detecting Features ({algo}, Thresh={threshold})...\n")
+                
+                # pass algorithm
+                f_pts, f_scores = sdf_lib.detect_features(sdf, resolution=res, threshold=threshold, algorithm=algo)
+                
+                if f_pts is not None and len(f_pts) > 0:
+                    msg = f"SDFRenderer: Found {len(f_pts)} pts. Max Score: {np.max(f_scores):.2f}"
+                    log_to_file(msg)
+                    # FreeCAD.Console.PrintMessage(msg + "\n")
+                    
+                    self.feature_coords.point.setValues(0, len(f_pts), f_pts.tolist())
+                    self.feature_points.numPoints.setValue(len(f_pts))
+                    
+                    # Color map
+                    # Simple Red (High) -> Blue (Low) ?
+                    # Or just Red intensity?
+                    # Let's do a gradient.
+                    # Normalize scores to 0-1 range for coloring.
+                    # Min score is threshold. Max score is ?
+                    
+                    s_min = threshold
+                    s_max = np.max(f_scores)
+                    if s_max <= s_min:
+                        s_max = s_min + 1e-5
+                        
+                    norm_scores = (f_scores - s_min) / (s_max - s_min)
+                    
+                    # Map to color: Blue(0) -> Red(1)
+                    # RGB
+                    # 0.0 -> (0, 0, 1)
+                    # 1.0 -> (1, 0, 0)
+                    
+                    colors = np.zeros((len(f_pts), 3), dtype=np.float32)
+                    colors[:, 0] = norm_scores # R
+                    colors[:, 2] = 1.0 - norm_scores # B
+                    
+                    self.feature_mat.diffuseColor.setValues(0, len(f_pts), colors.tolist())
+                    
+                    # Ensure binding is PER_VERTEX
+                    self.feature_mat_binding.value = coin.SoMaterialBinding.PER_VERTEX
+                    
+                else:
+                    self.feature_coords.point.setNum(0)
+                    self.feature_points.numPoints.setValue(0)
+            else:
+                 self.feature_coords.point.setNum(0)
+                 self.feature_points.numPoints.setValue(0)
+                 
             log_to_file("SDFRenderer.update: Finished.")
             
         except Exception as e:
             msg = f"SDFRenderer.update: Error: {e}"
             log_to_file(msg)
-            import traceback
-            FreeCAD.Console.PrintError(msg + "\n")
-            traceback.print_exc()
+            # Only print if it's a real error, not just an interruption
+            if "KeyboardInterrupt" not in str(e):
+                import traceback
+                FreeCAD.Console.PrintError(msg + "\n")
+                traceback.print_exc()
             self.root.removeAllChildren()
 
     def __getstate__(self):
