@@ -20,7 +20,7 @@ class SDFObjectFactory:
         Adds standard SDF properties to the object: Resolution, Margin, Wireframe settings.
         """
         if not hasattr(obj, "Resolution"):
-            obj.addProperty("App::PropertyInteger", "Resolution", "SDF", "Grid resolution").Resolution = 32
+            obj.addProperty("App::PropertyInteger", "Resolution", "SDF", "Grid resolution").Resolution = 16
         if not hasattr(obj, "Margin"):
             obj.addProperty("App::PropertyFloat", "Margin", "SDF", "Grid margin").Margin = 0.2
             

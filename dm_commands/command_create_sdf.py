@@ -1,6 +1,7 @@
 import FreeCAD
 import FreeCADGui
-from FCDirectModeling import sdf_renderer, box_creator, box_task_panel
+from FCDirectModeling import sdf_renderer
+from FCDirectModeling.primitives import box_creator, box_task_panel
 
 class CreateSDFCommand:
     """
@@ -16,7 +17,8 @@ class CreateSDFCommand:
 
     def Activated(self):
         import importlib
-        from FCDirectModeling import sdf_renderer, box_creator, box_task_panel, sdf_utils
+        from FCDirectModeling import sdf_renderer, sdf_utils
+        from FCDirectModeling.primitives import box_creator, box_task_panel
         importlib.reload(sdf_utils)
         importlib.reload(sdf_renderer)
         importlib.reload(box_creator)

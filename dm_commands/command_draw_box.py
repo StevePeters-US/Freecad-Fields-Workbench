@@ -1,6 +1,6 @@
 import FreeCAD
 import FreeCADGui
-from FCDirectModeling import box_creator, box_task_panel
+from FCDirectModeling.primitives import box_creator, box_task_panel
 
 class DrawBoxCommand:
     """
@@ -16,7 +16,8 @@ class DrawBoxCommand:
 
     def Activated(self):
         import importlib
-        from FCDirectModeling import box_creator, box_task_panel, sdf_utils
+        from FCDirectModeling.primitives import box_creator, box_task_panel
+        from FCDirectModeling import sdf_utils
         importlib.reload(sdf_utils)
         importlib.reload(box_creator)
         importlib.reload(box_task_panel)

@@ -215,26 +215,14 @@ class SDFRenderer:
         self.box_points = coin.SoPointSet()
         self.box_sep.addChild(self.box_points)
         
-        # Slices
-        self.slice_sep = coin.SoSeparator()
-        self.root.addChild(self.slice_sep)
-        
-        self.slice_mat = coin.SoMaterial()
-        self.slice_mat.diffuseColor.setValue(0.0, 1.0, 0.0) # Green for slices
-        self.slice_sep.addChild(self.slice_mat)
-        
-        self.slice_coords = coin.SoCoordinate3()
-        self.slice_sep.addChild(self.slice_coords)
-        
-        self.slice_lines = coin.SoLineSet()
-        self.slice_sep.addChild(self.slice_lines)
-        
+
+
         # Initial Update - REMOVED FOR STABILITY
         # self.update()
 
     def updateData(self, fp, prop):
         log_to_file(f"SDFRenderer.updateData: {fp.Name} - {prop}")
-        if prop in ["Length", "Width", "Height", "Resolution", "Margin", "SliceAxis", 
+        if prop in ["Length", "Width", "Height", "Resolution", "Margin",
                     "WireframeColor", "WireframeWidth", "ShowVertices", "VertexSize",
                     "Radius", "MajorRadius", "MinorRadius",
                     "ShowFeatures", "FeatureThreshold", "FeatureAlgo"]:
@@ -337,38 +325,8 @@ class SDFRenderer:
             faces = None
             normals = None
 
-            if mode == "SDF Mesh":
-                # Clear Slices
-                self.slice_coords.point.setNum(0)
-                self.slice_lines.numVertices.setNum(0)
-                
-                # Updated to return normals
-                log_to_file(f"SDFRenderer.update: calling mesh_from_sdf...")
-                verts, faces, normals = sdf_lib.mesh_from_sdf(sdf, resolution=res, margin=margin)
-                log_to_file(f"SDFRenderer.update: Mesh Generated. Verts: {len(verts) if verts is not None else 'None'}")
-                
-                if verts is None:
-                    # No surface found - Suppress spammy warning if empty
-                    log_to_file("SDFRenderer.update: No surface found.")
-                    # Only warn if resolution is reasonably high, otherwise it might just be empty space
-                    # FreeCAD.Console.PrintMessage(f"SDFRenderer: No surface generated for {self.sobj.Name}. (Check bounds/resolution)\n")
-                    self.coords.point.setNum(0)
-                    self.face_set.coordIndex.setNum(0)
-                    self.norms.vector.setNum(0)
-                    # Don't return, we might need to clear features too
-                else:
-                    # HIDE MAIN MESH by not setting coords/faces
-                    # but keep it in memory for feature detection? 
-                    # Actually we already have 'verts', 'faces', 'normals' in local vars.
-                    
-                    # We intentionally do NOT populate self.coords and self.face_set
-                    # so the main surface is invisible.
-                    self.coords.point.setNum(0)
-                    self.face_set.coordIndex.setNum(0)
-                    self.norms.vector.setNum(0)
-                    
-                    # If we want a wireframe hint, we could add it here, but user asked to hide it.
-            
+
+
             # Wireframe disabled for now
             self.box_coords.point.setNum(0)
             self.box_lines.coordIndex.setNum(0)
@@ -383,7 +341,7 @@ class SDFRenderer:
             # Create nodes if needed
             self._create_feature_nodes()
             
-            if show_features and verts is not None and len(verts) > 0:
+            if show_features:
                 # Default threshold 5.0, Default Algo 'Normal Variance' (since Laplacian is noisy on sharp edges)
                 threshold = getattr(self.sobj, "FeatureThreshold", 5.0)
                 algo = getattr(self.sobj, "FeatureAlgo", "Normal Variance") 
@@ -401,52 +359,52 @@ class SDFRenderer:
                 # We can tune samples/iterations
                 f_pts = sdf.generate_point_cloud(resolution=res, samples=8, iterations=5)
                 
-                f_scores = None
                 if f_pts is not None and len(f_pts) > 0:
                      FreeCAD.Console.PrintMessage(f"SDFRenderer: Got {len(f_pts)} points. Computing variance...\n")
                      
                      # Calculate dynamic radius for sampling
-                     # Similar logic to what was in detect_features
+                     # Compute radius based on resolution
                      bound_min, bound_max = sdf._bounds_local()
                      size = bound_max - bound_min
                      # Approx step size
                      step = np.max(size) / (res - 1)
-                     # Radius: slightly larger than step to catch neighbors
-                     # User suggested step * 1.5
-                     radius = step * 1.5
+                     # Radius: Step * 1.0 for finer detail
+                     radius = step * 1.0
                      
                      f_scores = sdf.compute_variances(f_pts, radius=radius)
                 else:
                      FreeCAD.Console.PrintMessage(f"SDFRenderer: Got None from generation.\n")
 
                 if f_pts is not None and len(f_pts) > 0:
+                    # RENDER ALL POINTS for the "Point Cloud" look
+                    # Color them based on variance
+                    
                     self.feature_coords.point.setValues(f_pts)
                     self.feature_points.numPoints.setValue(len(f_pts))
                     
-                    # Color mapping
-                    # Normalize: 0 .. Threshold
-                    # Apply Gamma Correction to make lower values more visible (e.g. Sphere curvature)
-                    
-                    # Norm = score / threshold. Clip at 1.0.
-                    norm_scores = f_scores / (threshold + 1e-9)
-                    norm_scores = np.clip(norm_scores, 0.0, 1.0)
-                    
-                    # Gamma 0.5 (Sqrt) to boost low values
-                    norm_scores = np.sqrt(norm_scores)
-                    
-                    # Map to color
-                    # Low (0) -> Blue (0,0,1)
-                    # High (1) -> Red (1,0,0)
+                    # Strict Threshold Coloring
+                    # Edges (> 0.20): Red
+                    # Surface (< 0.20): Grey
+                    # This creates a sharp distinction and avoids "wide" gradients.
+                    edge_contrast = 0.20 
                     
                     colors = np.zeros((len(f_pts), 3))
-                    colors[:, 0] = norm_scores # R
-                    colors[:, 2] = 1.0 - norm_scores # B
+                    
+                    # Mask for edges
+                    is_edge = f_scores > edge_contrast
+                    
+                    # Set Surface Color (Grey)
+                    colors[~is_edge] = [0.7, 0.7, 0.7] # Light Grey
+                    
+                    # Set Edge Color (Red)
+                    colors[is_edge] = [1.0, 0.0, 0.0] # Red
                     
                     self.feature_mat.diffuseColor.setValues(colors)
                     self.feature_mat_binding.value = coin.SoMaterialBinding.PER_VERTEX
                 else:
                     self.feature_coords.point.setNum(0)
                     self.feature_points.numPoints.setValue(0)
+
             else:
                  FreeCAD.Console.PrintMessage("SDFRenderer: ShowFeatures is False. Skipping detection.\n")
                  self.feature_coords.point.setNum(0)

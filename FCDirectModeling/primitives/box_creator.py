@@ -7,27 +7,21 @@ import FCDirectModeling.sdf_renderer as sdf_renderer
 import FCDirectModeling.sdf_lib as sdf_lib
 import FCDirectModeling.sdf_utils as sdf_utils
 import numpy as np
+from .base import PrimitiveCreatorBase
 
-class BoxCreator:
+class BoxCreator(PrimitiveCreatorBase):
     def __init__(self):
-        self.view = FreeCADGui.ActiveDocument.ActiveView
-        self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
+        super().__init__()
         
         self.create_sdf_mode = False # Flag for SDF creation
 
-        self.start_point = None
-        self.current_point = None
+        # State is initialized by super: self.start_point, self.current_point, self.state=0
         
-        self.state = 0
         self.height = 0.0
         
         self.active_axis = None
         self.locked_length = None
         self.locked_width = None
-        self.locked_height = None
-        
-        self.locked_height = None
-        
         self.locked_height = None
         
         self.manual_mode_override = False
@@ -37,16 +31,13 @@ class BoxCreator:
         
         self.panel = None
 
-        self.sg = coin.SoSeparator()
-        self.sg.ref() 
-        
-        # Material (for Tool)
-        self.material = coin.SoMaterial()
-        self.sg.addChild(self.material)
         self.is_cutter = False
         
-        # Preview Intersection Nodes
-        self.preview_sep = coin.SoSeparator()
+        # Base initializes: self.sg, self.material, self.preview_sep, self.sdf_sep
+        
+        # Add Box-specific nodes
+        
+        # Preview Intersection Nodes (Add to self.preview_sep)
         self.preview_mat = coin.SoMaterial()
         # Bright Yellow/Orange for cut intersection
         self.preview_mat.diffuseColor.setValue(1.0, 0.8, 0.0) 
@@ -59,34 +50,14 @@ class BoxCreator:
         self.preview_face_set = coin.SoIndexedFaceSet()
         self.preview_sep.addChild(self.preview_face_set)
         
-        self.sg.addChild(self.preview_sep)
         
-
-        
-        # Coordinates (Tool Box)
+        # Coordinates (Tool Box) - Solid Box Preview
         self.coords = coin.SoCoordinate3()
         self.sg.addChild(self.coords)
         
         # Faces (Tool Box)
         self.face_set = coin.SoIndexedFaceSet()
         self.sg.addChild(self.face_set)
-        
-        # SDF Preview Nodes
-        self.sdf_sep = coin.SoSeparator()
-        self.sdf_mat = coin.SoMaterial()
-        self.sdf_mat.diffuseColor.setValue(0.7, 0.7, 0.7) # Light Gray
-        self.sdf_sep.addChild(self.sdf_mat)
-        
-        self.sdf_coords = coin.SoCoordinate3()
-        self.sdf_sep.addChild(self.sdf_coords)
-        
-        self.sdf_norm = coin.SoNormal()
-        self.sdf_sep.addChild(self.sdf_norm)
-        
-        self.sdf_faces = coin.SoIndexedFaceSet()
-        self.sdf_sep.addChild(self.sdf_faces)
-        
-        self.sg.addChild(self.sdf_sep)
         
         # Outline (Black lines)
         self.line_sep = coin.SoSeparator()
@@ -99,8 +70,6 @@ class BoxCreator:
         self.line_sep.addChild(self.line_set)
         
         self.sg.addChild(self.line_sep)
-        
-        self.view.getSceneGraph().addChild(self.sg)
         
         # Initial Material Update
         self.update_material()
@@ -129,14 +98,7 @@ class BoxCreator:
          self.view.redraw()
 
     def terminate(self):
-        if self.callback:
-            self.view.removeEventCallback("SoEvent", self.callback)
-            self.callback = None
-        if self.sg:
-            self.view.getSceneGraph().removeChild(self.sg)
-            self.sg.unref()
-            self.sg = None
-            
+        super().terminate()
         # Close task panel
         FreeCADGui.Control.closeDialog()
 
@@ -328,58 +290,42 @@ class BoxCreator:
             self.line_mat.diffuseColor.setValue(1.0, 1.0, 0.0) 
             self.line_mat.transparency.setValue(0.0)
             
-            # SDF Mesh Preview (Low Res)
+            # SDF Point Cloud Preview (No meshing)
             try:
-                # Create temp SDF object to evaluate
-                # Center is at (width/2, length/2, height/2) relative to Corner at (min_x, min_y, z_offset)
-                # But we need to generate mesh in local coords and then apply the same transform as the box.
-                
                 # Dimensions must be positive for SDF
                 w = max(0.001, width)
                 l = max(0.001, length)
-                h = max(0.001, abs(h))
+                h_abs = max(0.001, abs(h))
                 
-                # Create SDF (Centering is handled by SDFBox usually being centered at 0,0,0)
-                # We need to map the mesh from that centered space to our box position.
+                sdf = sdf_lib.SDFBox(size=(w, l, h_abs))
                 
-                # BoxCreator creates box at (min_x, min_y, z_offset) extending by w, l, h
-                # SDFBox creates box at (-w/2, -l/2, -h/2) to (w/2, l/2, h/2)
+                # Generate point cloud (low res ~100 pts for speed during drag)
+                pts = sdf.generate_point_cloud(resolution=8, samples=4, iterations=4)
                 
-                offset = FreeCAD.Vector(min_x + w/2, min_y + l/2, z_offset + h/2)
-                
-                sdf = sdf_lib.SDFBox(size=(w, l, h))
-                
-                # Generate mesh (Low Res for speed)
-                verts, faces, normals = sdf_lib.mesh_from_sdf(sdf, resolution=16, margin=0.1)
-                
-                if verts is not None and len(verts) > 0:
-                    # Translate vertices to correct position
-                    # verts is (N, 3) float32 array
+                if pts is not None and len(pts) > 0:
+                    # Translate points to correct position
+                    offset = np.array([min_x + w/2, min_y + l/2, z_offset + h_abs/2], dtype=np.float64)
+                    pts += offset
                     
-                    # Apply offset
-                    verts += np.array([offset.x, offset.y, offset.z], dtype=np.float32)
-                    
-                    self.sdf_coords.point.setValues(0, len(verts), verts)
-                    self.sdf_norm.vector.setValues(0, len(normals), normals)
-                    
-                    # Faces
-                    # Flatten faces (M, 3) -> list
-                    flat_faces = []
-                    for f in faces:
-                        flat_faces.extend([f[0], f[1], f[2], -1])
-                    
-                    self.sdf_faces.coordIndex.setValues(0, len(flat_faces), flat_faces)
+                    self.sdf_coords.point.setValues(0, len(pts), pts)
+                    self.sdf_points.numPoints.setValue(len(pts))
                 else:
-                    self.sdf_faces.coordIndex.setNum(0)
+                    self.sdf_coords.point.setNum(0)
+                    self.sdf_points.numPoints.setValue(0)
 
             except Exception as e:
                 print(f"SDF Preview Error: {e}")
-                self.sdf_faces.coordIndex.setNum(0)
+                self.sdf_coords.point.setNum(0)
+                self.sdf_points.numPoints.setValue(0)
+
+
 
         else:
             # Standard Box Mode
             # Hide SDF
-            self.sdf_faces.coordIndex.setNum(0)
+            self.sdf_coords.point.setNum(0)
+            self.sdf_points.numPoints.setValue(0)
+
             self.line_mat.diffuseColor.setValue(0, 0, 0) # Black outline
             
             # Update Solid Box Faces
@@ -724,12 +670,8 @@ class BoxCreator:
             # Common Properties
             sdf_utils.SDFObjectFactory.add_common_properties(box)
             
-            # Slicing
-            if not hasattr(box, "SliceAxis"):
-                box.addProperty("App::PropertyEnumeration", "SliceAxis", "SDF", "Axis to slice along")
-                box.SliceAxis = ["X", "Y", "Z"]
-                box.SliceAxis = "Z"
-            
+
+
             sdf_utils.SDFObjectFactory.setup_view_provider(box)
         else:
             # Create Standard Box
