@@ -25,6 +25,12 @@ from FCDirectModeling.primitives.sphere import SDFSphere
 from FCDirectModeling.primitives.cone import SDFCone
 from FCDirectModeling.primitives.torus import SDFTorus
 
+try:
+    from FCDirectModeling import curve_extraction
+    HAS_CURVE_EXTRACTION = True
+except ImportError:
+    HAS_CURVE_EXTRACTION = False
+
 def create_sdf_from_obj(obj):
     """
     Factory to create an sdf_lib.SDFObject from a FreeCAD FeaturePython object.
@@ -215,7 +221,19 @@ class SDFRenderer:
         self.box_points = coin.SoPointSet()
         self.box_sep.addChild(self.box_points)
         
-
+        # --- Curve rendering nodes ---
+        self.curve_sep = coin.SoSeparator()
+        self.root.addChild(self.curve_sep)
+        
+        self.curve_mat = coin.SoMaterial()
+        self.curve_mat.diffuseColor.setValue(0.0, 1.0, 0.3)  # Bright green
+        self.curve_sep.addChild(self.curve_mat)
+        
+        self.curve_style = coin.SoDrawStyle()
+        self.curve_style.lineWidth = 3.0
+        self.curve_sep.addChild(self.curve_style)
+        
+        # Curves are added dynamically as child separators with their own coords + line sets
 
         # Initial Update - REMOVED FOR STABILITY
         # self.update()
@@ -225,7 +243,8 @@ class SDFRenderer:
         if prop in ["Length", "Width", "Height", "Resolution", "Margin",
                     "WireframeColor", "WireframeWidth", "ShowVertices", "VertexSize",
                     "Radius", "MajorRadius", "MinorRadius",
-                    "ShowFeatures", "FeatureThreshold", "FeatureAlgo"]:
+                    "ShowFeatures", "FeatureThreshold", "FeatureAlgo",
+                    "ShowCurves"]:
             self.update()
 
     def getDisplayModes(self, vobj):
@@ -383,20 +402,25 @@ class SDFRenderer:
                     self.feature_points.numPoints.setValue(len(f_pts))
                     
                     # Strict Threshold Coloring
-                    # Edges (> 0.20): Red
-                    # Surface (< 0.20): Grey
-                    # This creates a sharp distinction and avoids "wide" gradients.
-                    edge_contrast = 0.20 
+                    # Use FeatureThreshold from object (default 0.2 if legacy 5.0 is found)
+                    
+                    # If Threshold is default 5.0 (from old logic), remap to sensible 0.2
+                    # The Property 'FeatureThreshold' is user exposed.
+                    # Range for variance is 0.0 to 1.0.
+                    
+                    edge_contrast = threshold
+                    if edge_contrast > 0.99: # Assume legacy or user error
+                         edge_contrast = 0.20
                     
                     colors = np.zeros((len(f_pts), 3))
                     
-                    # Mask for edges
+                    # Mask for edges (High variance)
                     is_edge = f_scores > edge_contrast
                     
-                    # Set Surface Color (Grey)
-                    colors[~is_edge] = [0.7, 0.7, 0.7] # Light Grey
+                    # Set Surface Color (Dark Grey for contrast)
+                    colors[~is_edge] = [0.2, 0.2, 0.2] # Dark Grey
                     
-                    # Set Edge Color (Red)
+                    # Set Edge Color (Bright Red)
                     colors[is_edge] = [1.0, 0.0, 0.0] # Red
                     
                     self.feature_mat.diffuseColor.setValues(colors)
@@ -409,7 +433,59 @@ class SDFRenderer:
                  FreeCAD.Console.PrintMessage("SDFRenderer: ShowFeatures is False. Skipping detection.\n")
                  self.feature_coords.point.setNum(0)
                  self.feature_points.numPoints.setValue(0)
-                 
+            
+            # --- Curve Extraction and Rendering ---
+            show_curves = True
+            if hasattr(self.sobj, "ShowCurves"):
+                show_curves = self.sobj.ShowCurves
+            
+            # Clear previous curves
+            if hasattr(self, 'curve_sep'):
+                # Remove dynamic curve children (keep mat + style = first 2 children)
+                while self.curve_sep.getNumChildren() > 2:
+                    self.curve_sep.removeChild(2)
+            
+            if show_curves and HAS_CURVE_EXTRACTION and sdf:
+                try:
+                    edge_contrast = getattr(self.sobj, "FeatureThreshold", 0.2)
+                    if edge_contrast > 0.99:
+                        edge_contrast = 0.20
+                    
+                    curves, patch_fits = curve_extraction.extract_curves(
+                        sdf, resolution=res,
+                        edge_threshold=edge_contrast,
+                        samples_per_curve=48
+                    )
+                    
+                    for curve in curves:
+                        if len(curve) < 2:
+                            continue
+                        
+                        # Create a sub-separator for each curve
+                        curve_node = coin.SoSeparator()
+                        
+                        coords = coin.SoCoordinate3()
+                        coords.point.setValues(curve.tolist())
+                        curve_node.addChild(coords)
+                        
+                        line_set = coin.SoLineSet()
+                        line_set.numVertices.setValue(len(curve))
+                        curve_node.addChild(line_set)
+                        
+                        self.curve_sep.addChild(curve_node)
+                    
+                    FreeCAD.Console.PrintMessage(
+                        f"SDFRenderer: Rendered {len(curves)} curves.\n"
+                    )
+                except ImportError:
+                    FreeCAD.Console.PrintWarning(
+                        "SDFRenderer: scipy not available. Install via Direct Modeling > Install Dependencies.\n"
+                    )
+                except Exception as ce:
+                    FreeCAD.Console.PrintWarning(f"SDFRenderer: Curve extraction error: {ce}\n")
+                    import traceback
+                    traceback.print_exc()
+                  
             log_to_file("SDFRenderer.update: Finished.")
             
         except Exception as e:

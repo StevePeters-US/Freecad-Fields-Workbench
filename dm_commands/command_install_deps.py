@@ -19,7 +19,7 @@ class InstallDependenciesCommand:
 
     def Activated(self):
         msg = "This will attempt to install the following libraries using pip:\n\n"
-        msg += "- shapely\n- numpy\n- scikit-image\n\n"
+        msg += "- shapely\n- numpy\n- scikit-image\n- scipy\n\n"
         msg += "FreeCAD might become unresponsive for a moment.\n"
         msg += "Do you want to continue?"
         
@@ -41,7 +41,7 @@ class InstallDependenciesCommand:
         # specific for FreeCAD bundled python on some platforms? 
         # Usually sys.executable is correct for the internal python.
         
-        pkgs = ["shapely", "numpy", "scikit-image"]
+        pkgs = ["shapely", "numpy", "scikit-image", "scipy"]
         
         cmd = [python_exe, "-m", "pip", "install"] + pkgs
         

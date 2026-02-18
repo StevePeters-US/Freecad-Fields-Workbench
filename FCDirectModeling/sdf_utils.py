@@ -47,6 +47,8 @@ class SDFObjectFactory:
             obj.addProperty("App::PropertyEnumeration", "FeatureAlgo", "SDF", "Feature Detection Algorithm")
             obj.FeatureAlgo = ["Laplacian", "Normal Variance"]
             obj.FeatureAlgo = "Normal Variance" # Default to new better algo
+        if not hasattr(obj, "ShowCurves"):
+            obj.addProperty("App::PropertyBool", "ShowCurves", "SDF", "Show extracted feature curves").ShowCurves = True
 
     @staticmethod
     def setup_view_provider(obj, compute_mesh=True):
