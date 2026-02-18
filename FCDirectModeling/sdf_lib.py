@@ -102,6 +102,188 @@ class SDFObject:
     def _bounds_local(self):
         raise NotImplementedError
 
+    def generate_point_cloud(self, resolution=32, margin=0.1, samples=8, iterations=5):
+        """
+        Generates a dense point cloud using Stochastic Surface Projection.
+        1. Identifies active voxels near surface.
+        2. Spawns random seeds in those voxels.
+        3. Projects seeds to zero-level set using SDF gradients.
+        
+        Returns points in LOCAL coordinates.
+        """
+        import time
+        t0 = time.time()
+        
+        bound_min, bound_max = self._bounds_local()
+        size = bound_max - bound_min
+        size[size < 1e-6] = 1.0 # Safety
+        
+        margin_vec = size * margin
+        grid_min = bound_min - margin_vec
+        grid_max = bound_max + margin_vec
+        
+        # 1. Coarse Grid to find Active Voxels
+        # Make resolution slightly coarser? Or use input resolution.
+        # User wants "dense" but not regular.
+        # Let's use resolution for the coarse grid.
+        
+        x_vals = np.linspace(grid_min[0], grid_max[0], resolution)
+        y_vals = np.linspace(grid_min[1], grid_max[1], resolution)
+        z_vals = np.linspace(grid_min[2], grid_max[2], resolution)
+        
+        step_sizes = np.array([
+            x_vals[1] - x_vals[0] if len(x_vals) > 1 else 1.0,
+            y_vals[1] - y_vals[0] if len(y_vals) > 1 else 1.0,
+            z_vals[1] - z_vals[0] if len(z_vals) > 1 else 1.0
+        ])
+        voxel_diag = np.linalg.norm(step_sizes)
+        
+        grid_x, grid_y, grid_z = np.meshgrid(x_vals, y_vals, z_vals, indexing='ij')
+        grid_points = np.stack([grid_x, grid_y, grid_z], axis=-1).reshape(-1, 3)
+        
+        vals = self._evaluate_local(grid_points)
+        
+        # Active voxels: |val| < diagonal
+        # This catches voxels that might contain the surface
+        mask = np.abs(vals) < (voxel_diag * 1.5) # slightly generous
+        active_indices = np.where(mask)[0]
+        
+        if len(active_indices) == 0:
+            return np.zeros((0, 3))
+            
+        n_active = len(active_indices)
+        # Spawn random seeds
+        # Center of active voxels
+        centers = grid_points[active_indices]
+        
+        # Vectors from -0.5 to 0.5 step
+        rng = np.random.default_rng() 
+        
+        all_pts = []
+        
+        # Vectorized spawning
+        # Total points = n_active * samples
+        # Repeat centers
+        centers_repeated = np.repeat(centers, samples, axis=0)
+        n_total = len(centers_repeated)
+        
+        # Random offsets: -0.5 to 0.5 * step
+        jitter = (rng.random((n_total, 3)) - 0.5) * step_sizes
+        
+        candidates = centers_repeated + jitter
+        
+        # 2. Projection Loop (Newton-Raphson)
+        curr_pts = candidates
+        
+        for k in range(iterations):
+            dists = self._evaluate_local(curr_pts)
+            
+            # Check convergence/divergence
+            # If distance is huge, maybe drop? But keep simple for now.
+            
+            grads = self.compute_normals(curr_pts, epsilon=1e-4) # Returns normalized normals
+            
+            # Move towards surface: p_new = p - dist * normal
+            # SDF convention: dist > 0 outside, normal points outside.
+            # So if dist > 0, we are outside, normal points away from surface.
+            # We want to go -normal * dist. 
+            # If dist < 0 (inside), normal points outside.
+            # We want to go +normal * |dist| = -normal * dist.
+            # So formula is consistent.
+            
+            # Dampen step slightly for stability? 1.0 is Newton.
+            curr_pts = curr_pts - grads * dists[:, np.newaxis]
+            
+            # Clip to bounds to avoid flying off?
+            # Optional
+            
+        # Final filter: Check if actually close to surface
+        final_dists = np.abs(self._evaluate_local(curr_pts))
+        valid_mask = final_dists < (voxel_diag * 0.1) # Strict tolerance
+        
+        final_pts = curr_pts[valid_mask]
+        
+        # Log
+        # FreeCAD.Console.PrintMessage(f"Stochastic: {len(final_pts)} points generated. (Init: {n_total})\n")
+        
+        return final_pts
+
+    def compute_normals(self, points, epsilon=1e-4):
+        """
+        Compute normalized gradients (normals) for points via central finite difference.
+        """
+        n_points = len(points)
+        if n_points == 0: return np.zeros((0, 3))
+        
+        sx = np.array([epsilon, 0, 0])
+        sy = np.array([0, epsilon, 0])
+        sz = np.array([0, 0, epsilon])
+        
+        # 6 samples per point
+        # Efficient batching
+        
+        # Shapes:
+        # P: (N, 3)
+        # Q: (N, 6, 3) -> flattened (N*6, 3)
+        
+        P = points[:, np.newaxis, :] # (N, 1, 3)
+        offsets = np.vstack([sx, -sx, sy, -sy, sz, -sz]) # (6, 3)
+        
+        Q = P + offsets # Broadcasting -> (N, 6, 3)
+        Q_flat = Q.reshape(-1, 3)
+        
+        vals = self._evaluate_local(Q_flat) # (N*6)
+        vals = vals.reshape(n_points, 6)
+        
+        # Gradients
+        gx = vals[:, 0] - vals[:, 1]
+        gy = vals[:, 2] - vals[:, 3]
+        gz = vals[:, 4] - vals[:, 5]
+        
+        grads = np.stack([gx, gy, gz], axis=1) # (N, 3)
+        
+        # Normalize
+        mags = np.linalg.norm(grads, axis=1, keepdims=True)
+        mags[mags < 1e-12] = 1.0 # Avoid div zero
+        
+        normals = grads / mags
+        return normals
+
+    def compute_variances(self, points, radius=None):
+        """
+        Compute surface normal variance for given points.
+        Returns: scores (0.0 to ~1.0)
+        """
+        n_points = len(points)
+        if n_points == 0: return np.array([])
+        
+        r = radius if radius is not None else 0.2
+        
+        # Use 6-axis sampling (deterministic)
+        offsets = np.array([
+            [r, 0, 0], [-r, 0, 0],
+            [0, r, 0], [0, -r, 0],
+            [0, 0, r], [0, 0, -r]
+        ])
+        n_samples = len(offsets)
+        
+        samples = points[:, np.newaxis, :] + offsets[np.newaxis, :, :]
+        samples_flat = samples.reshape(-1, 3)
+        
+        # Compute normals for all samples
+        # Reuse separate compute_normals? Yes.
+        # But compute_normals uses epsilon for fd. radius here is for variance "search" radius.
+        
+        norms_flat = self.compute_normals(samples_flat, epsilon=1e-4)
+        norms_grouped = norms_flat.reshape(n_points, n_samples, 3)
+        
+        # Variance = 1 - length(mean_normal)
+        mean_norm = np.mean(norms_grouped, axis=1)
+        len_mean = np.linalg.norm(mean_norm, axis=1)
+        scores = 1.0 - len_mean
+        
+        return scores
+
 class SDFBox(SDFObject):
     def __init__(self, size):
         super().__init__()
@@ -633,8 +815,107 @@ class SDFIntersection(SDFOperation):
         min_b, max_b = self._get_child_bounds_in_local(self.sdf_b)
         return np.maximum(min_a, min_b), np.minimum(max_a, max_b)
 
+def generate_point_cloud(sdf_obj, resolution=32, margin=0.1):
+    """
+    Generates a dense point cloud on the zero-isosurface of the SDF object.
+    Finds zero-crossings along grid edges directly.
+    Returns points in LOCAL coordinates of the object.
+    """
+    import time
+    t0 = time.time()
+    
+    # We want LOCAL coordinates because SDFRenderer applies the placement transform.
+    # So we must generate grid in Local Space.
+    bound_min, bound_max = sdf_obj._bounds_local()
+    size = bound_max - bound_min
+    margin_vec = size * margin
+    grid_min = bound_min - margin_vec
+    grid_max = bound_max + margin_vec
+    
+    # Create grid
+    x_vals = np.linspace(grid_min[0], grid_max[0], resolution)
+    y_vals = np.linspace(grid_min[1], grid_max[1], resolution)
+    z_vals = np.linspace(grid_min[2], grid_max[2], resolution)
+    
+    # 3D Grid
+    grid_x, grid_y, grid_z = np.meshgrid(x_vals, y_vals, z_vals, indexing='ij')
+    
+    # Reshape grid points for evaluation
+    grid_points = np.stack([grid_x, grid_y, grid_z], axis=-1).reshape(-1, 3)
+    
+    # Evaluate SDF (Local Coords)
+    vals = sdf_obj._evaluate_local(grid_points)
+    
+    vals = vals.reshape(resolution, resolution, resolution)
+    
+    points = []
+    
+    # Find zero crossings along X edges
+    # grid[i, j, k] vs grid[i+1, j, k]
+    # Indices: (x, y, z)
+    
+    # X-edges: (x, y, z) -> (x+1, y, z)
+    # v1 = vals[:-1, :, :]
+    # v2 = vals[1:, :, :]
+    # crossings: v1 * v2 < 0
+    
+    def get_crossings(v1, v2, p1_idx, p2_idx, axis):
+        mask = (v1 * v2) <= 0
+        if not np.any(mask):
+            return np.zeros((0, 3))
+            
+        # Get indices
+        # ix, iy, iz are indices into v1
+        ix, iy, iz = np.where(mask)
+        
+        # Values
+        val1 = v1[ix, iy, iz]
+        val2 = v2[ix, iy, iz]
+        
+        # Interpolate t (fraction from p1 to p2)
+        # p = p1 + t * (p2 - p1)
+        # val = val1 + t * (val2 - val1) = 0
+        # t = -val1 / (val2 - val1)
+        # Avoid div zero
+        denom = (val2 - val1)
+        denom[denom == 0] = 1.0 # Should be covered by mask (val1*val2 <= 0 so if both 0, t=0?)
+        t = -val1 / denom
+        
+        # Coords
+        # Grid coords
+        
+        # Axis 0 (X): p1=(ix, iy, iz), p2=(ix+1, iy, iz)
+        # Axis 1 (Y): p1=(ix, iy, iz), p2=(ix, iy+1, iz)
+        # Axis 2 (Z): p1=(ix, iy, iz), p2=(ix, iy, iz+1)
+        
+        # Basic coords:
+        c_x = x_vals[ix]
+        c_y = y_vals[iy]
+        c_z = z_vals[iz]
+        
+        # Result coords
+        pts = np.zeros((len(t), 3))
+        pts[:, 0] = c_x
+        pts[:, 1] = c_y
+        pts[:, 2] = c_z
+        
+        # Add offset along axis
+        # Step size along axis
+        if axis == 0: # X
+            dx = x_vals[1] - x_vals[0]
+            pts[:, 0] += t * dx
+        elif axis == 1: # Y
+            dy = y_vals[1] - y_vals[0]
+            pts[:, 1] += t * dy
+        elif axis == 2: # Z
+            dz = z_vals[1] - z_vals[0]
+            pts[:, 2] += t * dz
+            
+        return pts
 
+    # X-edges: varies in dim 0
 def detect_features(sdf_obj, resolution=32, threshold=0.5, algorithm="Laplacian"):
+
     """
     Detects features (high curvature points) on the SDF surface.
     Returns: (points, scores)
@@ -647,13 +928,34 @@ def detect_features(sdf_obj, resolution=32, threshold=0.5, algorithm="Laplacian"
         return None, None
         
     FreeCAD.Console.PrintMessage(f"detect_features: {len(verts)} vertices. Algo: {algorithm}, Thresh: {threshold}\n")
+    if len(verts) > 0:
+        FreeCAD.Console.PrintMessage(f"detect_features: First vert: {verts[0]}\n")
         
+    # Calculate dynamic radius based on resolution
+    # Matches mesh_from_sdf logic roughly
+    bound_min, bound_max = sdf_obj.bounds()
+    size = bound_max - bound_min
+    # Margin is 0.1 in mesh_from_sdf
+    margin_vec = size * 0.1
+    grid_min = bound_min - margin_vec
+    grid_max = bound_max + margin_vec
+    
+    # max step size
+    step = np.max((grid_max - grid_min) / (resolution - 1))
+    
+    # Radius should be comparable to step size. 
+    # If radius < step/2, we might miss things between grid points?
+    # Actually verts ARE on grid lines/edges (marching cubes).
+    # But normal variance needs to sample *around* the point.
+    # Radius = step * 0.8 seemed to be the heuristic in the plan.
+    radius = step * 0.8
+    
     if algorithm == "Laplacian":
         return _detect_laplacian(sdf_obj, verts, threshold)
     elif algorithm == "Normal Variance":
         # Pass normals if available? We can compute them locally or use mesh normals.
         # Ideally we sample fresh.
-        return _detect_variance(sdf_obj, verts, threshold)
+        return _detect_variance(sdf_obj, verts, threshold, radius=radius)
     else:
         FreeCAD.Console.PrintError(f"Unknown Algorithm: {algorithm}\n")
         return None, None
@@ -679,7 +981,7 @@ def _detect_laplacian(sdf_obj, points, threshold):
         p
     ])
     
-    vals = sdf_obj.evaluate(batch)
+    vals = sdf_obj._evaluate_local(batch)
     
     v_xp = vals[0:n]
     v_xm = vals[n:2*n]
@@ -704,26 +1006,20 @@ def _detect_laplacian(sdf_obj, points, threshold):
     mask = scores > threshold
     return points[mask], scores[mask]
 
-def _detect_variance(sdf_obj, points, threshold):
+def _detect_variance(sdf_obj, points, threshold, radius=None):
     """
     Sample points in a small radius around each candidate.
     Compute normals at samples.
     Variance of normals (1 - length of mean vector) indicates curvature.
     """
     n_points = len(points)
-    radius = 0.5 # Sampling radius. Needs to be tuned relative to object scale/resolution?
-    # Maybe relative to grid spacing?
-    # Grid spacing is roughly (Size+Margin)/Resolution.
-    # We don't have grid spacing handy here easily without recomputing bounds.
-    # Let's assume a small fixed radius or derive from points density.
-    # If resolution=32 on a size 10 box, step is ~0.3.
-    # So radius 0.2-0.5 is good.
+    
+    # Use dynamic radius if provided, else fallback to 0.2
+    r = radius if radius is not None else 0.2
     
     # Generate random offsets in sphere
-    # For speed, we just use fixed axis offsets? 
     # Better: 6 neighbors at radius R.
     
-    r = 0.2
     offsets = np.array([
         [r, 0, 0], [-r, 0, 0],
         [0, r, 0], [0, -r, 0],
@@ -764,7 +1060,7 @@ def _detect_variance(sdf_obj, points, threshold):
         samples_flat + sz, samples_flat - sz
     ])
     
-    g_vals = sdf_obj.evaluate(grad_batch)
+    g_vals = sdf_obj._evaluate_local(grad_batch)
     
     gx_p = g_vals[0:total_samples]
     gx_m = g_vals[total_samples:2*total_samples]
@@ -815,9 +1111,10 @@ def _detect_variance(sdf_obj, points, threshold):
     
     # Debug
     msg = f"Variance Scores: Min={np.min(scores):.4f}, Max={np.max(scores):.4f}, Mean={np.mean(scores):.4f}"
-    # print(msg)
-    # import FreeCAD
-    FreeCAD.Console.PrintMessage(msg + "\n")
+    # FreeCAD.Console.PrintMessage(msg + "\n")
+    
+    count_over = np.sum(scores > threshold)
+    # FreeCAD.Console.PrintMessage(f"Points over Threshold ({threshold}): {count_over} / {len(scores)}\n")
     
     mask = scores > threshold
     return points[mask], scores[mask]

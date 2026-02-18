@@ -357,25 +357,17 @@ class SDFRenderer:
                     self.norms.vector.setNum(0)
                     # Don't return, we might need to clear features too
                 else:
-                    # Update Coin3D
-                    log_to_file("SDFRenderer.update: Updating Coin3D Nodes...")
+                    # HIDE MAIN MESH by not setting coords/faces
+                    # but keep it in memory for feature detection? 
+                    # Actually we already have 'verts', 'faces', 'normals' in local vars.
                     
-                    # Vertices
-                    if verts is not None:
-                         self.coords.point.setValues(0, len(verts), verts.tolist())
+                    # We intentionally do NOT populate self.coords and self.face_set
+                    # so the main surface is invisible.
+                    self.coords.point.setNum(0)
+                    self.face_set.coordIndex.setNum(0)
+                    self.norms.vector.setNum(0)
                     
-                    # Normals
-                    if normals is not None and len(normals) > 0:
-                        self.norms.vector.setValues(0, len(normals), normals.tolist())
-                    else:
-                        self.norms.vector.setNum(0)
-                    
-                    # Indices
-                    n_faces = faces.shape[0]
-                    indices = np.full((n_faces, 4), -1, dtype=np.int32)
-                    indices[:, :3] = faces
-                    self.face_set.coordIndex.setValues(0, indices.size, indices.flatten().tolist())
-                    
+                    # If we want a wireframe hint, we could add it here, but user asked to hide it.
             
             # Wireframe disabled for now
             self.box_coords.point.setNum(0)
@@ -383,8 +375,8 @@ class SDFRenderer:
             self.box_points.numPoints.setValue(0)
             
             
-            # Check for "ShowFeatures"
-            show_features = False
+            # Check for "ShowFeatures" - Default to True for now since we are hiding mesh
+            show_features = True
             if hasattr(self.sobj, "ShowFeatures"):
                 show_features = self.sobj.ShowFeatures
             
@@ -392,60 +384,71 @@ class SDFRenderer:
             self._create_feature_nodes()
             
             if show_features and verts is not None and len(verts) > 0:
+                # Default threshold 5.0, Default Algo 'Normal Variance' (since Laplacian is noisy on sharp edges)
                 threshold = getattr(self.sobj, "FeatureThreshold", 5.0)
-                algo = getattr(self.sobj, "FeatureAlgo", "Laplacian")
-                # Handle Enum potentially returning index or string depending on FreeCAD version?
-                # Usually string if accessed via getattr on Python object wrapping App::PropertyEnumeration
+                algo = getattr(self.sobj, "FeatureAlgo", "Normal Variance") 
+                
+                # Handle Enum potentially returning index
                 if isinstance(algo, int):
-                   # Map index to string if needed, but usually it returns string.
+                   # approximate mapping if needed, or rely on it being string
                    pass
                 
-                log_to_file(f"SDFRenderer: Detecting ({algo}, Thresh={threshold})...")
-                # FreeCAD.Console.PrintMessage(f"SDFRenderer: Detecting Features ({algo}, Thresh={threshold})...\n")
+                log_to_file(f"SDFRenderer: Generating Point Cloud ({algo}, Thresh={threshold})...")
+                FreeCAD.Console.PrintMessage(f"SDFRenderer: Generating Point Cloud ({algo}, Thresh={threshold})...\n")
                 
-                # pass algorithm
-                f_pts, f_scores = sdf_lib.detect_features(sdf, resolution=res, threshold=threshold, algorithm=algo)
+                # Generate full point cloud using internal method (Local Coords)
+                # Stochastic Projection
+                # We can tune samples/iterations
+                f_pts = sdf.generate_point_cloud(resolution=res, samples=8, iterations=5)
                 
+                f_scores = None
                 if f_pts is not None and len(f_pts) > 0:
-                    msg = f"SDFRenderer: Found {len(f_pts)} pts. Max Score: {np.max(f_scores):.2f}"
-                    log_to_file(msg)
-                    # FreeCAD.Console.PrintMessage(msg + "\n")
-                    
-                    self.feature_coords.point.setValues(0, len(f_pts), f_pts.tolist())
+                     FreeCAD.Console.PrintMessage(f"SDFRenderer: Got {len(f_pts)} points. Computing variance...\n")
+                     
+                     # Calculate dynamic radius for sampling
+                     # Similar logic to what was in detect_features
+                     bound_min, bound_max = sdf._bounds_local()
+                     size = bound_max - bound_min
+                     # Approx step size
+                     step = np.max(size) / (res - 1)
+                     # Radius: slightly larger than step to catch neighbors
+                     # User suggested step * 1.5
+                     radius = step * 1.5
+                     
+                     f_scores = sdf.compute_variances(f_pts, radius=radius)
+                else:
+                     FreeCAD.Console.PrintMessage(f"SDFRenderer: Got None from generation.\n")
+
+                if f_pts is not None and len(f_pts) > 0:
+                    self.feature_coords.point.setValues(f_pts)
                     self.feature_points.numPoints.setValue(len(f_pts))
                     
-                    # Color map
-                    # Simple Red (High) -> Blue (Low) ?
-                    # Or just Red intensity?
-                    # Let's do a gradient.
-                    # Normalize scores to 0-1 range for coloring.
-                    # Min score is threshold. Max score is ?
+                    # Color mapping
+                    # Normalize: 0 .. Threshold
+                    # Apply Gamma Correction to make lower values more visible (e.g. Sphere curvature)
                     
-                    s_min = threshold
-                    s_max = np.max(f_scores)
-                    if s_max <= s_min:
-                        s_max = s_min + 1e-5
-                        
-                    norm_scores = (f_scores - s_min) / (s_max - s_min)
+                    # Norm = score / threshold. Clip at 1.0.
+                    norm_scores = f_scores / (threshold + 1e-9)
+                    norm_scores = np.clip(norm_scores, 0.0, 1.0)
                     
-                    # Map to color: Blue(0) -> Red(1)
-                    # RGB
-                    # 0.0 -> (0, 0, 1)
-                    # 1.0 -> (1, 0, 0)
+                    # Gamma 0.5 (Sqrt) to boost low values
+                    norm_scores = np.sqrt(norm_scores)
                     
-                    colors = np.zeros((len(f_pts), 3), dtype=np.float32)
+                    # Map to color
+                    # Low (0) -> Blue (0,0,1)
+                    # High (1) -> Red (1,0,0)
+                    
+                    colors = np.zeros((len(f_pts), 3))
                     colors[:, 0] = norm_scores # R
                     colors[:, 2] = 1.0 - norm_scores # B
                     
-                    self.feature_mat.diffuseColor.setValues(0, len(f_pts), colors.tolist())
-                    
-                    # Ensure binding is PER_VERTEX
+                    self.feature_mat.diffuseColor.setValues(colors)
                     self.feature_mat_binding.value = coin.SoMaterialBinding.PER_VERTEX
-                    
                 else:
                     self.feature_coords.point.setNum(0)
                     self.feature_points.numPoints.setValue(0)
             else:
+                 FreeCAD.Console.PrintMessage("SDFRenderer: ShowFeatures is False. Skipping detection.\n")
                  self.feature_coords.point.setNum(0)
                  self.feature_points.numPoints.setValue(0)
                  

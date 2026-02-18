@@ -36,7 +36,7 @@ class SDFObjectFactory:
             
         # Feature Detection Properties
         if not hasattr(obj, "ShowFeatures"):
-            obj.addProperty("App::PropertyBool", "ShowFeatures", "SDF", "Show Features").ShowFeatures = False
+            obj.addProperty("App::PropertyBool", "ShowFeatures", "SDF", "Show Features").ShowFeatures = True
         if not hasattr(obj, "FeatureThreshold"):
             obj.addProperty("App::PropertyFloat", "FeatureThreshold", "SDF", "Feature Threshold").FeatureThreshold = 5.0
         if not hasattr(obj, "FeatureAlgo"):

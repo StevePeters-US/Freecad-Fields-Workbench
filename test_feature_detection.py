@@ -6,6 +6,7 @@ import os
 # Usually /usr/lib/freecad/lib or similar. 
 # If running with FreeCADCmd, these imports should work directly.
 
+
 import FreeCAD
 import FreeCADGui
 import Part
@@ -49,8 +50,8 @@ def test_feature_detection():
         print(f"Mesh generated: {len(verts)} verts.")
 
     # Detect features
-    print("Detecting Features...")
-    points, scores = sdf_lib.detect_features(box, resolution=32, threshold=5.0)
+    print("Detecting Features (Normal Variance)...")
+    points, scores = sdf_lib.detect_features(box, resolution=32, threshold=5.0, algorithm="Normal Variance")
     
     if points is None:
         print("No features found (points is None).")
