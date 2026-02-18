@@ -5,6 +5,7 @@ SDF Torus creator.
 import FreeCAD
 from .base import SDFPrimitiveCreator, log_to_file
 import FCDirectModeling.sdf_lib as sdf_lib
+from FCDirectModeling.primitives.torus import SDFTorus
 
 
 class TorusCreator(SDFPrimitiveCreator):
@@ -28,14 +29,14 @@ class TorusCreator(SDFPrimitiveCreator):
         pt = self.get_point_on_plane(event_dict)
         if self.state == 1:
             self.R = max(0.1, (pt - self.center).Length)
-            sdf = sdf_lib.SDFTorus(self.R, self.r)
+            sdf = SDFTorus(self.R, self.r)
             self.update_sdf_preview(sdf)
             self.view.redraw()
 
         elif self.state == 2:
             dist = (pt - self.center).Length
             self.r = max(0.01, abs(dist - self.R))
-            sdf = sdf_lib.SDFTorus(self.R, self.r)
+            sdf = SDFTorus(self.R, self.r)
             self.update_sdf_preview(sdf)
             self.view.redraw()
 

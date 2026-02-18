@@ -9,13 +9,9 @@ import numpy as np
 import sys
 import os
 def log_to_file(msg):
-    try:
-        with open("/tmp/fc_debug.log", "a") as f:
-            f.write(f"[SDF] {msg}\n")
-            f.flush()
-            os.fsync(f.fileno())
-    except:
-        pass
+    # Use FreeCAD's built-in logging
+    # PrintLog ensures it goes to the "Report View" and potentially a log file if configured by user
+    FreeCAD.Console.PrintLog(f"[SDF] {msg}\n")
 
 # Ensure we can find our local modules
 # This might be redundant if InitGui sets it up, but safe to have
@@ -24,6 +20,10 @@ if wb_path not in sys.path:
     sys.path.append(wb_path)
 
 from FCDirectModeling import sdf_lib
+from FCDirectModeling.primitives.box import SDFBox
+from FCDirectModeling.primitives.sphere import SDFSphere
+from FCDirectModeling.primitives.cone import SDFCone
+from FCDirectModeling.primitives.torus import SDFTorus
 
 def create_sdf_from_obj(obj):
     """
@@ -71,18 +71,18 @@ def create_sdf_from_obj(obj):
     if hasattr(obj, "MajorRadius") and hasattr(obj, "MinorRadius"):
         R = get_val(obj, "MajorRadius", 10.0)
         r = get_val(obj, "MinorRadius", 2.0)
-        sdf = sdf_lib.SDFTorus(major_radius=R, minor_radius=r)
+        sdf = SDFTorus(major_radius=R, minor_radius=r)
 
     # Cone (Radius and Height, but NO Length/Width)
     elif hasattr(obj, "Radius") and hasattr(obj, "Height") and not hasattr(obj, "Length"):
         r = get_val(obj, "Radius", 5.0)
         h = get_val(obj, "Height", 10.0)
-        sdf = sdf_lib.SDFCone(radius=r, height=h)
+        sdf = SDFCone(radius=r, height=h)
 
     # Sphere (Radius only, no Height)
     elif hasattr(obj, "Radius") and not hasattr(obj, "Height") and not hasattr(obj, "MajorRadius"):
         r = get_val(obj, "Radius", 5.0)
-        sdf = sdf_lib.SDFSphere(radius=r)
+        sdf = SDFSphere(radius=r)
 
     # Box
     elif hasattr(obj, "Length") and hasattr(obj, "Width") and hasattr(obj, "Height"):
@@ -90,7 +90,7 @@ def create_sdf_from_obj(obj):
         w = get_val(obj, "Width", 10.0)
         h = get_val(obj, "Height", 10.0)
         
-        sdf = sdf_lib.SDFBox(size=(l, w, h))
+        sdf = SDFBox(size=(l, w, h))
         
         # Center Offset Logic (Box only? Or all?)
         # Box matches centered logic in lib, but FreeCAD Box is corner-based usually.

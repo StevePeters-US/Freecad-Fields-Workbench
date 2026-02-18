@@ -30,16 +30,52 @@ class DirectModelingTaskPanel:
         self.form = QtGui.QWidget()
         self.layout = QtGui.QVBoxLayout(self.form)
         
-        self.label = QtGui.QLabel("This is a Direct Modeling task panel")
+        self.label = QtGui.QLabel("Global SDF Settings")
         self.layout.addWidget(self.label)
         
-        self.button = QtGui.QPushButton("Click Me")
-        self.layout.addWidget(self.button)
+        # Resolution Control
+        self.res_layout = QtGui.QHBoxLayout()
+        self.res_label = QtGui.QLabel("Default Resolution:")
+        self.res_spin = QtGui.QSpinBox()
+        self.res_spin.setRange(1, 256)
         
-        QtCore.QObject.connect(self.button, QtCore.SIGNAL("clicked()"), self.button_clicked)
+        # Import here to avoid circular imports if possible, or check if top-level is safe
+        from FCDirectModeling import sdf_utils
+        self.res_spin.setValue(sdf_utils.DEFAULT_RESOLUTION)
+        
+        self.res_layout.addWidget(self.res_label)
+        self.res_layout.addWidget(self.res_spin)
+        self.layout.addLayout(self.res_layout)
+        
+        # Apply to Selection Button
+        self.apply_btn = QtGui.QPushButton("Apply to Selection")
+        self.layout.addWidget(self.apply_btn)
+        
+        QtCore.QObject.connect(self.res_spin, QtCore.SIGNAL("valueChanged(int)"), self.on_resolution_changed)
+        QtCore.QObject.connect(self.apply_btn, QtCore.SIGNAL("clicked()"), self.on_apply_clicked)
 
-    def button_clicked(self):
-        print("Button clicked!")
+    def on_resolution_changed(self, val):
+        from FCDirectModeling import sdf_utils
+        sdf_utils.DEFAULT_RESOLUTION = val
+        # FreeCAD.Console.PrintMessage(f"Default Resolution set to {val}\n")
+
+    def on_apply_clicked(self):
+        import FreeCADGui
+        from FCDirectModeling import sdf_utils
+        
+        sel = FreeCADGui.Selection.getSelection()
+        val = self.res_spin.value()
+        
+        count = 0
+        for obj in sel:
+            if hasattr(obj, "Resolution"):
+                obj.Resolution = val
+                count += 1
+        
+        # Recompute is not strictly necessary as Property change triggers it, 
+        # but if we want to be sure:
+        # FreeCAD.ActiveDocument.recompute()
+        # FreeCAD.Console.PrintMessage(f"Applied resolution {val} to {count} objects.\n")
 
     def get_widget(self):
         return self.form

@@ -10,15 +10,13 @@ import FCDirectModeling.sdf_renderer as sdf_renderer
 import FCDirectModeling.sdf_utils as sdf_utils
 
 # Preview point count target (~100 points per shape during drag)
-PREVIEW_RESOLUTION = 8
+PREVIEW_RESOLUTION = sdf_utils.DEFAULT_RESOLUTION
 PREVIEW_SAMPLES = 4
 PREVIEW_ITERATIONS = 4
 
 
 def log_to_file(msg):
-    with open("/tmp/fc_debug.log", "a") as f:
-        f.write(msg + "\n")
-        f.flush()
+    FreeCAD.Console.PrintLog(f"[SDF] {msg}\n")
 
 
 class PrimitiveCreatorBase:
@@ -177,7 +175,7 @@ class PrimitiveCreatorBase:
         """Updates the SDF preview as a point cloud (~100 points)."""
         try:
             pts = sdf_obj.generate_point_cloud(
-                resolution=PREVIEW_RESOLUTION,
+                resolution=sdf_utils.DEFAULT_RESOLUTION,
                 samples=PREVIEW_SAMPLES,
                 iterations=PREVIEW_ITERATIONS
             )

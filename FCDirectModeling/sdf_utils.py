@@ -2,6 +2,10 @@ import FreeCAD
 import FreeCADGui
 import FCDirectModeling.sdf_renderer as sdf_renderer
 
+
+# Default resolution for SDF generation (lower value = larger voxels/points = less density)
+DEFAULT_RESOLUTION = 8
+
 class SDFObjectFactory:
     @staticmethod
     def create_sdf_object(doc, name_prefix, proxy_class=None):
@@ -20,7 +24,7 @@ class SDFObjectFactory:
         Adds standard SDF properties to the object: Resolution, Margin, Wireframe settings.
         """
         if not hasattr(obj, "Resolution"):
-            obj.addProperty("App::PropertyInteger", "Resolution", "SDF", "Grid resolution").Resolution = 16
+            obj.addProperty("App::PropertyInteger", "Resolution", "SDF", "Grid resolution").Resolution = DEFAULT_RESOLUTION
         if not hasattr(obj, "Margin"):
             obj.addProperty("App::PropertyFloat", "Margin", "SDF", "Grid margin").Margin = 0.2
             

@@ -5,6 +5,7 @@ SDF Sphere creator.
 import FreeCAD
 from .base import SDFPrimitiveCreator, log_to_file
 import FCDirectModeling.sdf_lib as sdf_lib
+from FCDirectModeling.primitives.sphere import SDFSphere
 
 
 class SphereCreator(SDFPrimitiveCreator):
@@ -31,7 +32,7 @@ class SphereCreator(SDFPrimitiveCreator):
         if self.state == 1:
             pt = self.get_point_on_plane(event_dict)
             self.radius = (pt - self.center).Length
-            sdf = sdf_lib.SDFSphere(self.radius)
+            sdf = SDFSphere(self.radius)
             self.update_sdf_preview(sdf)
             self.view.redraw()
 

@@ -5,6 +5,7 @@ from pivy import coin
 from PySide import QtCore, QtGui
 import FCDirectModeling.sdf_renderer as sdf_renderer
 import FCDirectModeling.sdf_lib as sdf_lib
+from FCDirectModeling.primitives.box import SDFBox
 import FCDirectModeling.sdf_utils as sdf_utils
 import numpy as np
 from .base import PrimitiveCreatorBase
@@ -297,10 +298,10 @@ class BoxCreator(PrimitiveCreatorBase):
                 l = max(0.001, length)
                 h_abs = max(0.001, abs(h))
                 
-                sdf = sdf_lib.SDFBox(size=(w, l, h_abs))
+                sdf = SDFBox(size=(w, l, h_abs))
                 
                 # Generate point cloud (low res ~100 pts for speed during drag)
-                pts = sdf.generate_point_cloud(resolution=8, samples=4, iterations=4)
+                pts = sdf.generate_point_cloud(resolution=sdf_utils.DEFAULT_RESOLUTION, samples=4, iterations=4)
                 
                 if pts is not None and len(pts) > 0:
                     # Translate points to correct position
