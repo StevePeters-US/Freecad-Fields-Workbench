@@ -393,30 +393,36 @@ class SDFRenderer:
                      if radius < 1e-3: radius = 1e-3
                      
                      f_scores = sdf.compute_variances(f_pts, radius=radius)
+                     
+                     edge_contrast = threshold
+                     if edge_contrast > 0.99:
+                          edge_contrast = 0.20
+                          
+                     # 1. Identify points somewhat near an edge (variance > half threshold)
+                     # to avoid running heavy gradient ascent on perfectly flat surfaces
+                     is_near_edge = f_scores > (edge_contrast * 0.2)
+                     
+                     if np.any(is_near_edge):
+                         pts_to_snap = f_pts[is_near_edge]
+                         # 2. Command the SDF object to mathematically slide these points
+                         # onto the local maximum variance ridge (the exact sharp edge)
+                         snapped_pts = sdf.snap_to_edges(pts_to_snap, radius=radius, iterations=5, step_size=0.1)
+                         
+                         # 3. Put them back
+                         f_pts[is_near_edge] = snapped_pts
+                         
+                         # 4. Re-evaluate variance for coloring so the snapped points are bright red
+                         f_scores = sdf.compute_variances(f_pts, radius=radius)
                 else:
                      FreeCAD.Console.PrintMessage(f"SDFRenderer: Got None from generation.\n")
 
                 if f_pts is not None and len(f_pts) > 0:
-                    # RENDER ALL POINTS for the "Point Cloud" look
-                    # Color them based on variance
-                    
                     self.feature_coords.point.setValues(f_pts)
                     self.feature_points.numPoints.setValue(len(f_pts))
                     
-                    # Strict Threshold Coloring
-                    # Use FeatureThreshold from object (default 0.2 if legacy 5.0 is found)
-                    
-                    # If Threshold is default 5.0 (from old logic), remap to sensible 0.2
-                    # The Property 'FeatureThreshold' is user exposed.
-                    # Range for variance is 0.0 to 1.0.
-                    
-                    edge_contrast = threshold
-                    if edge_contrast > 0.99: # Assume legacy or user error
-                         edge_contrast = 0.20
-                    
                     colors = np.zeros((len(f_pts), 3))
                     
-                    # Mask for edges (High variance)
+                    # Final exact edge mask
                     is_edge = f_scores > edge_contrast
                     
                     # Set Surface Color (Dark Grey for contrast)

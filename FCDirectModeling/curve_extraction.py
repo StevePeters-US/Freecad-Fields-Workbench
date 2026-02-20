@@ -318,14 +318,17 @@ def _intersect_plane_cone(plane_params, cone_params, n_samples=32):
     dot = abs(np.dot(p_normal, axis_dir))
     
     if dot > 0.9:
-        d = np.dot(p_center - apex, axis_dir) / max(dot, 1e-10)
-        if d < 0:
-            return None
+        # Distance from apex to the plane along the cone axis
+        d = np.dot(p_center - apex, p_normal) / np.dot(axis_dir, p_normal)
+        
+        # In a generic cone, it extends in both directions. 
+        # But we only care about the direction where d > 0 from the apex along axis_dir
+        # Actually our Cone SDF is finite but fitted as infinite.
         
         circle_center = apex + d * axis_dir
-        circle_radius = d * np.tan(half_angle)
+        circle_radius = abs(d) * np.tan(half_angle)
         
-        return _circle_in_plane(circle_center, axis_dir, circle_radius, n_samples)
+        return _circle_in_plane(circle_center, p_normal, circle_radius, n_samples)
     
     return None
 
@@ -338,9 +341,11 @@ def _intersect_plane_cylinder(plane_params, cyl_params, n_samples=32):
     dot = abs(np.dot(p_normal, c_dir))
     
     if dot > 0.9:
-        d = np.dot(p_center - c_point, p_normal) / max(dot, 1e-10)
+        # Projection of plane center onto cylinder axis gives circle center
+        vec = p_center - c_point
+        d = np.dot(vec, c_dir)
         circle_center = c_point + d * c_dir
-        return _circle_in_plane(circle_center, c_dir, c_radius, n_samples)
+        return _circle_in_plane(circle_center, p_normal, c_radius, n_samples)
     
     return None
 

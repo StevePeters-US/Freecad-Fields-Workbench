@@ -100,62 +100,57 @@ def fit_cylinder(points, normals=None):
     return center, axis_dir, radius, error
 
 def fit_cone(points, normals=None):
-    """
-    Fit a cone to points.
-    
-    Heuristic:
-    1. Estimate apex by finding where normals converge (intersection of normal lines).
-    2. Compute half-angle from apex to points.
-    
-    Returns: (apex, axis_dir, half_angle, error) or (None, None, None, inf)
-    """
     N = len(points)
     if N < 5:
         return None, None, None, float('inf')
     
-    if normals is None:
-        return None, None, None, float('inf')
-    
     center = np.mean(points, axis=0)
     
-    # Estimate axis from point distribution (axis = direction of most spread)
-    p_centered = points - center
-    _, _, vh = np.linalg.svd(p_centered, full_matrices=False)
-    axis_dir = vh[0, :]  # Largest spread direction
+    # Estimate axis from normals! Normals of a cone form a distinct circular band
+    n_centered = normals - np.mean(normals, axis=0)
+    try:
+        _, _, vh = np.linalg.svd(n_centered, full_matrices=False)
+        # The direction with the LEAST variance in the normals is the axis of the cone
+        axis_dir = vh[2, :]
+    except np.linalg.LinAlgError:
+         return None, None, None, float('inf')
+         
     axis_dir = axis_dir / np.linalg.norm(axis_dir)
     
-    # Project points along axis to estimate apex
-    # On a cone, projecting point positions along axis:
-    # The radius decreases linearly toward the apex.
-    t = np.dot(p_centered, axis_dir)  # distance along axis from center
+    p_centered = points - center
     
-    # Radial distance from axis at each point
-    proj_along = np.outer(t, axis_dir)
+    # Project points along axis (Z) and orthogonal to it (R)
+    Z = np.dot(p_centered, axis_dir)
+    proj_along = np.outer(Z, axis_dir)
     radial_vecs = p_centered - proj_along
-    r = np.linalg.norm(radial_vecs, axis=1)
+    R = np.linalg.norm(radial_vecs, axis=1)
     
-    # Linear fit: r = a * t + b
-    # Apex is where r = 0: t_apex = -b/a
-    if np.std(t) < 1e-10:
+    # A cone makes a linear relationship: R(Z) = a * Z + b
+    # where apex is at R=0 => Z_apex = -b/a
+    if np.std(Z) < 1e-6:
         return None, None, None, float('inf')
-    
-    A_mat = np.column_stack([t, np.ones(N)])
-    result = np.linalg.lstsq(A_mat, r, rcond=None)
-    a, b = result[0]
-    
-    if abs(a) < 1e-10:
+        
+    A = np.column_stack([Z, np.ones(N)])
+    try:
+         result, _, _, _ = np.linalg.lstsq(A, R, rcond=None)
+         a, b = result
+    except:
+         return None, None, None, float('inf')
+         
+    if abs(a) < 1e-6: # essentially a cylinder
         return None, None, None, float('inf')
-    
+        
     t_apex = -b / a
     apex = center + t_apex * axis_dir
     
-    # Half angle
+    # Ensure axis points from base to tip or vice versa by convention
+    # Let's normalize orientation so half_angle > 0 and axis is well-defined
+    # actually a is tan(half_angle) roughly if signs are right
+    # but more precisely:
     half_angle = np.arctan(abs(a))
     
-    # Error: distance from each point to the cone surface
-    # For point p, the cone surface at axis-distance t has radius |a*t + b|
-    expected_r = np.abs(a * t + b)
-    error = np.mean((r - expected_r)**2)
+    expected_R = np.abs(a * Z + b)
+    error = np.mean((R - expected_R)**2)
     
     return apex, axis_dir, half_angle, error
 
