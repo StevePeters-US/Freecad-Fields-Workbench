@@ -286,22 +286,6 @@ class SDFObject:
 
     def segment_point_cloud(self, points, normals, scores, edge_threshold=0.2, 
                             normal_similarity=0.9, neighbor_radius=None):
-        """
-        Segment surface points into connected patches by normal similarity.
-        
-        Args:
-            points: (N, 3) surface points in local coords
-            normals: (N, 3) surface normals
-            scores: (N,) variance scores
-            edge_threshold: variance above this = edge point
-            normal_similarity: cos(angle) threshold for same-patch grouping
-            neighbor_radius: spatial search radius (auto-computed if None)
-            
-        Returns:
-            patches: list of lists of point indices (surface patches)
-            edge_indices: array of indices for edge points
-            adjacency: dict {(patch_i, patch_j): [shared_edge_point_indices]}
-        """
         from scipy.spatial import KDTree
         
         n_points = len(points)
@@ -318,9 +302,9 @@ class SDFObject:
         if neighbor_radius is None:
             bound_min, bound_max = self._bounds_local()
             size = bound_max - bound_min
-            # Use ~2x the expected point spacing
+            # Use geometric size / 16.0 for robustness against varying resolutions
             neighbor_radius = np.max(size) / 16.0
-        
+            
         # 3. Build KD-tree for surface points only
         surface_points = points[surface_indices]
         surface_normals = normals[surface_indices]
@@ -334,7 +318,6 @@ class SDFObject:
             if visited[i]:
                 continue
             
-            # Start new patch
             patch = []
             stack = [i]
             visited[i] = True
@@ -344,7 +327,7 @@ class SDFObject:
                 patch.append(surface_indices[curr])  # Store original index
                 
                 # Find spatial neighbors
-                neighbors = tree.query_ball_point(surface_points[curr], neighbor_radius)
+                neighbors = tree.query_ball_point(surface_points[curr], neighbor_radius * 1.5)
                 
                 for nb in neighbors:
                     if visited[nb]:
@@ -356,47 +339,42 @@ class SDFObject:
                         visited[nb] = True
                         stack.append(nb)
             
-            if len(patch) >= 3:  # Need at least 3 points for fitting
+            if len(patch) >= 3:
                 patches.append(patch)
         
-        # 5. Build patch adjacency via edge points
-        # For each edge point, find its nearest patches
+        # 5. Build patch adjacency
         adjacency = {}
-        
-        if len(edge_indices) > 0 and len(patches) >= 2:
-            edge_points = points[edge_indices]
-            
-            # Build KD-trees for each patch
+        if len(patches) >= 2:
             patch_trees = []
             for patch in patches:
-                patch_pts = points[patch]
-                patch_trees.append(KDTree(patch_pts))
-            
-            # For each edge point, find closest patch(es)
-            for ei, edge_idx in enumerate(edge_indices):
-                ep = edge_points[ei]
+                patch_trees.append(KDTree(points[patch]))
                 
-                # Find distance to each patch
-                dists = []
-                for pt_tree in patch_trees:
-                    d, _ = pt_tree.query(ep)
-                    dists.append(d)
-                
-                dists = np.array(dists)
-                
-                # Edge point is "between" patches if close to 2+ patches
-                close_patches = np.where(dists < neighbor_radius * 2.0)[0]
-                
-                if len(close_patches) >= 2:
-                    # Mark adjacency between all close patch pairs
-                    for a in range(len(close_patches)):
-                        for b in range(a + 1, len(close_patches)):
-                            key = (min(close_patches[a], close_patches[b]),
-                                   max(close_patches[a], close_patches[b]))
-                            if key not in adjacency:
-                                adjacency[key] = []
-                            adjacency[key].append(edge_idx)
-        
+            # Proximity-based adjacency between patches
+            # Check every pair of patches
+            for a in range(len(patches)):
+                for b in range(a + 1, len(patches)):
+                    # Check if patch A and patch B are close to each other
+                    # We can use KDTree.count_neighbors or query_ball_tree
+                    # A faster way: query points of patch B against tree of patch A
+                    dists, _ = patch_trees[a].query(points[patches[b]], k=1)
+                    # If the minimum distance is within an acceptable gap (e.g. 3 * neighbor_radius)
+                    min_dist = np.min(dists) if len(dists) > 0 else float('inf')
+                    
+                    if min_dist < neighbor_radius * 4.0:
+                        key = (a, b)
+                        # Find "edge" points that might belong to the intersection
+                        # Here we just store empty or a generic edge point reference
+                        adjacency[key] = []
+                        
+                        # Optionally, if we DO have edge points, map them to this adjacency
+                        if len(edge_indices) > 0:
+                            edge_pts = points[edge_indices]
+                            dists_a, _ = patch_trees[a].query(edge_pts)
+                            dists_b, _ = patch_trees[b].query(edge_pts)
+                            # points close to BOTH patch A and B
+                            valid = (dists_a < neighbor_radius * 3.0) & (dists_b < neighbor_radius * 3.0)
+                            adjacency[key] = edge_indices[valid].tolist()
+
         return patches, edge_indices, adjacency
 
 

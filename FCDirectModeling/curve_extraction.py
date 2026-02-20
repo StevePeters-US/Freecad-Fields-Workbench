@@ -37,7 +37,8 @@ def extract_curves(sdf_object, resolution=32, edge_threshold=0.2,
     bound_min, bound_max = sdf_object._bounds_local()
     size = bound_max - bound_min
     step = np.max(size) / max(resolution - 1, 1)
-    radius = step * 1.0
+    radius = np.max(size) * 0.02
+    if radius < 1e-3: radius = 1e-3
     
     scores = sdf_object.compute_variances(points, radius=radius)
     

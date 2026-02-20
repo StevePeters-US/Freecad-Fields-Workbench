@@ -382,13 +382,15 @@ class SDFRenderer:
                      FreeCAD.Console.PrintMessage(f"SDFRenderer: Got {len(f_pts)} points. Computing variance...\n")
                      
                      # Calculate dynamic radius for sampling
-                     # Compute radius based on resolution
                      bound_min, bound_max = sdf._bounds_local()
                      size = bound_max - bound_min
                      # Approx step size
-                     step = np.max(size) / (res - 1)
-                     # Radius: Step * 1.0 for finer detail
-                     radius = step * 1.0
+                     step = np.max(size) / max(res - 1, 1)
+                     # For visual variance detection (red points), use a tight radius 
+                     # relative to object size instead of step size, to ensure only 
+                     # exact edges are red.
+                     radius = np.max(size) * 0.02
+                     if radius < 1e-3: radius = 1e-3
                      
                      f_scores = sdf.compute_variances(f_pts, radius=radius)
                 else:
