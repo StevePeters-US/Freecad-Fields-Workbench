@@ -268,29 +268,29 @@ class SDFRenderer:
         
     def _create_feature_nodes(self):
         # Helper to ensure feature nodes exist
-        if not hasattr(self, 'feature_sep'):
+        if not hasattr(self, "feature_sep"):
             self.feature_sep = coin.SoSeparator()
-            self.root.addChild(self.feature_sep)
-            
             self.feature_mat = coin.SoMaterial()
-            self.feature_mat.diffuseColor.setValue(1.0, 0.0, 0.0) # Red
-            # self.feature_mat.pointSize.setValue(5.0) # Removing invalid attribute
-            self.feature_sep.addChild(self.feature_mat)
             
-            # Material Binding for Per-Vertex Color
             self.feature_mat_binding = coin.SoMaterialBinding()
-            self.feature_mat_binding.value = coin.SoMaterialBinding.OVERALL # Default
-            self.feature_sep.addChild(self.feature_mat_binding)
+            self.feature_mat_binding.value = coin.SoMaterialBinding.PER_VERTEX
             
-            self.feature_style = coin.SoDrawStyle()
-            self.feature_style.pointSize.setValue(5.0)
-            self.feature_sep.addChild(self.feature_style)
+            # Use point rendering style
+            self.feature_drawstyle = coin.SoDrawStyle()
+            self.feature_drawstyle.style = coin.SoDrawStyle.POINTS
+            self.feature_drawstyle.pointSize = 4.0 # Size for visibility
             
             self.feature_coords = coin.SoCoordinate3()
-            self.feature_sep.addChild(self.feature_coords)
-            
             self.feature_points = coin.SoPointSet()
+            
+            self.feature_sep.addChild(self.feature_mat_binding)
+            self.feature_sep.addChild(self.feature_mat)
+            self.feature_sep.addChild(self.feature_drawstyle)
+            self.feature_sep.addChild(self.feature_coords)
             self.feature_sep.addChild(self.feature_points)
+            
+            self.root.addChild(self.feature_sep)
+            self.root.addChild(self.curve_sep)
 
     def update(self):
         try:
@@ -373,66 +373,22 @@ class SDFRenderer:
                 log_to_file(f"SDFRenderer: Generating Point Cloud ({algo}, Thresh={threshold})...")
                 FreeCAD.Console.PrintMessage(f"SDFRenderer: Generating Point Cloud ({algo}, Thresh={threshold})...\n")
                 
-                # Generate full point cloud using internal method (Local Coords)
-                # Stochastic Projection
-                # We can tune samples/iterations
-                f_pts = sdf.generate_point_cloud(resolution=res, samples=8, iterations=5)
+                # Generate feature edge point cloud
+                if hasattr(sdf, 'get_vertices'):
+                    f_pts = sdf.get_vertices()
+                else:
+                    f_pts = sdf.trace_edges(num_seeds=200, variance_threshold=0.5)
                 
                 if f_pts is not None and len(f_pts) > 0:
-                     FreeCAD.Console.PrintMessage(f"SDFRenderer: Got {len(f_pts)} points. Computing variance...\n")
+                     FreeCAD.Console.PrintMessage(f"SDFRenderer: Traced {len(f_pts)} absolute edge points.\n")
                      
-                     # Calculate dynamic radius for sampling
-                     bound_min, bound_max = sdf._bounds_local()
-                     size = bound_max - bound_min
-                     # Approx step size
-                     step = np.max(size) / max(res - 1, 1)
-                     # For visual variance detection (red points), use a tight radius 
-                     # relative to object size instead of step size, to ensure only 
-                     # exact edges are red.
-                     radius = np.max(size) * 0.02
-                     if radius < 1e-3: radius = 1e-3
+                     self.feature_coords.point.setValues(f_pts)
+                     self.feature_points.numPoints.setValue(len(f_pts))
                      
-                     f_scores = sdf.compute_variances(f_pts, radius=radius)
-                     
-                     edge_contrast = threshold
-                     if edge_contrast > 0.99:
-                          edge_contrast = 0.20
-                          
-                     # 1. Identify points somewhat near an edge (variance > half threshold)
-                     # to avoid running heavy gradient ascent on perfectly flat surfaces
-                     is_near_edge = f_scores > (edge_contrast * 0.2)
-                     
-                     if np.any(is_near_edge):
-                         pts_to_snap = f_pts[is_near_edge]
-                         # 2. Command the SDF object to mathematically slide these points
-                         # onto the local maximum variance ridge (the exact sharp edge)
-                         snapped_pts = sdf.snap_to_edges(pts_to_snap, radius=radius, iterations=5, step_size=0.1)
-                         
-                         # 3. Put them back
-                         f_pts[is_near_edge] = snapped_pts
-                         
-                         # 4. Re-evaluate variance for coloring so the snapped points are bright red
-                         f_scores = sdf.compute_variances(f_pts, radius=radius)
-                else:
-                     FreeCAD.Console.PrintMessage(f"SDFRenderer: Got None from generation.\n")
-
-                if f_pts is not None and len(f_pts) > 0:
-                    self.feature_coords.point.setValues(f_pts)
-                    self.feature_points.numPoints.setValue(len(f_pts))
-                    
-                    colors = np.zeros((len(f_pts), 3))
-                    
-                    # Final exact edge mask
-                    is_edge = f_scores > edge_contrast
-                    
-                    # Set Surface Color (Dark Grey for contrast)
-                    colors[~is_edge] = [0.2, 0.2, 0.2] # Dark Grey
-                    
-                    # Set Edge Color (Bright Red)
-                    colors[is_edge] = [1.0, 0.0, 0.0] # Red
-                    
-                    self.feature_mat.diffuseColor.setValues(colors)
-                    self.feature_mat_binding.value = coin.SoMaterialBinding.PER_VERTEX
+                     # Since ALL returned points are exactly on the edge, they can ALL be red
+                     # We change the material binding back to OVERALL 
+                     self.feature_mat.diffuseColor.setValue(1.0, 0.0, 0.0) # Red
+                     self.feature_mat_binding.value = coin.SoMaterialBinding.OVERALL
                 else:
                     self.feature_coords.point.setNum(0)
                     self.feature_points.numPoints.setValue(0)

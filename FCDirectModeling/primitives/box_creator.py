@@ -300,8 +300,8 @@ class BoxCreator(PrimitiveCreatorBase):
                 
                 sdf = SDFBox(size=(w, l, h_abs))
                 
-                # Generate point cloud (low res ~100 pts for speed during drag)
-                pts = sdf.generate_point_cloud(resolution=sdf_utils.DEFAULT_RESOLUTION, samples=4, iterations=4)
+                # Generate edge tracing (low seed count for 60fps real-time drag preview)
+                pts = sdf.trace_edges(num_seeds=50, variance_threshold=0.2)
                 
                 if pts is not None and len(pts) > 0:
                     # Translate points to correct position

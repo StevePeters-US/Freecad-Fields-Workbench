@@ -33,3 +33,39 @@ class SDFBox(SDFObject):
 
     def _bounds_local(self):
         return (-self.half_size, self.half_size)
+
+    def get_vertices(self):
+        b = self.half_size
+        return np.array([
+            [b[0], b[1], b[2]],
+            [-b[0], b[1], b[2]],
+            [b[0], -b[1], b[2]],
+            [-b[0], -b[1], b[2]],
+            [b[0], b[1], -b[2]],
+            [-b[0], b[1], -b[2]],
+            [b[0], -b[1], -b[2]],
+            [-b[0], -b[1], -b[2]]
+        ])
+
+    def get_edges(self):
+        b = self.half_size
+        edges = []
+        # Top face edges
+        edges.append(np.array([[b[0], b[1], b[2]], [-b[0], b[1], b[2]]]))
+        edges.append(np.array([[-b[0], b[1], b[2]], [-b[0], -b[1], b[2]]]))
+        edges.append(np.array([[-b[0], -b[1], b[2]], [b[0], -b[1], b[2]]]))
+        edges.append(np.array([[b[0], -b[1], b[2]], [b[0], b[1], b[2]]]))
+        
+        # Bottom face edges
+        edges.append(np.array([[b[0], b[1], -b[2]], [-b[0], b[1], -b[2]]]))
+        edges.append(np.array([[-b[0], b[1], -b[2]], [-b[0], -b[1], -b[2]]]))
+        edges.append(np.array([[-b[0], -b[1], -b[2]], [b[0], -b[1], -b[2]]]))
+        edges.append(np.array([[b[0], -b[1], -b[2]], [b[0], b[1], -b[2]]]))
+        
+        # Pillars
+        edges.append(np.array([[b[0], b[1], b[2]], [b[0], b[1], -b[2]]]))
+        edges.append(np.array([[-b[0], b[1], b[2]], [-b[0], b[1], -b[2]]]))
+        edges.append(np.array([[-b[0], -b[1], b[2]], [-b[0], -b[1], -b[2]]]))
+        edges.append(np.array([[b[0], -b[1], b[2]], [b[0], -b[1], -b[2]]]))
+        
+        return edges

@@ -102,149 +102,129 @@ class SDFObject:
     def _bounds_local(self):
         raise NotImplementedError
 
-    def generate_point_cloud(self, resolution=32, margin=0.1, samples=8, iterations=5):
+    def get_vertices(self):
         """
-        Generates a dense, uniform point cloud using Grid Edge Intersection.
-        Evaluates the SDF on a regular 3D grid and finds zero-crossings
-        along the X, Y, and Z grid lines. Snaps the interpolated crossings 
-        exactly to the surface using a single step of Newton-Raphson.
-        
-        Returns points in LOCAL coordinates.
+        Returns an explicit list of sharp geometric vertices (points) for this object.
+        Subclasses should override this if they have distinctive points (e.g. Box corners).
+        Returns: (N, 3) numpy array
+        """
+        return np.zeros((0, 3))
+
+    def get_edges(self):
+        """
+        Returns an explicit list of analytic geometric edges (curves) for this object.
+        Subclasses should override this if they have distinct curves (e.g. Box edges, Cone base).
+        Returns: list of (N, 3) numpy arrays
+        """
+        return []
+
+    def trace_edges(self, num_seeds=200, step_size=0.1, max_steps=1000, variance_threshold=0.5):
+        """
+        Mathematically traces the sharp edges (ridges of maximum normal variance) 
+        of the SDF object. Used for arbitrary boolean intersections.
         """
         bound_min, bound_max = self._bounds_local()
         size = bound_max - bound_min
         size[size < 1e-6] = 1.0 # Safety
         
-        margin_vec = size * margin
-        grid_min = bound_min - margin_vec
-        grid_max = bound_max + margin_vec
+        # 1. Generate random seed points around the object bounds
+        rng = np.random.default_rng(42)
+        base_points = bound_min + rng.random((num_seeds, 3)) * size
         
-        # Determine grid steps. More resolution -> finer point cloud
-        # User resolution implies the grid size
-        res = max(resolution, 8)
-        
-        x_vals = np.linspace(grid_min[0], grid_max[0], res)
-        y_vals = np.linspace(grid_min[1], grid_max[1], res)
-        z_vals = np.linspace(grid_min[2], grid_max[2], res)
-        
-        grid_x, grid_y, grid_z = np.meshgrid(x_vals, y_vals, z_vals, indexing='ij')
-        grid_points = np.stack([grid_x, grid_y, grid_z], axis=-1)
-        
-        # Evaluate SDF over the entire grid
-        vals_flat = self._evaluate_local(grid_points.reshape(-1, 3))
-        vals = vals_flat.reshape(res, res, res)
-        
-        points = []
-        
-        # Helper to find crossings along an axis and interpolate
-        def find_crossings(v1, v2, p1, p2):
-            cross = v1 * v2 <= 0.0 # sign change means surface passes through
-            if not np.any(cross): return None
-            
-            p1_c = p1[cross]
-            p2_c = p2[cross]
-            v1_c = v1[cross]
-            v2_c = v2[cross]
-            
-            # Linear interpolation factor
-            t = v1_c / (v1_c - v2_c + 1e-12)
-            pts = p1_c + (p2_c - p1_c) * t[:, np.newaxis]
-            return pts
-            
-        # Check X edges: (i, j, k) to (i+1, j, k)
-        v1_x = vals[:-1, :, :]
-        v2_x = vals[1:, :, :]
-        p1_x = grid_points[:-1, :, :]
-        p2_x = grid_points[1:, :, :]
-        pts_x = find_crossings(v1_x, v2_x, p1_x, p2_x)
-        if pts_x is not None: points.append(pts_x)
-        
-        # Check Y edges
-        v1_y = vals[:, :-1, :]
-        v2_y = vals[:, 1:, :]
-        p1_y = grid_points[:, :-1, :]
-        p2_y = grid_points[:, 1:, :]
-        pts_y = find_crossings(v1_y, v2_y, p1_y, p2_y)
-        if pts_y is not None: points.append(pts_y)
-        
-        # Check Z edges
-        v1_z = vals[:, :, :-1]
-        v2_z = vals[:, :, 1:]
-        p1_z = grid_points[:, :, :-1]
-        p2_z = grid_points[:, :, 1:]
-        pts_z = find_crossings(v1_z, v2_z, p1_z, p2_z)
-        if pts_z is not None: points.append(pts_z)
-        
-        if not points:
-            return np.zeros((0, 3))
-            
-        all_pts = np.vstack(points)
-        
-        # Optional: A single step of Newton-Raphson to snap exactly to surface
-        # (Linear interpolation on grid edges is an approximation)
-        dists = self._evaluate_local(all_pts)
-        grads = self.compute_normals(all_pts, epsilon=1e-4)
-        
-        final_pts = all_pts - grads * dists[:, np.newaxis]
-        
-        return final_pts
-
-    def snap_to_edges(self, points, radius=None, iterations=10, step_size=0.1):
-        """
-        Gradient ascent on the normal variance field.
-        Slides surface points exactly onto the sharpest mathematical edges or corners.
-        """
-        if len(points) == 0:
-            return points
-            
-        pts = np.copy(points)
-        epsilon = 1e-4
-        
-        for i in range(iterations):
-            # Compute gradient of variance field V(x,y,z) via finite differences
-            sx = np.array([epsilon, 0, 0])
-            sy = np.array([0, epsilon, 0])
-            sz = np.array([0, 0, epsilon])
-            
-            P = pts[:, np.newaxis, :]
-            offsets = np.vstack([sx, -sx, sy, -sy, sz, -sz])
-            
-            Q = P + offsets
-            Q_flat = Q.reshape(-1, 3)
-            
-            V_Q_flat = self.compute_variances(Q_flat, radius=radius)
-            V_Q = V_Q_flat.reshape(-1, 6)
-            
-            grad_Vx = (V_Q[:, 0] - V_Q[:, 1]) / (2 * epsilon)
-            grad_Vy = (V_Q[:, 2] - V_Q[:, 3]) / (2 * epsilon)
-            grad_Vz = (V_Q[:, 4] - V_Q[:, 5]) / (2 * epsilon)
-            
-            grad_V = np.stack([grad_Vx, grad_Vy, grad_Vz], axis=1)
-            
-            # Surface normals
-            normals = self.compute_normals(pts, epsilon=1e-4) # Normalized N x 3
-            
-            # Project grad_V onto the tangent plane of the surface
-            dot_product = np.sum(grad_V * normals, axis=1, keepdims=True) # N x 1
-            normal_component = dot_product * normals
-            g_tangent = grad_V - normal_component
-            
-            # Step in the direction of the highest tangent gradient
-            # Bound the maximum step to prevent jumping over sharp ridges
-            g_norms = np.linalg.norm(g_tangent, axis=1, keepdims=True)
-            
-            # If the gradient is huge, cap it to step_size. 
-            # If it's small, let it be small so it settles exactly on the peak.
-            scale = np.where(g_norms > step_size, step_size / (g_norms + 1e-8), 1.0)
-            
-            pts = pts + g_tangent * scale
-            
-            # Snap back exactly to SDF=0 surface (Newton Raphson)
+        # 2. Snap to mathematically perfect surface (SDF = 0)
+        # Using 5 Newton-Raphson steps
+        pts = base_points
+        for _ in range(5):
             dists = self._evaluate_local(pts)
-            new_normals = self.compute_normals(pts, epsilon=1e-4)
-            pts = pts - new_normals * dists[:, np.newaxis]
+            grads = self.compute_normals(pts, epsilon=1e-4)
+            pts = pts - grads * dists[:, np.newaxis]
             
-        return pts
+        # 3. Slide points "uphill" to the crests of the edges (Gradient Ascent on Variance)
+        # We need to compute the gradient of the 'variance' field
+        
+        # Determine dynamic sampling radius for variance based on object size
+        # We need a stable radius so variance doesn't depend on raw geometry scale
+        # Normal variance maxes out around 0.29 for a 90 degree corner
+        radius = np.max(size) * 0.05
+        if radius < 0.1: radius = 0.1
+        
+        # Step size for gradient ascent (keep it small to prevent jumping over the sharp edge)
+        lr = radius * 0.2
+        
+        FreeCAD.Console.PrintMessage(f"SDFRenderer: Sliding {len(pts)} edge seeds to crests...\n")
+        
+        # Perform constrained gradient ascent
+        # We want to maximize variance, so we step in direction of +grad(variance)
+        # But we must project this step onto the surface tangent plane to stay on the object
+        eps = radius * 0.1
+        for step in range(30):
+            # Compute variance at current points
+            v_center = self.compute_variances(pts, radius=radius)
+            
+            # Compute numerical gradient of variance
+            # Offset points in x, y, z
+            pts_x = pts + np.array([eps, 0, 0])
+            pts_y = pts + np.array([0, eps, 0])
+            pts_z = pts + np.array([0, 0, eps])
+            
+            v_x = self.compute_variances(pts_x, radius=radius)
+            v_y = self.compute_variances(pts_y, radius=radius)
+            v_z = self.compute_variances(pts_z, radius=radius)
+            
+            # Gradient vector of variance (N, 3)
+            grad_v = np.column_stack([
+                (v_x - v_center) / eps,
+                (v_y - v_center) / eps,
+                (v_z - v_center) / eps
+            ])
+            
+            # Surface normals (N, 3)
+            normals = self.compute_normals(pts, epsilon=1e-4)
+            
+            # Project variance gradient onto surface tangent plane
+            # v_proj = grad_v - dot(grad_v, normal) * normal
+            dots = np.sum(grad_v * normals, axis=1)[:, np.newaxis]
+            grad_v_proj = grad_v - dots * normals
+            
+            # Normalize projected gradient to safely step
+            mags = np.linalg.norm(grad_v_proj, axis=1, keepdims=True)
+            valid_mags = mags > 1e-8
+            
+            step_dir = np.zeros_like(grad_v_proj)
+            step_dir[valid_mags[:, 0]] = grad_v_proj[valid_mags[:, 0]] / mags[valid_mags[:, 0]]
+            
+            # Take step
+            # Scale learning rate by how far we are from the max variance (approx 0.3)
+            # This makes them slow down as they reach the peak
+            scale = np.clip(0.35 - v_center, 0.05, 0.35)[:, np.newaxis]
+            pts = pts + step_dir * lr * (scale * 5.0)
+            
+            # Correction: Snap back to exact surface (SDF=0)
+            d = self._evaluate_local(pts)
+            n = self.compute_normals(pts, epsilon=1e-4)
+            pts = pts - n * d[:, np.newaxis]
+            
+            # Bound points to object bounding box so they don't fly off to infinity
+            # add a small margin
+            margin_vec = size * 0.1
+            pts = np.clip(pts, bound_min - margin_vec, bound_max + margin_vec)
+            
+            if step % 5 == 0:
+                FreeCAD.Console.PrintMessage(f"SDFRenderer: Ascent step {step}, Max Var={np.max(v_center):.3f}...\n")
+            
+        # 4. Filter strictly to the converged edges
+        final_vars = self.compute_variances(pts, radius=radius)
+        
+        FreeCAD.Console.PrintMessage(f"SDFRenderer: Max final variance: {np.max(final_vars):.3f}\n")
+        
+        # Valid 90 degree sharp edge is usually around 0.28
+        edge_pts = pts[final_vars > 0.20]
+        if len(edge_pts) == 0:
+            return []
+            
+        # Temporarily return just the optimized edge seed points 
+        # instead of undertaking the expensive curve crawling.
+        return edge_pts
 
     def compute_normals(self, points, epsilon=1e-4):
         """
@@ -340,8 +320,8 @@ class SDFObject:
         if neighbor_radius is None:
             bound_min, bound_max = self._bounds_local()
             size = bound_max - bound_min
-            # Use geometric size / 16.0 for robustness against varying resolutions
-            neighbor_radius = np.max(size) / 16.0
+            # Use geometric size / 5.0 for robustness against sparse voxel spawning
+            neighbor_radius = np.max(size) / 5.0
             
         # 3. Build KD-tree for surface points only
         surface_points = points[surface_indices]
@@ -351,7 +331,6 @@ class SDFObject:
         # 4. Region growing
         visited = np.zeros(len(surface_indices), dtype=bool)
         patches = []
-        
         for i in range(len(surface_indices)):
             if visited[i]:
                 continue

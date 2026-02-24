@@ -110,3 +110,16 @@ class SDFCone(SDFObject):
         z_min = min(0, h)
         z_max = max(0, h)
         return (np.array([-r, -r, z_min]), np.array([r, r, z_max]))
+
+    def get_vertices(self):
+        # A cone has exactly 1 vertex (the tip).
+        # We need to account for height being positive vs negative.
+        return np.array([[0.0, 0.0, self.height]])
+
+    def get_edges(self):
+        # A cone has 1 distinct curve: the circular base at z = 0
+        theta = np.linspace(0, 2 * np.pi, 64)
+        x = self.radius * np.cos(theta)
+        y = self.radius * np.sin(theta)
+        z = np.zeros_like(x)
+        return [np.column_stack([x, y, z])]

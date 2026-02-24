@@ -31,3 +31,33 @@ class SDFTorus(SDFObject):
         # Z: -r to r
         lim = self.R + self.r
         return (np.array([-lim, -lim, -self.r]), np.array([lim, lim, self.r]))
+
+    def get_vertices(self):
+        # Torus has no distinct vertices (corners).
+        return np.zeros((0, 3))
+
+    def get_edges(self):
+        edges = []
+        theta = np.linspace(0, 2 * np.pi, 64)
+        
+        # Major ring (at minor_radius distance from origin? No, at major_radius distance in XY plane)
+        ring_x = self.R * np.cos(theta)
+        ring_y = self.R * np.sin(theta)
+        ring_z = np.zeros_like(theta)
+        edges.append(np.column_stack([ring_x, ring_y, ring_z]))
+        
+        # 4 minor cross-sections
+        minor_theta = np.linspace(0, 2 * np.pi, 32)
+        c = self.r * np.cos(minor_theta)
+        s = self.r * np.sin(minor_theta)
+        
+        for angle in [0, np.pi/2, np.pi, 3*np.pi/2]:
+            x_center = self.R * np.cos(angle)
+            y_center = self.R * np.sin(angle)
+            
+            x = x_center + c * np.cos(angle)
+            y = y_center + c * np.sin(angle)
+            z = s
+            edges.append(np.column_stack([x, y, z]))
+            
+        return edges

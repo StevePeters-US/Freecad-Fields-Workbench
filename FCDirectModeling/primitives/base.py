@@ -172,13 +172,11 @@ class PrimitiveCreatorBase:
         pass
 
     def update_sdf_preview(self, sdf_obj):
-        """Updates the SDF preview as a point cloud (~100 points)."""
+        """Updates the SDF preview as traced mathematical edges."""
         try:
-            pts = sdf_obj.generate_point_cloud(
-                resolution=sdf_utils.DEFAULT_RESOLUTION,
-                samples=PREVIEW_SAMPLES,
-                iterations=PREVIEW_ITERATIONS
-            )
+            # Lightweight analytical edge tracing for live preview
+            pts = sdf_obj.trace_edges(num_seeds=50, variance_threshold=0.2)
+            
             if pts is not None and len(pts) > 0:
                 self.sdf_coords.point.setValues(0, len(pts), pts)
                 self.sdf_points.numPoints.setValue(len(pts))
