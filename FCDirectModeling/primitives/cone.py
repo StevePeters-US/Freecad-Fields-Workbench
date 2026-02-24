@@ -117,9 +117,26 @@ class SDFCone(SDFObject):
         return np.array([[0.0, 0.0, self.height]])
 
     def get_edges(self):
-        # A cone has 1 distinct curve: the circular base at z = 0
+        # A cone has its circular base at z = 0, and we add 4 profile lines to the tip
+        edges = []
+        
+        # Base circle
         theta = np.linspace(0, 2 * np.pi, 64)
         x = self.radius * np.cos(theta)
         y = self.radius * np.sin(theta)
         z = np.zeros_like(x)
-        return [np.column_stack([x, y, z])]
+        edges.append(np.column_stack([x, y, z]))
+        
+        # 4 vertical profile lines from base to tip
+        tip_z = self.height
+        for angle in [0, np.pi/2, np.pi, 3*np.pi/2]:
+            base_x = self.radius * np.cos(angle)
+            base_y = self.radius * np.sin(angle)
+            
+            # Line from base to tip
+            line_x = np.array([base_x, 0.0])
+            line_y = np.array([base_y, 0.0])
+            line_z = np.array([0.0, tip_z])
+            edges.append(np.column_stack([line_x, line_y, line_z]))
+            
+        return edges

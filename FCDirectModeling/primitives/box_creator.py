@@ -288,36 +288,14 @@ class BoxCreator(PrimitiveCreatorBase):
             self.face_set.coordIndex.setNum(0)
             
             # Wireframe (Yellow)
-            self.line_mat.diffuseColor.setValue(1.0, 1.0, 0.0) 
+            self.line_mat.diffuseColor.setValue(0.0, 1.0, 0.0) 
             self.line_mat.transparency.setValue(0.0)
             
             # SDF Point Cloud Preview (No meshing)
-            try:
-                # Dimensions must be positive for SDF
-                w = max(0.001, width)
-                l = max(0.001, length)
-                h_abs = max(0.001, abs(h))
-                
-                sdf = SDFBox(size=(w, l, h_abs))
-                
-                # Generate edge tracing (low seed count for 60fps real-time drag preview)
-                pts = sdf.trace_edges(num_seeds=50, variance_threshold=0.2)
-                
-                if pts is not None and len(pts) > 0:
-                    # Translate points to correct position
-                    offset = np.array([min_x + w/2, min_y + l/2, z_offset + h_abs/2], dtype=np.float64)
-                    pts += offset
-                    
-                    self.sdf_coords.point.setValues(0, len(pts), pts)
-                    self.sdf_points.numPoints.setValue(len(pts))
-                else:
-                    self.sdf_coords.point.setNum(0)
-                    self.sdf_points.numPoints.setValue(0)
-
-            except Exception as e:
-                print(f"SDF Preview Error: {e}")
-                self.sdf_coords.point.setNum(0)
-                self.sdf_points.numPoints.setValue(0)
+            self.sdf_coords.point.setNum(0)
+            self.sdf_points.numPoints.setValue(0)
+            self.sdf_edge_coords.point.setNum(0)
+            self.sdf_edge_lines.coordIndex.setNum(0)
 
 
 

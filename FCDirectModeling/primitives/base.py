@@ -58,11 +58,23 @@ class PrimitiveCreatorBase:
         self.sdf_style.pointSize.setValue(4.0)
         self.sdf_sep.addChild(self.sdf_style)
 
+        # Points (original point cloud preview if needed)
         self.sdf_coords = coin.SoCoordinate3()
         self.sdf_sep.addChild(self.sdf_coords)
 
         self.sdf_points = coin.SoPointSet()
         self.sdf_sep.addChild(self.sdf_points)
+
+        # Edges (analytical curves for sphere, cone, torus)
+        self.sdf_edge_mat = coin.SoMaterial()
+        self.sdf_edge_mat.diffuseColor.setValue(0.0, 1.0, 0.0) # Bright green
+        self.sdf_sep.addChild(self.sdf_edge_mat)
+
+        self.sdf_edge_coords = coin.SoCoordinate3()
+        self.sdf_sep.addChild(self.sdf_edge_coords)
+
+        self.sdf_edge_lines = coin.SoIndexedLineSet()
+        self.sdf_sep.addChild(self.sdf_edge_lines)
 
         self.view.getSceneGraph().addChild(self.sg)
 
@@ -172,9 +184,38 @@ class PrimitiveCreatorBase:
         pass
 
     def update_sdf_preview(self, sdf_obj):
-        """Updates the SDF preview as traced mathematical edges."""
+        """Updates the SDF preview with explicit analytical edges if available, otherwise fallback to tracing."""
         try:
-            # Lightweight analytical edge tracing for live preview
+            edges = sdf_obj.get_edges()
+            
+            if edges and len(edges) > 0:
+                # We have explicit analytical edges (e.g., Box, Sphere, Cone, Torus)
+                all_pts = []
+                coord_indices = []
+                current_idx = 0
+                
+                for edge_pts in edges:
+                    if len(edge_pts) == 0: continue
+                    all_pts.extend(edge_pts)
+                    num_pts = len(edge_pts)
+                    
+                    # Create line strip indices for this edge
+                    indices = list(range(current_idx, current_idx + num_pts))
+                    indices.append(-1) # Line strip separator
+                    coord_indices.extend(indices)
+                    
+                    current_idx += num_pts
+                
+                if len(all_pts) > 0:
+                    self.sdf_edge_coords.point.setValues(0, len(all_pts), all_pts)
+                    self.sdf_edge_lines.coordIndex.setValues(0, len(coord_indices), coord_indices)
+                    
+                    # Hide point cloud
+                    self.sdf_coords.point.setNum(0)
+                    self.sdf_points.numPoints.setValue(0)
+                    return
+            
+            # Fallback for complex booleans: Lightweight analytical edge tracing
             pts = sdf_obj.trace_edges(num_seeds=50, variance_threshold=0.2)
             
             if pts is not None and len(pts) > 0:
@@ -183,10 +224,17 @@ class PrimitiveCreatorBase:
             else:
                 self.sdf_coords.point.setNum(0)
                 self.sdf_points.numPoints.setValue(0)
+                
+            # Hide explicit edges
+            self.sdf_edge_coords.point.setNum(0)
+            self.sdf_edge_lines.coordIndex.setNum(0)
+            
         except Exception as e:
             FreeCAD.Console.PrintError(f"SDF Preview Error: {e}\n")
             self.sdf_coords.point.setNum(0)
             self.sdf_points.numPoints.setValue(0)
+            self.sdf_edge_coords.point.setNum(0)
+            self.sdf_edge_lines.coordIndex.setNum(0)
 
 
 class SDFPrimitiveCreator(PrimitiveCreatorBase):
