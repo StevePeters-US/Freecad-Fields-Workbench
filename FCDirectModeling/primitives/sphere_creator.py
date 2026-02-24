@@ -52,22 +52,36 @@ class SphereCreator(BRepPrimitiveCreator):
             if not doc:
                 doc = FreeCAD.newDocument()
             
-            # Loft/Revolve Approach:
-            # Create a semi-circle arc from -Z to +Z
-            p1 = FreeCAD.Vector(0, 0, -self.radius)
-            p2 = FreeCAD.Vector(self.radius, 0, 0)
-            p3 = FreeCAD.Vector(0, 0, self.radius)
+            r = abs(self.radius)
+            if r < 0.001: r = 0.001
             
-            arc = Part.Arc(p1, p2, p3).toShape()
-            wire = Part.Wire([arc])
-            face = Part.Face(wire)
+            # Construct from 8 triangular pieces (octants)
+            wedges = []
+            for u in [0, 90, 180, 270]:
+                for v_pairs in [(0, 90), (-90, 0)]:
+                    # makeSphere(radius, center, dir, angle1, angle2, angle3)
+                    # angle1/angle2 are V angles (-90 to 90)
+                    # angle3 is U sweep
+                    wedge = Part.makeSphere(r, FreeCAD.Vector(0,0,0), FreeCAD.Vector(0,0,1), v_pairs[0], v_pairs[1], 90)
+                    
+                    rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), u)
+                    pl = FreeCAD.Placement(FreeCAD.Vector(0,0,0), rot)
+                    wedge.transformShape(pl.toMatrix())
+                    
+                    wedges.append(wedge)
             
-            # Revolve around Z axis 360 degrees
-            sphere_shape = face.revolve(FreeCAD.Vector(0,0,0), FreeCAD.Vector(0,0,1), 360)
+            # Fuse the 8 wedges to form the final solid
+            sphere_shape = wedges[0]
+            for w in wedges[1:]:
+                sphere_shape = sphere_shape.fuse(w)
             
-            obj = doc.addObject("Part::Feature", "Sphere")
+            from FCDirectModeling.dm_part import create_dm_part
+            obj = create_dm_part("Sphere")
             obj.Shape = sphere_shape
             obj.Placement.Base = self.center
+            
+            if hasattr(obj, "ViewObject") and obj.ViewObject:
+                obj.ViewObject.Deviation = 0.05
             
             doc.recompute()
             log_to_file("SphereCreator: Object created successfully.")

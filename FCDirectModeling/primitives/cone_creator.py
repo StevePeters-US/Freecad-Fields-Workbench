@@ -96,7 +96,8 @@ class ConeCreator(BRepPrimitiveCreator):
             # Loft them (ruled solid)
             loft_shape = Part.makeLoft([base_wire, top_wire], True, True) 
             
-            obj = doc.addObject("Part::Feature", "Cone")
+            from FCDirectModeling.dm_part import create_dm_part
+            obj = create_dm_part("Cone")
             obj.Shape = loft_shape
             
             pl = FreeCAD.Placement()
@@ -105,6 +106,10 @@ class ConeCreator(BRepPrimitiveCreator):
                 pl.Rotation = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 180)
             
             obj.Placement = pl
+            
+            if hasattr(obj, "ViewObject") and obj.ViewObject:
+                obj.ViewObject.Deviation = 0.05
+                
             FreeCAD.activeDocument().recompute()
             log_to_file("ConeCreator: Object created successfully.")
             

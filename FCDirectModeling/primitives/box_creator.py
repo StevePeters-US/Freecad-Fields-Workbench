@@ -450,8 +450,8 @@ class BoxCreator(BRepPrimitiveCreator):
         # Extrude to form Solid
         prism_shape = base_face.extrude(FreeCAD.Vector(0, 0, final_height))
         
-        # Make real Part
-        box = doc.addObject("Part::Feature", "Box")
+        from FCDirectModeling.dm_part import create_dm_part
+        box = create_dm_part("Box")
         box.Shape = prism_shape
         
         # Final Placement

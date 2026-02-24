@@ -65,10 +65,15 @@ class TorusCreator(BRepPrimitiveCreator):
             # Revolve around Z axis 360 degrees
             torus_shape = face.revolve(FreeCAD.Vector(0,0,0), FreeCAD.Vector(0,0,1), 360)
             
-            obj = doc.addObject("Part::Feature", "Torus")
+            from FCDirectModeling.dm_part import create_dm_part
+            obj = create_dm_part("Torus")
             obj.Shape = torus_shape
             
             obj.Placement.Base = self.center
+            
+            if hasattr(obj, "ViewObject") and obj.ViewObject:
+                obj.ViewObject.Deviation = 0.05
+                
             FreeCAD.activeDocument().recompute()
             log_to_file("TorusCreator: Object created successfully.")
             
