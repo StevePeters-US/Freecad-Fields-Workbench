@@ -54,23 +54,14 @@ class BoxTaskPanel:
         self.ui_height.setSingleStep(1.0)
         self.ui_height.setSuffix(" mm")
         
-        self.chk_sdf = QtGui.QCheckBox("Create as SDF")
-        self.chk_sdf.setToolTip("Create a Signed Distance Field object instead of a standard Box")
-        
         self.layout.addRow("Length (X):", self.ui_length)
         self.layout.addRow("Width (Y):", self.ui_width)
         self.layout.addRow("Height (Z):", self.ui_height)
-        self.layout.addRow("", self.chk_sdf)
-        
-        # Initial State
-        if self.creator.create_sdf_mode:
-            self.chk_sdf.setChecked(True)
         
         # Connections
         self.ui_length.valueChanged.connect(self.on_length_changed)
         self.ui_width.valueChanged.connect(self.on_width_changed)
         self.ui_height.valueChanged.connect(self.on_height_changed)
-        self.chk_sdf.toggled.connect(self.on_sdf_toggled)
         
         # Install Event Filter to catch keys in spinboxes
         self.ui_length.installEventFilter(self.form)
@@ -108,10 +99,6 @@ class BoxTaskPanel:
             self.ui_height.setValue(height)
         finally:
             self._block_updates = False
-            
-    def on_sdf_toggled(self, checked):
-        if self.creator:
-            self.creator.create_sdf_mode = checked
             
     def focus_field(self, axis):
         if axis == 'x':

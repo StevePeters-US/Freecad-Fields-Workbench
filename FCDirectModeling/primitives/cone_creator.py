@@ -1,17 +1,14 @@
 """
-SDF Cone creator.
+Cone creator (BRep).
 """
 
 import FreeCAD
 import FreeCADGui
 from pivy import coin
 import numpy as np
-from .base import SDFPrimitiveCreator, log_to_file
-import FCDirectModeling.sdf_lib as sdf_lib
-from FCDirectModeling.primitives.cone import SDFCone
-import FCDirectModeling.sdf_utils as sdf_utils
+from .base import BRepPrimitiveCreator, log_to_file
 
-class ConeCreator(SDFPrimitiveCreator):
+class ConeCreator(BRepPrimitiveCreator):
     def __init__(self):
         super().__init__()
         self.radius = 0.1
@@ -23,7 +20,6 @@ class ConeCreator(SDFPrimitiveCreator):
         
         if self.state == 0:  # Start: Center point
             self.center = pt
-            self.sdf_trans.translation.setValue(pt.x, pt.y, pt.z)
             self.state = 1
             log_to_file("ConeCreator: Center set")
             
@@ -40,7 +36,6 @@ class ConeCreator(SDFPrimitiveCreator):
             self.radius = (pt - self.center).Length
             if self.radius < 0.001: self.radius = 0.001
             
-            # Preview with default height
             self.update_preview()
             
         elif self.state == 2: # Dragging Height
@@ -57,47 +52,65 @@ class ConeCreator(SDFPrimitiveCreator):
                 self.height = 0.001 if self.height >= 0 else -0.001
                 
             self.update_preview()
-            
+
     def update_preview(self):
         try:
-            # Create temporary SDF for preview
-            # Note: SDFCone expects (radius, height)
-            # With updated SDFCone, height is absolute height from base (0) to tip (h).
-            sdf = SDFCone(self.radius, self.height)
-            self.update_sdf_preview(sdf)
-            self.view.redraw()
-        except Exception as e:
-            log_to_file(f"ConeCreator Preview Error: {e}")
-
-    def create_object(self):
-        log_to_file("ConeCreator: Creating object...")
-        try:
-            # Ensure positive dimensions where appropriate
-            # SDFCone handles signed height, but for property consistency:
+            import Part
+            import FreeCAD
+            
             r = abs(self.radius)
-            h = self.height # Signed height is useful for direction
+            h = abs(self.height)
             
-            obj = self.create_generic_sdf(
-                "SDF_Cone",
-                [
-                    ("App::PropertyLength", "Radius", "SDF", "Cone Radius"),
-                    ("App::PropertyLength", "Height", "SDF", "Cone Height"),
-                ],
-                {"Radius": r, "Height": abs(h)},
-            )
+            shape = Part.makeCone(r, 0.0, h)
             
-            # Handle orientation if height was negative
-            if h < 0:
-                # Flip 180 deg around X
-                pl = obj.Placement
+            pl = FreeCAD.Placement()
+            pl.Base = self.center
+            if self.height < 0:
                 pl.Rotation = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 180)
-                obj.Placement = pl
                 
+            super().update_preview(shape, pl)
+        except Exception as e:
+            log_to_file(f"Cone preview error: {e}")
+
+    def finish(self):
+        log_to_file("ConeCreator: Creating loft object...")
+        try:
+            import Part
+            import FreeCAD
+            
+            doc = FreeCAD.activeDocument()
+            if not doc:
+                doc = FreeCAD.newDocument()
+            
+            r = abs(self.radius)
+            h = abs(self.height)
+            
+            # Loft: Base circle and Top circle/vertex
+            base_circle = Part.makeCircle(r, FreeCAD.Vector(0,0,0), FreeCAD.Vector(0,0,1))
+            top_circle = Part.makeCircle(1e-5, FreeCAD.Vector(0,0,h), FreeCAD.Vector(0,0,1)) # 0 radius circle approximating vertex
+            
+            # Create Wires
+            base_wire = Part.Wire(base_circle)
+            top_wire = Part.Wire(top_circle)
+            
+            # Loft them (ruled solid)
+            loft_shape = Part.makeLoft([base_wire, top_wire], True, True) 
+            
+            obj = doc.addObject("Part::Feature", "Cone")
+            obj.Shape = loft_shape
+            
+            pl = FreeCAD.Placement()
+            pl.Base = self.center
+            if self.height < 0:
+                pl.Rotation = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 180)
+            
+            obj.Placement = pl
+            FreeCAD.activeDocument().recompute()
             log_to_file("ConeCreator: Object created successfully.")
             
         except Exception as e:
             msg = f"ConeCreator: Error creating object: {e}"
             log_to_file(msg)
-            import traceback
-            traceback.print_exc()
-
+            FreeCAD.Console.PrintError(msg + "\n")
+            
+        super().finish()

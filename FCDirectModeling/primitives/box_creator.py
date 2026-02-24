@@ -3,19 +3,13 @@ import FreeCADGui
 import Part
 from pivy import coin
 from PySide import QtCore, QtGui
-import FCDirectModeling.sdf_renderer as sdf_renderer
-import FCDirectModeling.sdf_lib as sdf_lib
-from FCDirectModeling.primitives.box import SDFBox
-import FCDirectModeling.sdf_utils as sdf_utils
 import numpy as np
-from .base import PrimitiveCreatorBase
+from .base import BRepPrimitiveCreator, log_to_file
 
-class BoxCreator(PrimitiveCreatorBase):
+class BoxCreator(BRepPrimitiveCreator):
     def __init__(self):
         super().__init__()
         
-        self.create_sdf_mode = False # Flag for SDF creation
-
         # State is initialized by super: self.start_point, self.current_point, self.state=0
         
         self.height = 0.0
@@ -38,63 +32,15 @@ class BoxCreator(PrimitiveCreatorBase):
         
         # Add Box-specific nodes
         
-        # Preview Intersection Nodes (Add to self.preview_sep)
-        self.preview_mat = coin.SoMaterial()
-        # Bright Yellow/Orange for cut intersection
-        self.preview_mat.diffuseColor.setValue(1.0, 0.8, 0.0) 
-        self.preview_mat.transparency.setValue(0.2)
-        self.preview_sep.addChild(self.preview_mat)
-        
-        self.preview_coords = coin.SoCoordinate3()
-        self.preview_sep.addChild(self.preview_coords)
-        
-        self.preview_face_set = coin.SoIndexedFaceSet()
-        self.preview_sep.addChild(self.preview_face_set)
-        
-        
-        # Coordinates (Tool Box) - Solid Box Preview
-        self.coords = coin.SoCoordinate3()
-        self.sg.addChild(self.coords)
-        
-        # Faces (Tool Box)
-        self.face_set = coin.SoIndexedFaceSet()
-        self.sg.addChild(self.face_set)
-        
-        # Outline (Black lines)
-        self.line_sep = coin.SoSeparator()
-        self.line_mat = coin.SoMaterial()
-        self.line_mat.diffuseColor.setValue(0,0,0)
-        self.line_sep.addChild(self.line_mat)
-        self.line_coords = coin.SoCoordinate3() # Shared coords technically better, but separate is easier to manage
-        self.line_sep.addChild(self.line_coords)
-        self.line_set = coin.SoIndexedLineSet()
-        self.line_sep.addChild(self.line_set)
-        
-        self.sg.addChild(self.line_sep)
-        
-        # Initial Material Update
-        self.update_material()
-
     def update_material(self):
-        # Force update by explicitly setting fields
-        # Ideally we shouldn't need to remove/add, but if ghosts appear, 
-        # let's try ensuring the transparency is correctly applied.
-        if self.is_cutter:
-            # Red for Cut
-            self.material.diffuseColor.setValue(1.0, 0.0, 0.0) 
-            self.material.transparency.setValue(0.6)
-        else:
-            # Blue for Create
-            self.material.diffuseColor.setValue(0.2, 0.6, 0.8) 
-            self.material.transparency.setValue(0.5)
+        # We don't have a live BRep object anymore during creation.
+        # Could color the wireframe if desired, but default green is fine for now.
+        pass
             
     def toggle_cutter_mode(self):
          self.is_cutter = not self.is_cutter
          self.manual_mode_override = True
-         self.update_material()
-         # Nuclear option: remove and re-add material to force SceneGraph update
-         self.sg.removeChild(self.material)
-         self.sg.insertChild(self.material, 0) # Insert at beginning
+         self.update_material() # Insert at beginning
          
          self.view.redraw()
 
@@ -207,7 +153,7 @@ class BoxCreator(PrimitiveCreatorBase):
         new_y = p1.y + new_dy
         
         self.current_point = FreeCAD.Vector(new_x, new_y, 0)
-        self.update_geometry()
+        self.update_preview()
         self.view.redraw()
 
     def update_ui(self):
@@ -238,7 +184,7 @@ class BoxCreator(PrimitiveCreatorBase):
             return p
         return self.working_plane.toMatrix().multVec(p)
 
-    def update_geometry(self):
+    def update_preview(self):
         if not self.start_point or not self.current_point:
             return
             
@@ -246,90 +192,37 @@ class BoxCreator(PrimitiveCreatorBase):
         p2 = self.to_local(self.current_point)
         h = self.height
         
-        # Min/Max for geometry creation (doesn't care about direction, just bounds)
         min_x = min(p1.x, p2.x)
         max_x = max(p1.x, p2.x)
         min_y = min(p1.y, p2.y)
         max_y = max(p1.y, p2.y)
         
-        width = max_x - min_x
-        length = max_y - min_y
+        width = max(0.001, max_x - min_x)
+        length = max(0.001, max_y - min_y)
+        h_abs = max(0.001, abs(h))
         
         z_offset = 0.0
         if h < 0:
             z_offset = h
-        
-        # 8 Coordinates in LOCAL
-        local_coords = [
-            FreeCAD.Vector(min_x, min_y, 0), FreeCAD.Vector(max_x, min_y, 0), 
-            FreeCAD.Vector(max_x, max_y, 0), FreeCAD.Vector(min_x, max_y, 0),
-            FreeCAD.Vector(min_x, min_y, h), FreeCAD.Vector(max_x, min_y, h), 
-            FreeCAD.Vector(max_x, max_y, h), FreeCAD.Vector(min_x, max_y, h)
-        ]
-        
-        # Convert to GLOBAL for Coin3D
-        coords = [[v.x, v.y, v.z] for v in [self.to_global(lp) for lp in local_coords]]
-        
-        self.coords.point.setValues(0, 8, coords)
-        self.line_coords.point.setValues(0, 8, coords)
-        
-        # Faces/Lines setup remains same (omitted for brevity in replacement if unchanged)
-        # But wait, replace_file_content needs contiguity. Steps below cover it all?
-        # Re-adding faces/lines setup just in case I need to cover large block.
-        # Actually I can just skip the invariant parts if I target carefully.
-        # I will replace from set_length_lock down to handle_move start to cover update_from_locks and update_ui.
-        
-        # Update Visuals
-        
-        if self.create_sdf_mode:
-            # Wireframe + SDF Preview
             
-            # Hide solid box
-            self.face_set.coordIndex.setNum(0)
+        try:
+            shape = Part.makeBox(width, length, h_abs)
             
-            # Wireframe (Yellow)
-            self.line_mat.diffuseColor.setValue(0.0, 1.0, 0.0) 
-            self.line_mat.transparency.setValue(0.0)
+            # Base in Local
+            local_base = FreeCAD.Vector(min_x, min_y, z_offset)
             
-            # SDF Point Cloud Preview (No meshing)
-            self.sdf_coords.point.setNum(0)
-            self.sdf_points.numPoints.setValue(0)
-            self.sdf_edge_coords.point.setNum(0)
-            self.sdf_edge_lines.coordIndex.setNum(0)
-
-
-
-        else:
-            # Standard Box Mode
-            # Hide SDF
-            self.sdf_coords.point.setNum(0)
-            self.sdf_points.numPoints.setValue(0)
-
-            self.line_mat.diffuseColor.setValue(0, 0, 0) # Black outline
+            pl = FreeCAD.Placement()
             
-            # Update Solid Box Faces
-            coords = [
-                # ... existing coordinate generation ...
-                # Actually, self.coords is set above, we just need to set coordIndex
-            ]
-            
-            # We need to set the coordIndex for the standard box faces
-            faces = [
-                0,3,2,1,-1, # Bottom
-                4,5,6,7,-1, # Top
-                0,1,5,4,-1, # Front
-                1,2,6,5,-1, # Right
-                2,3,7,6,-1, # Back
-                3,0,4,7,-1  # Left
-            ]
-            self.face_set.coordIndex.setValues(0, len(faces), faces)
-        
-        lines = [
-            0,1,2,3,0,-1, # Base loop
-            4,5,6,7,4,-1, # Top loop
-            0,4,-1, 1,5,-1, 2,6,-1, 3,7,-1 # Vertical struts
-        ]
-        self.line_set.coordIndex.setValues(0, len(lines), lines)
+            if self.working_plane:
+                 local_placement = FreeCAD.Placement(local_base, FreeCAD.Rotation())
+                 final_placement = self.working_plane.multiply(local_placement)
+                 pl = final_placement
+            else:
+                 pl.Base = local_base
+                 
+            super().update_preview(shape, pl)
+        except Exception as e:
+            log_to_file(f"Box preview error: {e}")
 
     def event_cb(self, event_dict):
         event_type = event_dict["Type"]
@@ -351,110 +244,7 @@ class BoxCreator(PrimitiveCreatorBase):
             
         return False
         
-    def preview_cut(self):
-        # Update preview only if cutter mode is active
-        if not self.is_cutter:
-            return
 
-        doc = FreeCAD.activeDocument()
-        if not doc or not self.current_point:
-             return
-
-        # 1. Create Temporary Box Shape
-        # Calculate in Local
-        p1 = self.to_local(self.start_point)
-        p2 = self.to_local(self.current_point)
-        
-        min_x = min(p1.x, p2.x)
-        max_x = max(p1.x, p2.x)
-        min_y = min(p1.y, p2.y)
-        max_y = max(p1.y, p2.y)
-        
-        width = max_x - min_x
-        length = max_y - min_y
-        
-        # Avoid zero dimensions for shape creation
-        if width < 0.001: width = 0.001
-        if length < 0.001: length = 0.001
-        
-        raw_height = self.height if abs(self.height) > 0.001 else 1.0
-        
-        # Part.makeBox requires positive dimensions
-        box_h = abs(raw_height)
-        z_offset = 0.0
-        if raw_height < 0:
-            z_offset = raw_height
-            
-        try:
-            # Create box in local coords
-            box_shape = Part.makeBox(width, length, box_h)
-            
-            # Apply local translation (offset to min_x, min_y, z_offset)
-            local_pos = FreeCAD.Vector(min_x, min_y, z_offset)
-            box_shape.translate(local_pos)
-            
-            # Apply Working Plane (Global Transform)
-            if self.working_plane:
-                # box_shape is currently 'aligned' to local system.
-                # We need to transform it to global.
-                box_shape.transformShape(self.working_plane.toMatrix())
-                
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"Preview Box Creation Failed: {e}\n")
-            return
-        
-        # 2. Find Intersections (Volume to be removed)
-        intersecting_shapes = []
-        for obj in doc.Objects:
-             if hasattr(obj, "Shape") and obj.Shape.isValid() and hasattr(obj, "ViewObject") and obj.ViewObject.Visibility:
-                 try:
-                     # Check BBox first
-                     if not obj.Shape.BoundBox.intersect(box_shape.BoundBox):
-                         continue
-                     
-                     # Check Common
-                     # FreeCAD.Console.PrintMessage(f"Checking intersection with {obj.Name}...\n")
-                     common = obj.Shape.common(box_shape)
-                     if common.Volume > 1e-6:
-                         intersecting_shapes.append(common)
-                 except Exception as e:
-                     # Don't spam console for expected failures on weird shapes, but log once if needed
-                     # FreeCAD.Console.PrintError(f"Preview Check Failed for {obj.Name}: {e}\n")
-                     continue
-
-        if not intersecting_shapes:
-            # Clear preview
-            self.preview_coords.point.setNum(0)
-            self.preview_face_set.coordIndex.setNum(0)
-            return
-            
-        # 3. Fuse intersections for visualization
-        try:
-            visual_shape = intersecting_shapes[0]
-            if len(intersecting_shapes) > 1:
-                for s in intersecting_shapes[1:]:
-                    visual_shape = visual_shape.fuse(s)
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"Preview Fuse Failed: {e}\n")
-            return
-                
-        # 4. Tessellate and Update Node
-        try:
-            # Use simple deflection
-            tess = visual_shape.tessellate(0.5) 
-            verts = tess[0]
-            faces = tess[1]
-            
-            self.preview_coords.point.setValues(0, len(verts), verts)
-            
-            coord_indices = []
-            for f in faces:
-                coord_indices.extend(f)
-                coord_indices.append(-1)
-                
-            self.preview_face_set.coordIndex.setValues(0, len(coord_indices), coord_indices)
-        except Exception as e:
-             FreeCAD.Console.PrintError(f"Preview Tessellation Failed: {e}\n")
             
     def handle_keyboard(self, event_dict):
         key = str(event_dict["Key"]).upper()
@@ -544,12 +334,9 @@ class BoxCreator(PrimitiveCreatorBase):
                 except Exception:
                     self.working_plane = None
                     self.snap_face = None
-            else:
-                self.working_plane = None
-                self.snap_face = None
             return
             
-        if self.state == 1:
+        elif self.state == 1:
             raw_pt = self.get_mouse_point_on_plane(event_dict, self.working_plane)
             
             # Work in Local Coords for standard delta logic
@@ -581,14 +368,8 @@ class BoxCreator(PrimitiveCreatorBase):
             new_local_pt = FreeCAD.Vector(new_local_x, new_local_y, 0)
             self.current_point = self.to_global(new_local_pt)
             
-            self.update_geometry()
+            self.update_preview()
             self.update_ui()
-            
-            if self.is_cutter:
-                self.preview_cut()
-            else:
-                self.preview_coords.point.setNum(0)
-                self.preview_face_set.coordIndex.setNum(0)
             
         elif self.state == 2:
             # Handle height
@@ -615,14 +396,8 @@ class BoxCreator(PrimitiveCreatorBase):
                          self.is_cutter = False
                          self.update_material()
             
-            self.update_geometry()
+            self.update_preview()
             self.update_ui()
-            
-            if self.is_cutter:
-                self.preview_cut()
-            else:
-                self.preview_coords.point.setNum(0)
-                self.preview_face_set.coordIndex.setNum(0)
 
     def finish(self):
         if not self.start_point or (not self.current_point and self.state == 0):
@@ -633,29 +408,7 @@ class BoxCreator(PrimitiveCreatorBase):
         doc = FreeCAD.activeDocument()
         if not doc:
             doc = FreeCAD.newDocument()
-            
-        if self.create_sdf_mode:
-            # Create SDF Box using Factory
-            box = sdf_utils.SDFObjectFactory.create_sdf_object(doc, "SDF_Box", sdf_renderer.SDFBoxFeature)
-            
-            # Add Properties (matches command_create_sdf.py)
-            if not hasattr(box, "Length"): 
-                box.addProperty("App::PropertyLength", "Length", "SDF", "Length of the box")
-            if not hasattr(box, "Width"):
-                box.addProperty("App::PropertyLength", "Width", "SDF", "Width of the box")
-            if not hasattr(box, "Height"):
-                box.addProperty("App::PropertyLength", "Height", "SDF", "Height of the box")
-            
-            # Common Properties
-            sdf_utils.SDFObjectFactory.add_common_properties(box)
-            
 
-
-            sdf_utils.SDFObjectFactory.setup_view_provider(box)
-        else:
-            # Create Standard Box
-            box = doc.addObject("Part::Box", "Box")
-        
         # Ensure we have points
         if not self.current_point:
              self.current_point = self.start_point
@@ -675,87 +428,95 @@ class BoxCreator(PrimitiveCreatorBase):
         if width < 0.001: width = 1.0
         if length < 0.001: length = 1.0
         
-        box.Length = width
-        box.Width = length
-        box.Height = self.height if abs(self.height) > 0.001 else 1.0
+        final_height = self.height if abs(self.height) > 0.001 else 1.0
         
-        # Placement
-        # Base in Local
-        local_base = FreeCAD.Vector(min_x, min_y, 0)
+        # Lofting / Extruding Approach:
+        # Create 4 points of the local base rectangle
+        pt1 = FreeCAD.Vector(min_x, min_y, 0)
+        pt2 = FreeCAD.Vector(max_x, min_y, 0)
+        pt3 = FreeCAD.Vector(max_x, max_y, 0)
+        pt4 = FreeCAD.Vector(min_x, max_y, 0)
         
-        if self.create_sdf_mode:
-            # SDF Box is centered at origin, so move placement to center of the drawn box
-            local_base += FreeCAD.Vector(width/2.0, length/2.0, (self.height if abs(self.height) > 0.001 else 1.0)/2.0)
+        # Create curves (LineSegments)
+        edge1 = Part.LineSegment(pt1, pt2).toShape()
+        edge2 = Part.LineSegment(pt2, pt3).toShape()
+        edge3 = Part.LineSegment(pt3, pt4).toShape()
+        edge4 = Part.LineSegment(pt4, pt1).toShape()
+        
+        # Form Wire -> Face
+        base_wire = Part.Wire([edge1, edge2, edge3, edge4])
+        base_face = Part.Face(base_wire)
+        
+        # Extrude to form Solid
+        prism_shape = base_face.extrude(FreeCAD.Vector(0, 0, final_height))
+        
+        # Make real Part
+        box = doc.addObject("Part::Feature", "Box")
+        box.Shape = prism_shape
         
         # Final Placement
         if self.working_plane:
-             local_placement = FreeCAD.Placement(local_base, FreeCAD.Rotation())
-             # Correct: Global = Plane * Local
-             final_placement = self.working_plane.multiply(local_placement)
-             box.Placement = final_placement
-        else:
-             box.Placement.Base = local_base
-        
+             box.Placement = self.working_plane
+             
         doc.recompute()
         
-        # Auto Fuse/Cut Logic (Only for standard Part::Box)
-        if not self.create_sdf_mode:
-            if not self.is_cutter and self.snap_face:
-                 # Fuse box with base object
-                 base_obj = self.snap_face[0]
-                 if base_obj:
-                     try:
-                         fused_name = f"Result"
-                         fuse = doc.addObject("Part::MultiFuse", fused_name)
-                         fuse.Shapes = [base_obj, box]
-                         
-                         if hasattr(base_obj, "ViewObject") and base_obj.ViewObject:
-                            base_obj.ViewObject.Visibility = False
-                         if hasattr(box, "ViewObject") and box.ViewObject:
-                            box.ViewObject.Visibility = False
-                            
-                         doc.recompute()
-                     except Exception as e:
-                         FreeCAD.Console.PrintError(f"Auto-Fuse Failed: {e}\n")
-            
-            # Boolean Cut Logic
-            if self.is_cutter:
-                intersecting_objs = []
-                for obj in doc.Objects:
-                    if obj == box:
-                        continue
-                    # Simple check: does it have a Shape?
-                    if hasattr(obj, "Shape") and obj.Shape.isValid():
-                        try:
-                            # Check collision/intersection
-                            # common volume check is robust
-                            if not box.Shape.isValid():
-                                 continue
-                                 
-                            common = box.Shape.common(obj.Shape)
-                            if common.Volume > 1e-5:
-                                intersecting_objs.append(obj)
-                        except Exception as e:
-                            FreeCAD.Console.PrintError(f"Boolean Check Failed for {obj.Name}: {e}\n")
-                            continue
-                
-                if intersecting_objs:
-                    for target in intersecting_objs:
-                        try:
-                            name = f"Cut_{target.Name}"
-                            cut = doc.addObject("Part::Cut", name)
-                            cut.Base = target
-                            cut.Tool = box
-                            
-                            # hide original objects
-                            if hasattr(target, "ViewObject") and target.ViewObject:
-                                target.ViewObject.Visibility = False
-                        except Exception as e:
-                            FreeCAD.Console.PrintError(f"Failed to create Cut for {target.Name}: {e}\n")
-                            
-                    # Hide the tool (box) if it made cuts
+        # Auto Fuse/Cut Logic
+        if not self.is_cutter and self.snap_face:
+            # Fuse box with base object
+            base_obj = self.snap_face[0]
+            if base_obj:
+                try:
+                    fused_name = f"Result"
+                    fuse = doc.addObject("Part::MultiFuse", fused_name)
+                    fuse.Shapes = [base_obj, box]
+                    
+                    if hasattr(base_obj, "ViewObject") and base_obj.ViewObject:
+                        base_obj.ViewObject.Visibility = False
                     if hasattr(box, "ViewObject") and box.ViewObject:
-                         box.ViewObject.Visibility = False
+                        box.ViewObject.Visibility = False
+                        
+                    doc.recompute()
+                except Exception as e:
+                    FreeCAD.Console.PrintError(f"Auto-Fuse Failed: {e}\n")
+        
+        # Boolean Cut Logic
+        if self.is_cutter:
+            intersecting_objs = []
+            for obj in doc.Objects:
+                if obj == box:
+                    continue
+                # Simple check: does it have a Shape?
+                if hasattr(obj, "Shape") and obj.Shape.isValid():
+                    try:
+                        # Check collision/intersection
+                        # common volume check is robust
+                        if not box.Shape.isValid():
+                            continue
+                            
+                        common = box.Shape.common(obj.Shape)
+                        if common.Volume > 1e-5:
+                            intersecting_objs.append(obj)
+                    except Exception as e:
+                        FreeCAD.Console.PrintError(f"Boolean Check Failed for {obj.Name}: {e}\n")
+                        continue
+            
+            if intersecting_objs:
+                for target in intersecting_objs:
+                    try:
+                        name = f"Cut_{target.Name}"
+                        cut = doc.addObject("Part::Cut", name)
+                        cut.Base = target
+                        cut.Tool = box
+                        
+                        # hide original objects
+                        if hasattr(target, "ViewObject") and target.ViewObject:
+                            target.ViewObject.Visibility = False
+                    except Exception as e:
+                        FreeCAD.Console.PrintError(f"Failed to create Cut for {target.Name}: {e}\n")
+                        
+                # Hide the tool (box) if it made cuts
+                if hasattr(box, "ViewObject") and box.ViewObject:
+                    box.ViewObject.Visibility = False
                          
                     doc.recompute()
 

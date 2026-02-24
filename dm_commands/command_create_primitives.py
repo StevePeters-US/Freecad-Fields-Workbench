@@ -1,75 +1,47 @@
-
 import FreeCAD
 import FreeCADGui
-import FCDirectModeling.sdf_renderer as sdf_renderer
-import FCDirectModeling.primitives as primitive_creators
+from FCDirectModeling import primitives as primitive_creators
 
-
-class CreateSDFSphere:
+class CreateSphere:
     def GetResources(self):
-        return {'Pixmap': 'Part_Sphere_Parametric', 'MenuText': 'SDF Sphere', 'ToolTip': 'Create an SDF Sphere'}
+        return {'Pixmap': 'Part_Sphere_Parametric', 'MenuText': 'Create Sphere', 'ToolTip': 'Create a Native BRep Sphere'}
 
     def Activated(self):
-        import FCDirectModeling.sdf_lib as sdf_lib
-        import FCDirectModeling.sdf_renderer as sdf_renderer
-        import FCDirectModeling.primitives as primitive_creators
-        import FCDirectModeling.sdf_utils as sdf_utils
-        import FCDirectModeling.primitives.base as _base
-        import FCDirectModeling.primitives.sphere_creator as _sphere
-
-        FreeCAD.Console.PrintMessage("CreateSDFSphere: Activated!\n")
         try:
             self.creator = primitive_creators.SphereCreator()
         except Exception as e:
-            FreeCAD.Console.PrintError(f"CreateSDFSphere: Error: {e}\n")
+            FreeCAD.Console.PrintError(f"CreateSphere: Error: {e}\n")
 
     def IsActive(self):
         return FreeCAD.activeDocument() is not None
 
-
-class CreateSDFCone:
+class CreateCone:
     def GetResources(self):
-        return {'Pixmap': 'Part_Cone_Parametric', 'MenuText': 'SDF Cone', 'ToolTip': 'Create an SDF Cone'}
+        return {'Pixmap': 'Part_Cone_Parametric', 'MenuText': 'Create Cone', 'ToolTip': 'Create a Native BRep Cone'}
 
     def Activated(self):
-        import FCDirectModeling.sdf_lib as sdf_lib
-        import FCDirectModeling.sdf_renderer as sdf_renderer
-        import FCDirectModeling.primitives as primitive_creators
-        import FCDirectModeling.sdf_utils as sdf_utils
-        import FCDirectModeling.primitives.base as _base
-        import FCDirectModeling.primitives.cone_creator as _cone
-
         try:
             self.creator = primitive_creators.ConeCreator()
         except Exception as e:
-            FreeCAD.Console.PrintError(f"CreateSDFCone: Error: {e}\n")
+            FreeCAD.Console.PrintError(f"CreateCone: Error: {e}\n")
 
     def IsActive(self):
         return FreeCAD.activeDocument() is not None
 
-
-class CreateSDFTorus:
+class CreateTorus:
     def GetResources(self):
-        return {'Pixmap': 'Part_Torus_Parametric', 'MenuText': 'SDF Torus', 'ToolTip': 'Create an SDF Torus'}
+        return {'Pixmap': 'Part_Torus_Parametric', 'MenuText': 'Create Torus', 'ToolTip': 'Create a Native BRep Torus'}
 
     def Activated(self):
-        import FCDirectModeling.sdf_lib as sdf_lib
-        import FCDirectModeling.sdf_renderer as sdf_renderer
-        import FCDirectModeling.primitives as primitive_creators
-        import FCDirectModeling.sdf_utils as sdf_utils
-        import FCDirectModeling.primitives.base as _base
-        import FCDirectModeling.primitives.torus_creator as _torus
-
         try:
             self.creator = primitive_creators.TorusCreator()
         except Exception as e:
-            FreeCAD.Console.PrintError(f"CreateSDFTorus: Error: {e}\n")
+            FreeCAD.Console.PrintError(f"CreateTorus: Error: {e}\n")
 
     def IsActive(self):
         return FreeCAD.activeDocument() is not None
 
-
 # Register
-FreeCADGui.addCommand('SDF_Sphere', CreateSDFSphere())
-FreeCADGui.addCommand('SDF_Cone', CreateSDFCone())
-FreeCADGui.addCommand('SDF_Torus', CreateSDFTorus())
+FreeCADGui.addCommand('DM_CreateSphere', CreateSphere())
+FreeCADGui.addCommand('DM_CreateCone', CreateCone())
+FreeCADGui.addCommand('DM_CreateTorus', CreateTorus())

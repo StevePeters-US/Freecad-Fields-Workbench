@@ -67,34 +67,22 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
         # in each file, making the commands available to FreeCAD.
         try:
             from dm_commands import command_open_task_panel
-            from dm_commands import command_create_sdf
-            from dm_commands import command_convert_to_sdf
-            from dm_commands import command_sdf_boolean
+            from dm_commands import command_create_box
             from dm_commands import command_create_primitives
             
             self.appendToolbar("Direct Modeling", [
-                'DM_CreateSDF',
-                'SDF_Sphere',
-                'SDF_Cone',
-                'SDF_Torus',
-                'DM_ConvertToSDF',
-                'DM_OpenTaskPanel',
-                "Separator",
-                'SDF_Union',
-                'SDF_Difference',
-                'SDF_Intersection'
+                'DM_CreateBox',
+                'DM_CreateSphere',
+                'DM_CreateCone',
+                'DM_CreateTorus',
+                'DM_OpenTaskPanel'
             ])
             self.appendMenu("Direct Modeling", [
-                'DM_CreateSDF',
-                'SDF_Sphere',
-                'SDF_Cone',
-                'SDF_Torus',
-                'DM_ConvertToSDF',
-                'DM_OpenTaskPanel',
-                "Separator",
-                'SDF_Union',
-                'SDF_Difference',
-                'SDF_Intersection'
+                'DM_CreateBox',
+                'DM_CreateSphere',
+                'DM_CreateCone',
+                'DM_CreateTorus',
+                'DM_OpenTaskPanel'
             ])
         except Exception as e:
             FreeCAD.Console.PrintError(f"Error importing Direct Modeling commands: {e}\n")

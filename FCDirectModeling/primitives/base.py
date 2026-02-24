@@ -6,15 +6,9 @@ import FreeCAD
 import FreeCADGui
 from pivy import coin
 from PySide import QtCore
-import FCDirectModeling.sdf_renderer as sdf_renderer
-import FCDirectModeling.sdf_utils as sdf_utils
+import Part
 
-# Preview point count target (~100 points per shape during drag)
-PREVIEW_RESOLUTION = sdf_utils.DEFAULT_RESOLUTION
-PREVIEW_SAMPLES = 4
-PREVIEW_ITERATIONS = 4
-
-
+# Preview target variables removed since native BRep does not need point clouds
 def log_to_file(msg):
     FreeCAD.Console.PrintLog(f"[SDF] {msg}\n")
 
@@ -42,39 +36,6 @@ class PrimitiveCreatorBase:
         # Shape Nodes (subclasses may add to preview_sep)
         self.preview_sep = coin.SoSeparator()
         self.sg.addChild(self.preview_sep)
-
-        # SDF Point Cloud Preview Nodes
-        self.sdf_sep = coin.SoSeparator()
-        self.sg.addChild(self.sdf_sep)
-
-        self.sdf_mat = coin.SoMaterial()
-        self.sdf_mat.diffuseColor.setValue(0.7, 0.7, 0.7)
-        self.sdf_sep.addChild(self.sdf_mat)
-
-        self.sdf_trans = coin.SoTransform()
-        self.sdf_sep.addChild(self.sdf_trans)
-
-        self.sdf_style = coin.SoDrawStyle()
-        self.sdf_style.pointSize.setValue(4.0)
-        self.sdf_sep.addChild(self.sdf_style)
-
-        # Points (original point cloud preview if needed)
-        self.sdf_coords = coin.SoCoordinate3()
-        self.sdf_sep.addChild(self.sdf_coords)
-
-        self.sdf_points = coin.SoPointSet()
-        self.sdf_sep.addChild(self.sdf_points)
-
-        # Edges (analytical curves for sphere, cone, torus)
-        self.sdf_edge_mat = coin.SoMaterial()
-        self.sdf_edge_mat.diffuseColor.setValue(0.0, 1.0, 0.0) # Bright green
-        self.sdf_sep.addChild(self.sdf_edge_mat)
-
-        self.sdf_edge_coords = coin.SoCoordinate3()
-        self.sdf_sep.addChild(self.sdf_edge_coords)
-
-        self.sdf_edge_lines = coin.SoIndexedLineSet()
-        self.sdf_sep.addChild(self.sdf_edge_lines)
 
         self.view.getSceneGraph().addChild(self.sg)
 
@@ -183,90 +144,99 @@ class PrimitiveCreatorBase:
     def handle_move(self, event_dict):
         pass
 
-    def update_sdf_preview(self, sdf_obj):
-        """Updates the SDF preview with explicit analytical edges if available, otherwise fallback to tracing."""
-        try:
-            edges = sdf_obj.get_edges()
-            
-            if edges and len(edges) > 0:
-                # We have explicit analytical edges (e.g., Box, Sphere, Cone, Torus)
-                all_pts = []
-                coord_indices = []
-                current_idx = 0
-                
-                for edge_pts in edges:
-                    if len(edge_pts) == 0: continue
-                    all_pts.extend(edge_pts)
-                    num_pts = len(edge_pts)
-                    
-                    # Create line strip indices for this edge
-                    indices = list(range(current_idx, current_idx + num_pts))
-                    indices.append(-1) # Line strip separator
-                    coord_indices.extend(indices)
-                    
-                    current_idx += num_pts
-                
-                if len(all_pts) > 0:
-                    self.sdf_edge_coords.point.setValues(0, len(all_pts), all_pts)
-                    self.sdf_edge_lines.coordIndex.setValues(0, len(coord_indices), coord_indices)
-                    
-                    # Hide point cloud
-                    self.sdf_coords.point.setNum(0)
-                    self.sdf_points.numPoints.setValue(0)
-                    return
-            
-            # Fallback for complex booleans: Lightweight analytical edge tracing
-            pts = sdf_obj.trace_edges(num_seeds=50, variance_threshold=0.2)
-            
-            if pts is not None and len(pts) > 0:
-                self.sdf_coords.point.setValues(0, len(pts), pts)
-                self.sdf_points.numPoints.setValue(len(pts))
-            else:
-                self.sdf_coords.point.setNum(0)
-                self.sdf_points.numPoints.setValue(0)
-                
-            # Hide explicit edges
-            self.sdf_edge_coords.point.setNum(0)
-            self.sdf_edge_lines.coordIndex.setNum(0)
-            
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"SDF Preview Error: {e}\n")
-            self.sdf_coords.point.setNum(0)
-            self.sdf_points.numPoints.setValue(0)
-            self.sdf_edge_coords.point.setNum(0)
-            self.sdf_edge_lines.coordIndex.setNum(0)
 
+class BRepPrimitiveCreator(PrimitiveCreatorBase):
+    """Base for creators that produce a persistent BRep Part object."""
 
-class SDFPrimitiveCreator(PrimitiveCreatorBase):
-    """Base for creators that produce a persistent SDF document object."""
+    def __init__(self):
+        super().__init__()
+        self.obj = None
+        
+        # We restore the Coin3D edge nodes for interactive wireframe previews
+        self.edge_mat = coin.SoMaterial()
+        self.edge_mat.diffuseColor.setValue(0.0, 1.0, 0.0) # Bright green
+        self.preview_sep.addChild(self.edge_mat)
+
+        self.edge_coords = coin.SoCoordinate3()
+        self.preview_sep.addChild(self.edge_coords)
+
+        self.edge_lines = coin.SoIndexedLineSet()
+        self.preview_sep.addChild(self.edge_lines)
 
     def finish(self):
-        self.create_object()
+        # Subclasses should handle their specific creation and finalization
+        self.obj = None # Ensure we don't delete on terminate
         QtCore.QTimer.singleShot(0, self.terminate)
 
-    def create_generic_sdf(self, type_name, properties_list, properties_values):
+    def terminate(self):
+        # If we cancel during creation, self.obj is deleted
+        if hasattr(self, 'obj') and self.obj:
+            try:
+                name = self.obj.Name
+                FreeCAD.activeDocument().removeObject(name)
+                FreeCAD.activeDocument().recompute()
+            except Exception as e:
+                log_to_file(f"Error removing temporary object {name}: {e}")
+        super().terminate()
+
+    def create_generic_part(self, type_name, name, properties_values):
         """
-        Generic helper to create an SDF document object.
-        :param type_name: e.g. "SDF_Sphere"
-        :param properties_list: list of (Type, Name, Group, Tooltip) tuples
+        Generic helper to create a Part document object and set properties.
+        :param type_name: e.g. "Part::Sphere"
+        :param name: e.g. "Sphere"
         :param properties_values: dict of {Name: Value}
         """
         doc = FreeCAD.activeDocument()
         if not doc:
             doc = FreeCAD.newDocument()
 
-        obj = sdf_utils.SDFObjectFactory.create_sdf_object(doc, type_name, sdf_renderer.SDFBoxFeature)
-
-        for prop_def in properties_list:
-            obj.addProperty(prop_def[0], prop_def[1], prop_def[2], prop_def[3])
-
-        sdf_utils.SDFObjectFactory.add_common_properties(obj)
-        obj.Placement.Base = self.center
-        sdf_utils.SDFObjectFactory.setup_view_provider(obj)
+        obj = doc.addObject(type_name, name)
 
         for prop_name, val in properties_values.items():
-            setattr(obj, prop_name, val)
+            if hasattr(obj, prop_name):
+                setattr(obj, prop_name, val)
 
         doc.recompute()
-        FreeCAD.Console.PrintMessage(f"{type_name} created successfully.\n")
+        FreeCAD.Console.PrintMessage(f"{name} created successfully.\n")
         return obj
+
+    def update_preview(self, shape, placement=None):
+        """
+        Updates the Coin3D preview with a standard BRep shape.
+        :param shape: A FreeCAD Part.Shape object
+        :param placement: Optional FreeCAD.Placement to apply
+        """
+        try:
+            if placement:
+                shape = shape.copy()
+                shape.Placement = placement
+                
+            # Extract and Draw Edges
+            edges = shape.Edges
+            edge_verts = []
+            edge_indices = []
+            current_idx = 0
+            
+            for e in edges:
+                # Discretize edge
+                pts = e.discretize(Deflection=0.05)
+                if not pts: continue
+                
+                # Add points
+                edge_verts.extend([v for v in pts])
+                
+                # Add indices for this line strip
+                num_pts = len(pts)
+                indices = list(range(current_idx, current_idx + num_pts))
+                indices.append(-1)
+                edge_indices.extend(indices)
+                
+                current_idx += num_pts
+                
+            self.edge_coords.point.setValues(0, len(edge_verts), edge_verts)
+            self.edge_lines.coordIndex.setValues(0, len(edge_indices), edge_indices)
+            
+            self.view.redraw()
+            
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"Preview Tessellation Failed: {e}\n")

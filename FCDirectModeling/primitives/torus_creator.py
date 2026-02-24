@@ -1,14 +1,12 @@
 """
-SDF Torus creator.
+Torus creator (BRep).
 """
 
 import FreeCAD
-from .base import SDFPrimitiveCreator, log_to_file
-import FCDirectModeling.sdf_lib as sdf_lib
-from FCDirectModeling.primitives.torus import SDFTorus
+import numpy as np
+from .base import BRepPrimitiveCreator, log_to_file
 
-
-class TorusCreator(SDFPrimitiveCreator):
+class TorusCreator(BRepPrimitiveCreator):
     def __init__(self):
         super().__init__()
         self.R = 1.0  # Major radius
@@ -18,7 +16,6 @@ class TorusCreator(SDFPrimitiveCreator):
         pt = self.get_point_on_plane(event_dict)
         if self.state == 0:  # Set center
             self.center = pt
-            self.sdf_trans.translation.setValue(pt.x, pt.y, pt.z)
             self.state = 1
         elif self.state == 1:  # Lock major radius
             self.state = 2
@@ -29,32 +26,55 @@ class TorusCreator(SDFPrimitiveCreator):
         pt = self.get_point_on_plane(event_dict)
         if self.state == 1:
             self.R = max(0.1, (pt - self.center).Length)
-            sdf = SDFTorus(self.R, self.r)
-            self.update_sdf_preview(sdf)
-            self.view.redraw()
+            self.update_preview()
 
         elif self.state == 2:
             dist = (pt - self.center).Length
             self.r = max(0.01, abs(dist - self.R))
-            sdf = SDFTorus(self.R, self.r)
-            self.update_sdf_preview(sdf)
-            self.view.redraw()
+            self.update_preview()
 
-    def create_object(self):
+    def update_preview(self):
+        try:
+            import Part
+            import FreeCAD
+            
+            shape = Part.makeTorus(self.R, self.r)
+            pl = FreeCAD.Placement()
+            pl.Base = self.center
+            
+            super().update_preview(shape, pl)
+        except Exception as e:
+            log_to_file(f"Torus preview error: {e}")
+
+    def finish(self):
         log_to_file("TorusCreator: Creating object...")
         try:
-            self.create_generic_sdf(
-                "SDF_Torus",
-                [
-                    ("App::PropertyLength", "MajorRadius", "SDF", "Major Radius"),
-                    ("App::PropertyLength", "MinorRadius", "SDF", "Minor Radius"),
-                ],
-                {"MajorRadius": self.R, "MinorRadius": self.r},
-            )
+            import Part
+            import FreeCAD
+            
+            doc = FreeCAD.activeDocument()
+            if not doc:
+                doc = FreeCAD.newDocument()
+            
+            # Revolve Approach: Revolve a minor circle around the Z axis
+            # Place minor circle at distance R on X axis, extending in XZ plane
+            minor_circle = Part.makeCircle(self.r, FreeCAD.Vector(self.R, 0, 0), FreeCAD.Vector(0, 1, 0))
+            wire = Part.Wire(minor_circle)
+            face = Part.Face(wire)
+            
+            # Revolve around Z axis 360 degrees
+            torus_shape = face.revolve(FreeCAD.Vector(0,0,0), FreeCAD.Vector(0,0,1), 360)
+            
+            obj = doc.addObject("Part::Feature", "Torus")
+            obj.Shape = torus_shape
+            
+            obj.Placement.Base = self.center
+            FreeCAD.activeDocument().recompute()
             log_to_file("TorusCreator: Object created successfully.")
+            
         except Exception as e:
             msg = f"TorusCreator: Error creating object: {e}"
             log_to_file(msg)
             FreeCAD.Console.PrintError(msg + "\n")
-            import traceback
-            traceback.print_exc()
+            
+        super().finish()

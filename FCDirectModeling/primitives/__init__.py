@@ -2,7 +2,7 @@
 SDF Primitive Creators package.
 """
 
-from .base import PrimitiveCreatorBase, SDFPrimitiveCreator, log_to_file
+from .base import PrimitiveCreatorBase, BRepPrimitiveCreator, log_to_file
 from .sphere_creator import SphereCreator
 from .cone_creator import ConeCreator
 from .torus_creator import TorusCreator
@@ -11,7 +11,7 @@ from .box_task_panel import BoxTaskPanel
 
 __all__ = [
     "PrimitiveCreatorBase",
-    "SDFPrimitiveCreator",
+    "BRepPrimitiveCreator",
     "SphereCreator",
     "ConeCreator",
     "TorusCreator",
