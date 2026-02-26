@@ -1,125 +1,391 @@
 # FreeCAD Direct Modeling — TODO
 
-> Tasks are grouped by difficulty. Each task is scoped so a single LLM session
-> (or developer) can pick it up with minimal context. Start from the top.
+## How to Write a Task
+
+Each task must be **self-contained** so an LLM or developer can complete it with
+no prior context beyond the files listed. Follow this template:
+
+```markdown
+- [ ] **Task Title** (Complexity: N/10)
+  - **Goal**: One sentence describing the desired outcome.
+  - **Files to read**: List every file the implementer must read first.
+  - **Files to modify/create**: List files that will change.
+  - **Steps**:
+    1. First concrete step…
+    2. Second step…
+  - **Acceptance**: How to verify the task is done.
+```
+
+- Mark in-progress tasks `[/]`, completed tasks `[x]`.
+- Move completed tasks to `COMPLETED.md` when a milestone is reached.
+- Sort by complexity within each section (lowest first).
 
 ---
 
-## 🟢 Easy (single-file, well-defined scope)
-
-### SDF Rendering — Marching Cubes Implementation
-- [ ] **Implement Marching Cubes in `sdf_mesher.py`**
-  - Add a `marching_cubes(sdf_values_3d, spacing)` function alongside `extract_mesh_numpy`.
-  - Input: 3D NumPy array of SDF values evaluated on a regular grid + grid spacing.
-  - Output: `(verts, tris)` — same format as `extract_mesh_numpy`.
-  - Use the classic 256-entry edge table and tri table (can be embedded as constants).
-  - Interpolate vertex positions along edges using the two SDF values at each edge endpoint.
-  - Reference: Paul Bourke's Marching Cubes tables.
-
-- [ ] **Wire Marching Cubes into the `mesh_sdf()` dispatcher in `sdf_object.py`**
-  - In the `mesh_sdf()` function, add a branch for `algorithm == "marching_cubes"`.
-  - Call the new `marching_cubes()` from `sdf_mesher.py`.
-  - Ensure the resolution parameter maps to grid dimensions the same way as Surface Nets.
-
-- [ ] **Verify Marching Cubes via DM Settings**
-  - Open DM Settings, select "Marching Cubes", create a Box primitive.
-  - Confirm the preview mesh and final mesh render correctly.
-  - Check that switching algorithms back to "Surface Nets" still works.
-
-### DM Settings Enhancements
-- [ ] **Add preview-resolution setting to DM Settings dialog**
-  - In `command_dm_settings.py`, add a second `QSpinBox` for "Preview Resolution" (range 8–32, default 15).
-  - Store/retrieve via `FreeCAD.ParamGet("User parameter:FCDirectModeling")` using key `"PreviewResolution"`.
-  - Add getter/setter pair (`get_preview_resolution` / `set_preview_resolution`) in `sdf_object.py`.
-  - Update `SDFMeshPrimitiveCreator.update_sdf_preview()` in `base.py` to use this value instead of the hardcoded `resolution=20`.
-
-- [ ] **Add sharp-features toggle to DM Settings**
-  - Add a `QCheckBox` "Sharp Features (QEF)" in the settings dialog, default on.
-  - Store as `"SharpFeatures"` parameter (bool).
-  - Pass through to `extract_mesh_numpy(..., sharp=value)` via `mesh_sdf()`.
-
-### Logging Cleanup
-- [ ] **Audit all files for bare `print()` or `FreeCAD.Console.Print*` calls**
-  - Replace with `sdf_logger.debug/info/warn/error` as appropriate.
-  - Files to check: `mesh_features.py` (uses `print()`), `surface_fitting.py`, `sdf_utils.py`, `dm_part.py`.
+## Tasks (sorted by complexity, lowest → highest)
 
 ---
 
-## 🟡 Medium (multi-file, moderate complexity)
+### 1. Replace bare `print()` with `sdf_logger` (Complexity: 1/10)
 
-### SDF Rendering — Dual Contouring
-- [ ] **Implement Dual Contouring in `sdf_mesher.py`**
-  - Add a `dual_contouring(sdf_func, mn, mx, resolution)` function.
-  - For each voxel cell, find zero-crossings on all 12 edges.
-  - Compute Hermite data (position + gradient) at each crossing.
-  - Solve the QEF (Quadratic Error Function) per cell to place the vertex.
-  - Connect adjacent cells sharing a sign-change edge to form quads/tris.
-  - Output: `(verts, tris)` matching the existing format.
-
-- [ ] **Wire Dual Contouring into `mesh_sdf()` in `sdf_object.py`**
-  - Add the `"dual_contouring"` branch (currently it falls through to Surface Nets).
-  - Ensure bounding-box padding and resolution handling are consistent.
-
-### Primitive Stabilization
-- [ ] **Fix Cone rendering** — `cone_creator.py` does not produce a valid mesh; debug the SDF function `_sdf_cone` in `sdf_object.py` and the cone's `handle_move` / `handle_click` in `cone_creator.py`.
-- [ ] **Fix Torus rendering** — similar to Cone; verify `_sdf_torus` parameters and creator interaction.
-- [ ] **Standardize all primitive TaskPanels** — Box has `box_task_panel.py`; create equivalent panels for Sphere, Cone, and Torus with matching dimension spinboxes and accept/cancel buttons.
-
-### Mesh Preview Reliability
-- [ ] **Fix viewport update on `.Mesh` replacement**
-  - In `_process_preview_queue()` (`base.py`), after assigning `.Mesh`, schedule a deferred `doc.recompute()` via `QTimer.singleShot(0, ...)`.
-  - Guard against re-entrancy (skip if a recompute is already pending).
-  - Verify across Box, Sphere, Cone, Torus.
-
-### Boolean Operations
-- [ ] **Implement SDF boolean composition end-to-end**
-  - `_sdf_boolean` in `sdf_object.py` already handles fuse/cut/common at the SDF level.
-  - Wire the boolean commands (`command_boolean.py`) to create a new `Mesh::FeaturePython` with `SDFObjectProxy` that takes two children.
-  - Ensure the result meshes correctly with the selected algorithm.
+- **Goal**: Every log statement in the codebase must go through `sdf_logger` — no bare `print()` or direct `FreeCAD.Console.Print*` calls remain in new/modified code.
+- **Files to read**: `FCDirectModeling/sdf_logger.py` (the logger module — has `debug`, `info`, `warn`, `error` functions).
+- **Files to modify**:
+  - `FCDirectModeling/mesh_features.py` — line 96 has `print("Building Adjacency...")` and line 99 has `print("Computing Angles...")`.
+- **Steps**:
+  1. Add `from FCDirectModeling import sdf_logger` at the top of `mesh_features.py`.
+  2. Replace `print("Building Adjacency...")` → `sdf_logger.debug("Building Adjacency...")`.
+  3. Replace `print("Computing Angles...")` → `sdf_logger.debug("Computing Angles...")`.
+  4. Grep the entire project for any other bare `print(` calls (excluding test files) and replace them the same way.
+- **Acceptance**: `grep -rn "print(" FCDirectModeling/ dm_commands/ --include="*.py"` returns zero results (test files excluded).
 
 ---
 
-## 🔴 Hard (architectural, multi-module, research-heavy)
+### 2. Add preview-resolution setting to DM Settings (Complexity: 2/10)
 
-### SDF to Curves (Feature Extraction)
-- [ ] **2D contour extraction**
-  - In `mesh_features.py` or a new `curve_extraction.py`, implement adaptive contouring.
-  - Walk the SDF zero-crossing on a 2D slice, fitting Bézier segments.
-  - Output: list of `Part.BSplineCurve` or `Part.Edge` objects.
-
-- [ ] **3D feature-edge extraction**
-  - From the meshed surface, detect sharp edges (dihedral angle > threshold) using `mesh_features.py`'s `compute_dihedral_angles`.
-  - Chain sharp edges into polylines / fit B-splines.
-  - Expose as a `DM_ExtractCurves` command.
-
-### SDF to BRep Conversion
-- [ ] **Level-set → CSG tree approximation**
-  - Fit the SDF with a hierarchy of analytic primitives (plane, sphere, cylinder, cone) using `surface_fitting.py`.
-  - Segment the mesh (`segment_mesh`), fit each patch, then reconstruct a `Part::Compound` or `Part::Boolean`.
-  - This is the path to STEP/IGES export without faceting.
-
-### BMesh to SDF
-- [ ] **Mesh → SDF voxelization**
-  - Given an imported mesh (STL, OBJ), compute a signed distance field.
-  - Approach: voxelize the mesh, compute unsigned distance via KD-tree, determine sign via ray-casting or angle-weighted pseudo-normals.
-  - Output: a callable `sdf_func(X, Y, Z)` compatible with the existing pipeline.
-
-### Array & Transform Operations
-- [ ] **Array command** — repeat an SDF object along a vector, circular pattern, or grid. Operate at the SDF level (translate the query point) rather than duplicating meshes.
-- [ ] **Transform command** — apply translate / rotate / scale to an SDF object's parameters, updating the mesh via recompute.
-
-### New Sketch Integration
-- [ ] **Sketch-driven SDF extrusion**
-  - After the user closes the Sketcher, read the resulting `Sketcher::SketchObject` wire.
-  - Convert the 2D profile to an SDF (e.g., signed distance from polygon).
-  - Extrude along the sketch normal to create a 3D SDF object.
+- **Goal**: Let the user configure both a preview resolution (used during drag) and a final resolution (used on commit) from the DM Settings dialog.
+- **Files to read**:
+  - `dm_commands/command_dm_settings.py` — the settings dialog (see `_SettingsDialog.__init__` for layout, `_on_accept` for saving).
+  - `FCDirectModeling/sdf_object.py` lines 22–43 — getter/setter pattern for DM params using `FreeCAD.ParamGet("User parameter:FCDirectModeling")`.
+  - `FCDirectModeling/primitives/base.py` line 206 — `update_sdf_preview(..., resolution=20)` hardcodes the preview resolution.
+- **Files to modify**:
+  - `FCDirectModeling/sdf_object.py` — add `get_preview_resolution()` / `set_preview_resolution()`.
+  - `dm_commands/command_dm_settings.py` — add a `QSpinBox` for "Preview Resolution".
+  - `FCDirectModeling/primitives/base.py` — replace hardcoded `resolution=20` with `get_preview_resolution()`.
+- **Steps**:
+  1. In `sdf_object.py`, below the existing `get_mesh_resolution` / `set_mesh_resolution`, add:
+     ```python
+     def get_preview_resolution():
+         return FreeCAD.ParamGet(_PARAM_PATH).GetInt("PreviewResolution", 15)
+     def set_preview_resolution(res):
+         FreeCAD.ParamGet(_PARAM_PATH).SetInt("PreviewResolution", int(res))
+     ```
+  2. In `command_dm_settings.py` `_SettingsDialog.__init__`, after the "Resolution" row, add a second `QSpinBox` labelled "Preview Resolution" (range 8–32, step 1, default from `get_preview_resolution()`).
+  3. In `_on_accept`, call `set_preview_resolution(self._preview_res_spin.value())`.
+  4. In `base.py` `update_sdf_preview`, replace `resolution=20` with:
+     ```python
+     from FCDirectModeling.sdf_object import get_preview_resolution
+     resolution = get_preview_resolution()
+     ```
+- **Acceptance**: Open DM Settings → change Preview Resolution → create a Box → confirm the preview mesh density matches the chosen resolution.
 
 ---
 
-## 🔧 Infrastructure / Continuous
+### 3. Add sharp-features toggle to DM Settings (Complexity: 2/10)
 
-- [ ] **Unit tests** — expand `test_primitives.py` and `test_sdf_mesher.py` with coverage for all algorithms and all primitive SDF functions.
-- [ ] **CI** — set up GitHub Actions to run headless FreeCAD tests on push.
-- [ ] **Icons** — create or commission SVG icons for all toolbar commands (currently some use FreeCAD stock icons).
-- [ ] **README update** — keep `README.md` in sync with actual project structure and features.
-- [ ] **Documentation** — auto-generate API docs from docstrings (Sphinx or pdoc).
+- **Goal**: Let the user toggle QEF sharp-feature snapping on/off from DM Settings.
+- **Files to read**:
+  - `dm_commands/command_dm_settings.py` — existing checkbox pattern (see "Show Wireframe" checkbox on line 65).
+  - `FCDirectModeling/sdf_object.py` lines 38–43 — existing get/set boolean pattern (`get_show_wireframe`).
+  - `FCDirectModeling/sdf_object.py` `mesh_sdf()` function (lines 139–166) — the `sharp` parameter is passed to `extract_mesh_numpy`.
+  - `FCDirectModeling/sdf_mesher.py` `extract_mesh_numpy(sdf_func, mn, mx, resolution, sharp=True)` — `sharp=True` enables QEF.
+- **Files to modify**:
+  - `FCDirectModeling/sdf_object.py` — add `get_sharp_features()` / `set_sharp_features()`, wire into `mesh_sdf()`.
+  - `dm_commands/command_dm_settings.py` — add a `QCheckBox` for "Sharp Features (QEF)".
+- **Steps**:
+  1. In `sdf_object.py`, add getter/setter (default `True`):
+     ```python
+     def get_sharp_features():
+         return FreeCAD.ParamGet(_PARAM_PATH).GetBool("SharpFeatures", True)
+     def set_sharp_features(enabled):
+         FreeCAD.ParamGet(_PARAM_PATH).SetBool("SharpFeatures", bool(enabled))
+     ```
+  2. In `mesh_sdf()`, replace the hardcoded `sharp=False` / `sharp=True` logic. Instead read `sharp = get_sharp_features()` and pass to `extract_mesh_numpy`.
+  3. In the settings dialog, add a checkbox modelled after the wireframe checkbox.
+- **Acceptance**: Toggle "Sharp Features" off → create a Box → edges appear rounded (Surface Nets default). Toggle on → edges are sharp.
+
+---
+
+### 4. Implement Marching Cubes in `sdf_mesher.py` (Complexity: 4/10)
+
+- **Goal**: Add a real Marching Cubes implementation so the "Marching Cubes" option in DM Settings produces distinct output from Surface Nets.
+- **Files to read**:
+  - `FCDirectModeling/sdf_mesher.py` — the entire file (224 lines). Understand how `extract_mesh_numpy` evaluates the SDF on a 3D grid, detects active voxels, and generates vertices/triangles. Your new function must return the **same format**: `(verts_ndarray_Nx3, tris_ndarray_Mx3)`.
+  - `FCDirectModeling/sdf_object.py` `mesh_sdf()` function (lines 139–166) — this is the dispatcher. Currently all three algorithm branches call `extract_mesh_numpy`. You will add a branch for `"marching_cubes"` → `marching_cubes()`.
+- **Files to modify**:
+  - `FCDirectModeling/sdf_mesher.py` — add `marching_cubes(sdf_func, mn, mx, resolution)` function.
+  - `FCDirectModeling/sdf_object.py` — update `mesh_sdf()` to call the new function.
+- **Steps**:
+  1. In `sdf_mesher.py`, add the 256-entry edge table and triangle table as module-level constants. These are standard Marching Cubes lookup tables (see Paul Bourke's tables or the public domain tables from `scikit-image`).
+  2. Implement `marching_cubes(sdf_func, mn, mx, resolution)`:
+     - Build a 3D grid from `mn` to `mx` with `resolution` steps per axis (same grid logic as `extract_mesh_numpy` lines 22–49).
+     - Evaluate `sdf_func(X, Y, Z)` on the grid to get a 3D value array `V`.
+     - For each cell (8 corners), compute a cube index from the sign of each corner.
+     - Look up the edge table to find which edges have crossings.
+     - Interpolate vertex positions along those edges using the two endpoint SDF values.
+     - Look up the triangle table to connect those vertices into triangles.
+     - Deduplicate vertices that share the same grid edge.
+     - Return `(np.array(verts), np.array(triangles))`.
+  3. In `sdf_object.py` `mesh_sdf()`, replace the `"marching_cubes"` branch:
+     ```python
+     if algorithm == "marching_cubes":
+         from .sdf_mesher import marching_cubes
+         res = marching_cubes(sdf_fn, bounds_min, bounds_max, resolution)
+     ```
+- **Acceptance**: Open DM Settings → select "Marching Cubes" → create a Box → verify a mesh appears. Compare visually with "Surface Nets" — Marching Cubes should look smoother on curves but less sharp on edges.
+
+---
+
+### 5. Fix the boolean commands to work with current `SDFObjectProxy` (Complexity: 4/10)
+
+- **Goal**: The boolean commands (`DM_Fuse`, `DM_Cut`, `DM_Common`) currently fail because `command_boolean.py` line 45 checks `hasattr(obj.Proxy, "sdf_type")`, but `SDFObjectProxy` stores type in FreeCAD properties (`obj.SDFType`), not as a Python attribute.
+- **Files to read**:
+  - `dm_commands/command_boolean.py` — the entire file (86 lines). The `Activated` method at line 35 validates selection and calls `create_sdf_object`.
+  - `FCDirectModeling/sdf_object.py` — `SDFObjectProxy.__init__` (line 189) adds properties `SDFType`, `SDFParams`, `SDFOp`, `SDFChildren` to the FreeCAD object. There is no `self.sdf_type` attribute on the proxy.
+- **Files to modify**:
+  - `dm_commands/command_boolean.py`
+- **Steps**:
+  1. Change the validation check on line 45 from:
+     ```python
+     if not hasattr(obj, "Proxy") or not hasattr(obj.Proxy, "sdf_type"):
+     ```
+     to:
+     ```python
+     if not hasattr(obj, "SDFType"):
+     ```
+     This checks for the FreeCAD property that `SDFObjectProxy` actually creates.
+  2. Test by creating two Box primitives, selecting both, and running DM_Fuse. The result should be a new mesh combining both boxes.
+- **Acceptance**: Select two SDF primitives → Fuse/Cut/Common → a new combined mesh object appears in the document without errors.
+
+---
+
+### 6. Create task panels for Sphere, Cone, and Torus (Complexity: 4/10)
+
+- **Goal**: Box has `box_task_panel.py` with dimension spinboxes. Sphere, Cone, and Torus have no panels — create them.
+- **Files to read**:
+  - `FCDirectModeling/primitives/box_task_panel.py` — the full reference panel (has `QDoubleSpinBox` inputs, `update_values()`, `focus_field()`, `accept()`, `reject()`).
+  - `FCDirectModeling/primitives/sphere_creator.py` — needs `radius` input.
+  - `FCDirectModeling/primitives/cone_creator.py` — needs `radius` and `height` inputs.
+  - `FCDirectModeling/primitives/torus_creator.py` — needs `major_r` and `minor_r` inputs.
+  - `dm_commands/command_create_primitives.py` — where the creators are instantiated (you'll need to attach panels here).
+- **Files to create**:
+  - `FCDirectModeling/primitives/sphere_task_panel.py`
+  - `FCDirectModeling/primitives/cone_task_panel.py`
+  - `FCDirectModeling/primitives/torus_task_panel.py`
+- **Files to modify**:
+  - `dm_commands/command_create_primitives.py` — attach each panel to its creator when activated, same way `command_create_box.py` uses `BoxTaskPanel`.
+- **Steps**:
+  1. Copy `box_task_panel.py` as a template.
+  2. For **Sphere**: one `QDoubleSpinBox` for Radius. `update_values(radius)` updates the display.
+  3. For **Cone**: two spinboxes — Radius and Height. `update_values(radius, height)`.
+  4. For **Torus**: two spinboxes — Major Radius and Minor Radius. `update_values(major_r, minor_r)`.
+  5. In each creator, add a `set_panel(panel)` call and in `handle_move` call `self.panel.update_values(...)`.
+  6. In `command_create_primitives.py`, after creating the creator, create the panel and show it via `FreeCADGui.Control.showDialog(panel)`.
+- **Acceptance**: Activate Sphere/Cone/Torus tool → a panel appears showing live dimensions as you drag.
+
+---
+
+### 7. Fix viewport update on `.Mesh` replacement during preview (Complexity: 5/10)
+
+- **Goal**: The preview mesh is generated but sometimes doesn't visually update in the viewport. Fix by scheduling a deferred `doc.recompute()`.
+- **Files to read**:
+  - `FCDirectModeling/primitives/base.py` — `_process_preview_queue()` method (lines 224–290). Currently assigns `.Mesh` and calls `FreeCADGui.updateGui()` but does not call `doc.recompute()`.
+  - `PROJECT_GUIDELINES.md` — "Event Safety" section (all document mutations must be deferred via `QTimer.singleShot(0, ...)`).
+- **Files to modify**:
+  - `FCDirectModeling/primitives/base.py`
+- **Steps**:
+  1. After line 286 (`FreeCADGui.updateGui()`), add a deferred recompute:
+     ```python
+     if not getattr(self, '_recompute_pending', False):
+         self._recompute_pending = True
+         def _deferred_recompute():
+             try:
+                 doc = FreeCAD.activeDocument()
+                 if doc:
+                     doc.recompute()
+             finally:
+                 self._recompute_pending = False
+         QtCore.QTimer.singleShot(0, _deferred_recompute)
+     ```
+  2. This guard prevents queueing multiple recomputes per frame.
+- **Acceptance**: Create a Box → while dragging, the preview mesh updates every frame without stale/invisible states.
+
+---
+
+### 8. Implement Dual Contouring in `sdf_mesher.py` (Complexity: 6/10)
+
+- **Goal**: Add a true Dual Contouring algorithm so the "Dual Contouring" option in DM Settings produces distinct output from Surface Nets.
+- **Files to read**:
+  - `FCDirectModeling/sdf_mesher.py` — understand `extract_mesh_numpy` (Surface Nets + QEF). Dual Contouring is similar but places **one vertex per cell** via full QEF solve, then connects cells sharing a sign-change edge with quads (split into 2 tris).
+  - `FCDirectModeling/sdf_object.py` `mesh_sdf()` — the dispatcher.
+- **Files to modify**:
+  - `FCDirectModeling/sdf_mesher.py` — add `dual_contouring(sdf_func, mn, mx, resolution)`.
+  - `FCDirectModeling/sdf_object.py` — update `mesh_sdf()` for `"dual_contouring"` branch.
+- **Steps**:
+  1. Build the same 3D grid as `extract_mesh_numpy`.
+  2. Evaluate SDF on grid corners. Detect active cells (sign change among 8 corners).
+  3. For each active cell, find zero-crossings on the 12 edges (same interpolation as `extract_mesh_numpy`).
+  4. At each crossing, compute the SDF gradient (normal) via central differences.
+  5. Solve QEF: minimize `∑ (nᵢ · (x - pᵢ))²` where `pᵢ` are crossing points and `nᵢ` are normals. Use `np.linalg.lstsq`. Clamp result to cell bounds.
+  6. For face-connectivity: for each internal face between two adjacent cells, if the face's 4 edges have a sign change, emit a quad connecting the 4 cell vertices sharing that face. Split each quad into 2 triangles.
+  7. Return `(verts, tris)` in the same format.
+  8. Wire into `mesh_sdf()` as a new branch.
+- **Acceptance**: Select "Dual Contouring" in DM Settings → create a Box → sharp edges should be preserved. Compare with Surface Nets (smoother edges when sharp=False) and Marching Cubes (staircase artifacts on edges).
+
+---
+
+### 9. Mesh to SDF voxelization (Complexity: 6/10)
+
+- **Goal**: Given an imported mesh (STL, OBJ, or existing `Mesh::Feature`), compute a signed distance field that can be used with the existing SDF pipeline.
+- **Files to read**:
+  - `FCDirectModeling/sdf_object.py` — the `_SDF_BUILDERS` dict (line 127) and `mesh_sdf()` to understand the expected SDF function signature: `sdf(X, Y, Z) → numpy array of distances`.
+  - `FCDirectModeling/mesh_features.py` — has mesh utilities (adjacency, face normals) that may be useful.
+- **Files to create**:
+  - `FCDirectModeling/mesh_to_sdf.py`
+  - `dm_commands/command_mesh_to_sdf.py`
+- **Steps**:
+  1. In `mesh_to_sdf.py`, implement `mesh_to_sdf(mesh_obj) → sdf_func`:
+     - Extract vertices and faces from the FreeCAD `Mesh::Feature`.
+     - Build a KD-tree from the mesh faces using `scipy.spatial.KDTree` (or manual approach with NumPy).
+     - For each query point `(X, Y, Z)`, compute the unsigned distance to the nearest triangle.
+     - Determine the sign using the angle-weighted pseudo-normal method: at the closest point, compute the dot product of `(query - closest)` with the surface normal. Negative = inside.
+     - Return a closure `sdf(X, Y, Z)` that evaluates this.
+  2. In `command_mesh_to_sdf.py`, create a `DM_MeshToSDF` command:
+     - Validate selection is a `Mesh::Feature`.
+     - Call `mesh_to_sdf()` to get the SDF function.
+     - Create an `SDFObjectProxy` that stores the SDF for later boolean composition.
+  3. Register the command in `InitGui.py` toolbar.
+- **Acceptance**: Import an STL → select it → run "Mesh to SDF" → a new SDF object appears that can be booleaned with other SDF primitives.
+
+---
+
+### 10. SDF to NURBS patches (replacing BRep) (Complexity: 7/10)
+
+- **Goal**: Instead of converting SDFs to BRep (boundary representation with exact analytic faces), convert them to **NURBS surface patches**. This produces smooth, resolution-independent surfaces suitable for CAD export.
+- **Files to read**:
+  - `FCDirectModeling/surface_fitting.py` — existing primitive fitting (plane, sphere, cylinder, cone). The `segment_mesh` + `best_fit` pipeline segments a mesh into regions and fits analytic primitives.
+  - `FCDirectModeling/mesh_features.py` — `segment_mesh()`, `compute_face_normals()`, `compute_dihedral_angles()`.
+  - `FCDirectModeling/sdf_object.py` — `SDFObjectProxy.execute()` produces `(verts, tris)`.
+- **Files to create**:
+  - `FCDirectModeling/sdf_to_nurbs.py`
+  - `dm_commands/command_sdf_to_nurbs.py`
+- **Steps**:
+  1. In `sdf_to_nurbs.py`:
+     - **Segment** the mesh into smooth patches using `mesh_features.segment_mesh`.
+     - **Sample** each patch: extract the boundary vertices and interior vertices.
+     - **Fit NURBS**: Use FreeCAD's `Part.BSplineSurface` to fit each patch. Approximate:
+       - Compute a parameterization (e.g., Floater mean-value or conformal) for the patch vertices in (u,v) space.
+       - Build a `Part.BSplineSurface` via `buildFromPolesMultsKnots` or `approximate()` fitting the 3D points.
+     - **Stitch**: Collect all NURBS patches into a `Part.Compound` or `Part.Shell`.
+  2. In `command_sdf_to_nurbs.py`:
+     - Validate selection is an SDF object.
+     - Re-mesh at high resolution.
+     - Call the fitting pipeline.
+     - Create a `Part::Feature` with the resulting NURBS compound.
+  3. Register in `InitGui.py`.
+- **Acceptance**: Create a Sphere SDF → run "SDF to NURBS" → a `Part::Feature` with smooth NURBS patches appears. Export to STEP → re-import → surfaces are smooth, not faceted.
+
+---
+
+### 11. SDF to Curves — feature edge extraction (Complexity: 7/10)
+
+- **Goal**: Extract feature curves (sharp edges, ridges) from an SDF mesh and represent them as `Part.BSplineCurve` objects in FreeCAD.
+- **Files to read**:
+  - `FCDirectModeling/mesh_features.py` — `build_adjacency()`, `compute_dihedral_angles()`, `segment_mesh()`.
+  - `FCDirectModeling/surface_fitting.py` — may be used to identify flat/curved regions.
+  - `FCDirectModeling/sdf_object.py` — to get `(verts, tris)` from an existing SDF object.
+- **Files to create**:
+  - `FCDirectModeling/curve_extraction.py`
+  - `dm_commands/command_extract_curves.py`
+- **Steps**:
+  1. Detect sharp edges:
+     - Compute face normals with `compute_face_normals(verts, faces)`.
+     - Build adjacency with `build_adjacency(faces)`.
+     - Compute dihedral angles with `compute_dihedral_angles(normals, adjacency)`.
+     - Mark edges where the dihedral angle > threshold (e.g., 30°) as feature edges.
+  2. Chain feature edges into polylines (ordered sequences of connected vertices).
+  3. Fit B-splines to each polyline using `Part.BSplineCurve().interpolate(points)`.
+  4. Create a `Part::Feature` containing the curves as `Part.Wire` or `Part.Compound`.
+  5. Register a `DM_ExtractCurves` command.
+- **Acceptance**: Create a Box SDF → run "Extract Curves" → 12 B-spline edges appear outlining the box.
+
+---
+
+### 12. BMesh to SDF (import external mesh as SDF) (Complexity: 7/10)
+
+- **Goal**: Same as task 9 (Mesh to SDF) but specifically handling Blender BMesh data imported via the Live Link, and supporting non-manifold or open meshes gracefully.
+- **Files to read**: Same as task 9 plus any Live Link import scripts if present.
+- **Note**: This task depends on task 9. Build on the `mesh_to_sdf.py` module. Add handling for:
+  - Non-manifold edges (fallback to flood-fill sign determination).
+  - Open meshes (unsigned distance only, or user-specified sign convention).
+  - Large meshes (octree acceleration for the KD-tree).
+- **Acceptance**: Import a Blender BMesh export → convert to SDF → boolean it with a Box SDF.
+
+---
+
+### 13. Array command — SDF-level repetition (Complexity: 7/10)
+
+- **Goal**: Repeat an SDF object along a vector, circular pattern, or grid, all at the SDF level (not duplicating meshes).
+- **Files to read**:
+  - `FCDirectModeling/sdf_object.py` — understand how `_sdf_boolean` composes child SDFs. Array works similarly: translate the query point before evaluating the child SDF, then union the results.
+- **Files to create**:
+  - `dm_commands/command_array.py`
+- **Files to modify**:
+  - `FCDirectModeling/sdf_object.py` — add `_sdf_array(params, child_sdf)` builder.
+  - `InitGui.py` — register the new command.
+- **Steps**:
+  1. Implement `_sdf_array(params, child_sdf)`:
+     - `params` contains: `count`, `offset` (vector), `pattern` ("linear" | "circular" | "grid").
+     - For linear: evaluate `child_sdf(X - i*offset[0], Y - i*offset[1], Z - i*offset[2])` for each `i`, take `np.minimum` across all.
+     - For circular: rotate the query point by `i * (360/count)` degrees around an axis before evaluating.
+  2. Create a dialog in `command_array.py` with inputs for count, offset, and pattern.
+  3. Create the result via `create_sdf_object` with `sdf_type="array"`.
+- **Acceptance**: Create a Sphere → Array it 5 times along X with spacing 3 → a row of 5 spheres appears as a single SDF mesh.
+
+---
+
+### 14. Transform command — SDF-level translate/rotate/scale (Complexity: 5/10)
+
+- **Goal**: Apply translate / rotate / scale to an SDF object at the SDF level (transforming the query point), not by moving the mesh.
+- **Files to read**:
+  - `FCDirectModeling/sdf_object.py` — `_SDF_BUILDERS`, `SDFObjectProxy.execute()`.
+- **Files to create**:
+  - `dm_commands/command_transform.py`
+- **Files to modify**:
+  - `FCDirectModeling/sdf_object.py` — add `_sdf_transform(params, child_sdf)`.
+  - `InitGui.py` — register command.
+- **Steps**:
+  1. `_sdf_transform` wraps a child SDF: apply inverse transform to query point before evaluating.
+     - Translate: `sdf(X - tx, Y - ty, Z - tz)`.
+     - Rotate: build a rotation matrix, multiply `[X,Y,Z]` by its inverse.
+     - Scale: `sdf(X/sx, Y/sy, Z/sz) * min(sx, sy, sz)` (scale the distance too).
+  2. Create a dialog with translate/rotate/scale inputs.
+  3. Store as `sdf_type="transform"` with child reference.
+- **Acceptance**: Create a Box → Transform (rotate 45° around Z) → the mesh updates to show the rotated box.
+
+---
+
+### 15. Sketch-driven SDF extrusion (Complexity: 8/10)
+
+- **Goal**: After the user closes the Sketcher, convert the sketch profile into a 2D SDF and extrude it into a 3D SDF object.
+- **Files to read**:
+  - `dm_commands/command_open_sketcher.py` — launches the Sketcher.
+  - `FCDirectModeling/sdf_object.py` — SDF builder pattern.
+- **Files to create**:
+  - `FCDirectModeling/sketch_to_sdf.py`
+  - `dm_commands/command_sketch_extrude.py`
+- **Steps**:
+  1. Read the `Sketcher::SketchObject` wire: extract edges as polylines.
+  2. Convert to 2D SDF: for each query point `(x, y)`, compute signed distance to the polygon boundary (positive outside, negative inside).
+  3. Extrude: `sdf_3d(X, Y, Z) = max(sdf_2d(X, Y), abs(Z) - height/2)`.
+  4. Register as `_sdf_extrusion` in `_SDF_BUILDERS`.
+- **Acceptance**: Draw a sketch → run extrude → a 3D SDF extrusion appears matching the sketch profile.
+
+---
+
+### 16. 2D contour extraction from SDF (Complexity: 8/10)
+
+- **Goal**: Walk the SDF zero-crossing on a 2D slice, producing Bézier or B-spline curves.
+- **Files to read**:
+  - `FCDirectModeling/sdf_mesher.py` — grid evaluation and sign-change detection.
+  - `FCDirectModeling/sdf_object.py` — SDF function signatures.
+- **Files to create**:
+  - `FCDirectModeling/contour_extraction.py`
+- **Steps**:
+  1. Evaluate the SDF on a 2D grid (fixing one axis, e.g. Z=z₀).
+  2. Detect cells where corners change sign.
+  3. Interpolate crossing points on cell edges.
+  4. Chain crossings into ordered polylines (marching squares).
+  5. Fit `Part.BSplineCurve` to each polyline.
+  6. Return a list of `Part.Edge` objects.
+- **Acceptance**: Given a sphere SDF sliced at Z=0 → produces a circle as a B-spline curve.

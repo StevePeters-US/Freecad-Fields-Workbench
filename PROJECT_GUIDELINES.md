@@ -61,8 +61,9 @@ The Direct Modeling workbench aims to:
 1. **Eliminate tree-management overhead** — create, combine, and edit 3D shapes directly without managing a feature tree.
 2. **Use SDF as the core representation** — all primitives and booleans operate on distance fields, enabling smooth blending, fast preview, and easy boolean composition.
 3. **Provide real-time 3D preview** — as the user drags to define a shape, a live mesh preview updates in the viewport.
-4. **Convert SDF to BRep only when needed** — keep geometry in SDF/mesh form for speed; export to BRep (STEP/BREP) on demand.
-5. **Integrate with existing FreeCAD tools** — sketcher profiles, constraints, and standard Part operations remain accessible.
+4. **Represent final geometry as NURBS patches** — instead of converting to BRep with exact analytic faces, fit NURBS surface patches to the SDF mesh. This gives resolution-independent, smooth surfaces suitable for STEP/IGES export without faceting.
+5. **Support mesh ↔ SDF round-tripping** — imported meshes (STL, OBJ, Blender BMesh) can be voxelized into SDFs for boolean composition, then converted back to NURBS for export.
+6. **Integrate with existing FreeCAD tools** — sketcher profiles, constraints, and standard Part operations remain accessible.
 
 ---
 
@@ -82,8 +83,10 @@ The toolbar and menu are registered in `InitGui.py` and contain the following gr
 ### Future Creation Tools (Not Yet Implemented)
 | Planned Tool | Description |
 |--------------|-------------|
-| BMesh to SDF | Convert mesh/bmesh data into an SDF representation |
-| SDF to Curves | Extract feature curves from an SDF zero-surface |
+| Mesh to SDF | Convert imported mesh (STL/OBJ/BMesh) into an SDF for boolean composition |
+| BMesh to SDF | Convert Blender BMesh data into an SDF (extends Mesh to SDF with non-manifold handling) |
+| SDF to NURBS | Segment SDF mesh into smooth patches and fit NURBS surfaces for CAD export |
+| SDF to Curves | Extract feature curves (sharp edges) from an SDF zero-surface as B-splines |
 | SDF to Mesh | Export the current SDF to a final high-res mesh |
 
 ### Operations
@@ -222,11 +225,21 @@ sdf_logger.error("message")   # Errors and failures
 
 ## Future Work
 
+### SDF to NURBS (Primary Export Path)
+The long-term direction is to represent exported geometry as **NURBS surface patches** rather than classical BRep with exact analytic faces. The pipeline:
+1. Mesh the SDF at high resolution.
+2. Segment the mesh into smooth patches (`mesh_features.segment_mesh`).
+3. Fit `Part.BSplineSurface` to each patch.
+4. Export the resulting `Part.Shell` / `Part.Compound` to STEP / IGES.
+
+### Mesh ↔ SDF Round-Tripping
+- **Mesh to SDF**: voxelize an imported mesh (STL/OBJ) into a callable SDF for boolean composition.
+- **BMesh to SDF**: handle non-manifold and open meshes from Blender Live Link.
+
 ### Curve Extraction from SDF
 - **2D** — Adaptive contouring: fit Bézier/Catmull-Rom segments to zero-crossings.
-- **3D** — Implicit surface → spline: Hermite data at crossings → B-spline / T-spline fit.
-- **3D** — Level-set → CSG: approximate SDF by primitive hierarchy.
-- **3D** — Direct analytic: for known-form SDFs, derive exact NURBS / analytic patches.
+- **3D** — Feature-edge extraction: detect sharp dihedral angles, chain into B-splines.
+- **3D** — Implicit surface → spline: Hermite data at crossings → T-spline fit.
 
 ### Higher-Quality Rendering
 - Ray-marched preview for smooth SDF surfaces before meshing.
