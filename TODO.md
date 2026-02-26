@@ -56,35 +56,6 @@ The following tasks establish the SDF-native pipeline so that all operations (bo
 
 ---
 
-### [x] SDF-A. Refactor `SDFObjectProxy` to expose SDF function reconstruction (Complexity: 3/10)
-
-- **Goal**: Add a method `SDFObjectProxy.build_sdf()` that reconstructs the `(sdf_fn, bbox)` tuple from the object's stored properties. This is the foundation for all SDF composition — booleans, transforms, arrays, and re-meshing all need to call `obj.Proxy.build_sdf()`.
-- **Background**: Currently `execute()` rebuilds the SDF inline every time it meshes. This logic should be extracted into a reusable method so that other objects (e.g. a boolean parent) can call `child.Proxy.build_sdf()` without triggering a full re-mesh.
-- **Files to read**:
-  - `FCDirectModeling/sdf_object.py` — `SDFObjectProxy.execute()` lines 218–270. The SDF reconstruction logic (reading `SDFType`, `SDFParams`, calling `_SDF_BUILDERS`) is embedded inside `execute()`.
-  - `FCDirectModeling/sdf_object.py` — `_SDF_BUILDERS` dict (line 135) and `_sdf_boolean` (line 116).
-- **Files to modify**:
-  - `FCDirectModeling/sdf_object.py`
-- **Steps**:
-  1. Extract the SDF reconstruction logic from `execute()` into a new method:
-     ```python
-     def build_sdf(self, fp):
-         """Reconstruct (sdf_fn, (bounds_min, bounds_max)) from stored properties."""
-         sdf_type = fp.SDFType
-         params = json.loads(fp.SDFParams)
-         if sdf_type == "boolean":
-             # recursively build children
-             ...
-         else:
-             bld = _SDF_BUILDERS.get(sdf_type)
-             return bld(params)
-     ```
-  2. Refactor `execute()` to call `self.build_sdf(fp)` instead of duplicating the logic.
-  3. For boolean objects, `build_sdf()` should recursively call `child.Proxy.build_sdf(child)` on each child.
-- **Acceptance**: `execute()` still works identically. Other code can call `obj.Proxy.build_sdf(obj)` to get a live SDF function without triggering a mesh rebuild.
-
----
-
 ### SDF-B. Make booleans compose SDFs, not labels (Complexity: 4/10)
 
 - **Goal**: Boolean objects should store references to child *objects* (not label strings) and compose their SDF functions at evaluation time. Currently `_sdf_boolean` in `execute()` looks up children by label, which breaks on rename/duplicate.
@@ -242,33 +213,6 @@ The following tasks establish the SDF-native pipeline so that all operations (bo
   5. In each creator, add a `set_panel(panel)` call and in `handle_move` call `self.panel.update_values(...)`.
   6. In `command_create_primitives.py`, after creating the creator, create the panel and show it via `FreeCADGui.Control.showDialog(panel)`.
 - **Acceptance**: Activate Sphere/Cone/Torus tool → a panel appears showing live dimensions as you drag.
-
----
-
-### 5. Fix viewport update on `.Mesh` replacement during preview (Complexity: 5/10)
-
-- **Goal**: The preview mesh is generated but sometimes doesn't visually update in the viewport. Fix by scheduling a deferred `doc.recompute()`.
-- **Files to read**:
-  - `FCDirectModeling/primitives/base.py` — `_process_preview_queue()` method (lines 224–290). Currently assigns `.Mesh` and calls `FreeCADGui.updateGui()` but does not call `doc.recompute()`.
-  - `PROJECT_GUIDELINES.md` — "Event Safety" section (all document mutations must be deferred via `QTimer.singleShot(0, ...)`).
-- **Files to modify**:
-  - `FCDirectModeling/primitives/base.py`
-- **Steps**:
-  1. After line 286 (`FreeCADGui.updateGui()`), add a deferred recompute:
-     ```python
-     if not getattr(self, '_recompute_pending', False):
-         self._recompute_pending = True
-         def _deferred_recompute():
-             try:
-                 doc = FreeCAD.activeDocument()
-                 if doc:
-                     doc.recompute()
-             finally:
-                 self._recompute_pending = False
-         QtCore.QTimer.singleShot(0, _deferred_recompute)
-     ```
-  2. This guard prevents queueing multiple recomputes per frame.
-- **Acceptance**: Create a Box → while dragging, the preview mesh updates every frame without stale/invisible states.
 
 ---
 

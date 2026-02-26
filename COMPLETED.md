@@ -41,3 +41,16 @@ Tasks moved here from `TODO.md` after verification.
 ## ✅ BUG-B. Final placed mesh has no geometry
 - **Completed**: Implemented `SDFViewProvider` and robust `DisplayMode` handling in `sdf_object.py`.
 - **Result**: Placed meshes are clearly visible in the viewport and correctly oriented.
+
+## ✅ SDF-A. Refactor `SDFObjectProxy` to expose SDF function reconstruction
+- **Completed**: Added `SDFObjectProxy.build_sdf()` to centralize SDF reconstruction logic.
+- **Result**: Boolean operations and transformations can now compose SDF functions recursively without triggering redundant meshing cycles.
+
+## ✅ SDF Part Container with Orange Icon
+- **Completed**: Refactored `create_sdf_object` to use `App::DocumentObjectGroupPython` with an orange stairstep XPM icon.
+- **Result**: SDF objects now appear as distinct orange containers in the tree view, better distinguishing them from standard meshes.
+
+## ✅ Fix Preview Visibility and Hierarchy
+- **Completed**: Fixed `base.py` `_process_preview_queue` to correctly reconstruct SDF functions and maintain a temporary Part-Mesh hierarchy during creation.
+- **Result**: Real-time visual feedback is now reliably displayed during interactive shape dragging.
+
