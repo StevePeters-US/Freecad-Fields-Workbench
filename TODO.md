@@ -34,25 +34,6 @@ The following tasks establish the SDF-native pipeline so that all operations (bo
 
 ---
 
-### SDF-B. Make booleans compose SDFs, not labels (Complexity: 4/10)
-
-- **Goal**: Boolean objects should store references to child *objects* (not label strings) and compose their SDF functions at evaluation time. Currently `_sdf_boolean` in `execute()` looks up children by label, which breaks on rename/duplicate.
-- **Depends on**: SDF-A (needs `build_sdf()`).
-- **Files to read**:
-  - `FCDirectModeling/sdf_object.py` — `SDFObjectProxy.execute()` lines 240–250: children are looked up by `doc.getObjectsByLabel(n)`.
-  - `dm_commands/command_boolean.py` — passes `child_names = [sel[0].Label, sel[1].Label]`.
-- **Files to modify**:
-  - `FCDirectModeling/sdf_object.py` — change `SDFChildren` from `PropertyStringList` (labels) to `App::PropertyLinkList` (object references). Update `execute()` to use links.
-  - `dm_commands/command_boolean.py` — pass object references instead of labels.
-- **Steps**:
-  1. Replace `SDFChildren` property type with `App::PropertyLinkList`.
-  2. In `execute()`, iterate `fp.SDFChildren` directly (they are now object references).
-  3. Call `child.Proxy.build_sdf(child)` on each child to get their SDF functions.
-  4. Compose with `_sdf_boolean`.
-- **Acceptance**: Create two boxes → Fuse → rename one child → recompute the boolean → it still works. The boolean SDF is composed from live child SDFs, not string lookups.
-
----
-
 ### SDF-C. Parametric editing — modify SDF params and re-mesh (Complexity: 4/10)
 
 - **Goal**: When a user changes an SDF property (e.g. `SDFParams`) in the property panel, the object automatically re-meshes. This is already partially handled by `execute()`, but the UI should make it easy to tweak individual SDF parameters (e.g. box width) without re-creating the object.

@@ -52,7 +52,6 @@ class CommandDMBoolean:
         from FCDirectModeling.sdf_object import create_sdf_object
 
         sdf_op   = self._OP_MAP[self.operation]
-        names    = [sel[0].Label, sel[1].Label]
         new_name = f"SDF_{self.operation}"
 
         try:
@@ -61,7 +60,7 @@ class CommandDMBoolean:
                 sdf_type   = "boolean",
                 params     = {"op": sdf_op},
                 sdf_op     = sdf_op,
-                child_names = names,
+                children   = sel,
             )
 
             # Hide originals (non-destructive; user can delete manually)

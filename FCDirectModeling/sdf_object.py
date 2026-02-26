@@ -194,7 +194,7 @@ def _to_mesh_facets(verts, tris):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SDFObjectProxy:
-    def __init__(self, obj, sdf_type, params, sdf_op=None, child_names=None, placement=None):
+    def __init__(self, obj, sdf_type, params, sdf_op=None, children=None, placement=None):
         obj.Proxy = self
         self.is_preview = False
         
@@ -206,12 +206,12 @@ class SDFObjectProxy:
         if not hasattr(obj, "SDFOp"):
             obj.addProperty("App::PropertyString", "SDFOp", "SDF", "Boolean operation")
         if not hasattr(obj, "SDFChildren"):
-            obj.addProperty("App::PropertyStringList", "SDFChildren", "SDF", "Names of child objects")
+            obj.addProperty("App::PropertyLinkList", "SDFChildren", "SDF", "Child SDF objects")
 
         obj.SDFType = sdf_type
         obj.SDFParams = json.dumps(params)
         obj.SDFOp = sdf_op or "none"
-        obj.SDFChildren = child_names or []
+        obj.SDFChildren = children or []
         if placement:
             obj.Placement = placement
 
@@ -221,21 +221,13 @@ class SDFObjectProxy:
         params = json.loads(fp.SDFParams)
         
         if sdf_type == "boolean":
-            doc = fp.Document
-            child_names = fp.SDFChildren
             child_sdfs = []
-            for n in child_names:
-                objs = doc.getObjectsByLabel(n)
-                if not objs:
-                    continue
-                child = objs[0]
+            for child in fp.SDFChildren:
                 if hasattr(child, "Proxy") and hasattr(child.Proxy, "build_sdf"):
                     child_sdfs.append(child.Proxy.build_sdf(child))
                 else:
-                    # Fallback or error? For now follow old logic's intent
-                    # but make it safer.
                     from FCDirectModeling import sdf_logger
-                    sdf_logger.warning(f"build_sdf: child '{n}' is not an SDF object")
+                    sdf_logger.warning(f"build_sdf: child '{child.Label}' is not an SDF object")
             
             # Ensure 'op' is available for _sdf_boolean
             if "op" not in params:
@@ -381,7 +373,7 @@ class SDFViewProvider:
 # Factory
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_sdf_object(name, sdf_type, params, sdf_op=None, child_names=None, is_preview=False, placement=None):
+def create_sdf_object(name, sdf_type, params, sdf_op=None, children=None, is_preview=False, placement=None):
     """
     Create an SDF container (App::DocumentObjectGroupPython) with a child Mesh::Feature.
     The container holds the SDF definition (type, params, children) and the mesh
@@ -396,7 +388,7 @@ def create_sdf_object(name, sdf_type, params, sdf_op=None, child_names=None, is_
     try:
         # App::DocumentObjectGroupPython supports Python Proxy + child objects
         obj = doc.addObject("App::DocumentObjectGroupPython", name)
-        proxy = SDFObjectProxy(obj, sdf_type, params, sdf_op, child_names, placement=placement)
+        proxy = SDFObjectProxy(obj, sdf_type, params, sdf_op, children, placement=placement)
         obj.Proxy.is_preview = is_preview
 
         # Style the view object 

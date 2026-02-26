@@ -58,3 +58,7 @@ Tasks moved here from `TODO.md` after verification.
 - **Completed**: Updated the validation loop in `dm_commands/command_boolean.py` to check for `SDFType` property.
 - **Result**: Boolean commands now correctly identify and process SDF objects.
 
+## ✅ SDF-B. Make booleans compose SDFs, not labels
+- **Completed**: Converted `SDFChildren` to `App::PropertyLinkList` and updated `build_sdf` to use direct object links.
+- **Result**: Boolean objects are now robust against renames and duplicates.
+
