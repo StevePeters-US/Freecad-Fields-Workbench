@@ -194,8 +194,9 @@ def _to_mesh_facets(verts, tris):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SDFObjectProxy:
-    def __init__(self, obj, sdf_type, params, sdf_op=None, child_names=None):
+    def __init__(self, obj, sdf_type, params, sdf_op=None, child_names=None, placement=None):
         obj.Proxy = self
+        self.is_preview = False
         
         # Use native FreeCAD properties for persistence and parametric updates
         if not hasattr(obj, "SDFType"):
@@ -211,9 +212,13 @@ class SDFObjectProxy:
         obj.SDFParams = json.dumps(params)
         obj.SDFOp = sdf_op or "none"
         obj.SDFChildren = child_names or []
+        if placement:
+            obj.Placement = placement
 
     def execute(self, fp):
         """Called by FreeCAD to recompute — we mesh and write fp.Mesh."""
+        import FreeCAD
+        FreeCAD.Console.PrintMessage(f"DEBUG: SDFObjectProxy.execute for {fp.Label} (is_preview={getattr(self, 'is_preview', False)})\n")
         if getattr(self, "is_preview", False):
             # During live preview dragging, base.py injects .Mesh directly.
             # Skip slow full-resolution recompute entirely.
@@ -255,7 +260,9 @@ class SDFObjectProxy:
             import time
             
             sdf_logger.debug(f"SDFObjectProxy: Executing high-res mesh for {sdf_type}...")
+            FreeCAD.Console.PrintMessage(f"DEBUG: mesh_sdf(type={sdf_type}, res={get_mesh_resolution()}, algo={get_mesh_algorithm()})\n")
             verts, tris = mesh_sdf(sdf_fn, mn, mx)
+            FreeCAD.Console.PrintMessage(f"DEBUG: mesh_sdf result: {len(verts)} verts, {len(tris)} tris\n")
             
             if len(verts) == 0:
                 sdf_logger.warning(f"SDFObject: mesher returned no geometry for {sdf_type}.")
@@ -268,31 +275,67 @@ class SDFObjectProxy:
             sdf_logger.debug(f"SDFObjectProxy: Conversion took {t_conv_1-t_conv_0:.3f}s")
 
             fp.Mesh = MeshModule.Mesh(facets)
+            FreeCAD.Console.PrintMessage(f"DEBUG: Mesh assigned to {fp.Label}. VertCount={fp.Mesh.CountPoints}, FacetCount={fp.Mesh.CountFacets}\n")
+            FreeCAD.Console.PrintMessage(f"DEBUG: Mesh Bounding Box: {fp.Mesh.BoundBox}\n")
             sdf_logger.debug(f"SDFObjectProxy: Mesh assigned to {fp.Label}")
-            sdf_logger.debug(f"Final mesh for {fp.Label} has {len(verts)} verts, {len(tris)} tris")
             
             # Explicitly force a view update if in GUI mode
             if FreeCAD.GuiUp:
-                if hasattr(fp, "ViewObject") and fp.ViewObject:
-                    fp.ViewObject.update()
+                vobj = getattr(fp, "ViewObject", None)
+                if vobj:
+                    vobj.Visibility = True
+                    # Discover available modes
+                    try:
+                        modes = vobj.getPropertyEnumeration("DisplayMode")
+                        FreeCAD.Console.PrintMessage(f"DEBUG: Available DisplayModes for {fp.Label}: {modes}\n")
+                        if "Flat Lines" in modes:
+                            vobj.DisplayMode = "Flat Lines"
+                        elif "Shaded" in modes:
+                            vobj.DisplayMode = "Shaded"
+                        elif len(modes) > 0:
+                            vobj.DisplayMode = modes[0]
+                    except Exception as ve:
+                        FreeCAD.Console.PrintMessage(f"DEBUG: Could not set DisplayMode: {ve}\n")
+                    
+                    vobj.update()
                     sdf_logger.debug(f"ViewObject updated for {fp.Label}")
 
         except Exception as e:
             from FCDirectModeling import sdf_logger
             sdf_logger.error(f"SDFObject.execute error: {e}")
 
-    def __getstate__(self):
-        return None  # State is now in properties
-
     def __setstate__(self, state):
         pass
+
+class SDFViewProvider:
+    """ViewProvider for SDF objects. Ensures they use the Mesh rendering engine."""
+    def __init__(self, vobj):
+        vobj.Proxy = self
+        
+    def attach(self, vobj):
+        self.Object = vobj.Object
+        
+    def getDisplayModes(self, vobj):
+        return ["Flat Lines", "Shaded", "Wireframe", "Points"]
+        
+    def getDefaultDisplayMode(self):
+        return "Flat Lines"
+        
+    def updateData(self, fp, prop):
+        pass
+
+    def __getstate__(self):
+        return None
+
+    def __setstate__(self, state):
+        return None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Factory
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_sdf_object(name, sdf_type, params, sdf_op=None, child_names=None, is_preview=False):
+def create_sdf_object(name, sdf_type, params, sdf_op=None, child_names=None, is_preview=False, placement=None):
     """
     Create a Mesh::FeaturePython SDF object.
     Triggers an immediate recompute (execute) to populate obj.Mesh.
@@ -302,21 +345,48 @@ def create_sdf_object(name, sdf_type, params, sdf_op=None, child_names=None, is_
         doc = FreeCAD.newDocument()
 
     obj = doc.addObject("Mesh::FeaturePython", name)
-    proxy = SDFObjectProxy(obj, sdf_type, params, sdf_op, child_names)
+    FreeCAD.Console.PrintMessage(f"DEBUG: create_sdf_object: created {obj.Name} for type {sdf_type}\n")
+    proxy = SDFObjectProxy(obj, sdf_type, params, sdf_op, child_names, placement=placement)
     obj.Proxy.is_preview = is_preview
 
-    # Style the view object (FreeCAD's built-in Mesh ViewProvider)
-    if hasattr(obj, "ViewObject") and obj.ViewObject:
-        try:
-            obj.ViewObject.ShapeColor = (0.65, 0.75, 0.90)
-            # Default to Flat Lines for now so the user can see what's placed
-            obj.ViewObject.DisplayMode = "Flat Lines"
-            obj.ViewObject.Visibility = True
-        except Exception:
-            pass
+    # Style the view object 
+    if FreeCAD.GuiUp:
+        # Explicitly attach our ViewProvider
+        SDFViewProvider(obj.ViewObject)
+        if hasattr(obj, "ViewObject") and obj.ViewObject:
+            try:
+                obj.ViewObject.ShapeColor = (0.65, 0.75, 0.90)
+                # We'll set DisplayMode inside execute() for better robustness
+                obj.ViewObject.Visibility = True
+            except Exception:
+                pass
     
     obj.touch()
+    FreeCAD.Console.PrintMessage(f"DEBUG: create_sdf_object: calling doc.recompute() for {obj.Name}\n")
     doc.recompute()
+    
+    # Check if mesh survived recompute
+    if hasattr(obj, "Mesh"):
+        FreeCAD.Console.PrintMessage(f"DEBUG: POST-RECOMPUTE: {obj.Name}.Mesh has {obj.Mesh.CountPoints} points\n")
+    else:
+        FreeCAD.Console.PrintMessage(f"DEBUG: POST-RECOMPUTE: {obj.Name} HAS NO MESH PROPERTY!\n")
+
+    FreeCAD.Console.PrintMessage(f"DEBUG: create_sdf_object: recompute done for {obj.Name}\n")
+    
     import FreeCADGui
-    FreeCADGui.updateGui()
+    if FreeCAD.GuiUp:
+        try:
+            # Select and Zoom to show if it's placed somewhere unexpected
+            FreeCADGui.Selection.clearSelection()
+            FreeCADGui.Selection.addSelection(obj)
+            
+            # Safer way to focus: viewSelection() method on ActiveView
+            active_view = FreeCADGui.ActiveDocument.ActiveView
+            if active_view:
+                active_view.viewSelection()
+                FreeCAD.Console.PrintMessage(f"DEBUG: View zoomed to selection for {obj.Name}\n")
+            
+            FreeCADGui.updateGui()
+        except Exception as e:
+            FreeCAD.Console.PrintMessage(f"DEBUG: Post-creation UI update failed: {e}\n")
     return obj

@@ -169,7 +169,9 @@ class BoxCreator(SDFMeshPrimitiveCreator):
         
         self.update_sdf_preview("box", {"bounds_min": bounds_min, "bounds_max": bounds_max})
         
-        # Override the base state with the REAL (unclamped) bounds for finalization
+        # Store the placement for finalization
+        self._last_placement = self.working_plane
+        
         self._last_sdf_params = {
             "bounds_min": [min_x, min_y, -abs(h) if h < 0 else 0.0],
             "bounds_max": [max_x, max_y, abs(h) if h != 0 else z_max]

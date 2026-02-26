@@ -401,3 +401,6 @@ no prior context beyond the files listed. Follow this template:
   5. Fit `Part.BSplineCurve` to each polyline.
   6. Return a list of `Part.Edge` objects.
 - **Acceptance**: Given a sphere SDF sliced at Z=0 → produces a circle as a B-spline curve.
+
+
+### add tools for drawing 3d curves and nurbs surfaces

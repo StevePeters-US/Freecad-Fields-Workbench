@@ -41,6 +41,7 @@ def _cam_pos(view):
 
 class PrimitiveCreatorBase:
     def __init__(self):
+        self._terminated = False
         sdf_logger.debug(f"DEBUG: PrimitiveCreatorBase.__init__ for {self.__class__.__name__}")
         
         sdf_logger.debug("DEBUG: Accessing ActiveView...")
@@ -61,6 +62,7 @@ class PrimitiveCreatorBase:
         self.state         = 0
 
     def terminate(self):
+        self._terminated = True
         sdf_logger.debug("PrimitiveCreatorBase: Terminating...")
         try:
             if self.callback:
@@ -209,6 +211,9 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         Setup the pending mesh request, but defer the exact execution 
         to avoid crashing in Coin3D event traversal.
         """
+        if self._terminated:
+            return
+
         self._pending_sdf_type = sdf_type
         self._pending_sdf_params = params
         
@@ -221,6 +226,8 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         # Track for finalization
         self._last_sdf_type = sdf_type
         self._last_sdf_params = params
+        if hasattr(self, "working_plane"):
+            self._last_placement = self.working_plane
         
         if not self._preview_queued:
             self._preview_queued = True
@@ -229,6 +236,9 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
 
     def _process_preview_queue(self):
         self._preview_queued = False
+        if self._terminated:
+            return
+
         try:
             sdf_type = self._pending_sdf_type
             params = self._pending_sdf_params
@@ -312,13 +322,16 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             
         sdf_logger.debug(f"SDFMeshPrimitiveCreator: Finishing {self._last_sdf_type}...")
         try:
+            FreeCAD.Console.PrintMessage(f"DEBUG: _do_finish: type={self._last_sdf_type} params={self._last_sdf_params}\n")
+            FreeCAD.Console.PrintMessage(f"DEBUG: _do_finish: placement={self._last_placement}\n")
             if self._last_sdf_type and self._last_sdf_params:
                 from ..sdf_object import create_sdf_object
                 # Create the final high-res SDFObject
                 create_sdf_object(
                     self._last_sdf_type.capitalize(), 
                     self._last_sdf_type, 
-                    self._last_sdf_params
+                    self._last_sdf_params,
+                    placement=self._last_placement
                 )
         except Exception as e:
             FreeCAD.Console.PrintError(f"Finalization Error: {e}\n")

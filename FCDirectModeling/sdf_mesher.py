@@ -73,6 +73,8 @@ def extract_mesh_numpy(sdf_func, mn, mx, resolution, sharp=True):
     )
     
     ax, ay, az = np.nonzero(crossings)
+    import FreeCAD
+    FreeCAD.Console.PrintMessage(f"DEBUG: extract_mesh_numpy: num_active_voxels={len(ax)}\n")
     if len(ax) == 0: return np.array([]), np.array([])
         
     num_active = len(ax)
@@ -180,6 +182,12 @@ def extract_mesh_numpy(sdf_func, mn, mx, resolution, sharp=True):
                 vertices[i] = avg_pt
         else:
             vertices[i] = avg_pt
+
+    if len(vertices) > 0:
+        import FreeCAD
+        v_min = np.min(vertices, axis=0)
+        v_max = np.max(vertices, axis=0)
+        FreeCAD.Console.PrintMessage(f"DEBUG: extract_mesh_numpy: VertBounds {v_min} to {v_max}\n")
 
     # 3. Generate Triangles (identical to before)
     triangles = []
