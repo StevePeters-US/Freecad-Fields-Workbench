@@ -190,7 +190,7 @@ def _to_mesh_facets(verts, tris):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SDFObjectProxy — used with Mesh::FeaturePython
+# SDFObjectProxy — used with Part-Mesh hierarchy
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SDFObjectProxy:
@@ -215,8 +215,41 @@ class SDFObjectProxy:
         if placement:
             obj.Placement = placement
 
+    def build_sdf(self, fp):
+        """Reconstruct (sdf_fn, (bounds_min, bounds_max)) from stored properties."""
+        sdf_type = fp.SDFType
+        params = json.loads(fp.SDFParams)
+        
+        if sdf_type == "boolean":
+            doc = fp.Document
+            child_names = fp.SDFChildren
+            child_sdfs = []
+            for n in child_names:
+                objs = doc.getObjectsByLabel(n)
+                if not objs:
+                    continue
+                child = objs[0]
+                if hasattr(child, "Proxy") and hasattr(child.Proxy, "build_sdf"):
+                    child_sdfs.append(child.Proxy.build_sdf(child))
+                else:
+                    # Fallback or error? For now follow old logic's intent
+                    # but make it safer.
+                    from FCDirectModeling import sdf_logger
+                    sdf_logger.warning(f"build_sdf: child '{n}' is not an SDF object")
+            
+            # Ensure 'op' is available for _sdf_boolean
+            if "op" not in params:
+                params["op"] = fp.SDFOp
+                
+            return _sdf_boolean(params, child_sdfs)
+        else:
+            bld = _SDF_BUILDERS.get(sdf_type)
+            if bld is None:
+                raise ValueError(f"Unknown SDF type '{sdf_type}'")
+            return bld(params)
+
     def execute(self, fp):
-        """Called by FreeCAD to recompute — we mesh and write fp.Mesh."""
+        """Called by FreeCAD to recompute — we mesh and write to the child Mesh object."""
         if getattr(self, "is_preview", False):
             # During live preview dragging, base.py injects .Mesh directly.
             # Skip slow full-resolution recompute entirely.
@@ -226,42 +259,17 @@ class SDFObjectProxy:
             
         try:
             import Mesh as MeshModule
-            doc = fp.Document
-            
-            # Read from properties
-            sdf_type = fp.SDFType
-            params = json.loads(fp.SDFParams)
-            sdf_op = fp.SDFOp
-            child_names = fp.SDFChildren
-
-            # Build SDF function
-            if sdf_type == "boolean":
-                children = [doc.getObjectsByLabel(n)[0] for n in child_names]
-                child_sdfs = []
-                for c in children:
-                    # Prefer reading from properties if available
-                    c_type = getattr(c, "SDFType", c.Proxy.sdf_type if hasattr(c.Proxy, "sdf_type") else "box")
-                    c_params = json.loads(c.SDFParams) if hasattr(c, "SDFParams") else c.Proxy.params
-                    bld = _SDF_BUILDERS.get(c_type)
-                    if bld:
-                        child_sdfs.append(bld(c_params))
-                sdf_fn, (mn, mx) = _sdf_boolean(params, child_sdfs)
-            else:
-                bld = _SDF_BUILDERS.get(sdf_type)
-                if bld is None:
-                    from FCDirectModeling import sdf_logger
-                    sdf_logger.error(f"SDFObject: unknown type '{sdf_type}'")
-                    return
-                sdf_fn, (mn, mx) = bld(params)
-
             from FCDirectModeling import sdf_logger
             import time
+
+            # Build SDF function using the new reusable method
+            sdf_fn, (mn, mx) = self.build_sdf(fp)
             
-            sdf_logger.debug(f"SDFObjectProxy: Executing high-res mesh for {sdf_type}...")
+            sdf_logger.debug(f"SDFObjectProxy: Executing high-res mesh for {fp.SDFType}...")
             verts, tris = mesh_sdf(sdf_fn, mn, mx)
             
             if len(verts) == 0:
-                sdf_logger.warning(f"SDFObject: mesher returned no geometry for {sdf_type}.")
+                sdf_logger.warning(f"SDFObject: mesher returned no geometry for {fp.SDFType}.")
                 return
 
             sdf_logger.debug(f"SDFObjectProxy: Converting {len(tris)} triangles to Mesh facets...")
@@ -270,12 +278,26 @@ class SDFObjectProxy:
             t_conv_1 = time.time()
             sdf_logger.debug(f"SDFObjectProxy: Conversion took {t_conv_1-t_conv_0:.3f}s")
 
-            fp.Mesh = MeshModule.Mesh(facets)
-            sdf_logger.debug(f"SDFObjectProxy: Mesh assigned to {fp.Label}")
+            # Find or create child mesh surface
+            mesh_obj = None
+            for child in fp.OutList:
+                if child.isDerivedFrom("Mesh::Feature"):
+                    mesh_obj = child
+                    break
+            
+            if not mesh_obj:
+                mesh_obj = fp.Document.addObject("Mesh::Feature", f"SDF_{fp.Name}_Mesh")
+                mesh_obj.Label = f"{fp.Label} Mesh"
+                fp.addObject(mesh_obj)
+                if FreeCAD.GuiUp and hasattr(mesh_obj, "ViewObject"):
+                    mesh_obj.ViewObject.ShapeColor = (0.65, 0.75, 0.90)
+
+            mesh_obj.Mesh = MeshModule.Mesh(facets)
+            sdf_logger.debug(f"SDFObjectProxy: Mesh assigned to {mesh_obj.Label}")
             
             # Explicitly force a view update if in GUI mode
             if FreeCAD.GuiUp:
-                vobj = getattr(fp, "ViewObject", None)
+                vobj = getattr(mesh_obj, "ViewObject", None)
                 if vobj:
                     vobj.Visibility = True
                     # Discover available modes
@@ -291,7 +313,7 @@ class SDFObjectProxy:
                         _ = ve # Silently fail
                     
                     vobj.update()
-                    sdf_logger.debug(f"ViewObject updated for {fp.Label}")
+                    sdf_logger.debug(f"ViewObject updated for {mesh_obj.Label}")
 
         except Exception as e:
             from FCDirectModeling import sdf_logger
@@ -301,7 +323,7 @@ class SDFObjectProxy:
         pass
 
 class SDFViewProvider:
-    """ViewProvider for SDF objects. Ensures they use the Mesh rendering engine."""
+    """ViewProvider for SDF objects. Shows an orange part icon."""
     def __init__(self, vobj):
         vobj.Proxy = self
         
@@ -309,13 +331,44 @@ class SDFViewProvider:
         self.Object = vobj.Object
         
     def getDisplayModes(self, vobj):
-        return ["Flat Lines", "Shaded", "Wireframe", "Points"]
+        return ["Standard"]
         
     def getDefaultDisplayMode(self):
-        return "Flat Lines"
+        return "Standard"
         
     def updateData(self, fp, prop):
         pass
+
+    def getIcon(self):
+        # Orange stairstep icon (Part)
+        return """
+            /* XPM */
+            static char * orange_part_xpm[] = {
+            "16 16 3 1",
+            " 	c None",
+            ".	c #FFA500",
+            "+	c #000000",
+            "                ",
+            "  ++++++        ",
+            "  +....++       ",
+            "  +.....+       ",
+            "  +..+..+       ",
+            "  +..+..+       ",
+            "  +..++++++     ",
+            "  +..+....++    ",
+            "  +..+.....+    ",
+            "  +..+..+..+    ",
+            "  ++++..++++++  ",
+            "     +..+....++ ",
+            "     +..+.....+ ",
+            "     +..+..+..+ ",
+            "     ++++++++++ ",
+            "                "};
+            """
+
+    def claimChildren(self):
+        # Allow child mesh and sub-SDFs to appear in the tree hierarchy
+        return self.Object.OutList
 
     def __getstate__(self):
         return None
@@ -330,45 +383,55 @@ class SDFViewProvider:
 
 def create_sdf_object(name, sdf_type, params, sdf_op=None, child_names=None, is_preview=False, placement=None):
     """
-    Create a Mesh::FeaturePython SDF object.
-    Triggers an immediate recompute (execute) to populate obj.Mesh.
+    Create an SDF container (App::DocumentObjectGroupPython) with a child Mesh::Feature.
+    The container holds the SDF definition (type, params, children) and the mesh
+    is the visual output nested underneath in the tree.
     """
+    from FCDirectModeling import sdf_logger
+    
     doc = FreeCAD.activeDocument()
     if not doc:
         doc = FreeCAD.newDocument()
 
-    obj = doc.addObject("Mesh::FeaturePython", name)
-    proxy = SDFObjectProxy(obj, sdf_type, params, sdf_op, child_names, placement=placement)
-    obj.Proxy.is_preview = is_preview
+    try:
+        # App::DocumentObjectGroupPython supports Python Proxy + child objects
+        obj = doc.addObject("App::DocumentObjectGroupPython", name)
+        proxy = SDFObjectProxy(obj, sdf_type, params, sdf_op, child_names, placement=placement)
+        obj.Proxy.is_preview = is_preview
 
-    # Style the view object 
-    if FreeCAD.GuiUp:
-        # Explicitly attach our ViewProvider
-        SDFViewProvider(obj.ViewObject)
-        if hasattr(obj, "ViewObject") and obj.ViewObject:
+        # Style the view object 
+        if FreeCAD.GuiUp:
+            SDFViewProvider(obj.ViewObject)
+            if hasattr(obj, "ViewObject") and obj.ViewObject:
+                try:
+                    obj.ViewObject.Visibility = True
+                except Exception:
+                    pass
+        
+        sdf_logger.debug(f"create_sdf_object: Created {name} ({sdf_type}), triggering recompute...")
+        obj.touch()
+        doc.recompute()
+        
+        import FreeCADGui
+        if FreeCAD.GuiUp:
             try:
-                obj.ViewObject.ShapeColor = (0.65, 0.75, 0.90)
-                # We'll set DisplayMode inside execute() for better robustness
-                obj.ViewObject.Visibility = True
+                FreeCADGui.Selection.clearSelection()
+                FreeCADGui.Selection.addSelection(obj)
+                
+                active_view = FreeCADGui.ActiveDocument.ActiveView
+                if active_view:
+                    active_view.viewSelection()
+                
+                FreeCADGui.updateGui()
             except Exception:
                 pass
-    
-    obj.touch()
-    doc.recompute()
-    
-    import FreeCADGui
-    if FreeCAD.GuiUp:
-        try:
-            # Select and Zoom to show if it's placed somewhere unexpected
-            FreeCADGui.Selection.clearSelection()
-            FreeCADGui.Selection.addSelection(obj)
-            
-            # Safer way to focus: viewSelection() method on ActiveView
-            active_view = FreeCADGui.ActiveDocument.ActiveView
-            if active_view:
-                active_view.viewSelection()
-            
-            FreeCADGui.updateGui()
-        except Exception:
-            pass
-    return obj
+        
+        sdf_logger.debug(f"create_sdf_object: {name} created successfully")
+        return obj
+        
+    except Exception as e:
+        sdf_logger.error(f"create_sdf_object FAILED: {e}")
+        import traceback
+        sdf_logger.error(traceback.format_exc())
+        return None
+

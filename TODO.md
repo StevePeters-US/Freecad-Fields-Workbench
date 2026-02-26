@@ -26,6 +26,121 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
+### BUG-C. Fix boolean commands — property mismatch (Complexity: 2/10)
+
+- **Goal**: The boolean commands (`DM_Fuse`, `DM_Cut`, `DM_Common`) fail with `'Cone' is not an SDFObject` because they check `obj.Proxy.sdf_type` (a Python attribute that doesn't exist) instead of `obj.SDFType` (the FreeCAD property that `SDFObjectProxy` actually creates).
+- **Files to read**:
+  - `dm_commands/command_boolean.py` line 45 — the validation check `hasattr(obj.Proxy, "sdf_type")`.
+  - `FCDirectModeling/sdf_object.py` lines 196–216 — `SDFObjectProxy.__init__` adds `obj.SDFType`, `obj.SDFParams`, `obj.SDFOp`, `obj.SDFChildren` as FreeCAD properties. There is no `self.sdf_type` attribute on the proxy.
+- **Files to modify**:
+  - `dm_commands/command_boolean.py`
+- **Steps**:
+  1. Change the validation check on line 45 from:
+     ```python
+     if not hasattr(obj, "Proxy") or not hasattr(obj.Proxy, "sdf_type"):
+     ```
+     to:
+     ```python
+     if not hasattr(obj, "SDFType"):
+     ```
+     This checks for the FreeCAD property that `SDFObjectProxy` actually creates.
+- **Acceptance**: Select two SDF primitives → Fuse/Cut/Common → a new combined mesh object appears without errors.
+
+---
+
+## SDF-Native Architecture
+
+> **Principle**: SDFs are the primary data model. Meshes are *only* for visualization. Every object in the workbench stores its SDF definition (type, params, children, operation) as persistent FreeCAD properties. The mesh is regenerated on demand from the SDF and should never be treated as the source of truth.
+
+The following tasks establish the SDF-native pipeline so that all operations (booleans, transforms, arrays, sketches) compose SDFs — not meshes.
+
+---
+
+### [x] SDF-A. Refactor `SDFObjectProxy` to expose SDF function reconstruction (Complexity: 3/10)
+
+- **Goal**: Add a method `SDFObjectProxy.build_sdf()` that reconstructs the `(sdf_fn, bbox)` tuple from the object's stored properties. This is the foundation for all SDF composition — booleans, transforms, arrays, and re-meshing all need to call `obj.Proxy.build_sdf()`.
+- **Background**: Currently `execute()` rebuilds the SDF inline every time it meshes. This logic should be extracted into a reusable method so that other objects (e.g. a boolean parent) can call `child.Proxy.build_sdf()` without triggering a full re-mesh.
+- **Files to read**:
+  - `FCDirectModeling/sdf_object.py` — `SDFObjectProxy.execute()` lines 218–270. The SDF reconstruction logic (reading `SDFType`, `SDFParams`, calling `_SDF_BUILDERS`) is embedded inside `execute()`.
+  - `FCDirectModeling/sdf_object.py` — `_SDF_BUILDERS` dict (line 135) and `_sdf_boolean` (line 116).
+- **Files to modify**:
+  - `FCDirectModeling/sdf_object.py`
+- **Steps**:
+  1. Extract the SDF reconstruction logic from `execute()` into a new method:
+     ```python
+     def build_sdf(self, fp):
+         """Reconstruct (sdf_fn, (bounds_min, bounds_max)) from stored properties."""
+         sdf_type = fp.SDFType
+         params = json.loads(fp.SDFParams)
+         if sdf_type == "boolean":
+             # recursively build children
+             ...
+         else:
+             bld = _SDF_BUILDERS.get(sdf_type)
+             return bld(params)
+     ```
+  2. Refactor `execute()` to call `self.build_sdf(fp)` instead of duplicating the logic.
+  3. For boolean objects, `build_sdf()` should recursively call `child.Proxy.build_sdf(child)` on each child.
+- **Acceptance**: `execute()` still works identically. Other code can call `obj.Proxy.build_sdf(obj)` to get a live SDF function without triggering a mesh rebuild.
+
+---
+
+### SDF-B. Make booleans compose SDFs, not labels (Complexity: 4/10)
+
+- **Goal**: Boolean objects should store references to child *objects* (not label strings) and compose their SDF functions at evaluation time. Currently `_sdf_boolean` in `execute()` looks up children by label, which breaks on rename/duplicate.
+- **Depends on**: SDF-A (needs `build_sdf()`).
+- **Files to read**:
+  - `FCDirectModeling/sdf_object.py` — `SDFObjectProxy.execute()` lines 240–250: children are looked up by `doc.getObjectsByLabel(n)`.
+  - `dm_commands/command_boolean.py` — passes `child_names = [sel[0].Label, sel[1].Label]`.
+- **Files to modify**:
+  - `FCDirectModeling/sdf_object.py` — change `SDFChildren` from `PropertyStringList` (labels) to `App::PropertyLinkList` (object references). Update `execute()` to use links.
+  - `dm_commands/command_boolean.py` — pass object references instead of labels.
+- **Steps**:
+  1. Replace `SDFChildren` property type with `App::PropertyLinkList`.
+  2. In `execute()`, iterate `fp.SDFChildren` directly (they are now object references).
+  3. Call `child.Proxy.build_sdf(child)` on each child to get their SDF functions.
+  4. Compose with `_sdf_boolean`.
+- **Acceptance**: Create two boxes → Fuse → rename one child → recompute the boolean → it still works. The boolean SDF is composed from live child SDFs, not string lookups.
+
+---
+
+### SDF-C. Parametric editing — modify SDF params and re-mesh (Complexity: 4/10)
+
+- **Goal**: When a user changes an SDF property (e.g. `SDFParams`) in the property panel, the object automatically re-meshes. This is already partially handled by `execute()`, but the UI should make it easy to tweak individual SDF parameters (e.g. box width) without re-creating the object.
+- **Files to read**:
+  - `FCDirectModeling/sdf_object.py` — `SDFObjectProxy.execute()`, the property definitions in `__init__`.
+- **Files to modify**:
+  - `FCDirectModeling/sdf_object.py` — ensure `execute()` properly re-reads params on recompute.
+  - Consider adding typed sub-properties (e.g. `BoxWidth`, `BoxHeight`) instead of a single JSON blob, so the FreeCAD property panel shows editable fields.
+- **Steps**:
+  1. For each primitive type, add dedicated properties (e.g. `App::PropertyFloat` for `BoxWidth`, `BoxHeight`, `BoxDepth`) so they appear as editable fields in FreeCAD's property panel.
+  2. In `execute()`, read from these typed properties and rebuild the SDF.
+  3. Changes to any property trigger `execute()` automatically via FreeCAD's dependency engine.
+- **Acceptance**: Create a box → change `BoxWidth` in the property panel → the mesh updates.
+
+---
+
+### SDF-D. SDF tree visualization in model tree (Complexity: 5/10)
+
+- **Goal**: Boolean and transform objects should show their children as a tree in FreeCAD's model browser, so the user can see the SDF composition hierarchy (e.g. "Fuse" → "Box" + "Sphere").
+- **Depends on**: SDF-B (needs `PropertyLinkList` children).
+- **Files to read**:
+  - `FCDirectModeling/sdf_object.py` — `SDFViewProvider`.
+- **Files to modify**:
+  - `FCDirectModeling/sdf_object.py` — implement `claimChildren()` in `SDFViewProvider` to return the child objects so FreeCAD nests them visually.
+- **Steps**:
+  1. In `SDFViewProvider`, add:
+     ```python
+     def claimChildren(self):
+         if hasattr(self.Object, "SDFChildren"):
+             return list(self.Object.SDFChildren)
+         return []
+     ```
+  2. Boolean children will now appear nested under their parent in the model tree.
+- **Acceptance**: Create two boxes → Fuse → the model tree shows "SDF_Fuse" with "Box" and "Box001" nested underneath.
+
+---
+
 ### 1. Add sharp-features toggle to DM Settings (Complexity: 2/10)
 
 - **Goal**: Let the user toggle QEF sharp-feature snapping on/off from DM Settings.

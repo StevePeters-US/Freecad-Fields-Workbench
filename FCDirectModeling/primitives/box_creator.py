@@ -49,7 +49,6 @@ class BoxCreator(SDFMeshPrimitiveCreator):
     def get_face_under_mouse(self, event_dict):
         pos = event_dict["Position"]
         try:
-        try:
             # getObjectInfo returns a dict with 'Object', 'Component', etc.
             info = self.view.getObjectInfo((pos[0], pos[1]))
             if info and "Object" in info and "Component" in info:

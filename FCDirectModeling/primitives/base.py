@@ -230,6 +230,14 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             if not sdf_type or not params:
                 return
 
+            from ..sdf_object import _SDF_BUILDERS, mesh_sdf, _to_mesh_facets
+            import Mesh as MeshModule
+            
+            bld = _SDF_BUILDERS.get(sdf_type)
+            if not bld:
+                return
+            
+            sdf_fn, (mn, mx) = bld(params)
             verts, tris = mesh_sdf(sdf_fn, mn, mx, resolution=self._pending_resolution)
 
             if len(verts) == 0:
@@ -242,18 +250,26 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             if not doc:
                 return
 
-            # Use a plain Mesh::Feature (NOT FeaturePython) for the preview.
-            # A plain Feature has no proxy / no execute() cycle, so doc.recompute()
-            # will NEVER wipe the .Mesh we assign here.  We just set .Mesh and
-            # call updateGui() — the viewport refreshes immediately.
+            # Hierarchy: App::Part (SDF_Preview) -> Mesh::Feature (SDF_[Type]_Preview)
             if self._preview_obj is None or self._preview_obj not in doc.Objects:
-                self._preview_obj = doc.addObject("Mesh::Feature", "SDF_Preview")
+                self._preview_obj = doc.addObject("App::Part", "SDF_Preview")
                 if hasattr(self._preview_obj, "ViewObject") and self._preview_obj.ViewObject:
                     try:
-                        self._preview_obj.ViewObject.ShapeColor = (0.20, 0.60, 0.85)
-                        self._preview_obj.ViewObject.Transparency = 20
-                        # Always use Flat Lines so mesh edges are visible during preview
-                        self._preview_obj.ViewObject.DisplayMode = "Flat Lines"
+                        # Use a recognizable preview color
+                        self._preview_obj.ViewObject.Visibility = True
+                    except Exception:
+                        pass
+                
+                # Create child mesh
+                mesh_name = f"SDF_{sdf_type.capitalize()}_Preview"
+                self._preview_mesh = doc.addObject("Mesh::Feature", mesh_name)
+                self._preview_obj.addObject(self._preview_mesh)
+                
+                if hasattr(self._preview_mesh, "ViewObject") and self._preview_mesh.ViewObject:
+                    try:
+                        self._preview_mesh.ViewObject.ShapeColor = (0.20, 0.60, 0.85)
+                        self._preview_mesh.ViewObject.Transparency = 20
+                        self._preview_mesh.ViewObject.DisplayMode = "Flat Lines"
                     except Exception:
                         pass
 
@@ -261,13 +277,14 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             self._preview_sdf_type = sdf_type
             self._preview_sdf_params = params
 
-            # Assign mesh directly — no recompute needed or wanted.
-            self._preview_obj.Mesh = mesh
+            # Assign mesh directly to the child mesh object
+            self._preview_mesh.Mesh = mesh
 
             # A plain updateGui() is sufficient to repaint. No recompute needed.
             FreeCADGui.updateGui()
 
-        except Exception:
+        except Exception as e:
+            sdf_logger.debug(f"DEBUG: _process_preview_queue error: {e}")
             pass
 
 
@@ -287,6 +304,7 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         try:
             if self._last_sdf_type and self._last_sdf_params:
                 from ..sdf_object import create_sdf_object
+                sdf_logger.debug(f"_do_finish: Creating final SDF object: type={self._last_sdf_type}")
                 # Create the final high-res SDFObject
                 create_sdf_object(
                     self._last_sdf_type.capitalize(), 
@@ -294,8 +312,12 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
                     self._last_sdf_params,
                     placement=self._last_placement
                 )
-        except Exception:
-            pass
+            else:
+                sdf_logger.debug(f"_do_finish: No SDF data to finalize (type={self._last_sdf_type})")
+        except Exception as e:
+            sdf_logger.error(f"_do_finish FAILED: {e}")
+            import traceback
+            sdf_logger.error(traceback.format_exc())
 
         self._finished = True
         self.terminate()
@@ -308,14 +330,22 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             pass
 
     def terminate(self):
-        """Remove preview object and unregister the event callback."""
+        """Remove preview objects (Part container + child mesh) and unregister the event callback."""
         if self._preview_obj is not None:
             try:
                 doc = FreeCAD.activeDocument()
-                if doc and self._preview_obj in doc.Objects:
-                    doc.removeObject(self._preview_obj.Name)
+                if doc:
+                    # Remove child mesh first
+                    if hasattr(self, '_preview_mesh') and self._preview_mesh is not None:
+                        if self._preview_mesh in doc.Objects:
+                            doc.removeObject(self._preview_mesh.Name)
+                        self._preview_mesh = None
+                    # Then remove the parent container
+                    if self._preview_obj in doc.Objects:
+                        doc.removeObject(self._preview_obj.Name)
                     doc.recompute()
             except Exception as e:
-                sdf_logger.debug(f"Error removing preview object: {e}")
+                sdf_logger.debug(f"Error removing preview objects: {e}")
             self._preview_obj = None
         super().terminate()
+
