@@ -54,3 +54,7 @@ Tasks moved here from `TODO.md` after verification.
 - **Completed**: Fixed `base.py` `_process_preview_queue` to correctly reconstruct SDF functions and maintain a temporary Part-Mesh hierarchy during creation.
 - **Result**: Real-time visual feedback is now reliably displayed during interactive shape dragging.
 
+## ✅ BUG-C. Fix boolean commands — property mismatch
+- **Completed**: Updated the validation loop in `dm_commands/command_boolean.py` to check for `SDFType` property.
+- **Result**: Boolean commands now correctly identify and process SDF objects.
+

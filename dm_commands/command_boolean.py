@@ -42,7 +42,7 @@ class CommandDMBoolean:
 
         # Verify all selected objects are SDFObjects
         for obj in sel:
-            if not hasattr(obj, "Proxy") or not hasattr(obj.Proxy, "sdf_type"):
+            if not hasattr(obj, "SDFType"):
                 FreeCAD.Console.PrintError(
                     f"DM_{self.operation}: '{obj.Label}' is not an SDFObject. "
                     f"Only SDF primitives can be combined.\n"

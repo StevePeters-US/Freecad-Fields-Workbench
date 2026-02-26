@@ -26,28 +26,6 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### BUG-C. Fix boolean commands — property mismatch (Complexity: 2/10)
-
-- **Goal**: The boolean commands (`DM_Fuse`, `DM_Cut`, `DM_Common`) fail with `'Cone' is not an SDFObject` because they check `obj.Proxy.sdf_type` (a Python attribute that doesn't exist) instead of `obj.SDFType` (the FreeCAD property that `SDFObjectProxy` actually creates).
-- **Files to read**:
-  - `dm_commands/command_boolean.py` line 45 — the validation check `hasattr(obj.Proxy, "sdf_type")`.
-  - `FCDirectModeling/sdf_object.py` lines 196–216 — `SDFObjectProxy.__init__` adds `obj.SDFType`, `obj.SDFParams`, `obj.SDFOp`, `obj.SDFChildren` as FreeCAD properties. There is no `self.sdf_type` attribute on the proxy.
-- **Files to modify**:
-  - `dm_commands/command_boolean.py`
-- **Steps**:
-  1. Change the validation check on line 45 from:
-     ```python
-     if not hasattr(obj, "Proxy") or not hasattr(obj.Proxy, "sdf_type"):
-     ```
-     to:
-     ```python
-     if not hasattr(obj, "SDFType"):
-     ```
-     This checks for the FreeCAD property that `SDFObjectProxy` actually creates.
-- **Acceptance**: Select two SDF primitives → Fuse/Cut/Common → a new combined mesh object appears without errors.
-
----
-
 ## SDF-Native Architecture
 
 > **Principle**: SDFs are the primary data model. Meshes are *only* for visualization. Every object in the workbench stores its SDF definition (type, params, children, operation) as persistent FreeCAD properties. The mesh is regenerated on demand from the SDF and should never be treated as the source of truth.
