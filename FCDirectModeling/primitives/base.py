@@ -153,7 +153,7 @@ class PrimitiveCreatorBase:
             if event_type == "SoMouseButtonEvent":
                 if event_dict["State"] == "DOWN" and event_dict["Button"] == "BUTTON1":
                     sdf_logger.debug("DEBUG: Left click detected")
-                    self.handle_click(event_dict)
+                    return self.handle_click(event_dict)
             elif event_type == "SoLocation2Event":
                 self.handle_move(event_dict)
             elif event_type == "SoKeyboardEvent":
@@ -161,6 +161,7 @@ class PrimitiveCreatorBase:
                 sdf_logger.debug(f"DEBUG: Key event: {key}")
                 if event_dict["State"] == "DOWN" and key == "ESCAPE":
                     QtCore.QTimer.singleShot(0, self.terminate)
+                    return True
             sdf_logger.debug("event_cb: Returning False")
             return False
         except Exception as e:

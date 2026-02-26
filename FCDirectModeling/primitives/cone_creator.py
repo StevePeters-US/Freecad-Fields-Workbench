@@ -23,6 +23,9 @@ class ConeCreator(SDFMeshPrimitiveCreator):
             self.state = 2
         elif self.state == 2:
             self.finish()
+            return True
+        
+        return False
 
     def handle_move(self, event_dict):
         if self.state == 1:

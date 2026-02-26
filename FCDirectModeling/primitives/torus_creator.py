@@ -22,6 +22,9 @@ class TorusCreator(SDFMeshPrimitiveCreator):
             self.state = 2
         elif self.state == 2:
             self.finish()
+            return True
+            
+        return False
 
     def handle_move(self, event_dict):
         pt = self.get_point_on_plane(event_dict)

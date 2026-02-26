@@ -23,6 +23,8 @@ class SphereCreator(SDFMeshPrimitiveCreator):
             self.handle_move(event_dict)
             self.finish()
             return True
+            
+        return False
 
     def handle_move(self, event_dict):
         if self.state == 1:

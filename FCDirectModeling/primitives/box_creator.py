@@ -182,7 +182,7 @@ class BoxCreator(SDFMeshPrimitiveCreator):
             if event_dict["State"] == "DOWN":
                 button = event_dict["Button"]
                 if button == "BUTTON1":
-                    self.handle_click(event_dict)
+                    return self.handle_click(event_dict)
                 
         elif event_type == "SoLocation2Event":
             self.handle_move(event_dict)
@@ -274,6 +274,9 @@ class BoxCreator(SDFMeshPrimitiveCreator):
             
         elif self.state == 2: # Finish
             self.finish()
+            return True
+        
+        return False
 
     def handle_move(self, event_dict):
         sdf_logger.debug(f"DEBUG: BoxCreator.handle_move, state={self.state}")
