@@ -1,6 +1,5 @@
 import FreeCAD
 import FreeCADGui
-import FCDirectModeling.sdf_renderer as sdf_renderer
 
 
 # Default resolution for SDF generation (lower value = larger voxels/points = less density)
@@ -49,16 +48,3 @@ class SDFObjectFactory:
             obj.FeatureAlgo = "Normal Variance" # Default to new better algo
         if not hasattr(obj, "ShowCurves"):
             obj.addProperty("App::PropertyBool", "ShowCurves", "SDF", "Show extracted feature curves").ShowCurves = True
-
-    @staticmethod
-    def setup_view_provider(obj, compute_mesh=True):
-        """
-        Initializes the SDFRenderer ViewProvider.
-        Safe to call if GUI is not up (checks FreeCAD.GuiUp).
-        :param compute_mesh: If True, forces an update() to generate mesh immediately.
-        """
-        if FreeCAD.GuiUp:
-            vp = sdf_renderer.SDFRenderer(obj.ViewObject)
-            if compute_mesh:
-                # Force update to ensure mesh is generated immediately
-                vp.update()

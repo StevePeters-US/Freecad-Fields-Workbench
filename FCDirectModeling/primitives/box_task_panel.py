@@ -1,6 +1,6 @@
-
 import FreeCAD
 from PySide import QtCore, QtGui
+from FCDirectModeling import sdf_logger
 
 class PanelWidget(QtGui.QWidget):
     def __init__(self, panel):
@@ -14,9 +14,9 @@ class PanelWidget(QtGui.QWidget):
             key = event.key()
             text = event.text().upper()
             
-            # Check for Esc
             if key == QtCore.Qt.Key_Escape:
-                self.panel.reject()
+                import FreeCADGui
+                FreeCADGui.Control.closeDialog()
                 return True
             
             # Check for C (Cutter Mode)
@@ -75,9 +75,16 @@ class BoxTaskPanel:
         
     def accept(self):
         self.creator.finish()
+        return True
         
     def reject(self):
+        # If the creator already finished (3rd click committed the object),
+        # closeDialog() triggers reject() — we must NOT terminate the creator
+        # again or it will delete the freshly-created final object.
+        if getattr(self.creator, "_finished", False):
+            return True
         self.creator.terminate()
+        return True
 
     def on_length_changed(self, val):
         if self._block_updates: return
@@ -92,15 +99,18 @@ class BoxTaskPanel:
         self.creator.set_height_lock(val)
 
     def update_values(self, length, width, height):
+        sdf_logger.debug(f"DEBUG: BoxTaskPanel.update_values({length}, {width}, {height})")
         self._block_updates = True
         try:
             self.ui_length.setValue(length)
             self.ui_width.setValue(width)
             self.ui_height.setValue(height)
+            sdf_logger.debug("DEBUG: Spinbox values set")
         finally:
             self._block_updates = False
             
     def focus_field(self, axis):
+        sdf_logger.debug(f"DEBUG: focus_field {axis}")
         if axis == 'x':
             self.ui_length.setFocus()
             self.ui_length.selectAll()

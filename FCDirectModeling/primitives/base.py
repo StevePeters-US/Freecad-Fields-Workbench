@@ -1,109 +1,134 @@
 """
 Base classes for SDF primitive creators.
+No Coin3D / pivy anywhere.
+
+Camera/ray math uses FreeCADGui.ActiveDocument.ActiveView public API only.
 """
 
 import FreeCAD
 import FreeCADGui
-from pivy import coin
 from PySide import QtCore
-import Part
 
-# Preview target variables removed since native BRep does not need point clouds
-def log_to_file(msg):
-    FreeCAD.Console.PrintLog(f"[SDF] {msg}\n")
+from FCDirectModeling import sdf_logger
 
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Camera helpers (no Coin3D)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _is_orthographic(view):
+    """True if the active camera is orthographic (not perspective)."""
+    try:
+        cam = view.getCameraNode()
+        return "Orthographic" in cam.getTypeId().getName()
+    except Exception:
+        return False
+
+def _cam_pos(view):
+    """Camera world position as a FreeCAD.Vector (perspective only)."""
+    try:
+        cam = view.getCameraNode()
+        p = cam.position.getValue()
+        return FreeCAD.Vector(p[0], p[1], p[2])
+    except Exception:
+        return FreeCAD.Vector(0,0,100)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PrimitiveCreatorBase
+# ─────────────────────────────────────────────────────────────────────────────
 
 class PrimitiveCreatorBase:
     def __init__(self):
-        log_to_file(f"PrimitiveCreatorBase: Init {self.__class__.__name__}")
-        self.view = FreeCADGui.ActiveDocument.ActiveView
+        sdf_logger.debug(f"DEBUG: PrimitiveCreatorBase.__init__ for {self.__class__.__name__}")
+        
+        sdf_logger.debug("DEBUG: Accessing ActiveView...")
+        self.view     = FreeCADGui.ActiveDocument.ActiveView
+        if not self.view:
+            sdf_logger.debug("DEBUG: No ActiveView found!")
+            return
+
+        sdf_logger.debug("DEBUG: Adding event callback...")
+        # Check if view is valid before calling addEventCallback
+        sdf_logger.debug(f"DEBUG: View Type: {type(self.view)}")
         self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
+        sdf_logger.debug("DEBUG: Callback added")
 
-        self.start_point = None
+        self.start_point   = None
         self.current_point = None
-        self.center = None
-        self.state = 0
-
-        self.sg = coin.SoSeparator()
-        self.sg.ref()
-
-        # Guide Material
-        self.material = coin.SoMaterial()
-        self.material.diffuseColor.setValue(0.2, 0.6, 0.8)
-        self.material.transparency.setValue(0.5)
-        self.sg.addChild(self.material)
-
-        # Shape Nodes (subclasses may add to preview_sep)
-        self.preview_sep = coin.SoSeparator()
-        self.sg.addChild(self.preview_sep)
-
-        self.view.getSceneGraph().addChild(self.sg)
+        self.center        = None
+        self.state         = 0
 
     def terminate(self):
-        log_to_file("PrimitiveCreatorBase: Terminating...")
+        sdf_logger.debug("PrimitiveCreatorBase: Terminating...")
         try:
             if self.callback:
                 self.view.removeEventCallback("SoEvent", self.callback)
                 self.callback = None
-            if self.sg:
-                self.view.getSceneGraph().removeChild(self.sg)
-                self.sg = None
-            log_to_file("PrimitiveCreatorBase: Terminated successfully.")
+            sdf_logger.debug("PrimitiveCreatorBase: Terminated successfully.")
         except Exception as e:
-            log_to_file(f"PrimitiveCreatorBase: Error terminating: {e}")
+            sdf_logger.debug(f"PrimitiveCreatorBase: Error terminating: {e}")
             FreeCAD.Console.PrintError(f"PrimitiveCreatorBase: Error terminating: {e}\n")
-            import traceback
-            traceback.print_exc()
 
-    def get_point_on_plane(self, event_dict):
+    def finish(self):
+        pass
+
+    # ------------------------------------------------------------------
+    # Geometry helpers — use FreeCAD view API, not Coin3D directly
+    # ------------------------------------------------------------------
+
+    def get_point_on_plane(self, event_dict, plane_normal=None, plane_point=None):
+        """Project cursor onto a world-space plane. Defaults to Z=0."""
         try:
             pos = event_dict["Position"]
-            point_on_focal_plane = self.view.getPoint(pos[0], pos[1])
-            view_dir = self.view.getViewDirection()
-            cam = self.view.getCameraNode()
+            sdf_logger.debug(f"DEBUG: get_point_on_plane at {pos}")
+            focal = self.view.getPoint(pos[0], pos[1])
+            sdf_logger.debug(f"DEBUG: Focal point: {focal}")
 
-            if cam.getTypeId() == coin.SoOrthographicCamera.getClassTypeId():
-                ray_origin = point_on_focal_plane
-                ray_dir = view_dir
+            if _is_orthographic(self.view):
+                ray_origin = focal
+                ray_dir    = self.view.getViewDirection()
             else:
-                cam_pos_sb = cam.position.getValue()
-                ray_origin = FreeCAD.Vector(cam_pos_sb[0], cam_pos_sb[1], cam_pos_sb[2])
-                ray_dir = point_on_focal_plane - ray_origin
+                ray_origin = _cam_pos(self.view)
+                ray_dir    = focal - ray_origin
                 ray_dir.normalize()
+            sdf_logger.debug(f"DEBUG: Ray Origin: {ray_origin}, Dir: {ray_dir}")
 
-            plane_normal = FreeCAD.Vector(0, 0, 1)
-            plane_point = FreeCAD.Vector(0, 0, 0)
+            n = plane_normal or FreeCAD.Vector(0, 0, 1)
+            o = plane_point  or FreeCAD.Vector(0, 0, 0)
 
-            denom = ray_dir.dot(plane_normal)
+            denom = ray_dir.dot(n)
             if abs(denom) < 1e-6:
-                return plane_point
-
-            t = (plane_point - ray_origin).dot(plane_normal) / denom
-            return ray_origin + ray_dir * t
+                sdf_logger.debug("DEBUG: Parallel ray to plane")
+                return o
+            t = (o - ray_origin).dot(n) / denom
+            pt = ray_origin + ray_dir * t
+            sdf_logger.debug(f"DEBUG: Point on plane result: {pt}")
+            return pt
         except Exception as e:
-            FreeCAD.Console.PrintError(f"get_point_on_plane: Error: {e}\n")
+            sdf_logger.debug(f"DEBUG: get_point_on_plane error: {e}")
+            FreeCAD.Console.PrintError(f"get_point_on_plane: {e}\n")
             return FreeCAD.Vector(0, 0, 0)
 
     def get_closest_point_on_axis(self, event_dict, axis_start, axis_dir):
         """Returns the point on the given axis closest to the cursor ray."""
         try:
             pos = event_dict["Position"]
-            point_on_focal_plane = self.view.getPoint(pos[0], pos[1])
-            cam = self.view.getCameraNode()
+            focal = self.view.getPoint(pos[0], pos[1])
 
-            if cam.getTypeId() == coin.SoOrthographicCamera.getClassTypeId():
-                ray_origin = point_on_focal_plane
-                ray_dir = self.view.getViewDirection()
+            if _is_orthographic(self.view):
+                ray_origin = focal
+                ray_dir    = self.view.getViewDirection()
             else:
-                cam_pos_sb = cam.position.getValue()
-                ray_origin = FreeCAD.Vector(cam_pos_sb[0], cam_pos_sb[1], cam_pos_sb[2])
-                ray_dir = point_on_focal_plane - ray_origin
+                ray_origin = _cam_pos(self.view)
+                ray_dir    = focal - ray_origin
                 ray_dir.normalize()
 
             P1, V1 = ray_origin, ray_dir
             P2, V2 = axis_start, axis_dir
 
-            DP = P2 - P1
+            DP  = P2 - P1
             v12 = V1.dot(V2)
             v11 = V1.dot(V1)
             v22 = V2.dot(V2)
@@ -111,31 +136,43 @@ class PrimitiveCreatorBase:
 
             if abs(det) < 1e-6:
                 return P2
-
             dp_v1 = DP.dot(V1)
             dp_v2 = DP.dot(V2)
             u = (v12 * dp_v1 - v11 * dp_v2) / det
             return P2 + V2 * u
         except Exception as e:
-            FreeCAD.Console.PrintError(f"get_closest_point_on_axis Error: {e}\n")
+            FreeCAD.Console.PrintError(f"get_closest_point_on_axis: {e}\n")
             return axis_start
+
+    # ------------------------------------------------------------------
+    # Event loop
+    # ------------------------------------------------------------------
 
     def event_cb(self, event_dict):
         try:
-            event_type = event_dict["Type"]
+            event_type = event_dict.get("Type", "Unknown")
+            # Log every mouse move might be too much, but for debugging a crash we need it
+            if event_type == "SoLocation2Event":
+                sdf_logger.debug(f"DEBUG: Mouse move event at {event_dict.get('Position')}")
+            else:
+                sdf_logger.debug(f"DEBUG: event_cb: {event_type}")
+
             if event_type == "SoMouseButtonEvent":
                 if event_dict["State"] == "DOWN" and event_dict["Button"] == "BUTTON1":
+                    sdf_logger.debug("DEBUG: Left click detected")
                     self.handle_click(event_dict)
             elif event_type == "SoLocation2Event":
                 self.handle_move(event_dict)
             elif event_type == "SoKeyboardEvent":
-                if event_dict["State"] == "DOWN" and str(event_dict["Key"]).upper() == "ESCAPE":
+                key = str(event_dict.get("Key", "None")).upper()
+                sdf_logger.debug(f"DEBUG: Key event: {key}")
+                if event_dict["State"] == "DOWN" and key == "ESCAPE":
                     QtCore.QTimer.singleShot(0, self.terminate)
+            sdf_logger.debug("event_cb: Returning False")
             return False
         except Exception as e:
+            sdf_logger.debug(f"DEBUG: event_cb error: {e}")
             FreeCAD.Console.PrintError(f"PrimitiveCreatorBase: Event Callback Error: {e}\n")
-            import traceback
-            traceback.print_exc()
             return False
 
     def handle_click(self, event_dict):
@@ -145,98 +182,133 @@ class PrimitiveCreatorBase:
         pass
 
 
-class BRepPrimitiveCreator(PrimitiveCreatorBase):
-    """Base for creators that produce a persistent BRep Part object."""
+# ─────────────────────────────────────────────────────────────────────────────
+# SDFMeshPrimitiveCreator
+# ─────────────────────────────────────────────────────────────────────────────
+
+class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
+    """
+    Base for creators that produce an SDF object via Mesh::FeaturePython.
+    Live preview is a Mesh::Feature whose .Mesh is replaced in-place each frame.
+    No Coin3D.
+    """
 
     def __init__(self):
         super().__init__()
-        self.obj = None
+        self._preview_obj = None   # Mesh::Feature used for live preview
+        self._pending_sdf_type = None
+        self._pending_sdf_params = None
+        self._preview_queued = False
+
+    # ------------------------------------------------------------------
+    # Preview — create once, replace .Mesh in-place (no recompute)
+    # ------------------------------------------------------------------
+
+    def update_sdf_preview(self, sdf_type, params, resolution=15):
+        """
+        Setup the pending mesh request, but defer the exact execution 
+        to avoid crashing in Coin3D event traversal.
+        """
+        self._pending_sdf_type = sdf_type
+        self._pending_sdf_params = params
+        self._pending_resolution = resolution
         
-        # We restore the Coin3D edge nodes for interactive wireframe previews
-        self.edge_mat = coin.SoMaterial()
-        self.edge_mat.diffuseColor.setValue(0.0, 1.0, 0.0) # Bright green
-        self.preview_sep.addChild(self.edge_mat)
+        if not self._preview_queued:
+            self._preview_queued = True
+            sdf_logger.debug("DEBUG: Scheduling deferred SDF preview generation...")
+            QtCore.QTimer.singleShot(0, self._process_preview_queue)
 
-        self.edge_coords = coin.SoCoordinate3()
-        self.preview_sep.addChild(self.edge_coords)
+    def _process_preview_queue(self):
+        self._preview_queued = False
+        try:
+            sdf_type = self._pending_sdf_type
+            params = self._pending_sdf_params
+            if not sdf_type or not params:
+                return
 
-        self.edge_lines = coin.SoIndexedLineSet()
-        self.preview_sep.addChild(self.edge_lines)
+            FreeCAD.Console.PrintMessage(f"DEBUG: Processing queued SDF preview {sdf_type} at res {self._pending_resolution}\n")
+            import Mesh as MeshModule
+            import FreeCADGui
+            from ..sdf_object import (_SDF_BUILDERS, mesh_sdf, _to_mesh_facets, get_show_wireframe)
+
+            bld = _SDF_BUILDERS.get(sdf_type)
+            if bld is None:
+                FreeCAD.Console.PrintError(f"SDFMeshPrimitiveCreator: unknown sdf_type '{sdf_type}'\n")
+                return
+
+            FreeCAD.Console.PrintMessage("DEBUG: Building SDF function...\n")
+            sdf_fn, (mn, mx) = bld(params)
+            FreeCAD.Console.PrintMessage(f"DEBUG: Meshing SDF with bounds {mn} to {mx}...\n")
+            verts, tris = mesh_sdf(sdf_fn, mn, mx, resolution=self._pending_resolution)
+            FreeCAD.Console.PrintMessage(f"DEBUG: Mesh result: {len(verts)} verts, {len(tris)} tris\n")
+
+            if len(verts) == 0:
+                FreeCAD.Console.PrintMessage("DEBUG: Empty mesh result\n")
+                return
+
+            FreeCAD.Console.PrintMessage(f"DEBUG: Creating mesh facets for {len(tris)} triangles...\n")
+            facets = _to_mesh_facets(verts, tris)
+            mesh   = MeshModule.Mesh(facets)
+
+            doc = FreeCAD.activeDocument()
+            if not doc:
+                return
+
+            # Use a plain Mesh::Feature (NOT FeaturePython) for the preview.
+            # A plain Feature has no proxy / no execute() cycle, so doc.recompute()
+            # will NEVER wipe the .Mesh we assign here.  We just set .Mesh and
+            # call updateGui() — the viewport refreshes immediately.
+            if self._preview_obj is None or self._preview_obj not in doc.Objects:
+                FreeCAD.Console.PrintMessage(f"DEBUG: Creating plain Mesh::Feature preview in {doc.Name}...\n")
+                self._preview_obj = doc.addObject("Mesh::Feature", "SDF_Preview")
+                if hasattr(self._preview_obj, "ViewObject") and self._preview_obj.ViewObject:
+                    try:
+                        self._preview_obj.ViewObject.ShapeColor = (0.20, 0.60, 0.85)
+                        self._preview_obj.ViewObject.Transparency = 20
+                        # Always use Flat Lines so mesh edges are visible during preview
+                        self._preview_obj.ViewObject.DisplayMode = "Flat Lines"
+                    except Exception:
+                        pass
+                FreeCAD.Console.PrintMessage("DEBUG: Preview object created\n")
+
+            # Store current SDF info on the creator so finish() can access it.
+            self._preview_sdf_type = sdf_type
+            self._preview_sdf_params = params
+
+            # Assign mesh directly — no recompute needed or wanted.
+            FreeCAD.Console.PrintMessage("DEBUG: Assigning .Mesh to plain Feature...\n")
+            self._preview_obj.Mesh = mesh
+
+            # A plain updateGui() is sufficient to repaint. No recompute needed.
+            FreeCADGui.updateGui()
+            FreeCAD.Console.PrintMessage("DEBUG: .Mesh assigned and viewport updated\n")
+
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"SDF Preview Update Failed: {e}\n")
+
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
 
     def finish(self):
-        # Subclasses should handle their specific creation and finalization
-        self.obj = None # Ensure we don't delete on terminate
-        QtCore.QTimer.singleShot(0, self.terminate)
+        """Schedule the finalization to happen safely outside the event loop."""
+        sdf_logger.debug("DEBUG: Deferring finish() to Qt event loop...")
+        QtCore.QTimer.singleShot(0, self._do_finish)
+
+    def _do_finish(self):
+        """Subclass creates the final object; base dispatches terminate."""
+        self.terminate()
 
     def terminate(self):
-        # If we cancel during creation, self.obj is deleted
-        if hasattr(self, 'obj') and self.obj:
+        """Remove preview object and unregister the event callback."""
+        if self._preview_obj is not None:
             try:
-                name = self.obj.Name
-                FreeCAD.activeDocument().removeObject(name)
-                FreeCAD.activeDocument().recompute()
+                doc = FreeCAD.activeDocument()
+                if doc and self._preview_obj in doc.Objects:
+                    doc.removeObject(self._preview_obj.Name)
+                    doc.recompute()
             except Exception as e:
-                log_to_file(f"Error removing temporary object {name}: {e}")
+                sdf_logger.debug(f"Error removing preview object: {e}")
+            self._preview_obj = None
         super().terminate()
-
-    def create_generic_part(self, type_name, name, properties_values):
-        """
-        Generic helper to create a Part document object and set properties.
-        :param type_name: e.g. "Part::Sphere"
-        :param name: e.g. "Sphere"
-        :param properties_values: dict of {Name: Value}
-        """
-        doc = FreeCAD.activeDocument()
-        if not doc:
-            doc = FreeCAD.newDocument()
-
-        obj = doc.addObject(type_name, name)
-
-        for prop_name, val in properties_values.items():
-            if hasattr(obj, prop_name):
-                setattr(obj, prop_name, val)
-
-        doc.recompute()
-        FreeCAD.Console.PrintMessage(f"{name} created successfully.\n")
-        return obj
-
-    def update_preview(self, shape, placement=None):
-        """
-        Updates the Coin3D preview with a standard BRep shape.
-        :param shape: A FreeCAD Part.Shape object
-        :param placement: Optional FreeCAD.Placement to apply
-        """
-        try:
-            if placement:
-                shape = shape.copy()
-                shape.Placement = placement
-                
-            # Extract and Draw Edges
-            edges = shape.Edges
-            edge_verts = []
-            edge_indices = []
-            current_idx = 0
-            
-            for e in edges:
-                # Discretize edge
-                pts = e.discretize(Deflection=0.05)
-                if not pts: continue
-                
-                # Add points
-                edge_verts.extend([v for v in pts])
-                
-                # Add indices for this line strip
-                num_pts = len(pts)
-                indices = list(range(current_idx, current_idx + num_pts))
-                indices.append(-1)
-                edge_indices.extend(indices)
-                
-                current_idx += num_pts
-                
-            self.edge_coords.point.setValues(0, len(edge_verts), edge_verts)
-            self.edge_lines.coordIndex.setValues(0, len(edge_indices), edge_indices)
-            
-            self.view.redraw()
-            
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"Preview Tessellation Failed: {e}\n")

@@ -1,6 +1,6 @@
 import FreeCAD
 import FreeCADGui
-from FCDirectModeling.primitives import box_creator, box_task_panel
+from FCDirectModeling import sdf_logger
 
 class CreateBoxCommand:
     """
@@ -16,14 +16,24 @@ class CreateBoxCommand:
 
     def Activated(self):
         from FCDirectModeling.primitives import box_creator, box_task_panel
+        sdf_logger.debug("DEBUG: Box Command Activated")
+        from FCDirectModeling.primitives import box_creator, box_task_panel
+        sdf_logger.debug("DEBUG: Imported modules")
 
         # Instantiate the creator. It attaches itself to the view.
+        sdf_logger.debug("DEBUG: Instantiating BoxCreator...")
         self.creator = box_creator.BoxCreator()
+        sdf_logger.debug("DEBUG: BoxCreator instantiated")
         
         # Instantiate and show task panel
+        sdf_logger.debug("DEBUG: Instantiating BoxTaskPanel...")
         self.panel = box_task_panel.BoxTaskPanel(self.creator)
+        sdf_logger.debug("DEBUG: BoxTaskPanel instantiated")
+
         self.creator.set_panel(self.panel)
+        sdf_logger.debug("DEBUG: Showing dialog...")
         FreeCADGui.Control.showDialog(self.panel)
+        sdf_logger.debug("DEBUG: Dialog shown")
 
     def IsActive(self):
         return FreeCAD.activeDocument() is not None

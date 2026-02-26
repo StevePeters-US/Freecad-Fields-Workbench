@@ -1,121 +1,70 @@
 """
-Cone creator (BRep).
+Cone creator — no Coin3D, uses Mesh::Feature preview.
 """
 
 import FreeCAD
-import FreeCADGui
-from pivy import coin
-import numpy as np
-from .base import BRepPrimitiveCreator, log_to_file
+from PySide import QtCore
+from .base import SDFMeshPrimitiveCreator
+from FCDirectModeling import sdf_logger
 
-class ConeCreator(BRepPrimitiveCreator):
+class ConeCreator(SDFMeshPrimitiveCreator):
     def __init__(self):
         super().__init__()
         self.radius = 0.1
         self.height = 0.1
-        log_to_file("ConeCreator: Initialized")
+        sdf_logger.debug("ConeCreator: Initialized")
 
     def handle_click(self, event_dict):
         pt = self.get_point_on_plane(event_dict)
-        
-        if self.state == 0:  # Start: Center point
+        if self.state == 0:
             self.center = pt
             self.state = 1
-            log_to_file("ConeCreator: Center set")
-            
-        elif self.state == 1:  # Radius set, start Height
+        elif self.state == 1:
             self.state = 2
-            log_to_file("ConeCreator: Radius set")
-            
-        elif self.state == 2:  # Height set, Finish
+        elif self.state == 2:
             self.finish()
 
     def handle_move(self, event_dict):
-        if self.state == 1: # Dragging Radius
+        if self.state == 1:
             pt = self.get_point_on_plane(event_dict)
-            self.radius = (pt - self.center).Length
-            if self.radius < 0.001: self.radius = 0.001
-            
+            self.radius = max(0.001, (pt - self.center).Length)
             self.update_preview()
-            
-        elif self.state == 2: # Dragging Height
-            axis = FreeCAD.Vector(0, 0, 1) # Local Z
+        elif self.state == 2:
+            axis = FreeCAD.Vector(0, 0, 1)
             pt_on_axis = self.get_closest_point_on_axis(event_dict, self.center, axis)
-            
-            # vector from center to mouse proj
-            diff = pt_on_axis - self.center
-            
-            # dot product to get signed height along Z
-            self.height = diff.dot(axis)
-            
+            self.height = (pt_on_axis - self.center).dot(axis)
             if abs(self.height) < 0.001:
                 self.height = 0.001 if self.height >= 0 else -0.001
-                
             self.update_preview()
 
     def update_preview(self):
-        try:
-            import Part
-            import FreeCAD
-            
-            r = abs(self.radius)
-            h = abs(self.height)
-            
-            shape = Part.makeCone(r, 0.0, h)
-            
-            pl = FreeCAD.Placement()
-            pl.Base = self.center
-            if self.height < 0:
-                pl.Rotation = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 180)
-                
-            super().update_preview(shape, pl)
-        except Exception as e:
-            log_to_file(f"Cone preview error: {e}")
+        cx, cy, cz = self.center.x, self.center.y, self.center.z
+        self.update_sdf_preview("cone", {
+            "center": [cx, cy, cz],
+            "radius": abs(self.radius),
+            "height": self.height,
+        })
 
-    def finish(self):
-        log_to_file("ConeCreator: Creating loft object...")
+    def _do_finish(self):
+        sdf_logger.debug("ConeCreator: Finishing object...")
         try:
-            import Part
-            import FreeCAD
-            
-            doc = FreeCAD.activeDocument()
-            if not doc:
-                doc = FreeCAD.newDocument()
-            
-            r = abs(self.radius)
-            h = abs(self.height)
-            
-            # Loft: Base circle and Top circle/vertex
-            base_circle = Part.makeCircle(r, FreeCAD.Vector(0,0,0), FreeCAD.Vector(0,0,1))
-            top_circle = Part.makeCircle(1e-5, FreeCAD.Vector(0,0,h), FreeCAD.Vector(0,0,1)) # 0 radius circle approximating vertex
-            
-            # Create Wires
-            base_wire = Part.Wire(base_circle)
-            top_wire = Part.Wire(top_circle)
-            
-            # Loft them (ruled solid)
-            loft_shape = Part.makeLoft([base_wire, top_wire], True, True) 
-            
-            from FCDirectModeling.dm_part import create_dm_part
-            obj = create_dm_part("Cone")
-            obj.Shape = loft_shape
-            
-            pl = FreeCAD.Placement()
-            pl.Base = self.center
-            if self.height < 0:
-                pl.Rotation = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 180)
-            
-            obj.Placement = pl
-            
-            if hasattr(obj, "ViewObject") and obj.ViewObject:
-                obj.ViewObject.Deviation = 0.05
-                
-            FreeCAD.activeDocument().recompute()
-            log_to_file("ConeCreator: Object created successfully.")
-            
+            cx, cy, cz = self.center.x, self.center.y, self.center.z
+            params = {
+                "center": [cx, cy, cz],
+                "radius": max(0.01, abs(self.radius)),
+                "height": self.height,
+            }
+            if self._preview_obj is not None:
+                self._preview_obj.Label = "Cone"
+                self._preview_obj.Proxy.sdf_type = "cone"
+                self._preview_obj.Proxy.params = params
+                self._preview_obj.Proxy.is_preview = False
+                self._preview_obj.touch()
+                FreeCAD.activeDocument().recompute()
+                self._preview_obj = None
+            else:
+                from ..sdf_object import create_sdf_object
+                create_sdf_object("Cone", "cone", params)
         except Exception as e:
-            msg = f"ConeCreator: Error creating object: {e}"
-            log_to_file(msg)
-            FreeCAD.Console.PrintError(msg + "\n")
-            
-        super().finish()
+            FreeCAD.Console.PrintError(f"ConeCreator finish error: {e}\n")
+        super()._do_finish()

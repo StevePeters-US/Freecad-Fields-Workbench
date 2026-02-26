@@ -1,12 +1,11 @@
 import FreeCAD
 import FreeCADGui
 import Part
-from pivy import coin
 from PySide import QtCore, QtGui
-import numpy as np
-from .base import BRepPrimitiveCreator, log_to_file
+from .base import SDFMeshPrimitiveCreator
+from FCDirectModeling import sdf_logger
 
-class BoxCreator(BRepPrimitiveCreator):
+class BoxCreator(SDFMeshPrimitiveCreator):
     def __init__(self):
         super().__init__()
         
@@ -33,80 +32,34 @@ class BoxCreator(BRepPrimitiveCreator):
         # Add Box-specific nodes
         
     def update_material(self):
-        # We don't have a live BRep object anymore during creation.
-        # Could color the wireframe if desired, but default green is fine for now.
         pass
-            
+
     def toggle_cutter_mode(self):
          self.is_cutter = not self.is_cutter
          self.manual_mode_override = True
-         self.update_material() # Insert at beginning
-         
          self.view.redraw()
 
     def terminate(self):
         super().terminate()
-        # Close task panel
-        FreeCADGui.Control.closeDialog()
+        self.panel = None
 
     def set_panel(self, panel):
         self.panel = panel
-        
+
     def get_face_under_mouse(self, event_dict):
         pos = event_dict["Position"]
-        # getObjectInfo returns a dict with 'Object', 'Component', etc.
-        # It takes pixel coordinates (x, y)
         try:
+            sdf_logger.debug(f"DEBUG: get_face_under_mouse at {pos}")
+            # getObjectInfo returns a dict with 'Object', 'Component', etc.
             info = self.view.getObjectInfo((pos[0], pos[1]))
-        except Exception:
-            return None, None
-            
-        if info and "Object" in info and "Component" in info:
-             return info["Object"], info["Component"]
+            if info and "Object" in info and "Component" in info:
+                 sdf_logger.debug(f"DEBUG: Found {info['Object'].Label} : {info['Component']}")
+                 return info["Object"], info["Component"]
+            sdf_logger.debug("DEBUG: No object under mouse")
+        except Exception as e:
+            sdf_logger.debug(f"DEBUG: getObjectInfo error: {e}")
+            pass
         return None, None
-
-    def get_mouse_point_on_plane(self, event_dict, plane_placement=None):
-        pos = event_dict["Position"]
-        
-        # Get point on focal plane and view direction
-        point_on_focal_plane = self.view.getPoint(pos[0], pos[1])
-        view_dir = self.view.getViewDirection()
-        
-        # Get Camera to check type
-        cam = self.view.getCameraNode()
-        
-        ray_origin = FreeCAD.Vector(0,0,0)
-        ray_dir = FreeCAD.Vector(0,0,1)
-        
-        if cam.getTypeId() == coin.SoOrthographicCamera.getClassTypeId():
-            ray_origin = point_on_focal_plane
-            ray_dir = view_dir
-        else: # Perspective
-            # For perspective, ray originates at camera position
-            cam_pos_sb = cam.position.getValue()
-            cam_pos = FreeCAD.Vector(cam_pos_sb[0], cam_pos_sb[1], cam_pos_sb[2])
-            
-            ray_origin = cam_pos
-            ray_dir = point_on_focal_plane - ray_origin
-            ray_dir.normalize()
-
-        # Plane Definition
-        if plane_placement:
-            plane_normal = plane_placement.Rotation.multVec(FreeCAD.Vector(0,0,1))
-            plane_point = plane_placement.Base
-        else:
-            # Default to Z=0
-            plane_normal = FreeCAD.Vector(0,0,1)
-            plane_point = FreeCAD.Vector(0,0,0)
-        
-        denom = ray_dir.dot(plane_normal)
-        
-        if abs(denom) < 1e-6:
-            # Ray is parallel to plane, return focal point projected to Z=0 or plane base as fallback
-            return plane_point
-            
-        t = (plane_point - ray_origin).dot(plane_normal) / denom
-        return ray_origin + ray_dir * t
 
     def set_length_lock(self, length):
         self.locked_length = length
@@ -119,7 +72,6 @@ class BoxCreator(BRepPrimitiveCreator):
     def set_height_lock(self, height):
         self.locked_height = height
         self.height = height
-        self.update_geometry()
         self.view.redraw()
 
     def update_from_locks(self):
@@ -157,32 +109,43 @@ class BoxCreator(BRepPrimitiveCreator):
         self.view.redraw()
 
     def update_ui(self):
-        if not self.start_point or not self.current_point:
-            return
+        try:
+            if not self.start_point or not self.current_point:
+                return
+                
+            p1 = self.start_point
+            p2 = self.current_point
             
-        p1 = self.start_point
-        p2 = self.current_point
-        
-        # Send SIGNED deltas to UI so positive = positive direction
-        length = p2.x - p1.x
-        width = p2.y - p1.y
-        height = self.height
-        
-        if self.panel:
-             self.panel.update_values(length, width, height)
+            # Send SIGNED deltas to UI so positive = positive direction
+            length = p2.x - p1.x
+            width = p2.y - p1.y
+            height = self.height
+            
+            sdf_logger.debug(f"DEBUG: update_ui {length}, {width}, {height}")
+            if self.panel:
+                 self.panel.update_values(length, width, height)
+                 sdf_logger.debug("DEBUG: panel.update_values finished")
+        except Exception as e:
+            sdf_logger.debug(f"DEBUG: update_ui error: {e}")
 
     def to_local(self, p):
+        sdf_logger.debug(f"DEBUG: to_local {p}")
         if not self.working_plane:
             return p
         # inverse matrix
         mat = self.working_plane.toMatrix()
         mat.invert()
-        return mat.multVec(p)
+        v = mat.multVec(p)
+        sdf_logger.debug(f"DEBUG: to_local result {v}")
+        return v
 
     def to_global(self, p):
+        sdf_logger.debug(f"DEBUG: to_global {p}")
         if not self.working_plane:
             return p
-        return self.working_plane.toMatrix().multVec(p)
+        v = self.working_plane.toMatrix().multVec(p)
+        sdf_logger.debug(f"DEBUG: to_global result {v}")
+        return v
 
     def update_preview(self):
         if not self.start_point or not self.current_point:
@@ -192,37 +155,24 @@ class BoxCreator(BRepPrimitiveCreator):
         p2 = self.to_local(self.current_point)
         h = self.height
         
-        min_x = min(p1.x, p2.x)
-        max_x = max(p1.x, p2.x)
-        min_y = min(p1.y, p2.y)
-        max_y = max(p1.y, p2.y)
+        min_x = min(p1.x, p2.x);  max_x = max(p1.x, p2.x)
+        min_y = min(p1.y, p2.y);  max_y = max(p1.y, p2.y)
         
-        width = max(0.001, max_x - min_x)
-        length = max(0.001, max_y - min_y)
-        h_abs = max(0.001, abs(h))
+        # Show a thin slab during base-draw (h==0) so user sees feedback
+        min_thick = max(1.0, max(max_x - min_x, max_y - min_y) * 0.02)
+        h_abs = max(min_thick, abs(h))
+        z_min = -h_abs if h < 0 else 0.0
+        z_max = z_min + h_abs
         
-        z_offset = 0.0
-        if h < 0:
-            z_offset = h
-            
-        try:
-            shape = Part.makeBox(width, length, h_abs)
-            
-            # Base in Local
-            local_base = FreeCAD.Vector(min_x, min_y, z_offset)
-            
-            pl = FreeCAD.Placement()
-            
-            if self.working_plane:
-                 local_placement = FreeCAD.Placement(local_base, FreeCAD.Rotation())
-                 final_placement = self.working_plane.multiply(local_placement)
-                 pl = final_placement
-            else:
-                 pl.Base = local_base
-                 
-            super().update_preview(shape, pl)
-        except Exception as e:
-            log_to_file(f"Box preview error: {e}")
+        bounds_min = [min_x, min_y, z_min]
+        bounds_max = [max_x, max_y, z_max]
+        
+        # Store for finalization (use real h, not min_thick clamped)
+        self._last_bounds_min = [min_x, min_y, -abs(h) if h < 0 else 0.0]
+        self._last_bounds_max = [max_x, max_y, abs(h) if h != 0 else z_max]
+        self._last_placement  = self.working_plane or FreeCAD.Placement()
+        
+        self.update_sdf_preview("box", {"bounds_min": bounds_min, "bounds_max": bounds_max})
 
     def event_cb(self, event_dict):
         event_type = event_dict["Type"]
@@ -251,8 +201,12 @@ class BoxCreator(BRepPrimitiveCreator):
         
         # ESC to cancel
         if key == "ESCAPE":
-            QtCore.QTimer.singleShot(0, self.terminate)
-            return
+            if self.panel:
+                import FreeCADGui
+                FreeCADGui.Control.closeDialog()
+            else:
+                QtCore.QTimer.singleShot(0, self.terminate)
+            return True
             
         # Toggle Cutter Mode (C)
         if key == "C":
@@ -293,9 +247,14 @@ class BoxCreator(BRepPrimitiveCreator):
             self.panel.focus_field(target_axis)
 
     def handle_click(self, event_dict):
-        # If left click, proceed with drawing logic
-        
-        pt = self.get_mouse_point_on_plane(event_dict, self.working_plane)
+        sdf_logger.debug(f"DEBUG: handle_click, state={self.state}")
+        n = FreeCAD.Vector(0,0,1)
+        o = FreeCAD.Vector(0,0,0)
+        if self.working_plane:
+            n = self.working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
+            o = self.working_plane.Base
+            
+        pt = self.get_point_on_plane(event_dict, n, o)
         
         if self.state == 0: # Start
             self.start_point = pt
@@ -316,28 +275,37 @@ class BoxCreator(BRepPrimitiveCreator):
             self.finish()
 
     def handle_move(self, event_dict):
+        sdf_logger.debug(f"DEBUG: BoxCreator.handle_move, state={self.state}")
         if self.state == 0:
             # Detect face under mouse
             obj, subname = self.get_face_under_mouse(event_dict)
             if obj and subname and "Face" in subname:
                 try:
+                    sdf_logger.debug(f"DEBUG: Accessing face {subname}...")
                     face = obj.Shape.getElement(subname)
-                    # Use GeomPlane check via TypeId or isinstance if available. 
-                    # Assuming Part.GeomPlane logic. Safe mostly to check TypeId.
+                    sdf_logger.debug(f"DEBUG: Face Surface Type: {face.Surface.TypeId}")
                     if hasattr(face, "Surface") and "GeomPlane" in face.Surface.TypeId:
                         self.working_plane = face.Surface.Position
                         self.snap_face = (obj, subname)
-                        # Optional: Highlight face? existing preselection might be enough.
+                        sdf_logger.debug("DEBUG: Working plane set")
                     else:
                         self.working_plane = None
                         self.snap_face = None
-                except Exception:
+                except Exception as e:
+                    sdf_logger.debug(f"DEBUG: Face detection error: {e}")
                     self.working_plane = None
                     self.snap_face = None
             return
             
         elif self.state == 1:
-            raw_pt = self.get_mouse_point_on_plane(event_dict, self.working_plane)
+            n = FreeCAD.Vector(0,0,1)
+            o = FreeCAD.Vector(0,0,0)
+            if self.working_plane:
+                n = self.working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
+                o = self.working_plane.Base
+            
+            sdf_logger.debug(f"DEBUG: Calling get_point_on_plane with n={n}, o={o}")
+            raw_pt = self.get_point_on_plane(event_dict, n, o)
             
             # Work in Local Coords for standard delta logic
             local_raw_pt = self.to_local(raw_pt)
@@ -354,9 +322,6 @@ class BoxCreator(BRepPrimitiveCreator):
             if self.locked_length is not None:
                  new_dx = self.locked_length
                  
-            if self.locked_width is not None:
-                 new_dy = self.locked_width
-            
             if self.locked_width is not None:
                  new_dy = self.locked_width
             
@@ -399,126 +364,33 @@ class BoxCreator(BRepPrimitiveCreator):
             self.update_preview()
             self.update_ui()
 
-    def finish(self):
+    def _do_finish(self):
         if not self.start_point or (not self.current_point and self.state == 0):
              # If completely uninitialized, just terminate
             self.terminate()
             return
-
-        doc = FreeCAD.activeDocument()
-        if not doc:
-            doc = FreeCAD.newDocument()
-
-        # Ensure we have points
-        if not self.current_point:
-             self.current_point = self.start_point
-             
-        p1 = self.to_local(self.start_point)
-        p2 = self.to_local(self.current_point)
-        
-        min_x = min(p1.x, p2.x)
-        max_x = max(p1.x, p2.x)
-        min_y = min(p1.y, p2.y)
-        max_y = max(p1.y, p2.y)
-        
-        width = max_x - min_x
-        length = max_y - min_y
-        
-        # Prevent zero dimensions
-        if width < 0.001: width = 1.0
-        if length < 0.001: length = 1.0
-        
-        final_height = self.height if abs(self.height) > 0.001 else 1.0
-        
-        # Lofting / Extruding Approach:
-        # Create 4 points of the local base rectangle
-        pt1 = FreeCAD.Vector(min_x, min_y, 0)
-        pt2 = FreeCAD.Vector(max_x, min_y, 0)
-        pt3 = FreeCAD.Vector(max_x, max_y, 0)
-        pt4 = FreeCAD.Vector(min_x, max_y, 0)
-        
-        # Create curves (LineSegments)
-        edge1 = Part.LineSegment(pt1, pt2).toShape()
-        edge2 = Part.LineSegment(pt2, pt3).toShape()
-        edge3 = Part.LineSegment(pt3, pt4).toShape()
-        edge4 = Part.LineSegment(pt4, pt1).toShape()
-        
-        # Form Wire -> Face
-        base_wire = Part.Wire([edge1, edge2, edge3, edge4])
-        base_face = Part.Face(base_wire)
-        
-        # Extrude to form Solid
-        prism_shape = base_face.extrude(FreeCAD.Vector(0, 0, final_height))
-        
-        from FCDirectModeling.dm_part import create_dm_part
-        box = create_dm_part("Box")
-        box.Shape = prism_shape
-        
-        # Final Placement
-        if self.working_plane:
-             box.Placement = self.working_plane
-             
-        doc.recompute()
-        
-        # Auto Fuse/Cut Logic
-        if not self.is_cutter and self.snap_face:
-            # Fuse box with base object
-            base_obj = self.snap_face[0]
-            if base_obj:
-                try:
-                    fused_name = f"Result"
-                    fuse = doc.addObject("Part::MultiFuse", fused_name)
-                    fuse.Shapes = [base_obj, box]
-                    
-                    if hasattr(base_obj, "ViewObject") and base_obj.ViewObject:
-                        base_obj.ViewObject.Visibility = False
-                    if hasattr(box, "ViewObject") and box.ViewObject:
-                        box.ViewObject.Visibility = False
-                        
-                    doc.recompute()
-                except Exception as e:
-                    FreeCAD.Console.PrintError(f"Auto-Fuse Failed: {e}\n")
-        
-        # Boolean Cut Logic
-        if self.is_cutter:
-            intersecting_objs = []
-            for obj in doc.Objects:
-                if obj == box:
-                    continue
-                # Simple check: does it have a Shape?
-                if hasattr(obj, "Shape") and obj.Shape.isValid():
-                    try:
-                        # Check collision/intersection
-                        # common volume check is robust
-                        if not box.Shape.isValid():
-                            continue
-                            
-                        common = box.Shape.common(obj.Shape)
-                        if common.Volume > 1e-5:
-                            intersecting_objs.append(obj)
-                    except Exception as e:
-                        FreeCAD.Console.PrintError(f"Boolean Check Failed for {obj.Name}: {e}\n")
-                        continue
             
-            if intersecting_objs:
-                for target in intersecting_objs:
-                    try:
-                        name = f"Cut_{target.Name}"
-                        cut = doc.addObject("Part::Cut", name)
-                        cut.Base = target
-                        cut.Tool = box
-                        
-                        # hide original objects
-                        if hasattr(target, "ViewObject") and target.ViewObject:
-                            target.ViewObject.Visibility = False
-                    except Exception as e:
-                        FreeCAD.Console.PrintError(f"Failed to create Cut for {target.Name}: {e}\n")
-                        
-                # Hide the tool (box) if it made cuts
-                if hasattr(box, "ViewObject") and box.ViewObject:
-                    box.ViewObject.Visibility = False
-                         
-                    doc.recompute()
+        sdf_logger.debug("BoxCreator: Finishing object...")
+        try:
+            mn = getattr(self, '_last_bounds_min', None)
+            mx = getattr(self, '_last_bounds_max', None)
+            if mn is not None and mx is not None:
+                # Always create the final high-res SDFObject from the stored params.
+                # The plain Mesh::Feature preview has no Proxy, so we never try to
+                # "promote" it — we just let terminate() delete it and create fresh.
+                from ..sdf_object import create_sdf_object
+                create_sdf_object("Box", "box", {"bounds_min": mn, "bounds_max": mx})
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"BoxCreator finish error: {e}\n")
 
-        # Defer termination
-        QtCore.QTimer.singleShot(0, self.terminate)
+        # Mark finished BEFORE closing the dialog so reject() is a no-op.
+        self._finished = True
+        super()._do_finish()
+
+        # Close the task panel dialog now that the object is committed.
+        try:
+            import FreeCADGui
+            FreeCADGui.Control.closeDialog()
+        except Exception:
+            pass
+

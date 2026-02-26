@@ -1,21 +1,32 @@
+"""
+DM Boolean commands — Union / Cut / Intersect on SDFObjects.
+Each creates a new SDFObject whose execute() composes children's SDFs.
+"""
+
 import FreeCAD
 import FreeCADGui
 
+
 class CommandDMBoolean:
-    """Base class for performing destructive Boolean operations (Fuse, Cut, Common) on DM_Parts."""
+    _OP_MAP = {
+        "Fuse":   "union",
+        "Cut":    "cut",
+        "Common": "intersect",
+    }
+    _ICONS = {
+        "Fuse":   "Part_Fuse.svg",
+        "Cut":    "Part_Cut.svg",
+        "Common": "Part_Common.svg",
+    }
+
     def __init__(self, operation="Fuse"):
         self.operation = operation
 
     def GetResources(self):
-        icon = 'Part_Booleans.svg'
-        if self.operation == "Fuse": icon = 'Part_Fuse.svg'
-        elif self.operation == "Cut": icon = 'Part_Cut.svg'
-        elif self.operation == "Common": icon = 'Part_Common.svg'
-            
         return {
-            'Pixmap': icon,
-            'MenuText': f"DM {self.operation}",
-            'ToolTip': f"Select two or more DM_Parts and perform destructive {self.operation}."
+            'Pixmap':   self._ICONS.get(self.operation, 'Part_Booleans.svg'),
+            'MenuText': f"SDF {self.operation}",
+            'ToolTip':  f"Select two SDFObjects and perform SDF {self.operation}.",
         }
 
     def IsActive(self):
@@ -24,43 +35,51 @@ class CommandDMBoolean:
     def Activated(self):
         sel = FreeCADGui.Selection.getSelection()
         if len(sel) < 2:
-            FreeCAD.Console.PrintError(f"DM_{self.operation}: Please select at least two objects.\n")
+            FreeCAD.Console.PrintError(
+                f"DM_{self.operation}: Select at least two SDF objects.\n"
+            )
             return
-            
-        # Perform destructive boolean using the shapes of the selected objects
-        base_shape = sel[0].Shape.copy()
-        
+
+        # Verify all selected objects are SDFObjects
+        for obj in sel:
+            if not hasattr(obj, "Proxy") or not hasattr(obj.Proxy, "sdf_type"):
+                FreeCAD.Console.PrintError(
+                    f"DM_{self.operation}: '{obj.Label}' is not an SDFObject. "
+                    f"Only SDF primitives can be combined.\n"
+                )
+                return
+
+        from FCDirectModeling.sdf_object import create_sdf_object
+
+        sdf_op   = self._OP_MAP[self.operation]
+        names    = [sel[0].Label, sel[1].Label]
+        new_name = f"SDF_{self.operation}"
+
         try:
-            for s in sel[1:]:
-                tool_shape = s.Shape.copy()
-                if self.operation == "Fuse":
-                    base_shape = base_shape.fuse(tool_shape)
-                elif self.operation == "Cut":
-                    base_shape = base_shape.cut(tool_shape)
-                elif self.operation == "Common":
-                    base_shape = base_shape.common(tool_shape)
-            
-            # Create a new DM_Part to hold the result
-            from FCDirectModeling.dm_part import create_dm_part
-            res_obj = create_dm_part(f"DM_{self.operation}_Result")
-            res_obj.Shape = base_shape
-            
-            # Hide or Delete original objects
-            # For true destructive modeling, we delete them:
+            result = create_sdf_object(
+                name       = new_name,
+                sdf_type   = "boolean",
+                params     = {"op": sdf_op},
+                sdf_op     = sdf_op,
+                child_names = names,
+            )
+
+            # Hide originals (non-destructive; user can delete manually)
             doc = FreeCAD.activeDocument()
-            for s in sel:
-                 doc.removeObject(s.Name)
-            
+            for obj in sel:
+                if hasattr(obj, "ViewObject") and obj.ViewObject:
+                    obj.ViewObject.Visibility = False
+
             doc.recompute()
             FreeCADGui.Selection.clearSelection()
-            FreeCADGui.Selection.addSelection(res_obj)
-            
-            FreeCAD.Console.PrintMessage(f"DM_{self.operation} completed. Original objects deleted.\n")
-            
+            FreeCADGui.Selection.addSelection(result)
+            FreeCAD.Console.PrintMessage(
+                f"SDF {self.operation} created from {names[0]} and {names[1]}.\n"
+            )
         except Exception as e:
-            FreeCAD.Console.PrintError(f"DM_{self.operation} Failed: {e}\n")
+            FreeCAD.Console.PrintError(f"DM_{self.operation} failed: {e}\n")
 
 
-FreeCADGui.addCommand('DM_Fuse', CommandDMBoolean("Fuse"))
-FreeCADGui.addCommand('DM_Cut', CommandDMBoolean("Cut"))
+FreeCADGui.addCommand('DM_Fuse',   CommandDMBoolean("Fuse"))
+FreeCADGui.addCommand('DM_Cut',    CommandDMBoolean("Cut"))
 FreeCADGui.addCommand('DM_Common', CommandDMBoolean("Common"))
