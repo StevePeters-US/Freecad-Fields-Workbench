@@ -34,22 +34,6 @@ The following tasks establish the SDF-native pipeline so that all operations (bo
 
 ---
 
-### SDF-C. Parametric editing — modify SDF params and re-mesh (Complexity: 4/10)
-
-- **Goal**: When a user changes an SDF property (e.g. `SDFParams`) in the property panel, the object automatically re-meshes. This is already partially handled by `execute()`, but the UI should make it easy to tweak individual SDF parameters (e.g. box width) without re-creating the object.
-- **Files to read**:
-  - `FCDirectModeling/sdf_object.py` — `SDFObjectProxy.execute()`, the property definitions in `__init__`.
-- **Files to modify**:
-  - `FCDirectModeling/sdf_object.py` — ensure `execute()` properly re-reads params on recompute.
-  - Consider adding typed sub-properties (e.g. `BoxWidth`, `BoxHeight`) instead of a single JSON blob, so the FreeCAD property panel shows editable fields.
-- **Steps**:
-  1. For each primitive type, add dedicated properties (e.g. `App::PropertyFloat` for `BoxWidth`, `BoxHeight`, `BoxDepth`) so they appear as editable fields in FreeCAD's property panel.
-  2. In `execute()`, read from these typed properties and rebuild the SDF.
-  3. Changes to any property trigger `execute()` automatically via FreeCAD's dependency engine.
-- **Acceptance**: Create a box → change `BoxWidth` in the property panel → the mesh updates.
-
----
-
 ### SDF-D. SDF tree visualization in model tree (Complexity: 5/10)
 
 - **Goal**: Boolean and transform objects should show their children as a tree in FreeCAD's model browser, so the user can see the SDF composition hierarchy (e.g. "Fuse" → "Box" + "Sphere").

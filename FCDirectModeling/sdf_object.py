@@ -202,7 +202,7 @@ class SDFObjectProxy:
         if not hasattr(obj, "SDFType"):
             obj.addProperty("App::PropertyString", "SDFType", "SDF", "Type of SDF primitive")
         if not hasattr(obj, "SDFParams"):
-            obj.addProperty("App::PropertyString", "SDFParams", "SDF", "JSON parameters for the SDF")
+            obj.addProperty("App::PropertyString", "SDFParams", "SDF", "JSON parameters (legacy/backup)")
         if not hasattr(obj, "SDFOp"):
             obj.addProperty("App::PropertyString", "SDFOp", "SDF", "Boolean operation")
         if not hasattr(obj, "SDFChildren"):
@@ -212,15 +212,48 @@ class SDFObjectProxy:
         obj.SDFParams = json.dumps(params)
         obj.SDFOp = sdf_op or "none"
         obj.SDFChildren = children or []
+        
+        # Add typed properties for parametric editing
+        if sdf_type == "box":
+            for p in ["Length", "Width", "Height"]:
+                if not hasattr(obj, p): obj.addProperty("App::PropertyFloat", p, "Box", p)
+            if "bounds_min" in params and "bounds_max" in params:
+                mn, mx = params["bounds_min"], params["bounds_max"]
+                obj.Length = abs(mx[0] - mn[0])
+                obj.Width  = abs(mx[1] - mn[1])
+                obj.Height = abs(mx[2] - mn[2])
+                # We also need the center or min corner if we want to stay true to the click
+                # But for now let's assume if placement is here, it handles the origin.
+            else:
+                obj.Length = params.get("length", 10.0)
+                obj.Width  = params.get("width", 10.0)
+                obj.Height = params.get("height", 10.0)
+                
+        elif sdf_type == "sphere":
+            if not hasattr(obj, "Radius"): obj.addProperty("App::PropertyFloat", "Radius", "Sphere", "Radius")
+            obj.Radius = params.get("radius", 5.0)
+            
+        elif sdf_type == "cone":
+            if not hasattr(obj, "Radius"): obj.addProperty("App::PropertyFloat", "Radius", "Cone", "Radius")
+            if not hasattr(obj, "Height"): obj.addProperty("App::PropertyFloat", "Height", "Cone", "Height")
+            obj.Radius = params.get("radius", 5.0)
+            obj.Height = params.get("height", 10.0)
+            
+        elif sdf_type == "torus":
+            if not hasattr(obj, "MajorRadius"): obj.addProperty("App::PropertyFloat", "MajorRadius", "Torus", "Major Radius")
+            if not hasattr(obj, "MinorRadius"): obj.addProperty("App::PropertyFloat", "MinorRadius", "Torus", "Minor Radius")
+            obj.MajorRadius = params.get("major_r", 10.0)
+            obj.MinorRadius = params.get("minor_r", 2.0)
+
         if placement:
             obj.Placement = placement
 
     def build_sdf(self, fp):
         """Reconstruct (sdf_fn, (bounds_min, bounds_max)) from stored properties."""
         sdf_type = fp.SDFType
-        params = json.loads(fp.SDFParams)
         
         if sdf_type == "boolean":
+            params = json.loads(fp.SDFParams)
             child_sdfs = []
             for child in fp.SDFChildren:
                 if hasattr(child, "Proxy") and hasattr(child.Proxy, "build_sdf"):
@@ -234,11 +267,35 @@ class SDFObjectProxy:
                 params["op"] = fp.SDFOp
                 
             return _sdf_boolean(params, child_sdfs)
-        else:
-            bld = _SDF_BUILDERS.get(sdf_type)
-            if bld is None:
-                raise ValueError(f"Unknown SDF type '{sdf_type}'")
-            return bld(params)
+        
+        # Primitives: Prefer typed properties, fallback to SDFParams JSON
+        if sdf_type == "box":
+            l, w, h = fp.Length, fp.Width, fp.Height
+            # Center at local origin
+            params = {"bounds_min": [-l/2, -w/2, -h/2], "bounds_max": [l/2, w/2, h/2]}
+            return _sdf_box(params)
+            
+        elif sdf_type == "sphere":
+            r = fp.Radius
+            params = {"center": [0, 0, 0], "radius": r}
+            return _sdf_sphere(params)
+            
+        elif sdf_type == "cone":
+            r, h = fp.Radius, fp.Height
+            params = {"center": [0, 0, 0], "radius": r, "height": h}
+            return _sdf_cone(params)
+            
+        elif sdf_type == "torus":
+            R, r = fp.MajorRadius, fp.MinorRadius
+            params = {"center": [0, 0, 0], "major_r": R, "minor_r": r}
+            return _sdf_torus(params)
+
+        # Catch-all for unknown or non-linkable types
+        params = json.loads(fp.SDFParams)
+        bld = _SDF_BUILDERS.get(sdf_type)
+        if bld is None:
+            raise ValueError(f"Unknown SDF type '{sdf_type}'")
+        return bld(params)
 
     def execute(self, fp):
         """Called by FreeCAD to recompute — we mesh and write to the child Mesh object."""

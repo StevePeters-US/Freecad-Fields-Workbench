@@ -62,3 +62,7 @@ Tasks moved here from `TODO.md` after verification.
 - **Completed**: Converted `SDFChildren` to `App::PropertyLinkList` and updated `build_sdf` to use direct object links.
 - **Result**: Boolean objects are now robust against renames and duplicates.
 
+## ✅ SDF-C. Parametric editing — modify SDF params and re-mesh
+- **Completed**: Added typed properties (`Length`, `Radius`, etc.) to all SDF primitive types and updated `build_sdf` to use them as the source of truth.
+- **Result**: Primitives can now be edited parametrically through the FreeCAD property panel after creation.
+
