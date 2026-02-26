@@ -27,14 +27,15 @@ def extract_mesh_numpy(sdf_func, mn, mx, resolution, sharp=True):
     step_target = np.max(bounds) / resolution
     if step_target < 1e-5: step_target = 0.1
     
-    # Calculate resolutions per axis, enforcing at least 5 voxels for thin features
-    # (if the bound is non-zero). If it is zero, make it small but > 2.
-    res_x = max(int(bounds[0] / step_target), 5) if bounds[0] > 1e-3 else 2
-    res_y = max(int(bounds[1] / step_target), 5) if bounds[1] > 1e-3 else 2
-    res_z = max(int(bounds[2] / step_target), 5) if bounds[2] > 1e-3 else 2
+    # Calculate resolutions per axis. Ensure a minimum density relative to the 
+    # requested resolution so thin objects don't get undersampled.
+    min_res = max(resolution // 4, 5)
+    res_x = max(int(bounds[0] / step_target), min_res) if bounds[0] > 1e-3 else 2
+    res_y = max(int(bounds[1] / step_target), min_res) if bounds[1] > 1e-3 else 2
+    res_z = max(int(bounds[2] / step_target), min_res) if bounds[2] > 1e-3 else 2
     
     # Cap maximum resolution to prevent memory explosions
-    MAX_RES = 100
+    MAX_RES = 128
     res_x, res_y, res_z = min(res_x, MAX_RES), min(res_y, MAX_RES), min(res_z, MAX_RES)
     
     rx = np.linspace(mn[0], mx[0], res_x)

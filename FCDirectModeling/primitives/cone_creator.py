@@ -45,26 +45,4 @@ class ConeCreator(SDFMeshPrimitiveCreator):
             "height": self.height,
         })
 
-    def _do_finish(self):
-        sdf_logger.debug("ConeCreator: Finishing object...")
-        try:
-            cx, cy, cz = self.center.x, self.center.y, self.center.z
-            params = {
-                "center": [cx, cy, cz],
-                "radius": max(0.01, abs(self.radius)),
-                "height": self.height,
-            }
-            if self._preview_obj is not None:
-                self._preview_obj.Label = "Cone"
-                self._preview_obj.Proxy.sdf_type = "cone"
-                self._preview_obj.Proxy.params = params
-                self._preview_obj.Proxy.is_preview = False
-                self._preview_obj.touch()
-                FreeCAD.activeDocument().recompute()
-                self._preview_obj = None
-            else:
-                from ..sdf_object import create_sdf_object
-                create_sdf_object("Cone", "cone", params)
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"ConeCreator finish error: {e}\n")
-        super()._do_finish()
+

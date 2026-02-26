@@ -1,67 +1,233 @@
-# FreeCAD Direct Modeling - Project Guidelines
+# FreeCAD Direct Modeling Workbench — Project Guidelines
 
-## ProjecModel Quota
-t Description
-FreeCAD Direct Modeling is a workbench for FreeCAD that aims to provide a fast, intuitive, drag-and-drop 3D modeling experience inside FreeCAD, similar to standard direct modeling workflows. By utilizing Signed Distance Fields (SDFs) and Naive Surface Nets (with QEF edge-preservation), the toolkit allows users to quickly sketch and define shapes without the typical constraints and tree-management overhead associated with standard Parametric CAD modeling.
+## Project Description
 
-## Current Goals
-- ~~Replace the legacy `libfive` C++ dependency with a native NumPy-based SDF evaluation and meshing solution to avoid complex compilation and dependency issues.~~ ✅ Done — `sdf_mesher.py` is pure NumPy + Surface Nets + QEF.
-- ~~Fix all remaining crashes and segfaults caused by Python/C++ boundary errors or FreeCAD UI double-frees.~~ ✅ Done — all event callbacks are deferred via `QTimer.singleShot(0, ...)` to safely run outside Coin3D event traversal.
-- ~~Provide interactive 3D view dragging for shape creation and dimensioning.~~ ✅ Done — `base.py` provides `get_point_on_plane`, orthographic/perspective support, and live mesh preview via `_process_preview_queue`.
-- Stabilize the core primitive creation tools (Box, Sphere, Cone, Torus).
-- Implement Boolean operations (Fuse, Cut, Common) that do not needlessly convert to BRep until explicitly requested.
+FreeCAD Direct Modeling is a Python workbench for FreeCAD that provides fast, intuitive, drag-and-drop 3D modeling using **Signed Distance Fields (SDFs)**. Instead of the traditional parametric tree workflow, users sketch and define shapes interactively in the 3D viewport. Meshes are generated on-the-fly from SDF distance functions using Surface Nets, Dual Contouring, or Marching Cubes — all implemented in pure NumPy with no native/C++ dependencies beyond FreeCAD itself.
 
-## Todo List
-- [ ] **Box Primitive**: Fix the crash that occurs when finishing the box creation.
-- [ ] **Cone Primitive**: Fix the bug preventing the cone from being drawn/rendered properly.
-- [ ] **Torus Primitive**: Resolve visual and rendering issues specific to the toroid.
-- [ ] **SDF Base Operations**: Consolidate common meshing and object spawning logic across all primitives to ensure consistent behavior.
-- [ ] **Boolean Operations**: Implement non-destructive (or pure-mesh) boolean operations utilizing the SDF primitives before converting to final BRep forms.
-- [ ] **UI TaskPanels**: Complete the standardization of the property panels for all shapes.
-- [ ] **Sketcher Integration**: Add an icon/toolbar button and command (`DM_OpenSketcher`) to launch the FreeCAD Sketcher workbench, allowing users to define sketch profiles that can then drive SDF extrusions or serve as cutting planes.
+---
 
-## Meshing — Known Issue
-The preview mesh is generated correctly by `_process_preview_queue()` in `base.py` (verts/tris counts are non-zero as confirmed by debug logs), but the FreeCAD `ViewObject` does not always visually update when `.Mesh` is replaced in-place. The current fix attempts:
-1. `self._preview_obj.Mesh = mesh` — direct property assignment
-2. `self._preview_obj.purgeTouched()`
-3. `self._preview_obj.ViewObject.update()`
-4. `FreeCADGui.updateGui()`
+## Folder Structure
 
-**Root cause**: FreeCAD's built-in `Mesh::Feature` view provider may not repaint when `.Mesh` is replaced without a `recompute()`. However, calling `doc.recompute()` during the event loop risks re-entering Coin3D. The safest fix is to call `doc.recompute()` **also** deferred via `QTimer.singleShot(0, ...)` after assigning the mesh, rather than skipping it entirely.
+```
+Freecad-Direct-Modeling/
+├── InitGui.py                     # Workbench registration & toolbar/menu setup
+├── PROJECT_GUIDELINES.md          # This file
+├── TODO.md                        # Task breakdown by difficulty
+├── README.md                      # Installation & quick-start
+├── DirectModeling.FCStd           # Sample document
+│
+├── FCDirectModeling/              # Core Python package
+│   ├── __init__.py                # Package init (exports sdf_logger)
+│   ├── sdf_logger.py              # Centralized logging
+│   ├── sdf_mesher.py              # Meshing algorithms (Surface Nets / QEF)
+│   ├── sdf_object.py              # SDFObjectProxy, SDF functions, mesh dispatch
+│   ├── sdf_utils.py               # SDFObjectFactory, common properties
+│   ├── mesh_features.py           # Adjacency, segmentation, face normals
+│   ├── surface_fitting.py         # Primitive fitting (plane, sphere, cylinder, cone)
+│   ├── dm_part.py                 # DM_Part FeaturePython wrapper
+│   ├── task_panel.py              # Base task panel utilities
+│   └── primitives/                # Interactive primitive creators
+│       ├── __init__.py            # Re-exports all creator classes
+│       ├── base.py                # PrimitiveCreatorBase & SDFMeshPrimitiveCreator
+│       ├── box_creator.py         # BoxCreator (3-click Place → Size → Set)
+│       ├── box_task_panel.py      # BoxTaskPanel (dimension inputs)
+│       ├── sphere_creator.py      # SphereCreator
+│       ├── cone_creator.py        # ConeCreator
+│       └── torus_creator.py       # TorusCreator
+│
+├── dm_commands/                   # FreeCADGui command definitions
+│   ├── __init__.py
+│   ├── command_create_box.py      # DM_CreateBox
+│   ├── command_create_primitives.py  # DM_CreateSphere / Cone / Torus
+│   ├── command_draw_box.py        # DM_DrawBox (legacy)
+│   ├── command_boolean.py         # DM_Fuse / DM_Cut / DM_Common
+│   ├── command_tweak.py           # DM_Tweak
+│   ├── command_dm_settings.py     # DM_Settings dialog
+│   ├── command_open_sketcher.py   # DM_OpenSketcher
+│   ├── command_open_task_panel.py # DM_OpenTaskPanel
+│   └── command_install_deps.py    # Dependency installer (shapely, etc.)
+│
+└── Resources/
+    ├── resources.qrc
+    └── icons/                     # SVG icons for toolbar buttons
+```
 
-**Proposed fix**: In `_process_preview_queue()`, after assigning `.Mesh`, schedule a deferred `doc.recompute()` instead of relying solely on `ViewObject.update()`.
+---
+
+## Workbench Goals
+
+The Direct Modeling workbench aims to:
+
+1. **Eliminate tree-management overhead** — create, combine, and edit 3D shapes directly without managing a feature tree.
+2. **Use SDF as the core representation** — all primitives and booleans operate on distance fields, enabling smooth blending, fast preview, and easy boolean composition.
+3. **Provide real-time 3D preview** — as the user drags to define a shape, a live mesh preview updates in the viewport.
+4. **Convert SDF to BRep only when needed** — keep geometry in SDF/mesh form for speed; export to BRep (STEP/BREP) on demand.
+5. **Integrate with existing FreeCAD tools** — sketcher profiles, constraints, and standard Part operations remain accessible.
+
+---
+
+## Workbench Toolbar Layout
+
+The toolbar and menu are registered in `InitGui.py` and contain the following groups:
+
+### Creation (Primitives)
+| Command | ID | Description |
+|---------|----|-------------|
+| Box | `DM_CreateBox` | Interactive 3-click box creation (Place → Size → Set) |
+| Sphere | `DM_CreateSphere` | Click-drag sphere creation |
+| Cone | `DM_CreateCone` | Click-drag cone creation |
+| Torus | `DM_CreateTorus` | Click-drag torus creation |
+| New Sketch | `DM_OpenSketcher` | Launch FreeCAD Sketcher for profile creation |
+
+### Future Creation Tools (Not Yet Implemented)
+| Planned Tool | Description |
+|--------------|-------------|
+| BMesh to SDF | Convert mesh/bmesh data into an SDF representation |
+| SDF to Curves | Extract feature curves from an SDF zero-surface |
+| SDF to Mesh | Export the current SDF to a final high-res mesh |
+
+### Operations
+| Command | ID | Description |
+|---------|----|-------------|
+| Fuse | `DM_Fuse` | Boolean union of two SDF objects |
+| Cut | `DM_Cut` | Boolean subtraction |
+| Common | `DM_Common` | Boolean intersection |
+| Array | *(planned)* | Repeat a shape along a vector or pattern |
+| Transform | *(planned)* | Move / rotate / scale an SDF object |
+| Tweak | `DM_Tweak` | Direct vertex/face manipulation |
+
+### Settings
+| Command | ID | Description |
+|---------|----|-------------|
+| DM Settings | `DM_Settings` | Opens the settings dialog (algorithm, resolution, wireframe) |
+
+---
+
+## DM Settings (User-Facing)
+
+Accessed via the **DM Settings** toolbar button (`DM_Settings` command). Configured in `dm_commands/command_dm_settings.py`. Settings are persisted in `FreeCAD.ParamGet("User parameter:FCDirectModeling")`.
+
+| Setting | Type | Range/Options | Default | Description |
+|---------|------|---------------|---------|-------------|
+| Meshing Algorithm | Dropdown | `surface_nets`, `dual_contouring`, `marching_cubes` | `surface_nets` | Which algorithm meshes the SDF |
+| Resolution | SpinBox | 8 – 128 (step 4) | 48 | Voxel grid resolution (higher = more detail, slower) |
+| Show Wireframe | Checkbox | on/off | off | Overlay triangle wireframe on SDF objects |
+
+### Preview vs Final Resolution
+- **Preview** (during drag): resolution ~15–20 for real-time feedback.
+- **Final** (on Set): resolution from the DM Settings value (default 48).
+
+---
+
+## SDF Rendering Pipeline
+
+```
+User Drag → SDF function (box/sphere/cone/torus)
+         → Voxel grid evaluation (NumPy)
+         → Meshing algorithm (Surface Nets / Dual Contouring / Marching Cubes)
+         → Vertex + Triangle arrays
+         → Mesh.Mesh() facet list
+         → Assign to preview Mesh::Feature or final Mesh::FeaturePython
+```
+
+### Key Files
+- **`sdf_object.py`** — SDF distance functions (`_sdf_box`, `_sdf_sphere`, etc.), `mesh_sdf()` dispatcher, `SDFObjectProxy`.
+- **`sdf_mesher.py`** — `extract_mesh_numpy()` (Surface Nets + QEF), `compute_normals_from_sdf()`.
+- **`primitives/base.py`** — `SDFMeshPrimitiveCreator.update_sdf_preview()` and `_process_preview_queue()` drive live mesh updates.
+
+### Marching Cubes
+Currently **not implemented** inside `sdf_mesher.py`. The `mesh_sdf()` dispatcher in `sdf_object.py` has a branch for `"marching_cubes"` but it falls through to Surface Nets. Implementing Marching Cubes is an active TODO.
+
+---
+
+## Code Formatting & Style (FreeCAD Standards)
+
+1. **Python 3.8+** — target the Python bundled with FreeCAD 0.21+/1.0.
+2. **PEP 8** with the following project conventions:
+   - 4-space indentation, no tabs.
+   - Max line length: 100 characters (soft limit).
+   - Use `snake_case` for functions and variables, `PascalCase` for classes.
+   - Private helpers prefixed with `_` (e.g., `_sdf_box`, `_process_preview_queue`).
+3. **Imports**:
+   - FreeCAD modules first (`import FreeCAD`, `import FreeCADGui`).
+   - Then PySide (`from PySide import QtCore, QtGui`).
+   - Then project imports (`from FCDirectModeling import sdf_logger`).
+   - Then standard library (`import os`, `import numpy as np`).
+4. **Docstrings**: Google-style or NumPy-style. Every public class and function must have a docstring.
+5. **Type hints**: Encouraged but not required on all functions (FreeCAD's own API is untyped).
+6. **FreeCAD Properties**: Use `App::Property*` types (e.g., `App::PropertyFloat`, `App::PropertyString`) for persistent data on FeaturePython objects. Access via `obj.PropertyName`.
+
+---
+
+## Logging
+
+All logging goes through **`FCDirectModeling/sdf_logger.py`**. Never use bare `print()` or `FreeCAD.Console.Print*` directly in new code.
+
+```python
+from FCDirectModeling import sdf_logger
+
+sdf_logger.debug("message")   # Verbose tracing
+sdf_logger.info("message")    # Normal operational info
+sdf_logger.warn("message")    # Potential issues
+sdf_logger.error("message")   # Errors and failures
+```
+
+### Logging Policies
+| Mode | Console | File (`~/sdf_debug.log`) | How to enable |
+|------|---------|--------------------------|---------------|
+| Normal | ✅ | ❌ | Default |
+| Crash investigation | ✅ | ✅ | `export DEBUG_SDF_CRASH=1` before launching FreeCAD |
+
+### Logging Best Practices
+- **Be concise.** One-line messages with key variable values.
+- **No per-frame spam.** Avoid logging on every `mouseMoveEvent` once logic is verified — use once-per-state-change or gate behind a flag.
+- **Tag log lines** with the module or function name for easy grep: `sdf_logger.debug("BoxCreator._on_move: w=%.1f h=%.1f" % (w, h))`.
+
+---
+
+## Event Safety
+
+**ALL scene-graph and document-mutating operations** must be deferred via `QTimer.singleShot(0, fn)`. Never mutate the FreeCAD document from inside a Coin3D event callback. This includes:
+- Assigning `.Mesh`
+- Creating / deleting document objects
+- Calling `doc.recompute()`
+- Closing dialogs (`FreeCADGui.Control.closeDialog()`)
+
+---
 
 ## Terminology
 
-### Box / Primitive Creation — 3-Click Flow
+### Primitive Creation — 3-Click Flow
 | Click | Term | Description |
 |-------|------|-------------|
-| 1st click | **Place** | Set the origin corner of the shape on the working plane. |
-| 2nd click | **Size** | Lock the base footprint (length × width). Dragging now controls height. |
-| 3rd click | **Set** | Commit ("set") the shape to the document at the current dimensions. The tool closes, the preview is removed, and the final object is created. |
+| 1st | **Place** | Set the origin corner on the working plane |
+| 2nd | **Size** | Lock the base footprint; dragging now controls height |
+| 3rd | **Set** | Commit the shape to the document |
 
-The **Set** action finalizes the shape. The term is chosen to mirror physical direct-modeling — you place, size, then *set* the piece in position.
+### Preview vs Final
+- **Preview**: Temporary `Mesh::Feature` (no Proxy). Low-res, replaced in-place each frame.
+- **Final**: Persistent `Mesh::FeaturePython` with `SDFObjectProxy`. High-res, triggers `doc.recompute()`.
 
-## General Notes
-- **SDF Mesher**: The project now uses a custom `sdf_mesher.py` (NumPy + Surface Nets + QEF) instead of `libfive`. This generates vertices and triangles from distance functions.
-- **Preview vs Final**: During creation, a lightweight preview mesh is shown via a temporary `Mesh::FeaturePython` object (`SDF_Preview`). This allows for native FreeCAD rendering without external dependencies. Upon completion, the preview is either relabeled or a new `Mesh::FeaturePython` (`SDFObject`) is created.
-- **Logging & Debugging**: 
-  - ALWAYS use the centralized logger: `from FCDirectModeling import sdf_logger`.
-  - Use `sdf_logger.debug()`, `sdf_logger.info()`, etc.
-  - This logs to both the FreeCAD console and `~/sdf_debug.log`. 
-  - Using a physical log file is mandatory for debugging segfaults to ensure the last Breadcrumb is captured.
+---
 
-- **FreeCAD API**: Proceed with caution when dealing with `FreeCADGui.Control.closeDialog()`, `Part` conversions, and `Mesh` instantiation, as FreeCAD's C++ back-end is prone to segfaulting on improperly typed Python arguments or double-frees.
-- **Coordinate Systems**: The `get_point_on_plane` and related functions translate screen mouse coordinates into 3D world/local space to provide a 1:1 sketching feel. Always mindful of local vs global coordinates when generating SDF geometry off a working plane.
-- **Event Safety**: ALL scene-graph and document-mutating operations (mesh updates, object creation, dialog closes) MUST be deferred via `QtCore.QTimer.singleShot(0, fn)`. Never mutate the document from inside a Coin3D event callback directly.
+## Dependencies
 
+| Package | Required | Purpose |
+|---------|----------|---------|
+| NumPy | ✅ (bundled with FreeCAD) | SDF evaluation, meshing, linear algebra |
+| Shapely | ✅ (user-installed) | 2D geometry operations |
+| FreeCAD 0.21+ / 1.0 | ✅ | Host application |
+
+---
 
 ## Future Work
-### Rendering
-Consider rendering options for higher quality display of SDF objects.
 
 ### Curve Extraction from SDF
-- **2D** — Adaptive contouring: Recursively subdivide cells where the sign changes, fitting Bézier or Catmull‑Rom segments to the local zero‑crossing.
-- **3D** — Implicit surface to spline conversion: Sample the SDF on a sparse grid, compute Hermite data (position + gradient) at zero‑crossings, then fit B‑splines or T‑splines to those data points using least‑squares or variational methods.
-- **3D** — Level‑set to CSG: Approximate the SDF by a hierarchy of primitive primitives (spheres, cylinders, boxes) using optimization or greedy fitting. The resulting CSG tree can be exported as a B‑Rep.
-- **3D** — Direct analytic extraction: For SDFs with a known closed‑form (e.g., sphere, torus, super‑ellipsoid), derive the exact parametric equations and output them as NURBS or analytic patches.
+- **2D** — Adaptive contouring: fit Bézier/Catmull-Rom segments to zero-crossings.
+- **3D** — Implicit surface → spline: Hermite data at crossings → B-spline / T-spline fit.
+- **3D** — Level-set → CSG: approximate SDF by primitive hierarchy.
+- **3D** — Direct analytic: for known-form SDFs, derive exact NURBS / analytic patches.
+
+### Higher-Quality Rendering
+- Ray-marched preview for smooth SDF surfaces before meshing.
+- Ambient occlusion and curvature shading in the viewport.

@@ -167,12 +167,13 @@ class BoxCreator(SDFMeshPrimitiveCreator):
         bounds_min = [min_x, min_y, z_min]
         bounds_max = [max_x, max_y, z_max]
         
-        # Store for finalization (use real h, not min_thick clamped)
-        self._last_bounds_min = [min_x, min_y, -abs(h) if h < 0 else 0.0]
-        self._last_bounds_max = [max_x, max_y, abs(h) if h != 0 else z_max]
-        self._last_placement  = self.working_plane or FreeCAD.Placement()
-        
         self.update_sdf_preview("box", {"bounds_min": bounds_min, "bounds_max": bounds_max})
+        
+        # Override the base state with the REAL (unclamped) bounds for finalization
+        self._last_sdf_params = {
+            "bounds_min": [min_x, min_y, -abs(h) if h < 0 else 0.0],
+            "bounds_max": [max_x, max_y, abs(h) if h != 0 else z_max]
+        }
 
     def event_cb(self, event_dict):
         event_type = event_dict["Type"]
@@ -370,27 +371,5 @@ class BoxCreator(SDFMeshPrimitiveCreator):
             self.terminate()
             return
             
-        sdf_logger.debug("BoxCreator: Finishing object...")
-        try:
-            mn = getattr(self, '_last_bounds_min', None)
-            mx = getattr(self, '_last_bounds_max', None)
-            if mn is not None and mx is not None:
-                # Always create the final high-res SDFObject from the stored params.
-                # The plain Mesh::Feature preview has no Proxy, so we never try to
-                # "promote" it — we just let terminate() delete it and create fresh.
-                from ..sdf_object import create_sdf_object
-                create_sdf_object("Box", "box", {"bounds_min": mn, "bounds_max": mx})
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"BoxCreator finish error: {e}\n")
-
-        # Mark finished BEFORE closing the dialog so reject() is a no-op.
-        self._finished = True
         super()._do_finish()
-
-        # Close the task panel dialog now that the object is committed.
-        try:
-            import FreeCADGui
-            FreeCADGui.Control.closeDialog()
-        except Exception:
-            pass
 

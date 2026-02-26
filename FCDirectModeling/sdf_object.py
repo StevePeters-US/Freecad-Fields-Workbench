@@ -26,8 +26,8 @@ def get_mesh_algorithm():
     return FreeCAD.ParamGet(_PARAM_PATH).GetString("MeshAlgorithm", "surface_nets")
 
 def get_mesh_resolution():
-    """Return the user's chosen voxel resolution (default 32)."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("MeshResolution", 32)
+    """Return the user's chosen voxel resolution (default 48 for final objects)."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("MeshResolution", 48)
 
 def set_mesh_algorithm(algo):
     FreeCAD.ParamGet(_PARAM_PATH).SetString("MeshAlgorithm", algo)
@@ -147,14 +147,23 @@ def mesh_sdf(sdf_fn, bounds_min, bounds_max, resolution=None, algorithm=None):
         algorithm = get_mesh_algorithm()
 
     from .sdf_mesher import extract_mesh_numpy
+    from FCDirectModeling import sdf_logger
 
+    sdf_logger.debug(f"mesh_sdf: Starting {algorithm} meshing at res {resolution}...")
+    import time
+    t0 = time.time()
+    
     if algorithm == "marching_cubes":
-        return extract_mesh_numpy(sdf_fn, mn=bounds_min, mx=bounds_max,
-                                  resolution=resolution, sharp=False)
+        res = extract_mesh_numpy(sdf_fn, mn=bounds_min, mx=bounds_max,
+                                   resolution=resolution, sharp=False)
     else:
         # surface_nets and dual_contouring both use QEF — sharp=True
-        return extract_mesh_numpy(sdf_fn, mn=bounds_min, mx=bounds_max,
-                                  resolution=resolution, sharp=True)
+        res = extract_mesh_numpy(sdf_fn, mn=bounds_min, mx=bounds_max,
+                                   resolution=resolution, sharp=True)
+    
+    t1 = time.time()
+    sdf_logger.debug(f"mesh_sdf: Meshing took {t1-t0:.3f}s. Result: {len(res[0])} verts, {len(res[1])} tris")
+    return res
 
 
 def _to_mesh_facets(verts, tris):
@@ -179,10 +188,21 @@ def _to_mesh_facets(verts, tris):
 class SDFObjectProxy:
     def __init__(self, obj, sdf_type, params, sdf_op=None, child_names=None):
         obj.Proxy = self
-        self.sdf_type    = sdf_type
-        self.params      = params
-        self.sdf_op      = sdf_op      # None or "union"/"cut"/"intersect"
-        self.child_names = child_names or []  # Names of child SDFObjects for booleans
+        
+        # Use native FreeCAD properties for persistence and parametric updates
+        if not hasattr(obj, "SDFType"):
+            obj.addProperty("App::PropertyString", "SDFType", "SDF", "Type of SDF primitive")
+        if not hasattr(obj, "SDFParams"):
+            obj.addProperty("App::PropertyString", "SDFParams", "SDF", "JSON parameters for the SDF")
+        if not hasattr(obj, "SDFOp"):
+            obj.addProperty("App::PropertyString", "SDFOp", "SDF", "Boolean operation")
+        if not hasattr(obj, "SDFChildren"):
+            obj.addProperty("App::PropertyStringList", "SDFChildren", "SDF", "Names of child objects")
+
+        obj.SDFType = sdf_type
+        obj.SDFParams = json.dumps(params)
+        obj.SDFOp = sdf_op or "none"
+        obj.SDFChildren = child_names or []
 
     def execute(self, fp):
         """Called by FreeCAD to recompute — we mesh and write fp.Mesh."""
@@ -192,51 +212,71 @@ class SDFObjectProxy:
             FreeCAD.Console.PrintMessage("DEBUG: proxy.execute skipped for live preview\n")
             return
             
-        FreeCAD.Console.PrintMessage(f"DEBUG: execute (full res) for {self.sdf_type}\n")
         try:
             import Mesh as MeshModule
             doc = fp.Document
+            
+            # Read from properties
+            sdf_type = fp.SDFType
+            params = json.loads(fp.SDFParams)
+            sdf_op = fp.SDFOp
+            child_names = fp.SDFChildren
 
             # Build SDF function
-            if self.sdf_type == "boolean":
-                children = [doc.getObjectsByLabel(n)[0] for n in self.child_names]
+            if sdf_type == "boolean":
+                children = [doc.getObjectsByLabel(n)[0] for n in child_names]
                 child_sdfs = []
                 for c in children:
-                    bld = _SDF_BUILDERS.get(c.Proxy.sdf_type)
+                    # Prefer reading from properties if available
+                    c_type = getattr(c, "SDFType", c.Proxy.sdf_type if hasattr(c.Proxy, "sdf_type") else "box")
+                    c_params = json.loads(c.SDFParams) if hasattr(c, "SDFParams") else c.Proxy.params
+                    bld = _SDF_BUILDERS.get(c_type)
                     if bld:
-                        child_sdfs.append(bld(c.Proxy.params))
-                sdf_fn, (mn, mx) = _sdf_boolean(self.params, child_sdfs)
+                        child_sdfs.append(bld(c_params))
+                sdf_fn, (mn, mx) = _sdf_boolean(params, child_sdfs)
             else:
-                bld = _SDF_BUILDERS.get(self.sdf_type)
+                bld = _SDF_BUILDERS.get(sdf_type)
                 if bld is None:
-                    FreeCAD.Console.PrintError(f"SDFObject: unknown type '{self.sdf_type}'\n")
+                    FreeCAD.Console.PrintError(f"SDFObject: unknown type '{sdf_type}'\n")
                     return
-                sdf_fn, (mn, mx) = bld(self.params)
+                sdf_fn, (mn, mx) = bld(params)
 
+            from FCDirectModeling import sdf_logger
+            import time
+            
+            sdf_logger.debug(f"SDFObjectProxy: Executing high-res mesh for {sdf_type}...")
             verts, tris = mesh_sdf(sdf_fn, mn, mx)
+            
             if len(verts) == 0:
-                FreeCAD.Console.PrintWarning(f"SDFObject: mesher returned no geometry.\n")
+                sdf_logger.warning(f"SDFObject: mesher returned no geometry for {sdf_type}.")
                 return
 
+            sdf_logger.debug(f"SDFObjectProxy: Converting {len(tris)} triangles to Mesh facets...")
+            t_conv_0 = time.time()
             facets = _to_mesh_facets(verts, tris)
+            t_conv_1 = time.time()
+            sdf_logger.debug(f"SDFObjectProxy: Conversion took {t_conv_1-t_conv_0:.3f}s")
+
             fp.Mesh = MeshModule.Mesh(facets)
+            sdf_logger.debug(f"SDFObjectProxy: Mesh assigned to {fp.Label}")
+            FreeCAD.Console.PrintMessage(f"DEBUG: Final mesh for {fp.Label} has {len(verts)} verts, {len(tris)} tris\n")
+            
+            # Explicitly force a view update if in GUI mode
+            if FreeCAD.GuiUp:
+                if hasattr(fp, "ViewObject") and fp.ViewObject:
+                    fp.ViewObject.update()
+                    FreeCAD.Console.PrintMessage(f"DEBUG: ViewObject updated for {fp.Label}\n")
 
         except Exception as e:
+            from FCDirectModeling import sdf_logger
+            sdf_logger.error(f"SDFObject.execute error: {e}")
             FreeCAD.Console.PrintError(f"SDFObject.execute error: {e}\n")
 
     def __getstate__(self):
-        return {
-            "sdf_type":    self.sdf_type,
-            "params":      self.params,
-            "sdf_op":      self.sdf_op,
-            "child_names": self.child_names,
-        }
+        return None  # State is now in properties
 
     def __setstate__(self, state):
-        self.sdf_type    = state.get("sdf_type", "box")
-        self.params      = state.get("params", {})
-        self.sdf_op      = state.get("sdf_op")
-        self.child_names = state.get("child_names", [])
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -260,12 +300,14 @@ def create_sdf_object(name, sdf_type, params, sdf_op=None, child_names=None, is_
     if hasattr(obj, "ViewObject") and obj.ViewObject:
         try:
             obj.ViewObject.ShapeColor = (0.65, 0.75, 0.90)
-            if get_show_wireframe():
-                obj.ViewObject.DisplayMode = "Flat Lines"
-            else:
-                obj.ViewObject.DisplayMode = "Shaded"
+            # Default to Flat Lines for now so the user can see what's placed
+            obj.ViewObject.DisplayMode = "Flat Lines"
+            obj.ViewObject.Visibility = True
         except Exception:
             pass
-
+    
+    obj.touch()
     doc.recompute()
+    import FreeCADGui
+    FreeCADGui.updateGui()
     return obj

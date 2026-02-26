@@ -35,26 +35,4 @@ class SphereCreator(SDFMeshPrimitiveCreator):
         r = max(0.01, abs(self.radius))
         self.update_sdf_preview("sphere", {"center": [cx, cy, cz], "radius": r})
 
-    def _do_finish(self):
-        sdf_logger.debug("SphereCreator: Finishing object...")
-        try:
-            cx, cy, cz = self.center.x, self.center.y, self.center.z
-            r = max(0.01, abs(self.radius))
-            if self._preview_obj is not None:
-                self._preview_obj.Label = "Sphere"
-                self._preview_obj.Proxy.sdf_type = "sphere"
-                self._preview_obj.Proxy.params = {"center": [cx, cy, cz], "radius": r}
-                self._preview_obj.Proxy.is_preview = False
-                self._preview_obj.touch()
-                FreeCAD.activeDocument().recompute()
-                self._preview_obj = None   # detach so terminate() doesn't delete it
-            else:
-                from ..sdf_object import create_sdf_object
-                create_sdf_object("Sphere", "sphere", {"center": [cx, cy, cz], "radius": r})
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"SphereCreator finish error: {e}\n")
-        
-        super()._do_finish()
-
-
 from PySide import QtCore

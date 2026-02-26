@@ -82,9 +82,7 @@ class PrimitiveCreatorBase:
         """Project cursor onto a world-space plane. Defaults to Z=0."""
         try:
             pos = event_dict["Position"]
-            sdf_logger.debug(f"DEBUG: get_point_on_plane at {pos}")
             focal = self.view.getPoint(pos[0], pos[1])
-            sdf_logger.debug(f"DEBUG: Focal point: {focal}")
 
             if _is_orthographic(self.view):
                 ray_origin = focal
@@ -93,18 +91,15 @@ class PrimitiveCreatorBase:
                 ray_origin = _cam_pos(self.view)
                 ray_dir    = focal - ray_origin
                 ray_dir.normalize()
-            sdf_logger.debug(f"DEBUG: Ray Origin: {ray_origin}, Dir: {ray_dir}")
 
             n = plane_normal or FreeCAD.Vector(0, 0, 1)
             o = plane_point  or FreeCAD.Vector(0, 0, 0)
 
             denom = ray_dir.dot(n)
             if abs(denom) < 1e-6:
-                sdf_logger.debug("DEBUG: Parallel ray to plane")
                 return o
             t = (o - ray_origin).dot(n) / denom
             pt = ray_origin + ray_dir * t
-            sdf_logger.debug(f"DEBUG: Point on plane result: {pt}")
             return pt
         except Exception as e:
             sdf_logger.debug(f"DEBUG: get_point_on_plane error: {e}")
@@ -151,10 +146,8 @@ class PrimitiveCreatorBase:
     def event_cb(self, event_dict):
         try:
             event_type = event_dict.get("Type", "Unknown")
-            # Log every mouse move might be too much, but for debugging a crash we need it
-            if event_type == "SoLocation2Event":
-                sdf_logger.debug(f"DEBUG: Mouse move event at {event_dict.get('Position')}")
-            else:
+            # Only log non-move events to avoid spam
+            if event_type != "SoLocation2Event":
                 sdf_logger.debug(f"DEBUG: event_cb: {event_type}")
 
             if event_type == "SoMouseButtonEvent":
@@ -199,12 +192,18 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         self._pending_sdf_type = None
         self._pending_sdf_params = None
         self._preview_queued = False
+        self._finished = False     # Guard for finalization
+
+        # Store last known valid state for finalization
+        self._last_sdf_type = None
+        self._last_sdf_params = None
+        self._last_placement = None
 
     # ------------------------------------------------------------------
     # Preview — create once, replace .Mesh in-place (no recompute)
     # ------------------------------------------------------------------
 
-    def update_sdf_preview(self, sdf_type, params, resolution=15):
+    def update_sdf_preview(self, sdf_type, params, resolution=20):
         """
         Setup the pending mesh request, but defer the exact execution 
         to avoid crashing in Coin3D event traversal.
@@ -212,6 +211,10 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         self._pending_sdf_type = sdf_type
         self._pending_sdf_params = params
         self._pending_resolution = resolution
+        
+        # Track for finalization
+        self._last_sdf_type = sdf_type
+        self._last_sdf_params = params
         
         if not self._preview_queued:
             self._preview_queued = True
@@ -297,8 +300,32 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         QtCore.QTimer.singleShot(0, self._do_finish)
 
     def _do_finish(self):
-        """Subclass creates the final object; base dispatches terminate."""
+        """Standard finalization for all SDF primitives."""
+        if self._finished:
+            return
+            
+        sdf_logger.debug(f"SDFMeshPrimitiveCreator: Finishing {self._last_sdf_type}...")
+        try:
+            if self._last_sdf_type and self._last_sdf_params:
+                from ..sdf_object import create_sdf_object
+                # Create the final high-res SDFObject
+                create_sdf_object(
+                    self._last_sdf_type.capitalize(), 
+                    self._last_sdf_type, 
+                    self._last_sdf_params
+                )
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"Finalization Error: {e}\n")
+
+        self._finished = True
         self.terminate()
+
+        # Close task panel if open
+        try:
+            import FreeCADGui
+            FreeCADGui.Control.closeDialog()
+        except Exception:
+            pass
 
     def terminate(self):
         """Remove preview object and unregister the event callback."""
