@@ -203,13 +203,18 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
     # Preview — create once, replace .Mesh in-place (no recompute)
     # ------------------------------------------------------------------
 
-    def update_sdf_preview(self, sdf_type, params, resolution=20):
+    def update_sdf_preview(self, sdf_type, params, resolution=None):
         """
         Setup the pending mesh request, but defer the exact execution 
         to avoid crashing in Coin3D event traversal.
         """
         self._pending_sdf_type = sdf_type
         self._pending_sdf_params = params
+        
+        if resolution is None:
+            from ..sdf_object import get_preview_resolution
+            resolution = get_preview_resolution()
+            
         self._pending_resolution = resolution
         
         # Track for finalization

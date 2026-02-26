@@ -1,5 +1,6 @@
 
 import numpy as np
+from FCDirectModeling import sdf_logger
 
 def build_adjacency(faces):
     """
@@ -88,10 +89,10 @@ def segment_mesh(faces, normals, angle_threshold_deg=30.0):
     import math
     threshold = math.cos(math.radians(angle_threshold_deg))
     
-    print("Building Adjacency...")
+    sdf_logger.debug("mesh_features: Building Adjacency...")
     adj, _ = build_adjacency(faces)
     
-    print("Computing Angles...")
+    sdf_logger.debug("mesh_features: Computing Angles...")
     # We compute angles on the fly during traversal
     
     num_faces = len(faces)

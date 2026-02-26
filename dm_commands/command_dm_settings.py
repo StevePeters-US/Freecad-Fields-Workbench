@@ -35,9 +35,13 @@ class _SettingsDialog(QtGui.QDialog):
         self.setWindowTitle("Direct Modeling Settings")
         self.setMinimumWidth(320)
 
-        from FCDirectModeling.sdf_object import get_mesh_algorithm, get_mesh_resolution, get_show_wireframe
+        from FCDirectModeling.sdf_object import (
+            get_mesh_algorithm, get_mesh_resolution, get_show_wireframe,
+            get_preview_resolution
+        )
         current_algo = get_mesh_algorithm()
         current_res  = get_mesh_resolution()
+        current_pre  = get_preview_resolution()
         current_wire = get_show_wireframe()
 
         layout = QtGui.QFormLayout(self)
@@ -61,6 +65,14 @@ class _SettingsDialog(QtGui.QDialog):
         self._res_spin.setToolTip("Voxel grid resolution for meshing (higher = more detail, slower)")
         layout.addRow("Resolution:", self._res_spin)
 
+        # Preview Resolution spinner
+        self._pre_spin = QtGui.QSpinBox()
+        self._pre_spin.setRange(8, 64)
+        self._pre_spin.setSingleStep(1)
+        self._pre_spin.setValue(current_pre)
+        self._pre_spin.setToolTip("Voxel grid resolution for live dragging previews (default 15)")
+        layout.addRow("Preview Resolution:", self._pre_spin)
+
         # Show Wireframe checkbox
         self._wire_check = QtGui.QCheckBox()
         self._wire_check.setChecked(current_wire)
@@ -76,15 +88,21 @@ class _SettingsDialog(QtGui.QDialog):
         layout.addRow(btn_box)
 
     def _on_accept(self):
-        from FCDirectModeling.sdf_object import set_mesh_algorithm, set_mesh_resolution, set_show_wireframe
+        from FCDirectModeling.sdf_object import (
+            set_mesh_algorithm, set_mesh_resolution, set_show_wireframe,
+            set_preview_resolution
+        )
         algo = self._algo_combo.currentData()
         res  = self._res_spin.value()
+        pre  = self._pre_spin.value()
         wire = self._wire_check.isChecked()
         set_mesh_algorithm(algo)
         set_mesh_resolution(res)
+        set_preview_resolution(pre)
         set_show_wireframe(wire)
         FreeCAD.Console.PrintMessage(
-            f"DM Settings: algorithm={algo}, resolution={res}, wireframe={wire}\n"
+            f"DM Settings: algorithm={algo}, resolution={res}, "
+            f"preview_res={pre}, wireframe={wire}\n"
         )
         self.accept()
 

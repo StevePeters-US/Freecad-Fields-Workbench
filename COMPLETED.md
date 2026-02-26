@@ -27,3 +27,10 @@ Tasks moved here from `TODO.md` after verification.
 
 ## ✅ Open Sketcher command
 - **Completed**: `dm_commands/command_open_sketcher.py` registers `DM_OpenSketcher` to launch the FreeCAD Sketcher workbench.
+## ✅ Replace bare `print()` with `sdf_logger`
+- **Completed**: Every log statement in the codebase now goes through `sdf_logger`.
+- **Result**: Consistent logging across the project, supporting both console and file output.
+
+## ✅ Add preview-resolution setting to DM Settings
+- **Completed**: Added a "Preview Resolution" setting to the DM Settings dialog.
+- **Result**: Users can now customize the density of the mesh during interactive dragging, balancing performance and visual detail.

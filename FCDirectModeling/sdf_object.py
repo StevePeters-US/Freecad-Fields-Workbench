@@ -42,6 +42,14 @@ def get_show_wireframe():
 def set_show_wireframe(show):
     FreeCAD.ParamGet(_PARAM_PATH).SetBool("ShowWireframe", bool(show))
 
+def get_preview_resolution():
+    """Return the user's chosen voxel resolution for live previews (default 15)."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("PreviewResolution", 15)
+
+def set_preview_resolution(res):
+    """Set the user's chosen voxel resolution for live previews."""
+    FreeCAD.ParamGet(_PARAM_PATH).SetInt("PreviewResolution", int(res))
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SDF evaluator functions — return numpy-callable SDFs
@@ -209,7 +217,8 @@ class SDFObjectProxy:
         if getattr(self, "is_preview", False):
             # During live preview dragging, base.py injects .Mesh directly.
             # Skip slow full-resolution recompute entirely.
-            FreeCAD.Console.PrintMessage("DEBUG: proxy.execute skipped for live preview\n")
+            from FCDirectModeling import sdf_logger
+            sdf_logger.debug("SDFObjectProxy: execute skipped for live preview")
             return
             
         try:
@@ -237,7 +246,8 @@ class SDFObjectProxy:
             else:
                 bld = _SDF_BUILDERS.get(sdf_type)
                 if bld is None:
-                    FreeCAD.Console.PrintError(f"SDFObject: unknown type '{sdf_type}'\n")
+                    from FCDirectModeling import sdf_logger
+                    sdf_logger.error(f"SDFObject: unknown type '{sdf_type}'")
                     return
                 sdf_fn, (mn, mx) = bld(params)
 
@@ -259,18 +269,17 @@ class SDFObjectProxy:
 
             fp.Mesh = MeshModule.Mesh(facets)
             sdf_logger.debug(f"SDFObjectProxy: Mesh assigned to {fp.Label}")
-            FreeCAD.Console.PrintMessage(f"DEBUG: Final mesh for {fp.Label} has {len(verts)} verts, {len(tris)} tris\n")
+            sdf_logger.debug(f"Final mesh for {fp.Label} has {len(verts)} verts, {len(tris)} tris")
             
             # Explicitly force a view update if in GUI mode
             if FreeCAD.GuiUp:
                 if hasattr(fp, "ViewObject") and fp.ViewObject:
                     fp.ViewObject.update()
-                    FreeCAD.Console.PrintMessage(f"DEBUG: ViewObject updated for {fp.Label}\n")
+                    sdf_logger.debug(f"ViewObject updated for {fp.Label}")
 
         except Exception as e:
             from FCDirectModeling import sdf_logger
             sdf_logger.error(f"SDFObject.execute error: {e}")
-            FreeCAD.Console.PrintError(f"SDFObject.execute error: {e}\n")
 
     def __getstate__(self):
         return None  # State is now in properties

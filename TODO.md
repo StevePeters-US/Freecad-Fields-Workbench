@@ -26,52 +26,8 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 1. Replace bare `print()` with `sdf_logger` (Complexity: 1/10)
 
-- **Goal**: Every log statement in the codebase must go through `sdf_logger` — no bare `print()` or direct `FreeCAD.Console.Print*` calls remain in new/modified code.
-- **Files to read**: `FCDirectModeling/sdf_logger.py` (the logger module — has `debug`, `info`, `warn`, `error` functions).
-- **Files to modify**:
-  - `FCDirectModeling/mesh_features.py` — line 96 has `print("Building Adjacency...")` and line 99 has `print("Computing Angles...")`.
-- **Steps**:
-  1. Add `from FCDirectModeling import sdf_logger` at the top of `mesh_features.py`.
-  2. Replace `print("Building Adjacency...")` → `sdf_logger.debug("Building Adjacency...")`.
-  3. Replace `print("Computing Angles...")` → `sdf_logger.debug("Computing Angles...")`.
-  4. Grep the entire project for any other bare `print(` calls (excluding test files) and replace them the same way.
-- **Acceptance**: `grep -rn "print(" FCDirectModeling/ dm_commands/ --include="*.py"` returns zero results (test files excluded).
-
----
-
-### 2. Add preview-resolution setting to DM Settings (Complexity: 2/10)
-
-- **Goal**: Let the user configure both a preview resolution (used during drag) and a final resolution (used on commit) from the DM Settings dialog.
-- **Files to read**:
-  - `dm_commands/command_dm_settings.py` — the settings dialog (see `_SettingsDialog.__init__` for layout, `_on_accept` for saving).
-  - `FCDirectModeling/sdf_object.py` lines 22–43 — getter/setter pattern for DM params using `FreeCAD.ParamGet("User parameter:FCDirectModeling")`.
-  - `FCDirectModeling/primitives/base.py` line 206 — `update_sdf_preview(..., resolution=20)` hardcodes the preview resolution.
-- **Files to modify**:
-  - `FCDirectModeling/sdf_object.py` — add `get_preview_resolution()` / `set_preview_resolution()`.
-  - `dm_commands/command_dm_settings.py` — add a `QSpinBox` for "Preview Resolution".
-  - `FCDirectModeling/primitives/base.py` — replace hardcoded `resolution=20` with `get_preview_resolution()`.
-- **Steps**:
-  1. In `sdf_object.py`, below the existing `get_mesh_resolution` / `set_mesh_resolution`, add:
-     ```python
-     def get_preview_resolution():
-         return FreeCAD.ParamGet(_PARAM_PATH).GetInt("PreviewResolution", 15)
-     def set_preview_resolution(res):
-         FreeCAD.ParamGet(_PARAM_PATH).SetInt("PreviewResolution", int(res))
-     ```
-  2. In `command_dm_settings.py` `_SettingsDialog.__init__`, after the "Resolution" row, add a second `QSpinBox` labelled "Preview Resolution" (range 8–32, step 1, default from `get_preview_resolution()`).
-  3. In `_on_accept`, call `set_preview_resolution(self._preview_res_spin.value())`.
-  4. In `base.py` `update_sdf_preview`, replace `resolution=20` with:
-     ```python
-     from FCDirectModeling.sdf_object import get_preview_resolution
-     resolution = get_preview_resolution()
-     ```
-- **Acceptance**: Open DM Settings → change Preview Resolution → create a Box → confirm the preview mesh density matches the chosen resolution.
-
----
-
-### 3. Add sharp-features toggle to DM Settings (Complexity: 2/10)
+### 1. Add sharp-features toggle to DM Settings (Complexity: 2/10)
 
 - **Goal**: Let the user toggle QEF sharp-feature snapping on/off from DM Settings.
 - **Files to read**:
@@ -96,7 +52,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 4. Implement Marching Cubes in `sdf_mesher.py` (Complexity: 4/10)
+### 2. Implement Marching Cubes in `sdf_mesher.py` (Complexity: 4/10)
 
 - **Goal**: Add a real Marching Cubes implementation so the "Marching Cubes" option in DM Settings produces distinct output from Surface Nets.
 - **Files to read**:
@@ -126,7 +82,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 5. Fix the boolean commands to work with current `SDFObjectProxy` (Complexity: 4/10)
+### 3. Fix the boolean commands to work with current `SDFObjectProxy` (Complexity: 4/10)
 
 - **Goal**: The boolean commands (`DM_Fuse`, `DM_Cut`, `DM_Common`) currently fail because `command_boolean.py` line 45 checks `hasattr(obj.Proxy, "sdf_type")`, but `SDFObjectProxy` stores type in FreeCAD properties (`obj.SDFType`), not as a Python attribute.
 - **Files to read**:
@@ -149,7 +105,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 6. Create task panels for Sphere, Cone, and Torus (Complexity: 4/10)
+### 4. Create task panels for Sphere, Cone, and Torus (Complexity: 4/10)
 
 - **Goal**: Box has `box_task_panel.py` with dimension spinboxes. Sphere, Cone, and Torus have no panels — create them.
 - **Files to read**:
@@ -175,7 +131,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 7. Fix viewport update on `.Mesh` replacement during preview (Complexity: 5/10)
+### 5. Fix viewport update on `.Mesh` replacement during preview (Complexity: 5/10)
 
 - **Goal**: The preview mesh is generated but sometimes doesn't visually update in the viewport. Fix by scheduling a deferred `doc.recompute()`.
 - **Files to read**:
@@ -202,7 +158,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 8. Implement Dual Contouring in `sdf_mesher.py` (Complexity: 6/10)
+### 6. Implement Dual Contouring in `sdf_mesher.py` (Complexity: 6/10)
 
 - **Goal**: Add a true Dual Contouring algorithm so the "Dual Contouring" option in DM Settings produces distinct output from Surface Nets.
 - **Files to read**:
@@ -224,7 +180,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 9. Mesh to SDF voxelization (Complexity: 6/10)
+### 7. Mesh to SDF voxelization (Complexity: 6/10)
 
 - **Goal**: Given an imported mesh (STL, OBJ, or existing `Mesh::Feature`), compute a signed distance field that can be used with the existing SDF pipeline.
 - **Files to read**:
@@ -249,7 +205,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 10. SDF to NURBS patches (replacing BRep) (Complexity: 7/10)
+### 8. SDF to NURBS patches (replacing BRep) (Complexity: 7/10)
 
 - **Goal**: Instead of converting SDFs to BRep (boundary representation with exact analytic faces), convert them to **NURBS surface patches**. This produces smooth, resolution-independent surfaces suitable for CAD export.
 - **Files to read**:
@@ -277,7 +233,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 11. SDF to Curves — feature edge extraction (Complexity: 7/10)
+### 9. SDF to Curves — feature edge extraction (Complexity: 7/10)
 
 - **Goal**: Extract feature curves (sharp edges, ridges) from an SDF mesh and represent them as `Part.BSplineCurve` objects in FreeCAD.
 - **Files to read**:
@@ -301,7 +257,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 12. BMesh to SDF (import external mesh as SDF) (Complexity: 7/10)
+### 10. BMesh to SDF (import external mesh as SDF) (Complexity: 7/10)
 
 - **Goal**: Same as task 9 (Mesh to SDF) but specifically handling Blender BMesh data imported via the Live Link, and supporting non-manifold or open meshes gracefully.
 - **Files to read**: Same as task 9 plus any Live Link import scripts if present.
@@ -313,7 +269,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 13. Array command — SDF-level repetition (Complexity: 7/10)
+### 11. Array command — SDF-level repetition (Complexity: 7/10)
 
 - **Goal**: Repeat an SDF object along a vector, circular pattern, or grid, all at the SDF level (not duplicating meshes).
 - **Files to read**:
@@ -334,7 +290,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 14. Transform command — SDF-level translate/rotate/scale (Complexity: 5/10)
+### 12. Transform command — SDF-level translate/rotate/scale (Complexity: 5/10)
 
 - **Goal**: Apply translate / rotate / scale to an SDF object at the SDF level (transforming the query point), not by moving the mesh.
 - **Files to read**:
@@ -355,7 +311,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 15. Sketch-driven SDF extrusion (Complexity: 8/10)
+### 13. Sketch-driven SDF extrusion (Complexity: 8/10)
 
 - **Goal**: After the user closes the Sketcher, convert the sketch profile into a 2D SDF and extrude it into a 3D SDF object.
 - **Files to read**:
@@ -373,7 +329,7 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 16. 2D contour extraction from SDF (Complexity: 8/10)
+### 14. 2D contour extraction from SDF (Complexity: 8/10)
 
 - **Goal**: Walk the SDF zero-crossing on a 2D slice, producing Bézier or B-spline curves.
 - **Files to read**:
