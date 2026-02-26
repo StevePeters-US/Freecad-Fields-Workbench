@@ -217,8 +217,6 @@ class SDFObjectProxy:
 
     def execute(self, fp):
         """Called by FreeCAD to recompute — we mesh and write fp.Mesh."""
-        import FreeCAD
-        FreeCAD.Console.PrintMessage(f"DEBUG: SDFObjectProxy.execute for {fp.Label} (is_preview={getattr(self, 'is_preview', False)})\n")
         if getattr(self, "is_preview", False):
             # During live preview dragging, base.py injects .Mesh directly.
             # Skip slow full-resolution recompute entirely.
@@ -260,9 +258,7 @@ class SDFObjectProxy:
             import time
             
             sdf_logger.debug(f"SDFObjectProxy: Executing high-res mesh for {sdf_type}...")
-            FreeCAD.Console.PrintMessage(f"DEBUG: mesh_sdf(type={sdf_type}, res={get_mesh_resolution()}, algo={get_mesh_algorithm()})\n")
             verts, tris = mesh_sdf(sdf_fn, mn, mx)
-            FreeCAD.Console.PrintMessage(f"DEBUG: mesh_sdf result: {len(verts)} verts, {len(tris)} tris\n")
             
             if len(verts) == 0:
                 sdf_logger.warning(f"SDFObject: mesher returned no geometry for {sdf_type}.")
@@ -275,8 +271,6 @@ class SDFObjectProxy:
             sdf_logger.debug(f"SDFObjectProxy: Conversion took {t_conv_1-t_conv_0:.3f}s")
 
             fp.Mesh = MeshModule.Mesh(facets)
-            FreeCAD.Console.PrintMessage(f"DEBUG: Mesh assigned to {fp.Label}. VertCount={fp.Mesh.CountPoints}, FacetCount={fp.Mesh.CountFacets}\n")
-            FreeCAD.Console.PrintMessage(f"DEBUG: Mesh Bounding Box: {fp.Mesh.BoundBox}\n")
             sdf_logger.debug(f"SDFObjectProxy: Mesh assigned to {fp.Label}")
             
             # Explicitly force a view update if in GUI mode
@@ -287,7 +281,6 @@ class SDFObjectProxy:
                     # Discover available modes
                     try:
                         modes = vobj.getPropertyEnumeration("DisplayMode")
-                        FreeCAD.Console.PrintMessage(f"DEBUG: Available DisplayModes for {fp.Label}: {modes}\n")
                         if "Flat Lines" in modes:
                             vobj.DisplayMode = "Flat Lines"
                         elif "Shaded" in modes:
@@ -295,7 +288,7 @@ class SDFObjectProxy:
                         elif len(modes) > 0:
                             vobj.DisplayMode = modes[0]
                     except Exception as ve:
-                        FreeCAD.Console.PrintMessage(f"DEBUG: Could not set DisplayMode: {ve}\n")
+                        _ = ve # Silently fail
                     
                     vobj.update()
                     sdf_logger.debug(f"ViewObject updated for {fp.Label}")
@@ -345,7 +338,6 @@ def create_sdf_object(name, sdf_type, params, sdf_op=None, child_names=None, is_
         doc = FreeCAD.newDocument()
 
     obj = doc.addObject("Mesh::FeaturePython", name)
-    FreeCAD.Console.PrintMessage(f"DEBUG: create_sdf_object: created {obj.Name} for type {sdf_type}\n")
     proxy = SDFObjectProxy(obj, sdf_type, params, sdf_op, child_names, placement=placement)
     obj.Proxy.is_preview = is_preview
 
@@ -362,16 +354,7 @@ def create_sdf_object(name, sdf_type, params, sdf_op=None, child_names=None, is_
                 pass
     
     obj.touch()
-    FreeCAD.Console.PrintMessage(f"DEBUG: create_sdf_object: calling doc.recompute() for {obj.Name}\n")
     doc.recompute()
-    
-    # Check if mesh survived recompute
-    if hasattr(obj, "Mesh"):
-        FreeCAD.Console.PrintMessage(f"DEBUG: POST-RECOMPUTE: {obj.Name}.Mesh has {obj.Mesh.CountPoints} points\n")
-    else:
-        FreeCAD.Console.PrintMessage(f"DEBUG: POST-RECOMPUTE: {obj.Name} HAS NO MESH PROPERTY!\n")
-
-    FreeCAD.Console.PrintMessage(f"DEBUG: create_sdf_object: recompute done for {obj.Name}\n")
     
     import FreeCADGui
     if FreeCAD.GuiUp:
@@ -384,9 +367,8 @@ def create_sdf_object(name, sdf_type, params, sdf_op=None, child_names=None, is_
             active_view = FreeCADGui.ActiveDocument.ActiveView
             if active_view:
                 active_view.viewSelection()
-                FreeCAD.Console.PrintMessage(f"DEBUG: View zoomed to selection for {obj.Name}\n")
             
             FreeCADGui.updateGui()
-        except Exception as e:
-            FreeCAD.Console.PrintMessage(f"DEBUG: Post-creation UI update failed: {e}\n")
+        except Exception:
+            pass
     return obj

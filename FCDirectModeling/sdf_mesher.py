@@ -187,7 +187,6 @@ def extract_mesh_numpy(sdf_func, mn, mx, resolution, sharp=True):
         import FreeCAD
         v_min = np.min(vertices, axis=0)
         v_max = np.max(vertices, axis=0)
-        FreeCAD.Console.PrintMessage(f"DEBUG: extract_mesh_numpy: VertBounds {v_min} to {v_max}\n")
 
     # 3. Generate Triangles (identical to before)
     triangles = []

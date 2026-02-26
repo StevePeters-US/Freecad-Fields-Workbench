@@ -42,19 +42,11 @@ def _cam_pos(view):
 class PrimitiveCreatorBase:
     def __init__(self):
         self._terminated = False
-        sdf_logger.debug(f"DEBUG: PrimitiveCreatorBase.__init__ for {self.__class__.__name__}")
-        
-        sdf_logger.debug("DEBUG: Accessing ActiveView...")
         self.view     = FreeCADGui.ActiveDocument.ActiveView
         if not self.view:
-            sdf_logger.debug("DEBUG: No ActiveView found!")
             return
 
-        sdf_logger.debug("DEBUG: Adding event callback...")
-        # Check if view is valid before calling addEventCallback
-        sdf_logger.debug(f"DEBUG: View Type: {type(self.view)}")
         self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
-        sdf_logger.debug("DEBUG: Callback added")
 
         self.start_point   = None
         self.current_point = None
@@ -63,15 +55,12 @@ class PrimitiveCreatorBase:
 
     def terminate(self):
         self._terminated = True
-        sdf_logger.debug("PrimitiveCreatorBase: Terminating...")
         try:
             if self.callback:
                 self.view.removeEventCallback("SoEvent", self.callback)
                 self.callback = None
-            sdf_logger.debug("PrimitiveCreatorBase: Terminated successfully.")
-        except Exception as e:
-            sdf_logger.debug(f"PrimitiveCreatorBase: Error terminating: {e}")
-            FreeCAD.Console.PrintError(f"PrimitiveCreatorBase: Error terminating: {e}\n")
+        except Exception:
+            pass
 
     def finish(self):
         pass
@@ -137,8 +126,7 @@ class PrimitiveCreatorBase:
             dp_v2 = DP.dot(V2)
             u = (v12 * dp_v1 - v11 * dp_v2) / det
             return P2 + V2 * u
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"get_closest_point_on_axis: {e}\n")
+        except Exception:
             return axis_start
 
     # ------------------------------------------------------------------
@@ -166,9 +154,7 @@ class PrimitiveCreatorBase:
                     return True
             sdf_logger.debug("event_cb: Returning False")
             return False
-        except Exception as e:
-            sdf_logger.debug(f"DEBUG: event_cb error: {e}")
-            FreeCAD.Console.PrintError(f"PrimitiveCreatorBase: Event Callback Error: {e}\n")
+        except Exception:
             return False
 
     def handle_click(self, event_dict):
@@ -231,7 +217,6 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         
         if not self._preview_queued:
             self._preview_queued = True
-            sdf_logger.debug("DEBUG: Scheduling deferred SDF preview generation...")
             QtCore.QTimer.singleShot(0, self._process_preview_queue)
 
     def _process_preview_queue(self):
@@ -245,27 +230,11 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             if not sdf_type or not params:
                 return
 
-            FreeCAD.Console.PrintMessage(f"DEBUG: Processing queued SDF preview {sdf_type} at res {self._pending_resolution}\n")
-            import Mesh as MeshModule
-            import FreeCADGui
-            from ..sdf_object import (_SDF_BUILDERS, mesh_sdf, _to_mesh_facets, get_show_wireframe)
-
-            bld = _SDF_BUILDERS.get(sdf_type)
-            if bld is None:
-                FreeCAD.Console.PrintError(f"SDFMeshPrimitiveCreator: unknown sdf_type '{sdf_type}'\n")
-                return
-
-            FreeCAD.Console.PrintMessage("DEBUG: Building SDF function...\n")
-            sdf_fn, (mn, mx) = bld(params)
-            FreeCAD.Console.PrintMessage(f"DEBUG: Meshing SDF with bounds {mn} to {mx}...\n")
             verts, tris = mesh_sdf(sdf_fn, mn, mx, resolution=self._pending_resolution)
-            FreeCAD.Console.PrintMessage(f"DEBUG: Mesh result: {len(verts)} verts, {len(tris)} tris\n")
 
             if len(verts) == 0:
-                FreeCAD.Console.PrintMessage("DEBUG: Empty mesh result\n")
                 return
 
-            FreeCAD.Console.PrintMessage(f"DEBUG: Creating mesh facets for {len(tris)} triangles...\n")
             facets = _to_mesh_facets(verts, tris)
             mesh   = MeshModule.Mesh(facets)
 
@@ -278,7 +247,6 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             # will NEVER wipe the .Mesh we assign here.  We just set .Mesh and
             # call updateGui() — the viewport refreshes immediately.
             if self._preview_obj is None or self._preview_obj not in doc.Objects:
-                FreeCAD.Console.PrintMessage(f"DEBUG: Creating plain Mesh::Feature preview in {doc.Name}...\n")
                 self._preview_obj = doc.addObject("Mesh::Feature", "SDF_Preview")
                 if hasattr(self._preview_obj, "ViewObject") and self._preview_obj.ViewObject:
                     try:
@@ -288,22 +256,19 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
                         self._preview_obj.ViewObject.DisplayMode = "Flat Lines"
                     except Exception:
                         pass
-                FreeCAD.Console.PrintMessage("DEBUG: Preview object created\n")
 
             # Store current SDF info on the creator so finish() can access it.
             self._preview_sdf_type = sdf_type
             self._preview_sdf_params = params
 
             # Assign mesh directly — no recompute needed or wanted.
-            FreeCAD.Console.PrintMessage("DEBUG: Assigning .Mesh to plain Feature...\n")
             self._preview_obj.Mesh = mesh
 
             # A plain updateGui() is sufficient to repaint. No recompute needed.
             FreeCADGui.updateGui()
-            FreeCAD.Console.PrintMessage("DEBUG: .Mesh assigned and viewport updated\n")
 
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"SDF Preview Update Failed: {e}\n")
+        except Exception:
+            pass
 
 
     # ------------------------------------------------------------------
@@ -312,7 +277,6 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
 
     def finish(self):
         """Schedule the finalization to happen safely outside the event loop."""
-        sdf_logger.debug("DEBUG: Deferring finish() to Qt event loop...")
         QtCore.QTimer.singleShot(0, self._do_finish)
 
     def _do_finish(self):
@@ -320,10 +284,7 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         if self._finished:
             return
             
-        sdf_logger.debug(f"SDFMeshPrimitiveCreator: Finishing {self._last_sdf_type}...")
         try:
-            FreeCAD.Console.PrintMessage(f"DEBUG: _do_finish: type={self._last_sdf_type} params={self._last_sdf_params}\n")
-            FreeCAD.Console.PrintMessage(f"DEBUG: _do_finish: placement={self._last_placement}\n")
             if self._last_sdf_type and self._last_sdf_params:
                 from ..sdf_object import create_sdf_object
                 # Create the final high-res SDFObject
@@ -333,8 +294,8 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
                     self._last_sdf_params,
                     placement=self._last_placement
                 )
-        except Exception as e:
-            FreeCAD.Console.PrintError(f"Finalization Error: {e}\n")
+        except Exception:
+            pass
 
         self._finished = True
         self.terminate()

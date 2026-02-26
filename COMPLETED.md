@@ -34,3 +34,10 @@ Tasks moved here from `TODO.md` after verification.
 ## ✅ Add preview-resolution setting to DM Settings
 - **Completed**: Added a "Preview Resolution" setting to the DM Settings dialog.
 - **Result**: Users can now customize the density of the mesh during interactive dragging, balancing performance and visual detail.
+## ✅ BUG-A. Suppress floating context menu on 3rd click
+- **Completed**: In `BoxCreator.event_cb`, return `True` when `state == 2` to consume the event.
+- **Result**: No floating menu appears after placing the final primitive.
+
+## ✅ BUG-B. Final placed mesh has no geometry
+- **Completed**: Implemented `SDFViewProvider` and robust `DisplayMode` handling in `sdf_object.py`.
+- **Result**: Placed meshes are clearly visible in the viewport and correctly oriented.

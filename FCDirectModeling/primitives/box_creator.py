@@ -49,15 +49,12 @@ class BoxCreator(SDFMeshPrimitiveCreator):
     def get_face_under_mouse(self, event_dict):
         pos = event_dict["Position"]
         try:
-            sdf_logger.debug(f"DEBUG: get_face_under_mouse at {pos}")
+        try:
             # getObjectInfo returns a dict with 'Object', 'Component', etc.
             info = self.view.getObjectInfo((pos[0], pos[1]))
             if info and "Object" in info and "Component" in info:
-                 sdf_logger.debug(f"DEBUG: Found {info['Object'].Label} : {info['Component']}")
                  return info["Object"], info["Component"]
-            sdf_logger.debug("DEBUG: No object under mouse")
-        except Exception as e:
-            sdf_logger.debug(f"DEBUG: getObjectInfo error: {e}")
+        except Exception:
             pass
         return None, None
 
@@ -121,31 +118,22 @@ class BoxCreator(SDFMeshPrimitiveCreator):
             width = p2.y - p1.y
             height = self.height
             
-            sdf_logger.debug(f"DEBUG: update_ui {length}, {width}, {height}")
             if self.panel:
                  self.panel.update_values(length, width, height)
-                 sdf_logger.debug("DEBUG: panel.update_values finished")
-        except Exception as e:
-            sdf_logger.debug(f"DEBUG: update_ui error: {e}")
+        except Exception:
+            pass
 
     def to_local(self, p):
-        sdf_logger.debug(f"DEBUG: to_local {p}")
         if not self.working_plane:
             return p
-        # inverse matrix
         mat = self.working_plane.toMatrix()
         mat.invert()
-        v = mat.multVec(p)
-        sdf_logger.debug(f"DEBUG: to_local result {v}")
-        return v
+        return mat.multVec(p)
 
     def to_global(self, p):
-        sdf_logger.debug(f"DEBUG: to_global {p}")
         if not self.working_plane:
             return p
-        v = self.working_plane.toMatrix().multVec(p)
-        sdf_logger.debug(f"DEBUG: to_global result {v}")
-        return v
+        return self.working_plane.toMatrix().multVec(p)
 
     def update_preview(self):
         if not self.start_point or not self.current_point:
@@ -287,18 +275,14 @@ class BoxCreator(SDFMeshPrimitiveCreator):
             obj, subname = self.get_face_under_mouse(event_dict)
             if obj and subname and "Face" in subname:
                 try:
-                    sdf_logger.debug(f"DEBUG: Accessing face {subname}...")
                     face = obj.Shape.getElement(subname)
-                    sdf_logger.debug(f"DEBUG: Face Surface Type: {face.Surface.TypeId}")
                     if hasattr(face, "Surface") and "GeomPlane" in face.Surface.TypeId:
                         self.working_plane = face.Surface.Position
                         self.snap_face = (obj, subname)
-                        sdf_logger.debug("DEBUG: Working plane set")
                     else:
                         self.working_plane = None
                         self.snap_face = None
-                except Exception as e:
-                    sdf_logger.debug(f"DEBUG: Face detection error: {e}")
+                except Exception:
                     self.working_plane = None
                     self.snap_face = None
             return
@@ -310,7 +294,6 @@ class BoxCreator(SDFMeshPrimitiveCreator):
                 n = self.working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
                 o = self.working_plane.Base
             
-            sdf_logger.debug(f"DEBUG: Calling get_point_on_plane with n={n}, o={o}")
             raw_pt = self.get_point_on_plane(event_dict, n, o)
             
             # Work in Local Coords for standard delta logic
