@@ -82,3 +82,6 @@ Tasks moved here from `TODO.md` after verification.
 
 ### ✅ Phase 0d: Strip primitive shape types from dm_object.py
 - **Completed**: Removed box, sphere, cone, and torus shape types from DMObjectProxy initialization and shape building. Only 'curve' remains, with a placeholder for future 'surface' patches.
+
+### ✅ Phase 0e: Strip primitive builders from nurbs_primitives.py
+- **Completed**: Removed build_box(), build_sphere(), build_cone(), and build_torus() from nurbs_primitives.py. Updated the module to focus exclusively on NURBS curve builders.

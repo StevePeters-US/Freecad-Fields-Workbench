@@ -34,19 +34,6 @@ These tasks remove code that no longer fits the pure-NURBS architecture.
 
 ---
 
-### 0e. Strip primitive builders from nurbs_primitives.py (Complexity: 2/10)
-
-- **Goal**: Remove `build_box()`, `build_sphere()`, `build_cone()`, `build_torus()` from `nurbs_primitives.py`. Keep only `build_curve()`.
-- **Files to modify**:
-  - `FCDirectModeling/nurbs_primitives.py` — delete lines 12-66 (the four builder functions).
-- **Steps**:
-  1. Delete the `build_box()`, `build_sphere()`, `build_cone()`, `build_torus()` functions.
-  2. Keep `build_curve()` (lines 68-111) intact.
-  3. Update the module docstring to say "NURBS curve builders" instead of "NURBS primitive builders".
-- **Acceptance**: `nurbs_primitives.build_curve(points)` still works. No functions named `build_box`, `build_sphere`, `build_cone`, `build_torus` exist.
-
----
-
 ### 0f. Clean up primitive_base.py (Complexity: 3/10)
 
 - **Goal**: Remove dead code from `primitive_base.py` — specifically the `_update_preview_object` branches for box/sphere/cone/torus shape types in `NURBSPrimitiveCreator`.

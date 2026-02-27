@@ -1,69 +1,13 @@
 """
 FCDirectModeling/nurbs_primitives.py
 
-NURBS primitive builders for Direct Modeling.
+NURBS curve builders for Direct Modeling.
 Each function constructs geometry explicitly from NURBS surfaces (Part.BSplineSurface).
 """
 
 import FreeCAD as App
 import Part
 import math
-
-def build_box(length, width, height):
-    """Build a Box from (0,0,0) to (L,W,H) allowing negative dimensions."""
-    if abs(length) < 0.001 or abs(width) < 0.001:
-        return Part.Shape()
-    
-    # Create the base rectangle in XY plane
-    p1 = App.Vector(0, 0, 0)
-    p2 = App.Vector(length, 0, 0)
-    p3 = App.Vector(length, width, 0)
-    p4 = App.Vector(0, width, 0)
-    wire = Part.makePolygon([p1, p2, p3, p4, p1])
-    face = Part.Face(wire)
-    
-    if abs(height) < 0.001:
-        return face.toNurbs()
-        
-    # Extrude along Z (supports negative height)
-    box = face.extrude(App.Vector(0, 0, height))
-    return box.toNurbs()
-
-def build_sphere(radius):
-    """Build a Sphere centered at (0,0,0) from a NURBS surface."""
-    R = abs(radius)
-    if R < 0.001:
-        return Part.Shape()
-    sphere = Part.makeSphere(R)
-    return sphere.toNurbs()
-
-def build_cone(radius, height):
-    """Build a Cone with base at origin (0,0,0)."""
-    R, H = abs(radius), abs(height)
-    if R < 0.001:
-        return Part.Shape()
-        
-    if H < 0.001:
-        # Return base circle as face
-        face = Part.makeCircle(R, App.Vector(0,0,0), App.Vector(0,0,1))
-        return face.toNurbs()
-
-    # radius1=radius, radius2=0 (apex)
-    cone = Part.makeCone(R, 0, H)
-    return cone.toNurbs()
-
-def build_torus(major_r, minor_r):
-    """Build a Torus centered at (0,0,0) from a NURBS surface."""
-    R, r = abs(major_r), abs(minor_r)
-    if R < 0.001 or r < 0.001:
-        return Part.Shape()
-    
-    # Ensure R > r for a standard torus
-    if R < r:
-         R, r = r, R
-         
-    torus = Part.makeTorus(R, r)
-    return torus.toNurbs()
 
 def build_curve(points, periodic=False):
     """Build a NURBS curve (BSpline) passing through a list of points.
