@@ -34,90 +34,7 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
 
 ---
 
-### 2. Remove `sdf_mesher.py` and all SDF meshing code [x] (Complexity: 2/10)
-
-- **Goal**: Delete the SDF voxel grid mesher module entirely — it is no longer needed with NURBS primitives.
-- **Files to delete**:
-  - `FCDirectModeling/sdf_mesher.py`
-  - `test_sdf_mesher.py`
-  - `test_primitives.py` (if SDF-specific)
-- **Files to modify**:
-  - `FCDirectModeling/sdf_object.py` — remove `mesh_sdf()` function, `_to_mesh_facets()`, and all imports of `sdf_mesher`.
-  - Any file importing from `sdf_mesher` — find with `grep -r "sdf_mesher" .`.
-- **Steps**:
-  1. Delete the files listed above.
-  2. Remove all references to `extract_mesh_numpy`, `mesh_sdf`, `_to_mesh_facets` from the codebase.
-  3. Remove the DM Settings for meshing algorithm and resolution (both final and preview) from `command_dm_settings.py`.
-- **Acceptance**: `grep -r "sdf_mesher\|mesh_sdf\|extract_mesh_numpy\|MeshAlgorithm\|MeshResolution\|PreviewResolution" .` returns zero results (excluding docs). The workbench loads without errors.
-
----
-
-### 3. Remove SDF distance functions from `sdf_object.py` [x] (Complexity: 2/10)
-
-- **Goal**: Delete the SDF evaluator functions (`_sdf_box`, `_sdf_sphere`, `_sdf_cone`, `_sdf_torus`, `_sdf_boolean`, `_SDF_BUILDERS`). These are replaced by NURBS builders.
-- **Files to read**:
-  - `FCDirectModeling/sdf_object.py` — lines 54–140 contain the SDF functions.
-- **Files to modify**:
-  - `FCDirectModeling/sdf_object.py` — remove lines 54–140 (all `_sdf_*` functions and `_SDF_BUILDERS` dict).
-- **Steps**:
-  1. Delete all `_sdf_box`, `_sdf_sphere`, `_sdf_cone`, `_sdf_torus`, `_sdf_boolean` function definitions.
-  2. Delete the `_SDF_BUILDERS` dictionary.
-  3. Remove the `import numpy as np` if no longer needed.
-- **Acceptance**: `grep -r "_sdf_box\|_sdf_sphere\|_sdf_cone\|_sdf_torus\|_sdf_boolean\|_SDF_BUILDERS" .` returns zero results. No import errors.
-
----
-
-### 4. Remove DM Settings for meshing algorithm and resolution (Complexity: 2/10)
-
-- **Goal**: Strip the meshing-specific settings (algorithm dropdown, resolution spinbox, preview resolution) from the DM Settings dialog. Keep the wireframe toggle.
-- **Files to read**:
-  - `dm_commands/command_dm_settings.py` — the settings dialog implementation.
-  - `FCDirectModeling/sdf_object.py` — getter/setter functions for mesh settings.
-- **Files to modify**:
-  - `dm_commands/command_dm_settings.py` — remove the "Meshing Algorithm" combo box, "Resolution" spinbox, and "Preview Resolution" spinbox.
-  - `FCDirectModeling/sdf_object.py` (or the new `dm_object.py`) — remove `get_mesh_algorithm`, `set_mesh_algorithm`, `get_mesh_resolution`, `set_mesh_resolution`, `get_preview_resolution`, `set_preview_resolution`.
-- **Steps**:
-  1. In the settings dialog, remove the algorithm and resolution widgets from the layout.
-### 3. Rename `sdf_object.py` to `dm_object.py` and refactor proxy [x] (Complexity: 3/10)
-
-- **Goal**: Rename the core object module and refactor `SDFObjectProxy` → `DMObjectProxy`, `SDFViewProvider` → `DMViewProvider`. Strip all SDF-related properties and logic.
-- **Files to read**:
-  - `FCDirectModeling/sdf_object.py` — the full file.
-- **Files to modify/create**:
-  - Rename `FCDirectModeling/sdf_object.py` → `FCDirectModeling/dm_object.py`.
-  - **Every file** that imports from `sdf_object` — find with `grep -r "sdf_object" .`.
-- **Steps**:
-  1. Rename the file.
-  2. Rename `SDFObjectProxy` → `DMObjectProxy`.
-  3. Rename `SDFViewProvider` → `DMViewProvider`.
-  4. Remove properties: `SDFType`, `SDFParams`, `SDFOp`, `SDFChildren`, `SDFMesh`.
-  5. Replace with: `ShapeType` (string), typed properties per primitive (Length, Width, Height, Radius, etc.).
-  6. Replace `build_sdf()` with `build_shape()` — returns a `Part.Shape` instead of an SDF function.
-  7. Replace `execute()` — calls `build_shape()` and assigns `fp.Shape` directly (no child mesh needed).
-  8. Rename `create_sdf_object()` → `create_dm_object()`.
-  9. The factory should create a `Part::FeaturePython` with no child `Mesh::Feature` (NURBS shapes render natively).
-  10. Update all imports across the codebase.
-- **Acceptance**: The workbench loads. Creating a box produces a `Part::FeaturePython` with the orange icon and a visible NURBS shape. No child mesh in the tree view.
-
----
-
-### 4. Refactor `SDFObjectProxy` to remove legacy properties [x] (Complexity: 2/10)
-
-- **Goal**: The boolean commands (`DM_Fuse`, `DM_Cut`, `DM_Common`) should operate on `Part::Feature` shapes using OpenCASCADE boolean operations instead of SDF composition.
-- **Files to read**:
-  - `dm_commands/command_boolean.py` — the current boolean command implementations.
-- **Files to modify**:
-  - `dm_commands/command_boolean.py` — rename internal references from SDF to BRep booleans.
-- **Steps**:
-  1. Replace the SDF composition logic with `Part.Shape.fuse()`, `.cut()`, `.common()` calls.
-  2. Validation: check that selected objects have a `Shape` property (not `SDFType`).
-  3. Result: create a new `Part::FeaturePython` with the boolean result shape.
-  4. Remove all references to `create_sdf_object`, `SDFType`, `SDFParams`.
-- **Acceptance**: Select two NURBS primitives → Fuse → a new boolean result appears as a single `Part::FeaturePython`.
-
----
-
-### 7. Create NURBS primitive builders (Complexity: 4/10)
+### 7. Create NURBS primitive builders [x] (Complexity: 4/10)
 
 - **Goal**: Implement `nurbs_primitives.py` with functions that return `Part.Shape` objects for each primitive type.
 - **Files to read**:
@@ -278,14 +195,6 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
 
 ---
 
-### 16. Update `guidelines_prompt.md` for NURBS architecture (Complexity: 1/10)
-
-- **Goal**: Update the documentation generation prompt to reflect the NURBS-based architecture instead of SDF.
-- **Files to modify**:
-  - `guidelines_prompt.md` — replace all SDF references with NURBS/BRep equivalents.
-- **Acceptance**: The prompt generates documentation consistent with the NURBS architecture.
-
----
 
 ### 17. Clean up test files (Complexity: 1/10)
 

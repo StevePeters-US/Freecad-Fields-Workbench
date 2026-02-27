@@ -80,7 +80,18 @@ class DMObjectProxy:
 
     def build_shape(self, fp):
         """Return a Part.Shape based on the object's properties."""
-        # This is a stub to be implemented in subsequent tasks.
+        from . import nurbs_primitives as np_builders
+        
+        st = fp.ShapeType
+        if st == "box":
+            return np_builders.build_box(fp.Length, fp.Width, fp.Height)
+        elif st == "sphere":
+            return np_builders.build_sphere(fp.Radius)
+        elif st == "cone":
+            return np_builders.build_cone(fp.Radius, fp.Height)
+        elif st == "torus":
+            return np_builders.build_torus(fp.MajorRadius, fp.MinorRadius)
+            
         import Part
         return Part.Shape()
 
@@ -91,11 +102,20 @@ class DMObjectProxy:
             dm_logger.debug(f"DMObjectProxy: Recomputing {fp.Label} ({fp.ShapeType})")
             
             # Ensure the object has a shape
-            fp.Shape = self.build_shape(fp)
+            new_shape = self.build_shape(fp)
+            
+            if new_shape.isNull():
+                 dm_logger.warning(f"DMObjectProxy: Built NULL shape for {fp.Label}")
+            else:
+                 dm_logger.debug(f"DMObjectProxy: Shape built. Faces={len(new_shape.Faces)}, BoundBox={new_shape.BoundBox}")
+                 
+            fp.Shape = new_shape
             
         except Exception as e:
             from FCDirectModeling import dm_logger
             dm_logger.error(f"DMObject.execute error: {e}")
+            import traceback
+            dm_logger.error(traceback.format_exc())
 
     def __setstate__(self, state):
         pass
@@ -107,12 +127,6 @@ class DMViewProvider:
         
     def attach(self, vobj):
         self.Object = vobj.Object
-        
-    def getDisplayModes(self, vobj):
-        return ["Standard"]
-        
-    def getDefaultDisplayMode(self):
-        return "Standard"
         
     def updateData(self, fp, prop):
         pass

@@ -98,12 +98,12 @@ class BoxCreator(DMPrimitiveCreator):
             if not self.start_point or not self.current_point:
                 return
                 
-            p1 = self.start_point
-            p2 = self.current_point
+            p1_local = self.to_local(self.start_point)
+            p2_local = self.to_local(self.current_point)
             
-            # Send SIGNED deltas to UI so positive = positive direction
-            length = p2.x - p1.x
-            width = p2.y - p1.y
+            # Send SIGNED deltas to UI so positive = positive local direction
+            length = p2_local.x - p1_local.x
+            width = p2_local.y - p1_local.y
             height = self.height
             
             if self.panel:
@@ -124,26 +124,18 @@ class BoxCreator(DMPrimitiveCreator):
         dx = p2_local.x - p1_local.x
         dy = p2_local.y - p1_local.y
         
-        # Local relative bounds (start point is 0,0,0)
-        # Note: we use min/max to allow dragging in any direction
-        min_x = min(0.0, dx); max_x = max(0.0, dx)
-        min_y = min(0.0, dy); max_y = max(0.0, dy)
-        min_z = min(0.0, h);  max_z = max(0.0, h)
-        
-        # We must ensure we don't have 0-size bounds
-        max_x = max(max_x, min_x + 1e-3)
-        max_y = max(max_y, min_y + 1e-3)
-        max_z = max(max_z, min_z + 1e-3)
-        
-        bounds_min = [min_x, min_y, min_z]
-        bounds_max = [max_x, max_y, max_z]
+        # Local offset to the minimal corner (where builders start)
+        min_corner_local = FreeCAD.Vector(min(0.0, dx), min(0.0, dy), min(0.0, h))
         
         # Final World Placement is just the working_plane (which is centered at p1)
         final_placement = self.working_plane
         
-        dm_logger.debug(f"BoxCreator.update_preview: bounds={bounds_min}/{bounds_max}")
-        
-        params = {"length": abs(dx), "width": abs(dy), "height": abs(h)}
+        params = {
+            "length": abs(dx), 
+            "width": abs(dy), 
+            "height": abs(h),
+            "min_corner_local": min_corner_local
+        }
         if debug_pt:
             params["debug_pt"] = debug_pt
             
@@ -387,7 +379,8 @@ class BoxCreator(DMPrimitiveCreator):
         params = {
             "length": abs(dx),
             "width":  abs(dy),
-            "height": abs(h)
+            "height": abs(h),
+            "min_corner_local": min_corner_local
         }
         
         dm_logger.debug(f"BoxCreator._do_finish: final_placement={final_placement.Base}, dims={params['length']}/{params['width']}/{params['height']}")

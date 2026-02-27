@@ -1,4 +1,4 @@
-Base classes for DM primitive creators.
+"""Base classes for DM primitive creators."""
 
 import FreeCAD
 import FreeCADGui
@@ -76,34 +76,12 @@ class PrimitiveCreatorBase:
             v_size = self.view.getSize()
             w, h = (v_size[0], v_size[1]) if v_size else (0, 0)
             
-            # DIAGNOSTIC: Test "No Inversion" for Y (maybe events are already top-down)
-            # raw_y top-down: h=0 at top
-            inv_y = y # TEST: Use raw y
-            
-            print(f"[DEBUG] COORD_DIAG: raw_x={x}, raw_y={y}, w={w}, h={h}, used_y={inv_y}")
-            
-            # getPoint expects (x, y) where y=0 is TOP
+            # getPoint expects (x, y) where y=0 is BOTTOM-UP (Coin3D)
+            inv_y = y
             focal = self.view.getPoint(x, inv_y)
-
-            if _is_orthographic(self.view):
-                ray_origin = focal
-                ray_dir    = self.view.getViewDirection()
-            else:
-                ray_origin = _cam_pos(self.view)
-                ray_dir    = focal - ray_origin
-                ray_dir.normalize()
-
-            n = plane_normal or FreeCAD.Vector(0, 0, 1)
-            o = plane_point  or FreeCAD.Vector(0, 0, 0)
-
-            denom = ray_dir.dot(n)
-            if abs(denom) < 1e-6:
-                return o
-            t = (o - ray_origin).dot(n) / denom
-            pt = ray_origin + ray_dir * t
             
-            print(f"[DEBUG] Intersection: pt={pt.x:.2f},{pt.y:.2f},{pt.z:.2f}, focal_y={focal.y:.2f}")
-            return pt
+            # Return raw getPoint result as requested to ensure visual alignment
+            return focal
         except Exception as e:
             dm_logger.debug(f"DEBUG: get_point_on_plane error: {e}")
             FreeCAD.Console.PrintError(f"get_point_on_plane: {e}\n")
@@ -113,8 +91,10 @@ class PrimitiveCreatorBase:
         """Returns the point on the given axis closest to the cursor ray."""
         try:
             pos = event_dict["Position"]
-            y_inv = self._get_y_inverted(pos[1])
-            focal = self.view.getPoint(pos[0], y_inv)
+            v_size = self.view.getSize()
+            w, h = (v_size[0], v_size[1]) if v_size else (1, 1)
+            inv_y = pos[1]
+            focal = self.view.getPoint(pos[0], inv_y)
 
             if _is_orthographic(self.view):
                 ray_origin = focal
@@ -212,13 +192,13 @@ class DMPrimitiveCreator(PrimitiveCreatorBase):
     def __init__(self):
         super().__init__()
         self._preview_obj = None   # Mesh::Feature used for live preview
-        self._pending_sdf_type = None
-        self._pending_sdf_params = None
+        self._pending_shape_type = None
+        self._pending_shape_params = None
         self._preview_queued = False
         self._finished = False     # Guard for finalization
 
-        self._last_sdf_type = None
-        self._last_sdf_params = None
+        self._last_shape_type = None
+        self._last_shape_params = None
         self._last_placement = None
         
         self._debug_pt = None      # Store current mouse 3D for debug dot
@@ -236,8 +216,8 @@ class DMPrimitiveCreator(PrimitiveCreatorBase):
         if self._terminated:
             return
 
-        self._pending_sdf_type = sdf_type
-        self._pending_sdf_params = params
+        self._pending_shape_type = shape_type
+        self._pending_shape_params = params
         
         if resolution is None:
             # Resolution no longer used for NURBS, keeping stub for compatibility
@@ -245,8 +225,8 @@ class DMPrimitiveCreator(PrimitiveCreatorBase):
             
         self._pending_resolution = resolution
         
-        self._last_sdf_type = sdf_type
-        self._last_sdf_params = params
+        self._last_shape_type = shape_type
+        self._last_shape_params = params
         
         # Track 3D cursor for debugging
         if "debug_pt" in params:
@@ -268,38 +248,50 @@ class DMPrimitiveCreator(PrimitiveCreatorBase):
             return
 
         try:
-            sdf_type = self._pending_sdf_type
-            params = self._pending_sdf_params
-            if not sdf_type or not params:
+            shape_type = self._pending_shape_type
+            params = self._pending_shape_params
+            if not shape_type or not params:
                 return
 
-            from ..dm_object import create_dm_object
+            from .. import nurbs_primitives
             import Part
 
-            if len(verts) == 0:
-                return
+            # Build the raw shape at origin
+            if shape_type == "box":
+                shape = nurbs_primitives.build_box(params.get("length", 1), params.get("width", 1), params.get("height", 1))
+            elif shape_type == "sphere":
+                shape = nurbs_primitives.build_sphere(params.get("radius", 1))
+            elif shape_type == "cone":
+                shape = nurbs_primitives.build_cone(params.get("radius", 1), params.get("height", 1))
+            elif shape_type == "torus":
+                shape = nurbs_primitives.build_torus(params.get("major_r", 1), params.get("minor_r", 1))
+            else:
+                shape = Part.Shape()
 
-            facets = _to_mesh_facets(verts, tris)
-            mesh   = MeshModule.Mesh(facets)
+            # Apply local offset (corner scaling)
+            mc = params.get("min_corner_local", FreeCAD.Vector(0,0,0))
+            shape.translate(mc)
 
             doc = FreeCAD.activeDocument()
             if not doc:
                 return
 
-            # Hierarchy: Part::FeaturePython (DM_Preview)
+            # Hierarchy: Part::Feature (DM_Preview)
             if self._preview_obj is None or self._preview_obj not in doc.Objects:
-                self._preview_obj = doc.addObject("Part::FeaturePython", "DM_Preview")
+                self._preview_obj = doc.addObject("Part::Feature", "DM_Preview")
                 if hasattr(self._preview_obj, "ViewObject") and self._preview_obj.ViewObject:
                     try:
                         self._preview_obj.ViewObject.Visibility = True
                         self._preview_obj.ViewObject.ShapeColor = (0.20, 0.60, 0.85)
-                        self._preview_obj.ViewObject.Transparency = 20
+                        self._preview_obj.ViewObject.Transparency = 50 # More transparent for preview
+                        self._preview_obj.ViewObject.DisplayMode = "Shaded"
                     except Exception:
                         pass
 
-            # Assign shape directly
-            # For now, we use an empty shape or a simple box if box_creator provides it in params
-            self._preview_obj.Shape = Part.Shape()
+            # Update shape and placement
+            self._preview_obj.Shape = shape
+            if self._last_placement:
+                 self._preview_obj.Placement = self._last_placement
 
             # Update Debug Cursor
             if self._debug_pt:
@@ -365,18 +357,18 @@ class DMPrimitiveCreator(PrimitiveCreatorBase):
             return
             
         try:
-            if self._last_sdf_type and self._last_sdf_params:
-                from ..dm_object import create_dm_object
-                dm_logger.debug(f"_do_finish: Finalizing. type={self._last_sdf_type}, params={self._last_sdf_params}, placement={self._last_placement}")
+            if self._last_shape_type and self._last_shape_params:
+                from FCDirectModeling.dm_object import create_dm_object
+                dm_logger.debug(f"_do_finish: Finalizing. type={self._last_shape_type}, params={self._last_shape_params}, placement={self._last_placement}")
                 # Create the final high-res DMObject
                 create_dm_object(
-                    self._last_sdf_type.capitalize(), 
-                    self._last_sdf_type, 
-                    self._last_sdf_params,
+                    self._last_shape_type.capitalize(), 
+                    self._last_shape_type, 
+                    self._last_shape_params,
                     placement=self._last_placement
                 )
             else:
-                dm_logger.debug(f"_do_finish: No SDF data to finalize (type={self._last_sdf_type})")
+                dm_logger.debug(f"_do_finish: No data to finalize (type={self._last_shape_type})")
         except Exception as e:
             dm_logger.error(f"_do_finish FAILED: {e}")
             import traceback
