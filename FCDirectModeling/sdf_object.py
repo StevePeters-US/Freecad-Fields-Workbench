@@ -155,9 +155,9 @@ def mesh_sdf(sdf_fn, bounds_min, bounds_max, resolution=None, algorithm=None):
         algorithm = get_mesh_algorithm()
 
     from .sdf_mesher import extract_mesh_numpy
-    from FCDirectModeling import sdf_logger
+    from FCDirectModeling import dm_logger
 
-    sdf_logger.debug(f"mesh_sdf: Starting {algorithm} meshing at res {resolution}...")
+    dm_logger.debug(f"mesh_sdf: Starting {algorithm} meshing at res {resolution}...")
     import time
     t0 = time.time()
     
@@ -170,7 +170,7 @@ def mesh_sdf(sdf_fn, bounds_min, bounds_max, resolution=None, algorithm=None):
                                    resolution=resolution, sharp=True)
     
     t1 = time.time()
-    sdf_logger.debug(f"mesh_sdf: Meshing took {t1-t0:.3f}s. Result: {len(res[0])} verts, {len(res[1])} tris")
+    dm_logger.debug(f"mesh_sdf: Meshing took {t1-t0:.3f}s. Result: {len(res[0])} verts, {len(res[1])} tris")
     return res
 
 
@@ -215,8 +215,8 @@ class SDFObjectProxy:
         obj.SDFOp = sdf_op or "none"
         obj.SDFChildren = children or []
         
-        from FCDirectModeling import sdf_logger
-        sdf_logger.debug(f"SDFObjectProxy.__init__: type={sdf_type}, params={params}, has_placement={placement is not None}")
+        from FCDirectModeling import dm_logger
+        dm_logger.debug(f"SDFObjectProxy.__init__: type={sdf_type}, params={params}, has_placement={placement is not None}")
         
         # Handle Placement and Center Offset
         # Standard primitives: we center them locally at [0,0,0] for build_sdf logic.
@@ -235,11 +235,11 @@ class SDFObjectProxy:
                 center_v = FreeCAD.Vector(cv[0], cv[1], cv[2])
 
             obj.Placement.Base = center_v
-            sdf_logger.debug(f"SDFObjectProxy: Default placement set to: {obj.Placement.Base}")
+            dm_logger.debug(f"SDFObjectProxy: Default placement set to: {obj.Placement.Base}")
 
         if placement:
             obj.Placement = placement
-            sdf_logger.debug(f"SDFObjectProxy: Final obj.Placement set to: {obj.Placement.Base}")
+            dm_logger.debug(f"SDFObjectProxy: Final obj.Placement set to: {obj.Placement.Base}")
 
         # Add typed properties for parametric editing
         if sdf_type == "box":
@@ -282,8 +282,8 @@ class SDFObjectProxy:
                 if hasattr(child, "Proxy") and hasattr(child.Proxy, "build_sdf"):
                     child_sdfs.append(child.Proxy.build_sdf(child))
                 else:
-                    from FCDirectModeling import sdf_logger
-                    sdf_logger.warn(f"build_sdf: child '{child.Label}' is not an SDF object")
+                    from FCDirectModeling import dm_logger
+                    dm_logger.warn(f"build_sdf: child '{child.Label}' is not an SDF object")
             
             # Ensure 'op' is available for _sdf_boolean
             if "op" not in params:
@@ -326,14 +326,14 @@ class SDFObjectProxy:
         if getattr(self, "is_preview", False):
             # During live preview dragging, base.py injects .Mesh directly.
             # Skip slow full-resolution recompute entirely.
-            from FCDirectModeling import sdf_logger
-            sdf_logger.debug("SDFObjectProxy: execute skipped for live preview")
+            from FCDirectModeling import dm_logger
+            dm_logger.debug("SDFObjectProxy: execute skipped for live preview")
             return
             
         try:
             import Mesh as MeshModule
             import Part
-            from FCDirectModeling import sdf_logger
+            from FCDirectModeling import dm_logger
             import time
 
             # Ensure the object has a shape (even if empty) to satisfy Part::Feature
@@ -343,18 +343,18 @@ class SDFObjectProxy:
             # Build SDF function using the new reusable method
             sdf_fn, (mn, mx) = self.build_sdf(fp)
             
-            sdf_logger.debug(f"SDFObjectProxy: Executing high-res mesh for {fp.SDFType}...")
+            dm_logger.debug(f"SDFObjectProxy: Executing high-res mesh for {fp.SDFType}...")
             verts, tris = mesh_sdf(sdf_fn, mn, mx)
             
             if len(verts) == 0:
-                sdf_logger.warn(f"SDFObject: mesher returned no geometry for {fp.SDFType}.")
+                dm_logger.warn(f"SDFObject: mesher returned no geometry for {fp.SDFType}.")
                 return
 
-            sdf_logger.debug(f"SDFObjectProxy: Converting {len(tris)} triangles to Mesh facets...")
+            dm_logger.debug(f"SDFObjectProxy: Converting {len(tris)} triangles to Mesh facets...")
             t_conv_0 = time.time()
             facets = _to_mesh_facets(verts, tris)
             t_conv_1 = time.time()
-            sdf_logger.debug(f"SDFObjectProxy: Conversion took {t_conv_1-t_conv_0:.3f}s")
+            dm_logger.debug(f"SDFObjectProxy: Conversion took {t_conv_1-t_conv_0:.3f}s")
 
             # Get linked child mesh surface
             mesh_obj = getattr(fp, "SDFMesh", None)
@@ -367,11 +367,11 @@ class SDFObjectProxy:
                         break
             
             if not mesh_obj:
-                sdf_logger.warn(f"SDFObjectProxy: No child mesh found for {fp.Label}")
+                dm_logger.warn(f"SDFObjectProxy: No child mesh found for {fp.Label}")
                 return
 
             mesh_obj.Mesh = MeshModule.Mesh(facets)
-            sdf_logger.debug(f"SDFObjectProxy: Mesh assigned to {mesh_obj.Label}")
+            dm_logger.debug(f"SDFObjectProxy: Mesh assigned to {mesh_obj.Label}")
             
             # Sync mesh placement with the container's placement
             # This ensures the local geometry [0,0,0] coincides with the object's world position.
@@ -395,11 +395,11 @@ class SDFObjectProxy:
                         _ = ve # Silently fail
                     
                     vobj.update()
-                    sdf_logger.debug(f"ViewObject updated for {mesh_obj.Label}")
+                    dm_logger.debug(f"ViewObject updated for {mesh_obj.Label}")
 
         except Exception as e:
-            from FCDirectModeling import sdf_logger
-            sdf_logger.error(f"SDFObject.execute error: {e}")
+            from FCDirectModeling import dm_logger
+            dm_logger.error(f"SDFObject.execute error: {e}")
 
     def __setstate__(self, state):
         pass
@@ -469,14 +469,14 @@ def create_sdf_object(name, sdf_type, params, sdf_op=None, children=None, is_pre
     The container holds the SDF definition (type, params, children) and the mesh
     is the visual output nested underneath in the tree.
     """
-    from FCDirectModeling import sdf_logger
+    from FCDirectModeling import dm_logger
     
     doc = FreeCAD.activeDocument()
     if not doc:
         doc = FreeCAD.newDocument()
 
     try:
-        sdf_logger.debug(f"create_sdf_object: name={name}, type={sdf_type}, has_placement={placement is not None}")
+        dm_logger.debug(f"create_sdf_object: name={name}, type={sdf_type}, has_placement={placement is not None}")
         # Part::FeaturePython supports Python Proxy + Placement + child objects via claimChildren
         obj = doc.addObject("Part::FeaturePython", name)
         proxy = SDFObjectProxy(obj, sdf_type, params, sdf_op, children, placement=placement)
@@ -499,7 +499,7 @@ def create_sdf_object(name, sdf_type, params, sdf_op=None, children=None, is_pre
         if FreeCAD.GuiUp and hasattr(mesh_obj, "ViewObject"):
             mesh_obj.ViewObject.ShapeColor = (0.65, 0.75, 0.90)
 
-        sdf_logger.debug(f"create_sdf_object: Created {name} ({sdf_type}), triggering recompute...")
+        dm_logger.debug(f"create_sdf_object: Created {name} ({sdf_type}), triggering recompute...")
         obj.touch()
         doc.recompute()
         
@@ -517,12 +517,12 @@ def create_sdf_object(name, sdf_type, params, sdf_op=None, children=None, is_pre
             except Exception:
                 pass
         
-        sdf_logger.debug(f"create_sdf_object: {name} created successfully")
+        dm_logger.debug(f"create_sdf_object: {name} created successfully")
         return obj
         
     except Exception as e:
-        sdf_logger.error(f"create_sdf_object FAILED: {e}")
+        dm_logger.error(f"create_sdf_object FAILED: {e}")
         import traceback
-        sdf_logger.error(traceback.format_exc())
+        dm_logger.error(traceback.format_exc())
         return None
 

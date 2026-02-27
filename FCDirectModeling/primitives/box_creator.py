@@ -3,7 +3,7 @@ import FreeCADGui
 import Part
 from PySide import QtCore, QtGui
 from .base import SDFMeshPrimitiveCreator
-from FCDirectModeling import sdf_logger
+from FCDirectModeling import dm_logger
 
 class BoxCreator(SDFMeshPrimitiveCreator):
     def __init__(self):
@@ -141,7 +141,7 @@ class BoxCreator(SDFMeshPrimitiveCreator):
         # Final World Placement is just the working_plane (which is centered at p1)
         final_placement = self.working_plane
         
-        sdf_logger.debug(f"BoxCreator.update_preview: bounds={bounds_min}/{bounds_max}")
+        dm_logger.debug(f"BoxCreator.update_preview: bounds={bounds_min}/{bounds_max}")
         
         params = {"bounds_min": bounds_min, "bounds_max": bounds_max}
         if debug_pt:
@@ -225,7 +225,7 @@ class BoxCreator(SDFMeshPrimitiveCreator):
             self.panel.focus_field(target_axis)
 
     def handle_click(self, event_dict):
-        sdf_logger.debug(f"DEBUG: handle_click, state={self.state}")
+        dm_logger.debug(f"DEBUG: handle_click, state={self.state}")
         n = FreeCAD.Vector(0,0,1)
         o = FreeCAD.Vector(0,0,0)
         if self.working_plane:
@@ -263,7 +263,7 @@ class BoxCreator(SDFMeshPrimitiveCreator):
         return False
 
     def handle_move(self, event_dict):
-        sdf_logger.debug(f"DEBUG: BoxCreator.handle_move, state={self.state}")
+        dm_logger.debug(f"DEBUG: BoxCreator.handle_move, state={self.state}")
         if self.state == 0:
             # Detect face under mouse
             obj, subname = self.get_face_under_mouse(event_dict)
@@ -368,7 +368,7 @@ class BoxCreator(SDFMeshPrimitiveCreator):
             return
 
         from FCDirectModeling.sdf_object import create_sdf_object
-        from FCDirectModeling import sdf_logger
+        from FCDirectModeling import dm_logger
         
         # Adjust placement for corner-scaling consistency
         # SDFObject.build_sdf uses [0,0,0] -> [L,W,H]. 
@@ -397,7 +397,7 @@ class BoxCreator(SDFMeshPrimitiveCreator):
         params["bounds_min"] = [0.0, 0.0, 0.0]
         params["bounds_max"] = [abs(dx), abs(dy), abs(h)]
         
-        sdf_logger.debug(f"BoxCreator._do_finish: final_placement={final_placement.Base}, dims={params['length']}/{params['width']}/{params['height']}")
+        dm_logger.debug(f"BoxCreator._do_finish: final_placement={final_placement.Base}, dims={params['length']}/{params['width']}/{params['height']}")
         
         create_sdf_object("Box", "box", params, placement=final_placement)
         self.terminate()

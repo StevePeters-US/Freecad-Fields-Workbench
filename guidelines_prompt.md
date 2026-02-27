@@ -34,7 +34,7 @@ You are maintaining three documentation files for a FreeCAD workbench project. R
    - Docstring style
    - FreeCAD property usage
 
-8. **Logging** — How to use `sdf_logger`, with code examples. Include a table of log modes (normal vs crash investigation) and best practices.
+8. **Logging** — How to use `dm_logger`, with code examples. Include a table of log modes (normal vs crash investigation) and best practices.
 
 9. **Event Safety** — The `QTimer.singleShot(0, fn)` rule for all document mutations. List what counts as a document mutation.
 
@@ -96,7 +96,7 @@ no prior context beyond the files listed. Follow this template:
 **Complexity guide**:
 | Complexity | Description | Example |
 |------------|-------------|---------|
-| 1–2 | Single-file find-and-replace | Replace `print()` with `sdf_logger.debug()` |
+| 1–2 | Single-file find-and-replace | Replace `print()` with `dm_logger.debug()` |
 | 3–4 | Add a setting, wire a new branch | Add a checkbox to the settings dialog |
 | 5–6 | Multi-file feature, moderate logic | Fix preview viewport update, implement Marching Cubes |
 | 7–8 | New module, algorithm, or pipeline | SDF to NURBS conversion, Dual Contouring |

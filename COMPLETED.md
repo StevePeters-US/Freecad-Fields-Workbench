@@ -17,7 +17,7 @@ Tasks moved here from `TODO.md` after verification.
 - **Result**: Users can click-drag to define shapes in the viewport with live mesh preview via `SDFMeshPrimitiveCreator._process_preview_queue()`.
 
 ## ✅ Centralized logging system
-- **Completed**: `FCDirectModeling/sdf_logger.py` provides `debug`, `info`, `warn`, `error` functions that log to FreeCAD console (always) and optionally to `~/sdf_debug.log` (when `DEBUG_SDF_CRASH=1`).
+- **Completed**: `FCDirectModeling/dm_logger.py` provides `debug`, `info`, `warn`, `error` functions that log to FreeCAD console (always) and optionally to `~/dm_debug.log` (when `DEBUG_DM_CRASH=1`).
 
 ## ✅ DM Settings dialog
 - **Completed**: `dm_commands/command_dm_settings.py` provides a Qt dialog for meshing algorithm, resolution, and wireframe toggle. Settings are persisted via `FreeCAD.ParamGet("User parameter:FCDirectModeling")`.
@@ -27,8 +27,8 @@ Tasks moved here from `TODO.md` after verification.
 
 ## ✅ Open Sketcher command
 - **Completed**: `dm_commands/command_open_sketcher.py` registers `DM_OpenSketcher` to launch the FreeCAD Sketcher workbench.
-## ✅ Replace bare `print()` with `sdf_logger`
-- **Completed**: Every log statement in the codebase now goes through `sdf_logger`.
+## ✅ Replace bare `print()` with `dm_logger`
+- **Completed**: Every log statement in the codebase now goes through `dm_logger`.
 - **Result**: Consistent logging across the project, supporting both console and file output.
 
 ## ✅ Add preview-resolution setting to DM Settings
@@ -67,6 +67,6 @@ Tasks moved here from `TODO.md` after verification.
 - **Result**: Primitives can now be edited parametrically through the FreeCAD property panel after creation.
 
 ## ✅ Fix: Object Placement and Container Type
-- **Completed**: Switched container to `Part::FeaturePython`, moved child mesh creation to the factory function using `App::PropertyLink`, and implemented `SDFObjectProxy` placement logic for centered primitives. Fixed `sdf_logger` calls from `.warning()` to `.warn()`.
+- **Completed**: Switched container to `Part::FeaturePython`, moved child mesh creation to the factory function using `App::PropertyLink`, and implemented `SDFObjectProxy` placement logic for centered primitives. Fixed `dm_logger` calls from `.warning()` to `.warn()`.
 - **Result**: Final objects are now correctly placed, and high-resolution meshing completes successfully without document locking or logging errors.
 

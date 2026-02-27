@@ -1,6 +1,6 @@
 import FreeCAD
 from PySide import QtCore, QtGui
-from FCDirectModeling import sdf_logger
+from FCDirectModeling import dm_logger
 
 class PanelWidget(QtGui.QWidget):
     def __init__(self, panel):
@@ -99,18 +99,18 @@ class BoxTaskPanel:
         self.creator.set_height_lock(val)
 
     def update_values(self, length, width, height):
-        sdf_logger.debug(f"DEBUG: BoxTaskPanel.update_values({length}, {width}, {height})")
+        dm_logger.debug(f"DEBUG: BoxTaskPanel.update_values({length}, {width}, {height})")
         self._block_updates = True
         try:
             self.ui_length.setValue(length)
             self.ui_width.setValue(width)
             self.ui_height.setValue(height)
-            sdf_logger.debug("DEBUG: Spinbox values set")
+            dm_logger.debug("DEBUG: Spinbox values set")
         finally:
             self._block_updates = False
             
     def focus_field(self, axis):
-        sdf_logger.debug(f"DEBUG: focus_field {axis}")
+        dm_logger.debug(f"DEBUG: focus_field {axis}")
         if axis == 'x':
             self.ui_length.setFocus()
             self.ui_length.selectAll()

@@ -5,14 +5,14 @@ Cone creator — no Coin3D, uses Mesh::Feature preview.
 import FreeCAD
 from PySide import QtCore
 from .base import SDFMeshPrimitiveCreator
-from FCDirectModeling import sdf_logger
+from FCDirectModeling import dm_logger
 
 class ConeCreator(SDFMeshPrimitiveCreator):
     def __init__(self):
         super().__init__()
         self.radius = 0.1
         self.height = 0.1
-        sdf_logger.debug("ConeCreator: Initialized")
+        dm_logger.debug("ConeCreator: Initialized")
 
     def handle_click(self, event_dict):
         n = FreeCAD.Vector(0,0,1)

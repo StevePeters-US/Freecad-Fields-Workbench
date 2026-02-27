@@ -9,7 +9,7 @@ import FreeCAD
 import FreeCADGui
 from PySide import QtCore
 
-from FCDirectModeling import sdf_logger
+from FCDirectModeling import dm_logger
 
 
 
@@ -110,7 +110,7 @@ class PrimitiveCreatorBase:
             print(f"[DEBUG] Intersection: pt={pt.x:.2f},{pt.y:.2f},{pt.z:.2f}, focal_y={focal.y:.2f}")
             return pt
         except Exception as e:
-            sdf_logger.debug(f"DEBUG: get_point_on_plane error: {e}")
+            dm_logger.debug(f"DEBUG: get_point_on_plane error: {e}")
             FreeCAD.Console.PrintError(f"get_point_on_plane: {e}\n")
             return FreeCAD.Vector(0, 0, 0)
 
@@ -156,21 +156,21 @@ class PrimitiveCreatorBase:
             event_type = event_dict.get("Type", "Unknown")
             # Only log non-move events to avoid spam
             if event_type != "SoLocation2Event":
-                sdf_logger.debug(f"DEBUG: event_cb: {event_type}")
+                dm_logger.debug(f"DEBUG: event_cb: {event_type}")
 
             if event_type == "SoMouseButtonEvent":
                 if event_dict["State"] == "DOWN" and event_dict["Button"] == "BUTTON1":
-                    sdf_logger.debug("DEBUG: Left click detected")
+                    dm_logger.debug("DEBUG: Left click detected")
                     return self.handle_click(event_dict)
             elif event_type == "SoLocation2Event":
                 self.handle_move(event_dict)
             elif event_type == "SoKeyboardEvent":
                 key = str(event_dict.get("Key", "None")).upper()
-                sdf_logger.debug(f"DEBUG: Key event: {key}")
+                dm_logger.debug(f"DEBUG: Key event: {key}")
                 if event_dict["State"] == "DOWN" and key == "ESCAPE":
                     QtCore.QTimer.singleShot(0, self.terminate)
                     return True
-            sdf_logger.debug("event_cb: Returning False")
+            dm_logger.debug("event_cb: Returning False")
             return False
         except Exception:
             return False
@@ -375,7 +375,7 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             FreeCADGui.updateGui()
 
         except Exception as e:
-            sdf_logger.debug(f"DEBUG: _process_preview_queue error: {e}")
+            dm_logger.debug(f"DEBUG: _process_preview_queue error: {e}")
             pass
 
 
@@ -395,7 +395,7 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         try:
             if self._last_sdf_type and self._last_sdf_params:
                 from ..sdf_object import create_sdf_object
-                sdf_logger.debug(f"_do_finish: Finalizing. type={self._last_sdf_type}, params={self._last_sdf_params}, placement={self._last_placement}")
+                dm_logger.debug(f"_do_finish: Finalizing. type={self._last_sdf_type}, params={self._last_sdf_params}, placement={self._last_placement}")
                 # Create the final high-res SDFObject
                 create_sdf_object(
                     self._last_sdf_type.capitalize(), 
@@ -404,11 +404,11 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
                     placement=self._last_placement
                 )
             else:
-                sdf_logger.debug(f"_do_finish: No SDF data to finalize (type={self._last_sdf_type})")
+                dm_logger.debug(f"_do_finish: No SDF data to finalize (type={self._last_sdf_type})")
         except Exception as e:
-            sdf_logger.error(f"_do_finish FAILED: {e}")
+            dm_logger.error(f"_do_finish FAILED: {e}")
             import traceback
-            sdf_logger.error(traceback.format_exc())
+            dm_logger.error(traceback.format_exc())
 
         self._finished = True
         self.terminate()
@@ -441,7 +441,7 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
                         doc.removeObject(self._preview_obj.Name)
                     doc.recompute()
             except Exception as e:
-                sdf_logger.debug(f"Error removing preview objects: {e}")
+                dm_logger.debug(f"Error removing preview objects: {e}")
             self._preview_obj = None
         super().terminate()
 

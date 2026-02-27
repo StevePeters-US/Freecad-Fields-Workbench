@@ -4,16 +4,16 @@ Sphere creator — no Coin3D, uses Mesh::Feature preview.
 
 import FreeCAD
 from .base import SDFMeshPrimitiveCreator
-from FCDirectModeling import sdf_logger
+from FCDirectModeling import dm_logger
 
 class SphereCreator(SDFMeshPrimitiveCreator):
     def __init__(self):
         super().__init__()
-        sdf_logger.debug("SphereCreator: Initializing...")
+        dm_logger.debug("SphereCreator: Initializing...")
         self.radius = 1.0
 
     def handle_click(self, event_dict):
-        sdf_logger.debug(f"SphereCreator: Click! State={self.state}")
+        dm_logger.debug(f"SphereCreator: Click! State={self.state}")
         
         n = FreeCAD.Vector(0,0,1)
         o = FreeCAD.Vector(0,0,0)

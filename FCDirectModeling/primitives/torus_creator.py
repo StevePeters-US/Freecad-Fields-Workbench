@@ -5,7 +5,7 @@ Torus creator — no Coin3D, uses Mesh::Feature preview.
 import FreeCAD
 from PySide import QtCore
 from .base import SDFMeshPrimitiveCreator
-from FCDirectModeling import sdf_logger
+from FCDirectModeling import dm_logger
 
 class TorusCreator(SDFMeshPrimitiveCreator):
     def __init__(self):

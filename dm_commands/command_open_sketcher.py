@@ -7,7 +7,7 @@ creating a new sketch on the active face or on the XY plane if nothing is select
 
 import FreeCAD
 import FreeCADGui
-from FCDirectModeling import sdf_logger
+from FCDirectModeling import dm_logger
 
 
 class DMOpenSketcherCommand:
@@ -25,10 +25,10 @@ class DMOpenSketcherCommand:
         return FreeCAD.activeDocument() is not None
 
     def Activated(self):
-        sdf_logger.info("DM_OpenSketcher: Switching to Sketcher workbench...")
+        dm_logger.info("DM_OpenSketcher: Switching to Sketcher workbench...")
         try:
             FreeCADGui.activateWorkbench("SketcherWorkbench")
-            sdf_logger.info("DM_OpenSketcher: Sketcher workbench activated.")
+            dm_logger.info("DM_OpenSketcher: Sketcher workbench activated.")
         except Exception as e:
             FreeCAD.Console.PrintError(f"DM_OpenSketcher: Failed to open Sketcher: {e}\n")
 

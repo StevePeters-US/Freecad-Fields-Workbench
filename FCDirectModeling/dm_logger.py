@@ -1,11 +1,11 @@
 import os
 import FreeCAD
 
-LOG_PATH = os.path.expanduser("~/sdf_debug.log")
+LOG_PATH = os.path.expanduser("~/dm_debug.log")
 
 # By default, only log to console. 
 # Enable file logging via environment variable if investigating a crash.
-ENABLE_LOG_FILE = os.getenv("DEBUG_SDF_CRASH", "0") == "1"
+ENABLE_LOG_FILE = os.getenv("DEBUG_DM_CRASH", "0") == "1"
 
 def _log(level, msg):
     """Internal helper to write to file and console."""
