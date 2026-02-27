@@ -118,11 +118,9 @@ class DMObjectProxy:
                  
             fp.Shape = new_shape
             
-        except Exception as e:
+        except Exception:
             from FCDirectModeling import dm_logger
-            dm_logger.error(f"DMObject.execute error: {e}")
-            import traceback
-            dm_logger.error(traceback.format_exc())
+            dm_logger.exception(f"DMObject.execute error for {fp.Label}")
 
     def __setstate__(self, state):
         pass
@@ -224,9 +222,7 @@ def create_dm_object(name, shape_type, params=None, is_preview=False, placement=
         dm_logger.debug(f"create_dm_object: {name} created successfully")
         return obj
         
-    except Exception as e:
-        dm_logger.error(f"create_dm_object FAILED: {e}")
-        import traceback
-        dm_logger.error(traceback.format_exc())
+    except Exception:
+        dm_logger.exception(f"create_dm_object FAILED for {name}")
         return None
 

@@ -1,11 +1,12 @@
 import FreeCAD
 import FreeCADGui
 import Part
+import traceback
 from PySide import QtCore, QtGui
-from .primitive_base import DMPrimitiveCreator
+from .primitive_base import NURBSPrimitiveCreator
 from FCDirectModeling import dm_logger
 
-class BoxCreator(DMPrimitiveCreator):
+class BoxCreator(NURBSPrimitiveCreator):
     def __init__(self):
         super().__init__()
         
@@ -66,18 +67,12 @@ class BoxCreator(DMPrimitiveCreator):
             width = p2_local.y - p1_local.y
             height = self.height
             
+            dm_logger.debug(f"DEBUG: Box update_ui: L={length:.2f}, W={width:.2f}, H={height:.2f}")
             if self.panel:
                  self.panel.update_values(length, width, height)
         except Exception:
-            pass
+            dm_logger.exception("Box update_ui exception")
 
-    def handle_click(self, event_dict):
-        # Delegate to base for state transitions
-        old_state = self.state
-        handled = super().handle_click(event_dict)
-        if handled:
-            print(f"Pin location {old_state+1}: {self.current_point.x:.2f}, {self.current_point.y:.2f}, {self.current_point.z:.2f}")
-        return handled
 
     def on_state_change(self, new_state):
         if new_state == 2:
@@ -87,14 +82,8 @@ class BoxCreator(DMPrimitiveCreator):
                 self.height = 0.001
         self.update_ui()
 
-    def apply_height(self, height):
-        if self.locked_height is not None:
-            self.height = self.locked_height
-        else:
-            self.height = height
-            
-        if abs(self.height) < 0.001:
-            self.height = 0.001 if self.height >= 0 else -0.001
+    def apply_height(self, height_delta):
+        super().apply_height(height_delta)
 
         # Auto-Cutter / Fuse Logic
         if not self.manual_mode_override and self.snap_face:
@@ -127,26 +116,5 @@ class BoxCreator(DMPrimitiveCreator):
         if debug_pt:
             params["debug_pt"] = debug_pt
             
-        self.update_dm_preview("box", params, placement=self.working_plane)
+        self.update_nurbs_preview("box", params, placement=self.working_plane)
 
-    def _do_finish(self):
-        if not self.start_point or (not self.current_point and self.state == 1):
-            self.terminate()
-            return
-
-        lp1 = self.to_local(self.start_point)
-        lp2 = self.to_local(self.current_point)
-        h = self.height
-        
-        dx = lp2.x - lp1.x
-        dy = lp2.y - lp1.y
-        
-        params = {
-            "length": dx,
-            "width":  dy,
-            "height": h
-        }
-        
-        from FCDirectModeling.dm_object import create_dm_object
-        create_dm_object("Box", "box", params, placement=self.working_plane)
-        self.terminate()

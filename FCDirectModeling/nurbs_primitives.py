@@ -103,8 +103,8 @@ def build_curve(points, periodic=False):
                 return shape
         
         return shape
-    except Exception as e:
-        import FreeCAD
-        FreeCAD.Console.PrintLog(f"DEBUG: build_curve failed: {e}\n")
+    except Exception:
+        from FCDirectModeling import dm_logger
+        dm_logger.exception("build_curve failed")
         # Fallback to simple polygon/wire
         return Part.makePolygon(points)

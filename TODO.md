@@ -34,7 +34,7 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
 
 ---
 
-### 8. Refactor primitive creators to use NURBS instead of SDF (Complexity: 5/10)
+### 8. Refactor primitive creators to use NURBS instead of SDF [x] (Complexity: 5/10)
 
 - **Goal**: Update `primitives/base.py` and all creator subclasses to produce NURBS shapes instead of SDF meshes during preview and finalization.
 - **Files to read**:
@@ -300,3 +300,5 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
 - **Acceptance**: Select an edge → a dimension label showing its length appears in the viewport. Select a circular edge → radius is displayed. Click two points → the distance between them is shown.
 
 ---
+
+Open sketcher tool should create a new sketch on the workplane, not switch to the sketcher workbench.

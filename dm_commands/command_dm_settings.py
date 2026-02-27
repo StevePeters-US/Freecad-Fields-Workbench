@@ -10,7 +10,7 @@ from PySide import QtGui, QtCore
 class CommandDMSettings:
     def GetResources(self):
         return {
-            'Pixmap':   'Std_Options',
+            'Pixmap':   'preferences-system',
             'MenuText': 'DM Settings',
             'ToolTip':  'Configure Direct Modeling settings (mesh algorithm, resolution…)',
         }
