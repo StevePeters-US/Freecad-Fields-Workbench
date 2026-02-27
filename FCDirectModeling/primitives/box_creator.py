@@ -125,7 +125,11 @@ class BoxCreator(DMPrimitiveCreator):
         dy = p2_local.y - p1_local.y
         
         # Local offset to the minimal corner (where builders start)
-        min_corner_local = FreeCAD.Vector(min(0.0, dx), min(0.0, dy), min(0.0, h))
+        mc = FreeCAD.Vector(min(0.0, dx), min(0.0, dy), min(0.0, h))
+        
+        # LOGGING for debugging quadrant inversion
+        dm_logger.debug(f"BoxCreator.update_preview: start={self.start_point}, current={self.current_point}")
+        dm_logger.debug(f"BoxCreator.update_preview: dx={dx:.2f}, dy={dy:.2f}, wp_base={self.working_plane.Base}, mc={mc}")
         
         # Final World Placement is just the working_plane (which is centered at p1)
         final_placement = self.working_plane
@@ -134,7 +138,7 @@ class BoxCreator(DMPrimitiveCreator):
             "length": abs(dx), 
             "width": abs(dy), 
             "height": abs(h),
-            "min_corner_local": min_corner_local
+            "min_corner_local": mc
         }
         if debug_pt:
             params["debug_pt"] = debug_pt
@@ -383,7 +387,8 @@ class BoxCreator(DMPrimitiveCreator):
             "min_corner_local": min_corner_local
         }
         
-        dm_logger.debug(f"BoxCreator._do_finish: final_placement={final_placement.Base}, dims={params['length']}/{params['width']}/{params['height']}")
+        dm_logger.debug(f"BoxCreator._do_finish: start={self.to_local(self.start_point)}, current={self.to_local(self.current_point)}, h={h}")
+        dm_logger.debug(f"BoxCreator._do_finish: final_placement_base={final_placement.Base}, mc={min_corner_local}, dims={params['length']}/{params['width']}/{params['height']}")
         
         create_dm_object("Box", "box", params, placement=final_placement)
         self.terminate()

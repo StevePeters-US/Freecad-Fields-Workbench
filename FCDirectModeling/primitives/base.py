@@ -80,8 +80,27 @@ class PrimitiveCreatorBase:
             inv_y = y
             focal = self.view.getPoint(x, inv_y)
             
-            # Return raw getPoint result as requested to ensure visual alignment
-            return focal
+            # Re-implementing robust ray-plane intersection.
+            # Raw getPoint is at a fixed depth; we need to project onto target plane.
+            if _is_orthographic(self.view):
+                ray_origin = focal
+                ray_dir    = self.view.getViewDirection()
+            else:
+                ray_origin = _cam_pos(self.view)
+                ray_dir    = focal - ray_origin
+                ray_dir.normalize()
+
+            n = plane_normal or FreeCAD.Vector(0, 0, 1)
+            o = plane_point  or FreeCAD.Vector(0, 0, 0)
+
+            denom = ray_dir.dot(n)
+            if abs(denom) < 1e-6:
+                return o
+            t = (o - ray_origin).dot(n) / denom
+            pt = ray_origin + ray_dir * t
+            
+            # dm_logger.debug(f"DEBUG: Ray Intersection: {pt.x:.2f}, {pt.y:.2f}, {pt.z:.2f}")
+            return pt
         except Exception as e:
             dm_logger.debug(f"DEBUG: get_point_on_plane error: {e}")
             FreeCAD.Console.PrintError(f"get_point_on_plane: {e}\n")

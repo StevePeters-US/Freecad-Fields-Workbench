@@ -15,8 +15,15 @@ def build_box(length, width, height):
         return Part.Shape()
     
     if abs(height) < 0.001:
-        # Return a planar face for preview
-        face = Part.makePlane(length, width, App.Vector(0,0,0), App.Vector(0,0,1))
+        # Return a planar face for preview starting at (0,0,0)
+        # We manually build the polygon to be 100% sure of the orientation
+        p1 = App.Vector(0, 0, 0)
+        p2 = App.Vector(length, 0, 0)
+        p3 = App.Vector(length, width, 0)
+        p4 = App.Vector(0, width, 0)
+        
+        poly = Part.makePolygon([p1, p2, p3, p4, p1])
+        face = Part.Face(poly)
         return face.toNurbs()
         
     box = Part.makeBox(length, width, height)
