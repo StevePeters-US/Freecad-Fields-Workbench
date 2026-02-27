@@ -88,3 +88,6 @@ Tasks moved here from `TODO.md` after verification.
 
 ### ✅ Phase 0f: Clean up primitive_base.py
 - **Completed**: Removed dead code from primitive_base.py preview logic. Simplified _update_preview_object() to only handle NURBS curves.
+
+### ✅ Phase 1a: Create NurbsPoint class
+- **Completed**: Defined the NurbsPoint class in FCDirectModeling/nurbs_geometry.py. This class wraps FreeCAD.Vector with support for NURBS-specific metadata like handles and weights.
