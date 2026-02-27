@@ -40,6 +40,7 @@ class PrimitiveBase:
     def __init__(self):
         self._terminated = False
         self.view = FreeCADGui.activeView()
+        self.doc = FreeCAD.ActiveDocument
         if not self.view:
             # Try to get it from ActiveDocument as fallback
             try:
@@ -435,12 +436,12 @@ class PrimitiveBase:
 class NURBSPrimitiveCreator(PrimitiveBase):
     """
     Base for creators that produce a DM object.
-    Live preview updates the main object's shape directly.
+    Uses the actual DMObject for real-time feedback.
     """
 
     def __init__(self):
         super().__init__()
-        self._preview_obj = None   # Part::Feature used for live preview
+        self._active_obj = None    # The DMObject being created/edited
         self._finished = False     # Guard for finalization
 
         self._last_shape_type = None
@@ -451,13 +452,12 @@ class NURBSPrimitiveCreator(PrimitiveBase):
         self._preview_cursor = None # Crosshair object
 
     # ------------------------------------------------------------------
-    # Preview — create once, replace .Shape in-place 
+    # Active Object Updates
     # ------------------------------------------------------------------
 
-    def update_nurbs_preview(self, shape_type, params, placement=None):
+    def update_active_object(self, shape_type, params, placement=None):
         """
-        Updates the NURBS preview object. 
-        Building NURBS primitives is fast, so we update directly.
+        Updates the active DM object or creates it if it doesn't exist.
         """
         if self._terminated:
             return
@@ -469,97 +469,80 @@ class NURBSPrimitiveCreator(PrimitiveBase):
         if "debug_pt" in params:
             self._debug_pt = params["debug_pt"]
         
-        # Track placement for finalization
+        # Track placement
         if placement:
             self._last_placement = placement
         elif hasattr(self, "working_plane"):
             self._last_placement = self.working_plane
         
-        self._update_preview_object()
-
-    def _update_preview_object(self):
-        if self._terminated:
-            return
-
-        try:
-            shape_type = self._last_shape_type
-            params = self._last_shape_params
-            if not shape_type or not params:
-                return
-
-            from .. import nurbs_primitives
-            import Part
-
-            # Build the raw shape at origin
-            if shape_type == "curve":
-                shape = nurbs_primitives.build_curve(params.get("points", []))
-            else:
-                shape = Part.Shape()
-
-            doc = FreeCAD.activeDocument()
-            if not doc:
-                return
-
-            # Hierarchy: Part::Feature (DM_Preview)
-            if self._preview_obj is None or self._preview_obj not in doc.Objects:
-                self._preview_obj = doc.addObject("Part::Feature", "DM_Preview")
-                if hasattr(self._preview_obj, "ViewObject") and self._preview_obj.ViewObject:
-                    try:
-                        if not shape.isNull():
-                            self._preview_obj.Shape = shape
-                        self._preview_obj.ViewObject.Visibility = True
-                        self._preview_obj.ViewObject.ShapeColor = (0.20, 0.60, 0.85)
-                        self._preview_obj.ViewObject.Transparency = 50 # More transparent for preview
-                        self._preview_obj.ViewObject.DisplayMode = "Flat Lines"
-                        self._preview_obj.ViewObject.Selectable = False
-                    except Exception as e:
-                        dm_logger.error(f"DEBUG: preview assign error: {e}")
-
-            # Update shape and placement
-            if not shape.isNull():
-                self._preview_obj.Shape = shape
-            if self._last_placement:
-                 self._preview_obj.Placement = self._last_placement
-
-            # Update Debug Cursor(s)
-            debug_pts = []
-            if self.start_point: debug_pts.append(self.start_point)
-            if self.current_point: debug_pts.append(self.current_point)
+        # Create or update
+        if self._active_obj is None:
+            from FCDirectModeling.dm_object import create_dm_object
+            self._active_obj = create_dm_object("DMObject", shape_type, params, placement=self._last_placement)
+            # Set initial label if possible
+            if self._active_obj:
+                self._active_obj.Label = shape_type.capitalize()
+        else:
+            # Update properties
+            for k, v in params.items():
+                if hasattr(self._active_obj, k):
+                    setattr(self._active_obj, k, v)
+                elif k == "Position" and placement is None: # Special case for position update if not using placement
+                    self._active_obj.Placement.Base = v
             
-            # Plus any explicit debug_pt passed in params
-            if "debug_pt" in params and params["debug_pt"] not in debug_pts:
-                debug_pts.append(params["debug_pt"])
+            if placement:
+                self._active_obj.Placement = placement
+            
+            self._active_obj.touch()
+            if self.doc:
+                self.doc.recompute()
 
-            if debug_pts:
-                if self._preview_cursor is None or self._preview_cursor not in doc.Objects:
-                    self._preview_cursor = doc.addObject("Part::Feature", "DM_DebugCursor")
+        # Update Crosshair Cursor
+        debug_pt = params.get("debug_pt")
+        if debug_pt and self.doc:
+            try:
+                if self._preview_cursor is None or self._preview_cursor.Name not in self.doc.Objects:
+                    from FCDirectModeling.dm_object import get_point_size
+                    self._preview_cursor = self.doc.addObject("Part::Feature", "DM_Cursor")
                     if hasattr(self._preview_cursor, "ViewObject") and self._preview_cursor.ViewObject:
-                        self._preview_cursor.ViewObject.ShapeColor = (0.0, 0.4, 1.0) # Blue
-                        self._preview_cursor.ViewObject.LineColor = (0.0, 0.4, 1.0)
-                        self._preview_cursor.ViewObject.LineWidth = 3.0
-                        self._preview_cursor.ViewObject.PointSize = 10.0
+                        self._preview_cursor.ViewObject.ShapeColor = (0.0, 0.4, 1.0)
+                        self._preview_cursor.ViewObject.PointSize = get_point_size() * 1.5
+                        self._preview_cursor.ViewObject.LineWidth = 2.0
                         self._preview_cursor.ViewObject.Selectable = False
                         if hasattr(self._preview_cursor.ViewObject, "LightModel"):
                             self._preview_cursor.ViewObject.LightModel = "NoLight"
                         if hasattr(self._preview_cursor, "ShowInTree"):
                              self._preview_cursor.ShowInTree = False
 
-                # Create a compound of crosshairs
-                crosses = []
-                for pt in debug_pts:
-                    crosses.extend([
-                        Part.makeLine((pt.x-5,pt.y,pt.z),(pt.x+5,pt.y,pt.z)),
-                        Part.makeLine((pt.x,pt.y-5,pt.z),(pt.x,pt.y+5,pt.z)),
-                        Part.makeLine((pt.x,pt.y,pt.z-5),(pt.x,pt.y,pt.z+5))
-                    ])
-                self._preview_cursor.Shape = Part.Compound(crosses)
-                self._preview_cursor.Placement = FreeCAD.Placement()
+                # Create a simple cross shape
+                import Part
+                cross = Part.Compound([
+                    Part.makeLine((debug_pt.x-2,debug_pt.y,debug_pt.z),(debug_pt.x+2,debug_pt.y,debug_pt.z)),
+                    Part.makeLine((debug_pt.x,debug_pt.y-2,debug_pt.z),(debug_pt.x,debug_pt.y+2,debug_pt.z)),
+                    Part.makeLine((debug_pt.x,debug_pt.y,debug_pt.z-2),(debug_pt.x,debug_pt.y,debug_pt.z+2))
+                ])
+                self._preview_cursor.Shape = cross
+            except Exception:
+                pass
 
-            FreeCADGui.updateGui()
-
-        except Exception as e:
-            dm_logger.debug(f"DEBUG: _update_preview_object error: {e}")
-            pass
+    def terminate(self):
+        """Clean up: delete active object if not finished."""
+        if self._terminated:
+            return
+        
+        super().terminate()
+        
+        if not self._finished and self._active_obj:
+            try:
+                # Use FreeCAD.ActiveDocument if self.doc is stale or None
+                doc = self.doc or FreeCAD.ActiveDocument
+                if doc and self._active_obj.Name in doc.Objects:
+                    doc.removeObject(self._active_obj.Name)
+                    doc.recompute()
+            except Exception:
+                pass
+        
+        self._active_obj = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -568,6 +551,7 @@ class NURBSPrimitiveCreator(PrimitiveBase):
     def finish(self):
         """Schedule the finalization to happen safely outside the event loop."""
         QtCore.QTimer.singleShot(0, self._do_finish)
+
 
     def _do_finish(self):
         """Standard finalization for all DM primitives."""
@@ -602,24 +586,6 @@ class NURBSPrimitiveCreator(PrimitiveBase):
         except Exception:
             pass
 
-    def terminate(self):
-        """Remove preview objects and unregister the event callback."""
-        if self._preview_obj is not None:
-            try:
-                doc = FreeCAD.activeDocument()
-                if doc:
-                    # Remove debug cursor
-                    if self._preview_cursor is not None:
-                        if self._preview_cursor in doc.Objects:
-                            doc.removeObject(self._preview_cursor.Name)
-                        self._preview_cursor = None
-                    # Remove the preview object
-                    if self._preview_obj in doc.Objects:
-                        doc.removeObject(self._preview_obj.Name)
-                    doc.recompute()
-            except Exception as e:
-                dm_logger.debug(f"Error removing preview objects: {e}")
-            self._preview_obj = None
-        super().terminate()
+
 
 

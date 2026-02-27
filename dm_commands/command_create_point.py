@@ -9,7 +9,7 @@ class DM_CreatePoint:
         return {
             'Pixmap': 'Draft_Point',
             'MenuText': 'Create Point',
-            'ToolTip': 'Place a NURBS point',
+            'ToolTip': 'Place a DM point',
             'Accel': 'P'
         }
 

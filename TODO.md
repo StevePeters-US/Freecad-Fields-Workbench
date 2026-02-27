@@ -24,13 +24,7 @@ no prior context beyond the files listed. Follow this template:
 
 ## Architecture Overview
 
-> **Principle**: `Part.BSplineSurface` is the native geometry — NOT BRep shells or solids. The three atoms are **Point**, **Edge (BSplineCurve)**, and **Patch (BSplineSurface)**. BRep is only used for conversion/export. The primary workflow is: draw a curve → extrude into a surface → compose.
-
----
-
-## Phase 0: Strip Legacy Code
-
-These tasks remove code that no longer fits the pure-NURBS architecture.
+> **Principle**: `Part.BSplineSurface` is the native geometry — NOT BRep shells or solids. The three atoms are **DMPoint**, **DMCurve (BSplineCurve)**, and **DMPatch (BSplineSurface)**. BRep is only used for conversion/export. The primary workflow is: draw a curve → extrude into a surface → compose.
 
 ---
 
@@ -40,55 +34,23 @@ These tasks build the curve→surface workflow.
 
 ---
 
-### 1a. Create NurbsPoint class (Complexity: 2/10)
+### 1b. Create DMCurve class (Complexity: 3/10)
 
-- **Goal**: Define a `NurbsPoint` class wrapping a `FreeCAD.Vector` with optional control handles for smooth/sharp corners.
-- **Files to create**:
-  - `FCDirectModeling/nurbs_geometry.py`
-- **Steps**:
-  1. Create `FCDirectModeling/nurbs_geometry.py`.
-  2. Define:
-     ```python
-     import FreeCAD
-
-     class NurbsPoint:
-         """3D point with optional control handles for NURBS curves."""
-         def __init__(self, position, handle_in=None, handle_out=None, weight=1.0):
-             self.position = FreeCAD.Vector(position)
-             self.handle_in = handle_in     # FreeCAD.Vector or None
-             self.handle_out = handle_out   # FreeCAD.Vector or None
-             self.weight = weight
-
-         def to_vector(self):
-             return FreeCAD.Vector(self.position)
-
-         def is_sharp(self):
-             return self.handle_in is None and self.handle_out is None
-
-         def __repr__(self):
-             return f"NurbsPoint({self.position.x:.2f}, {self.position.y:.2f}, {self.position.z:.2f})"
-     ```
-- **Acceptance**: `NurbsPoint(FreeCAD.Vector(1,2,3)).to_vector()` returns `Vector(1,2,3)`. `.is_sharp()` returns `True` when no handles set.
-
----
-
-### 1b. Create NurbsEdge class (Complexity: 3/10)
-
-- **Goal**: A `NurbsEdge` class that builds a `Part.BSplineCurve` from `NurbsPoint` objects.
+- **Goal**: A `DMCurve` class that builds a `Part.BSplineCurve` from `DMPoint` objects.
 - **Files to read**:
-  - `FCDirectModeling/nurbs_geometry.py` — the `NurbsPoint` class (task 1a).
+  - `FCDirectModeling/nurbs_geometry.py` — the `DMPoint` class (task 1a).
   - FreeCAD `Part.BSplineCurve` docs — `buildFromPolesMultsKnots()`, `interpolate()`.
 - **Files to modify**:
-  - `FCDirectModeling/nurbs_geometry.py` — add `NurbsEdge`.
+  - `FCDirectModeling/nurbs_geometry.py` — add `DMCurve`.
 - **Steps**:
-  1. Add class `NurbsEdge`:
+  1. Add class `DMCurve`:
      ```python
      import Part
 
-     class NurbsEdge:
-         """NURBS curve from a sequence of NurbsPoint objects."""
+     class DMCurve:
+         """NURBS curve from a sequence of DMPoint objects."""
          def __init__(self, points, degree=3):
-             self.points = list(points)  # List[NurbsPoint]
+             self.points = list(points)  # List[DMPoint]
              self.degree = degree
      ```
   2. Method `to_bspline_curve() -> Part.BSplineCurve`:
@@ -96,25 +58,25 @@ These tasks build the curve→surface workflow.
      - If handles exist: build poles array = `[p.handle_in, p.position, p.handle_out, ...]` and use `buildFromPolesMultsKnots` with appropriate multiplicity.
   3. Method `to_shape() -> Part.Shape`: calls `self.to_bspline_curve().toShape()`.
   4. Property `is_closed`: returns `True` if first and last positions within 0.001 distance.
-- **Acceptance**: `NurbsEdge([NurbsPoint(V(0,0,0)), NurbsPoint(V(10,0,0))]).to_shape()` returns a valid `Part.Edge`.
+- **Acceptance**: `DMCurve([DMPoint(V(0,0,0)), DMPoint(V(10,0,0))]).to_shape()` returns a valid `Part.Edge`.
 
 ---
 
-### 1c. Create NurbsPatch class (Complexity: 4/10)
+### 1c. Create DMPatch class (Complexity: 4/10)
 
-- **Goal**: A `NurbsPatch` class that builds a `Part.BSplineSurface` from a control point grid.
+- **Goal**: A `DMPatch` class that builds a `Part.BSplineSurface` from a control point grid.
 - **Files to read**:
-  - `FCDirectModeling/nurbs_geometry.py` — `NurbsPoint`, `NurbsEdge` (tasks 1a, 1b).
+  - `FCDirectModeling/nurbs_geometry.py` — `DMPoint`, `DMCurve` (tasks 1a, 1b).
   - FreeCAD `Part.BSplineSurface` docs — `buildFromPolesMultsKnots()`.
 - **Files to modify**:
-  - `FCDirectModeling/nurbs_geometry.py` — add `NurbsPatch`.
+  - `FCDirectModeling/nurbs_geometry.py` — add `DMPatch`.
 - **Steps**:
-  1. Add class `NurbsPatch`:
+  1. Add class `DMPatch`:
      ```python
-     class NurbsPatch:
+     class DMPatch:
          """NURBS surface from a control point grid."""
          def __init__(self, control_grid, u_degree=1, v_degree=1):
-             self.control_grid = control_grid  # List[List[NurbsPoint]] — rows x cols
+             self.control_grid = control_grid  # List[List[DMPoint]] — rows x cols
              self.u_degree = u_degree
              self.v_degree = v_degree
      ```
@@ -126,7 +88,7 @@ These tasks build the curve→surface workflow.
      - Call `bs = Part.BSplineSurface()` then `bs.buildFromPolesMultsKnots(poles, umults, vmults, uknots, vknots, False, False, udeg, vdeg, weights)`.
      - Return `bs`.
   4. Method `to_face() -> Part.Face`: `Part.Face(self.to_bspline_surface().toShape())`. This creates a `Part.Face` for display but the **canonical representation is the BSplineSurface itself**, not the face.
-- **Acceptance**: `NurbsPatch.from_corners(p1,p2,p3,p4).to_bspline_surface()` returns a valid `Part.BSplineSurface`. `.to_face()` returns a displayable `Part.Face`.
+- **Acceptance**: `DMPatch.from_corners(p1,p2,p3,p4).to_bspline_surface()` returns a valid `Part.BSplineSurface`. `.to_face()` returns a displayable `Part.Face`.
 
 ---
 
@@ -134,7 +96,7 @@ These tasks build the curve→surface workflow.
 
 - **Goal**: Extrude a `Part.BSplineCurve` (edge) along a direction vector to produce a `Part.BSplineSurface`. This is the core curve→surface operation. The result is a BSplineSurface, NOT a BRep solid.
 - **Files to read**:
-  - `FCDirectModeling/nurbs_geometry.py` — `NurbsEdge`, `NurbsPatch` (tasks 1b, 1c).
+  - `FCDirectModeling/nurbs_geometry.py` — `DMCurve`, `DMPatch` (tasks 1b, 1c).
   - `FCDirectModeling/nurbs_primitives.py` — `build_curve()` for how curves are made.
   - FreeCAD `Part.BSplineSurface` and `Part.BSplineCurve` API.
 - **Files to modify**:
@@ -349,20 +311,18 @@ These tasks build the curve→surface workflow.
   3. Store setting in `FreeCAD.ParamGet("User parameter:FCDirectModeling").SetBool("BoolUseInstance", True)`.
 - **Acceptance**: Fuse two objects → original second object hidden, instance used for result.
 
----
-
-### 3c. Linear Array command (Complexity: 4/10)
-
-- **Goal**: Repeat a shape along a direction vector.
-- **Files to create**:
-  - `dm_commands/command_array.py`
-- **Files to modify**:
-  - `InitGui.py`
-- **Steps**:
-  1. Dialog: count, direction vector, spacing, fuse checkbox.
-  2. For each copy: `shape.translated(direction * spacing * i)`.
-  3. If fuse: `result.fuse(copy)` iteratively, then `removeSplitter()`.
-  4. Create result as `Part::Feature`.
+- [x] **1a. Create DMPoint class** (Complexity: 2/10)
+- [x] **1f. Create Point tool** (Complexity: 3/10)
+- [x] **1g. Improve Curve Tool Visibility and Functionality** (Complexity: 4/10)
+- [x] **1h. Fix Curve Plane Projection and Interpolation** (Complexity: 3/10)
+- [ ] **1j. Unify Preview and Final Objects** (Complexity: 5/10)
+    - **Goal**: Eliminate the separate `DM_Preview` object. Use a real `DMObject` that updates its properties in real-time.
+    - **Files to modify**: `FCDirectModeling/primitives/primitive_base.py`, `FCDirectModeling/primitives/curve_creator.py`, `FCDirectModeling/dm_object.py`.
+    - **Steps**:
+      1. Refactor `NURBSPrimitiveCreator` to manage a "live" `DMObject`.
+      2. Update `update_nurbs_preview` to set properties on the live object and trigger `recompute()`.
+      3. Maintain an `is_finalized` flag to delete the object on `terminate` if not finished.
+      4. Simplify `finish` logic in subclasses.
 - **Acceptance**: Array a surface 5 times along X → 5 translated copies (or one fused shape).
 
 ---

@@ -4,7 +4,7 @@ from .primitive_base import NURBSPrimitiveCreator
 from FCDirectModeling import dm_logger
 
 class PointCreator(NURBSPrimitiveCreator):
-    """Tool to create a NurbsPoint object at a clicked location."""
+    """Tool to create a DMPoint object at a clicked location."""
     
     def __init__(self):
         super().__init__()
@@ -22,11 +22,8 @@ class PointCreator(NURBSPrimitiveCreator):
 
             dm_logger.info(f"Placing point at: {pt}")
             
-            # Finalize immediately
-            from FCDirectModeling.dm_object import create_dm_object
-            create_dm_object("Point", "point", {"position": pt})
-            
-            self.terminate()
+            self.update_active_object("point", {"Position": pt, "debug_pt": pt})
+            self._do_finish()
             return True
         except Exception:
             dm_logger.exception("PointCreator.handle_click error")
@@ -34,16 +31,18 @@ class PointCreator(NURBSPrimitiveCreator):
 
     def handle_move(self, event_dict):
         # Update point preview (just the crosshair)
-        raw_pt = self.get_mouse_world_pos(event_dict)
-        self.update_preview(debug_pt=raw_pt)
-        
-    def update_preview(self, debug_pt=None):
-        if self._terminated:
-            return
-            
-        params = {}
-        if debug_pt:
-            params["debug_pt"] = debug_pt
-            
-        # Point tool doesn't have a shape-body preview, just the cursor
-        self.update_nurbs_preview("point", params)
+        pt = self.get_mouse_world_pos(event_dict)
+        # We don't create/update a DMObject on hover for points, 
+        # but we do for the cursor.
+        # Actually, let's stick to the rule: unify objects.
+        # For a point tool, we maybe don't want to create it until click?
+        # User said: "remove the concept of a preview and final mesh. They should be the same."
+        # If I create it on move, it will follow the mouse.
+        # Let's create it on move if it doesn't exist.
+        if pt:
+            self.update_active_object("point", {"Position": pt, "debug_pt": pt})
+
+    def _do_finish(self):
+        if self._active_obj:
+            self._finished = True
+        self.terminate()

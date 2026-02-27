@@ -6,10 +6,12 @@ from .primitive_base import NURBSPrimitiveCreator
 from FCDirectModeling import dm_logger
 
 class CurveCreator(NURBSPrimitiveCreator):
+    """Tool to create a DMCurve object from clicked points."""
     def __init__(self):
         super().__init__()
         self.points = []
-        self.is_finished = False
+        self.is_closed = False
+        self.current_point = None
 
     def handle_click(self, event_dict):
         try:
@@ -52,11 +54,17 @@ class CurveCreator(NURBSPrimitiveCreator):
             
             # In state 1, subsequent clicks add points
             elif self.state == 1:
+                # Ensure point is on the established plane
+                n, o = self.get_base_plane()
+                pt = self.get_mouse_world_pos(event_dict, n, o)
+                if pt is None:
+                    return False
+
                 # Check for click on start point (close the curve)
                 if len(self.points) >= 2:
                     dist = (pt - self.points[0]).Length
                     if dist < 1.0: # Snapping distance for click
-                        self.points.append(self.points[0]) # Exact close
+                        self.is_closed = True
                         self.finish()
                         return True
 
@@ -77,7 +85,11 @@ class CurveCreator(NURBSPrimitiveCreator):
             super().handle_move(event_dict)
         elif self.state == 1:
             # Update temporary "current_point" for preview
-            pt = self.get_mouse_world_pos(event_dict)
+            # Ensure point is on the established plane
+            n, o = self.get_base_plane()
+            pt = self.get_mouse_world_pos(event_dict, n, o)
+            if pt is None:
+                return
             
             # Snapping to start point
             if len(self.points) >= 2:
@@ -101,37 +113,67 @@ class CurveCreator(NURBSPrimitiveCreator):
             
         return super().handle_keyboard(event_dict)
 
+    def _get_auto_handles(self):
+        """Compute automatic smooth handles for each point."""
+        if len(self.points) < 2:
+            return [], []
+            
+        h_in = [None] * len(self.points)
+        h_out = [None] * len(self.points)
+        
+        # Simple Catmull-Rom like tangent: T_i = (P_{i+1} - P_{i-1}) / 2
+        # Handle distance = 1/3 of segment length
+        for i in range(len(self.points)):
+            p = self.points[i]
+            prev_p = self.points[i-1] if i > 0 else (self.points[1] - (self.points[1]-self.points[0]) if len(self.points) > 1 else p)
+            next_p = self.points[i+1] if i < len(self.points)-1 else (self.points[-1] + (self.points[-1]-self.points[-2]) if len(self.points) > 1 else p)
+            
+            tangent = (next_p - prev_p) * 0.5
+            h_in[i] = p - tangent * 0.33
+            h_out[i] = p + tangent * 0.33
+            
+        return h_in, h_out
+
     def update_preview(self, debug_pt=None):
         if not self.points:
             return
-            
-        # Preview curve = confirmed points + current mouse position
-        preview_points = list(self.points)
-        if self.current_point and self.state == 1:
-            preview_points.append(self.current_point)
-            
+        pts = list(self.points)
+        if self.current_point:
+            pts.append(self.current_point)
+        
+        # Prepare parameters for DMObject
         params = {
-            "points": preview_points
+            "Points": pts,
+            "is_closed": self.is_closed
         }
+        
+        # Calculate auto-handles for preview if we have enough points
+        if len(pts) >= 2:
+            hi, ho = self._get_auto_handles()
+            params["HandleIn"] = hi
+            params["HandleOut"] = ho
+        
         if debug_pt:
             params["debug_pt"] = debug_pt
             
-        self.update_nurbs_preview("curve", params, placement=FreeCAD.Placement())
+        self.update_active_object("curve", params)
 
     def update_ui(self):
         # Optional: update panel with point count or last segment length
         pass
 
     def _do_finish(self):
+        """Finalize the curve."""
         if len(self.points) < 2:
             self.terminate()
             return
-            
-        params = {
-            "points": self.points
-        }
-        
-        from FCDirectModeling.dm_object import create_dm_object
-        create_dm_object("Curve", "curve", params, placement=FreeCAD.Placement())
-        self.terminate()
 
+        # Ensure active object is fully updated one last time
+        self.update_preview()
+        
+        self._finished = True
+        dm_logger.debug(f"Curve finalized: {self._active_obj.Name if self._active_obj else 'None'}")
+        
+        # Reset but keep object
+        self._active_obj = None
+        self.terminate()

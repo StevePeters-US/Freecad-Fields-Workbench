@@ -29,6 +29,20 @@ def get_show_wireframe():
 def set_show_wireframe(show):
     FreeCAD.ParamGet(_PARAM_PATH).SetBool("ShowWireframe", bool(show))
 
+def get_line_width():
+    """Return the line width for DM objects."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("LineWidth", 3.0)
+
+def set_line_width(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("LineWidth", float(val))
+
+def get_point_size():
+    """Return the point size for DM objects."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("PointSize", 8.0)
+
+def set_point_size(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("PointSize", float(val))
+
 
 
 
@@ -42,7 +56,6 @@ def set_show_wireframe(show):
 class DMObjectProxy:
     def __init__(self, obj, shape_type, params=None, placement=None):
         obj.Proxy = self
-        self.is_preview = False
         
         if not hasattr(obj, "ShapeType"):
             obj.addProperty("App::PropertyString", "ShapeType", "DM", "Type of primitive")
@@ -59,12 +72,33 @@ class DMObjectProxy:
         if shape_type == "curve":
             if not hasattr(obj, "Points"):
                 obj.addProperty("App::PropertyVectorList", "Points", "Curve", "Spline fit points")
-            obj.Points = params.get("points", [])
+            if not hasattr(obj, "HandleIn"):
+                obj.addProperty("App::PropertyVectorList", "HandleIn", "Curve", "Inbound tangent handles")
+            if not hasattr(obj, "HandleOut"):
+                obj.addProperty("App::PropertyVectorList", "HandleOut", "Curve", "Outbound tangent handles")
+            obj.Points = params.get("Points", [])
+            obj.HandleIn = params.get("HandleIn", [])
+            obj.HandleOut = params.get("HandleOut", [])
         elif shape_type == "point":
             if not hasattr(obj, "Position"):
                 obj.addProperty("App::PropertyVector", "Position", "Point", "Position")
-            obj.Position = params.get("position", FreeCAD.Vector(0,0,0))
-        # Future: "surface" shape type for BSplineSurface patches
+            obj.Position = params.get("Position", FreeCAD.Vector(0,0,0))
+        elif shape_type == "patch":
+            if not hasattr(obj, "ControlGrid"):
+                # Nested list of vectors is not a standard FreeCAD property type.
+                # Use App::PropertyString to store it as a JSON string or just use 
+                # a flat PropertyVectorList and store the grid dimensions.
+                # For now, let's use PropertyVectorList and a separate UCount/VCount.
+                obj.addProperty("App::PropertyVectorList", "ControlGrid", "Patch", "Control point grid")
+                obj.addProperty("App::PropertyInteger", "UCount", "Patch", "Width of grid")
+                obj.addProperty("App::PropertyInteger", "VCount", "Patch", "Height of grid")
+            
+            grid = params.get("ControlGrid", [[]])
+            if grid and grid[0]:
+                obj.UCount = len(grid[0])
+                obj.VCount = len(grid)
+                flat_list = [p for row in grid for p in row]
+                obj.ControlGrid = flat_list
 
     def build_shape(self, fp):
         """Return a Part.Shape based on the object's properties."""
@@ -72,10 +106,38 @@ class DMObjectProxy:
         
         st = fp.ShapeType
         if st == "curve":
-            return np_builders.build_curve(fp.Points)
+            # Points are stored as VectorList on the object
+            from .nurbs_geometry import DMCurve, DMPoint
+            
+            pts = fp.Points
+            h_in = fp.HandleIn if hasattr(fp, "HandleIn") else []
+            h_out = fp.HandleOut if hasattr(fp, "HandleOut") else []
+            
+            dm_points = []
+            for i, p in enumerate(pts):
+                hi = h_in[i] if i < len(h_in) else None
+                ho = h_out[i] if i < len(h_out) else None
+                dm_points.append(DMPoint(p, handle_in=hi, handle_out=ho))
+                
+            curve = DMCurve(dm_points)
+            return curve.to_shape()
         elif st == "point":
             return Part.Point(fp.Position).toShape()
-        # Future: "surface" shape type
+        elif st == "patch":
+            from .nurbs_geometry import DMPatch
+            
+            grid = []
+            u_count = fp.UCount
+            v_count = fp.VCount
+            flat_list = fp.ControlGrid
+            
+            if u_count > 0 and v_count > 0 and len(flat_list) == u_count * v_count:
+                for v in range(v_count):
+                    row = flat_list[v*u_count : (v+1)*u_count]
+                    grid.append(row)
+            
+            patch = DMPatch(grid)
+            return patch.to_shape()
             
         return Part.Shape()
 
@@ -89,7 +151,7 @@ class DMObjectProxy:
             new_shape = self.build_shape(fp)
             
             if new_shape.isNull():
-                 dm_logger.warning(f"DMObjectProxy: Built NULL shape for {fp.Label}")
+                 dm_logger.debug(f"DMObjectProxy: Built NULL shape for {fp.Label} (expected if object is empty)")
             else:
                  dm_logger.debug(f"DMObjectProxy: Shape built. Faces={len(new_shape.Faces)}, BoundBox={new_shape.BoundBox}")
                  
@@ -106,7 +168,14 @@ class DMViewProvider:
     """ViewProvider for DM objects. Shows an orange part icon."""
     def __init__(self, vobj):
         vobj.Proxy = self
+        self.setup_view(vobj)
         
+    def setup_view(self, vobj):
+        vobj.ShapeColor = (0.8, 0.5, 0.2)
+        vobj.LineWidth = get_line_width()
+        vobj.PointSize = get_point_size()
+        vobj.DisplayMode = "Flat Lines"
+
     def attach(self, vobj):
         self.Object = vobj.Object
         
@@ -154,7 +223,7 @@ class DMViewProvider:
 # Factory
 # ─────────────────────────────────────────────────────────────────────────────
 
-def create_dm_object(name, shape_type, params=None, is_preview=False, placement=None):
+def create_dm_object(name, shape_type, params=None, placement=None):
     """
     Create a DM object (Part::FeaturePython).
     """
@@ -168,7 +237,6 @@ def create_dm_object(name, shape_type, params=None, is_preview=False, placement=
         dm_logger.debug(f"create_dm_object: name={name}, type={shape_type}, has_placement={placement is not None}")
         obj = doc.addObject("Part::FeaturePython", name)
         DMObjectProxy(obj, shape_type, params, placement=placement)
-        obj.Proxy.is_preview = is_preview
 
         if FreeCAD.GuiUp:
             DMViewProvider(obj.ViewObject)

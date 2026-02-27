@@ -73,13 +73,12 @@ Freecad-Direct-Modeling/
 
 ## Workbench Goals
 
-1. **`Part.BSplineSurface` is the native format** — no `Part.Shell`, `Part.Solid`, or BRep topology in the modeling pipeline. BRep is only used for conversion/export.
-2. **Curve-first workflow** — draw a NURBS curve, extrude it to a surface, compose surfaces. This is the fundamental loop.
-3. **Fast and precise** — radial menus and hotkeys for all operations. Minimal mouse travel.
-4. **Tangent workplane** — automatically sits tangent to whatever surface the cursor is over.
-5. **Instance and Copy system** — linked instances vs independent copies. Booleans operate on instances by default (toggleable), hiding the original.
-6. **Real-time preview** — live NURBS curve/surface preview during interaction.
-7. **NURBS ↔ BRep bridge** — convert to BRep for STEP/IGES export or interop; convert imported BRep back to NURBS for editing.
+1. **Principle**: `Part.BSplineSurface` is the native geometry — NOT BRep shells or solids. The three atoms are **DMPoint**, **DMCurve (BSplineCurve)**, and **DMPatch (BSplineSurface)**. BRep is only used for conversion/export. The primary workflow is: draw a curve → extrude into a surface → compose surfaces. This is the fundamental loop.
+2. **Fast and precise** — radial menus and hotkeys for all operations. Minimal mouse travel.
+3. **Tangent workplane** — automatically sits tangent to whatever surface the cursor is over.
+4. **Instance and Copy system** — linked instances vs independent copies. Booleans operate on instances by default (toggleable), hiding the original.
+5. **Real-time preview** — live NURBS curve/surface preview during interaction.
+6. **NURBS ↔ BRep bridge** — convert to BRep for STEP/IGES export or interop; convert imported BRep back to NURBS for editing.
 
 ---
 
