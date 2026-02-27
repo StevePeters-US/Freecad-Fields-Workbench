@@ -62,6 +62,8 @@ class PrimitiveCreatorBase:
         except Exception:
             pass
 
+    # Removed _get_y_inverted in favor of inline diagnostic logic in get_point_on_plane
+
     def finish(self):
         pass
 
@@ -69,11 +71,24 @@ class PrimitiveCreatorBase:
     # Geometry helpers — use FreeCAD view API, not Coin3D directly
     # ------------------------------------------------------------------
 
-    def get_point_on_plane(self, event_dict, plane_normal=None, plane_point=None):
-        """Project cursor onto a world-space plane. Defaults to Z=0."""
+    def get_point_on_plane(self, event_dict, plane_normal, plane_point):
+        """Standard Ray-Plane Intersection using FreeCAD Raycasting."""
         try:
-            pos = event_dict["Position"]
-            focal = self.view.getPoint(pos[0], pos[1])
+            x = event_dict['Position'][0]
+            y = event_dict['Position'][1]
+            
+            # TELEMETRY: Get viewport size
+            v_size = self.view.getSize()
+            w, h = (v_size[0], v_size[1]) if v_size else (0, 0)
+            
+            # DIAGNOSTIC: Test "No Inversion" for Y (maybe events are already top-down)
+            # raw_y top-down: h=0 at top
+            inv_y = y # TEST: Use raw y
+            
+            print(f"[DEBUG] COORD_DIAG: raw_x={x}, raw_y={y}, w={w}, h={h}, used_y={inv_y}")
+            
+            # getPoint expects (x, y) where y=0 is TOP
+            focal = self.view.getPoint(x, inv_y)
 
             if _is_orthographic(self.view):
                 ray_origin = focal
@@ -91,6 +106,8 @@ class PrimitiveCreatorBase:
                 return o
             t = (o - ray_origin).dot(n) / denom
             pt = ray_origin + ray_dir * t
+            
+            print(f"[DEBUG] Intersection: pt={pt.x:.2f},{pt.y:.2f},{pt.z:.2f}, focal_y={focal.y:.2f}")
             return pt
         except Exception as e:
             sdf_logger.debug(f"DEBUG: get_point_on_plane error: {e}")
@@ -101,7 +118,8 @@ class PrimitiveCreatorBase:
         """Returns the point on the given axis closest to the cursor ray."""
         try:
             pos = event_dict["Position"]
-            focal = self.view.getPoint(pos[0], pos[1])
+            y_inv = self._get_y_inverted(pos[1])
+            focal = self.view.getPoint(pos[0], y_inv)
 
             if _is_orthographic(self.view):
                 ray_origin = focal
@@ -157,6 +175,28 @@ class PrimitiveCreatorBase:
         except Exception:
             return False
 
+    def to_local(self, p):
+        if not hasattr(self, "working_plane") or not self.working_plane:
+            return p
+        mat = self.working_plane.toMatrix()
+        mat.invert()
+        return mat.multVec(p)
+
+    def to_global(self, p):
+        if not hasattr(self, "working_plane") or not self.working_plane:
+            return p
+        return self.working_plane.toMatrix().multVec(p)
+
+    def get_face_under_mouse(self, event_dict):
+        pos = event_dict["Position"]
+        try:
+            info = self.view.getObjectInfo((pos[0], pos[1]))
+            if info and "Object" in info and "Component" in info:
+                 return info["Object"], info["Component"]
+        except Exception:
+            pass
+        return None, None
+
     def handle_click(self, event_dict):
         pass
 
@@ -183,16 +223,18 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         self._preview_queued = False
         self._finished = False     # Guard for finalization
 
-        # Store last known valid state for finalization
         self._last_sdf_type = None
         self._last_sdf_params = None
         self._last_placement = None
+        
+        self._debug_pt = None      # Store current mouse 3D for debug dot
+        self._preview_cursor = None # Red dot object
 
     # ------------------------------------------------------------------
     # Preview — create once, replace .Mesh in-place (no recompute)
     # ------------------------------------------------------------------
 
-    def update_sdf_preview(self, sdf_type, params, resolution=None):
+    def update_sdf_preview(self, sdf_type, params, resolution=None, placement=None):
         """
         Setup the pending mesh request, but defer the exact execution 
         to avoid crashing in Coin3D event traversal.
@@ -209,10 +251,17 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             
         self._pending_resolution = resolution
         
-        # Track for finalization
         self._last_sdf_type = sdf_type
         self._last_sdf_params = params
-        if hasattr(self, "working_plane"):
+        
+        # Track 3D cursor for debugging
+        if "debug_pt" in params:
+            self._debug_pt = params["debug_pt"]
+        
+        # Track placement for finalization
+        if placement:
+            self._last_placement = placement
+        elif hasattr(self, "working_plane"):
             self._last_placement = self.working_plane
         
         if not self._preview_queued:
@@ -280,6 +329,48 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             # Assign mesh directly to the child mesh object
             self._preview_mesh.Mesh = mesh
 
+            # Update Debug Cursor
+            if self._debug_pt:
+                # Log intersection to help user debug
+                print(f"[DEBUG] Ray Intersection: {self._debug_pt.x:.2f}, {self._debug_pt.y:.2f}, {self._debug_pt.z:.2f}")
+
+                if self._preview_cursor is None or self._preview_cursor not in doc.Objects:
+                    self._preview_cursor = doc.addObject("Part::Feature", "SDF_DebugCursor")
+                    
+                    import Part
+                    size = 25.0 # 50mm total spread
+                    l1 = Part.LineSegment(FreeCAD.Vector(-size,0,0), FreeCAD.Vector(size,0,0)).toShape()
+                    l2 = Part.LineSegment(FreeCAD.Vector(0,-size,0), FreeCAD.Vector(0,size,0)).toShape()
+                    l3 = Part.LineSegment(FreeCAD.Vector(0,0,-size), FreeCAD.Vector(0,0,size)).toShape()
+                    self._preview_cursor.Shape = Part.Compound([l1, l2, l3])
+                    
+                    if hasattr(self._preview_cursor, "ViewObject") and self._preview_cursor.ViewObject:
+                        self._preview_cursor.ViewObject.ShapeColor = (1.0, 0.0, 0.0) # Red
+                        self._preview_cursor.ViewObject.LineColor = (1.0, 0.0, 0.0)
+                        self._preview_cursor.ViewObject.LineWidth = 12.0
+                        self._preview_cursor.ViewObject.PointColor = (1.0, 0.0, 0.0)
+                        self._preview_cursor.ViewObject.PointSize = 16.0
+                        self._preview_cursor.ViewObject.Transparency = 0
+                        self._preview_cursor.ViewObject.Selectable = False
+                        
+                        # Use flat emissive coloring (no lighting/shading)
+                        if hasattr(self._preview_cursor.ViewObject, "LightModel"):
+                            self._preview_cursor.ViewObject.LightModel = "NoLight"
+                        
+                        # Hide from tree view to avoid clutter
+                        self._preview_cursor.ViewObject.Visibility = True
+                        if hasattr(self._preview_cursor, "ShowInTree"):
+                             self._preview_cursor.ShowInTree = False
+                
+                # Use larger lines (30mm) for high visibility
+                debug_shape = Part.Compound([
+                    Part.makeLine((self._debug_pt.x-15,self._debug_pt.y,self._debug_pt.z),(self._debug_pt.x+15,self._debug_pt.y,self._debug_pt.z)),
+                    Part.makeLine((self._debug_pt.x,self._debug_pt.y-15,self._debug_pt.z),(self._debug_pt.x,self._debug_pt.y+15,self._debug_pt.z)),
+                    Part.makeLine((self._debug_pt.x,self._debug_pt.y,self._debug_pt.z-15),(self._debug_pt.x,self._debug_pt.y,self._debug_pt.z+15))
+                ])
+                self._preview_cursor.Shape = debug_shape
+                self._preview_cursor.Placement = FreeCAD.Placement(FreeCAD.Vector(0,0,0), FreeCAD.Rotation())
+
             # A plain updateGui() is sufficient to repaint. No recompute needed.
             FreeCADGui.updateGui()
 
@@ -304,7 +395,7 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         try:
             if self._last_sdf_type and self._last_sdf_params:
                 from ..sdf_object import create_sdf_object
-                sdf_logger.debug(f"_do_finish: Creating final SDF object: type={self._last_sdf_type}")
+                sdf_logger.debug(f"_do_finish: Finalizing. type={self._last_sdf_type}, params={self._last_sdf_params}, placement={self._last_placement}")
                 # Create the final high-res SDFObject
                 create_sdf_object(
                     self._last_sdf_type.capitalize(), 
@@ -340,6 +431,11 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
                         if self._preview_mesh in doc.Objects:
                             doc.removeObject(self._preview_mesh.Name)
                         self._preview_mesh = None
+                    # Remove debug cursor
+                    if self._preview_cursor is not None:
+                        if self._preview_cursor in doc.Objects:
+                            doc.removeObject(self._preview_cursor.Name)
+                        self._preview_cursor = None
                     # Then remove the parent container
                     if self._preview_obj in doc.Objects:
                         doc.removeObject(self._preview_obj.Name)

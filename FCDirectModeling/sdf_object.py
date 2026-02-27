@@ -207,12 +207,40 @@ class SDFObjectProxy:
             obj.addProperty("App::PropertyString", "SDFOp", "SDF", "Boolean operation")
         if not hasattr(obj, "SDFChildren"):
             obj.addProperty("App::PropertyLinkList", "SDFChildren", "SDF", "Child SDF objects")
+        if not hasattr(obj, "SDFMesh"):
+            obj.addProperty("App::PropertyLink", "SDFMesh", "SDF", "Child high-res mesh")
 
         obj.SDFType = sdf_type
         obj.SDFParams = json.dumps(params)
         obj.SDFOp = sdf_op or "none"
         obj.SDFChildren = children or []
         
+        from FCDirectModeling import sdf_logger
+        sdf_logger.debug(f"SDFObjectProxy.__init__: type={sdf_type}, params={params}, has_placement={placement is not None}")
+        
+        # Handle Placement and Center Offset
+        # Standard primitives: we center them locally at [0,0,0] for build_sdf logic.
+        # But for Box, we'll use corner-alignment [0,0,0] -> [L,W,H].
+        if sdf_type in ["box", "sphere", "cone", "torus"] and not placement:
+            # Default center at origin unless we calculate it from click-drag bounds
+            center_v = FreeCAD.Vector(0,0,0)
+            
+            if sdf_type == "box":
+                if "bounds_min" in params and "bounds_max" in params:
+                    mn, mx = params["bounds_min"], params["bounds_max"]
+                    # If no global placement provided, we use the average as the base
+                    center_v = FreeCAD.Vector((mn[0]+mx[0])/2, (mn[1]+mx[1])/2, (mn[2]+mx[2])/2)
+            elif "center" in params:
+                cv = params["center"]
+                center_v = FreeCAD.Vector(cv[0], cv[1], cv[2])
+
+            obj.Placement.Base = center_v
+            sdf_logger.debug(f"SDFObjectProxy: Default placement set to: {obj.Placement.Base}")
+
+        if placement:
+            obj.Placement = placement
+            sdf_logger.debug(f"SDFObjectProxy: Final obj.Placement set to: {obj.Placement.Base}")
+
         # Add typed properties for parametric editing
         if sdf_type == "box":
             for p in ["Length", "Width", "Height"]:
@@ -222,8 +250,6 @@ class SDFObjectProxy:
                 obj.Length = abs(mx[0] - mn[0])
                 obj.Width  = abs(mx[1] - mn[1])
                 obj.Height = abs(mx[2] - mn[2])
-                # We also need the center or min corner if we want to stay true to the click
-                # But for now let's assume if placement is here, it handles the origin.
             else:
                 obj.Length = params.get("length", 10.0)
                 obj.Width  = params.get("width", 10.0)
@@ -245,9 +271,6 @@ class SDFObjectProxy:
             obj.MajorRadius = params.get("major_r", 10.0)
             obj.MinorRadius = params.get("minor_r", 2.0)
 
-        if placement:
-            obj.Placement = placement
-
     def build_sdf(self, fp):
         """Reconstruct (sdf_fn, (bounds_min, bounds_max)) from stored properties."""
         sdf_type = fp.SDFType
@@ -260,7 +283,7 @@ class SDFObjectProxy:
                     child_sdfs.append(child.Proxy.build_sdf(child))
                 else:
                     from FCDirectModeling import sdf_logger
-                    sdf_logger.warning(f"build_sdf: child '{child.Label}' is not an SDF object")
+                    sdf_logger.warn(f"build_sdf: child '{child.Label}' is not an SDF object")
             
             # Ensure 'op' is available for _sdf_boolean
             if "op" not in params:
@@ -270,9 +293,10 @@ class SDFObjectProxy:
         
         # Primitives: Prefer typed properties, fallback to SDFParams JSON
         if sdf_type == "box":
-            l, w, h = fp.Length, fp.Width, fp.Height
-            # Center at local origin
-            params = {"bounds_min": [-l/2, -w/2, -h/2], "bounds_max": [l/2, w/2, h/2]}
+            l, w, h = abs(fp.Length), abs(fp.Width), abs(fp.Height)
+            # Corner-aligned at local origin [0,0,0]
+            # This ensures it scales from the Placement point (the click point)
+            params = {"bounds_min": [0.0, 0.0, 0.0], "bounds_max": [l, w, h]}
             return _sdf_box(params)
             
         elif sdf_type == "sphere":
@@ -308,8 +332,13 @@ class SDFObjectProxy:
             
         try:
             import Mesh as MeshModule
+            import Part
             from FCDirectModeling import sdf_logger
             import time
+
+            # Ensure the object has a shape (even if empty) to satisfy Part::Feature
+            if not hasattr(fp, "Shape") or fp.Shape.isNull():
+                fp.Shape = Part.Shape()
 
             # Build SDF function using the new reusable method
             sdf_fn, (mn, mx) = self.build_sdf(fp)
@@ -318,7 +347,7 @@ class SDFObjectProxy:
             verts, tris = mesh_sdf(sdf_fn, mn, mx)
             
             if len(verts) == 0:
-                sdf_logger.warning(f"SDFObject: mesher returned no geometry for {fp.SDFType}.")
+                sdf_logger.warn(f"SDFObject: mesher returned no geometry for {fp.SDFType}.")
                 return
 
             sdf_logger.debug(f"SDFObjectProxy: Converting {len(tris)} triangles to Mesh facets...")
@@ -327,22 +356,26 @@ class SDFObjectProxy:
             t_conv_1 = time.time()
             sdf_logger.debug(f"SDFObjectProxy: Conversion took {t_conv_1-t_conv_0:.3f}s")
 
-            # Find or create child mesh surface
-            mesh_obj = None
-            for child in fp.OutList:
-                if child.isDerivedFrom("Mesh::Feature"):
-                    mesh_obj = child
-                    break
+            # Get linked child mesh surface
+            mesh_obj = getattr(fp, "SDFMesh", None)
             
             if not mesh_obj:
-                mesh_obj = fp.Document.addObject("Mesh::Feature", f"SDF_{fp.Name}_Mesh")
-                mesh_obj.Label = f"{fp.Label} Mesh"
-                fp.addObject(mesh_obj)
-                if FreeCAD.GuiUp and hasattr(mesh_obj, "ViewObject"):
-                    mesh_obj.ViewObject.ShapeColor = (0.65, 0.75, 0.90)
+                # Fallback search in OutList
+                for child in fp.OutList:
+                    if child.isDerivedFrom("Mesh::Feature"):
+                        mesh_obj = child
+                        break
+            
+            if not mesh_obj:
+                sdf_logger.warn(f"SDFObjectProxy: No child mesh found for {fp.Label}")
+                return
 
             mesh_obj.Mesh = MeshModule.Mesh(facets)
             sdf_logger.debug(f"SDFObjectProxy: Mesh assigned to {mesh_obj.Label}")
+            
+            # Sync mesh placement with the container's placement
+            # This ensures the local geometry [0,0,0] coincides with the object's world position.
+            mesh_obj.Placement = fp.Placement
             
             # Explicitly force a view update if in GUI mode
             if FreeCAD.GuiUp:
@@ -443,8 +476,9 @@ def create_sdf_object(name, sdf_type, params, sdf_op=None, children=None, is_pre
         doc = FreeCAD.newDocument()
 
     try:
-        # App::DocumentObjectGroupPython supports Python Proxy + child objects
-        obj = doc.addObject("App::DocumentObjectGroupPython", name)
+        sdf_logger.debug(f"create_sdf_object: name={name}, type={sdf_type}, has_placement={placement is not None}")
+        # Part::FeaturePython supports Python Proxy + Placement + child objects via claimChildren
+        obj = doc.addObject("Part::FeaturePython", name)
         proxy = SDFObjectProxy(obj, sdf_type, params, sdf_op, children, placement=placement)
         obj.Proxy.is_preview = is_preview
 
@@ -457,6 +491,14 @@ def create_sdf_object(name, sdf_type, params, sdf_op=None, children=None, is_pre
                 except Exception:
                     pass
         
+        # Create child mesh surface immediately (link it via property for nesting)
+        mesh_obj = doc.addObject("Mesh::Feature", f"SDF_{obj.Name}_Mesh")
+        mesh_obj.Label = f"{obj.Label} Mesh"
+        obj.SDFMesh = mesh_obj
+        
+        if FreeCAD.GuiUp and hasattr(mesh_obj, "ViewObject"):
+            mesh_obj.ViewObject.ShapeColor = (0.65, 0.75, 0.90)
+
         sdf_logger.debug(f"create_sdf_object: Created {name} ({sdf_type}), triggering recompute...")
         obj.touch()
         doc.recompute()

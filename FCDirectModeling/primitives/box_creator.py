@@ -46,17 +46,6 @@ class BoxCreator(SDFMeshPrimitiveCreator):
     def set_panel(self, panel):
         self.panel = panel
 
-    def get_face_under_mouse(self, event_dict):
-        pos = event_dict["Position"]
-        try:
-            # getObjectInfo returns a dict with 'Object', 'Component', etc.
-            info = self.view.getObjectInfo((pos[0], pos[1]))
-            if info and "Object" in info and "Component" in info:
-                 return info["Object"], info["Component"]
-        except Exception:
-            pass
-        return None, None
-
     def set_length_lock(self, length):
         self.locked_length = length
         self.update_from_locks()
@@ -122,47 +111,46 @@ class BoxCreator(SDFMeshPrimitiveCreator):
         except Exception:
             pass
 
-    def to_local(self, p):
-        if not self.working_plane:
-            return p
-        mat = self.working_plane.toMatrix()
-        mat.invert()
-        return mat.multVec(p)
-
-    def to_global(self, p):
-        if not self.working_plane:
-            return p
-        return self.working_plane.toMatrix().multVec(p)
-
-    def update_preview(self):
+    def update_preview(self, debug_pt=None):
         if not self.start_point or not self.current_point:
             return
             
-        p1 = self.to_local(self.start_point)
-        p2 = self.to_local(self.current_point)
+        # Coordinates are now strictly relative to start_point in local space
+        # working_plane origin is now p1.
+        p1_local = self.to_local(self.start_point) # Should be [0,0,0]
+        p2_local = self.to_local(self.current_point)
         h = self.height
         
-        min_x = min(p1.x, p2.x);  max_x = max(p1.x, p2.x)
-        min_y = min(p1.y, p2.y);  max_y = max(p1.y, p2.y)
+        dx = p2_local.x - p1_local.x
+        dy = p2_local.y - p1_local.y
         
-        # Show a thin slab during base-draw (h==0) so user sees feedback
-        min_thick = max(1.0, max(max_x - min_x, max_y - min_y) * 0.02)
-        h_abs = max(min_thick, abs(h))
-        z_min = -h_abs if h < 0 else 0.0
-        z_max = z_min + h_abs
+        # Local relative bounds (start point is 0,0,0)
+        # Note: we use min/max to allow dragging in any direction
+        min_x = min(0.0, dx); max_x = max(0.0, dx)
+        min_y = min(0.0, dy); max_y = max(0.0, dy)
+        min_z = min(0.0, h);  max_z = max(0.0, h)
         
-        bounds_min = [min_x, min_y, z_min]
-        bounds_max = [max_x, max_y, z_max]
+        # We must ensure we don't have 0-size bounds
+        max_x = max(max_x, min_x + 1e-3)
+        max_y = max(max_y, min_y + 1e-3)
+        max_z = max(max_z, min_z + 1e-3)
         
-        self.update_sdf_preview("box", {"bounds_min": bounds_min, "bounds_max": bounds_max})
+        bounds_min = [min_x, min_y, min_z]
+        bounds_max = [max_x, max_y, max_z]
         
-        # Store the placement for finalization
-        self._last_placement = self.working_plane
+        # Final World Placement is just the working_plane (which is centered at p1)
+        final_placement = self.working_plane
         
-        self._last_sdf_params = {
-            "bounds_min": [min_x, min_y, -abs(h) if h < 0 else 0.0],
-            "bounds_max": [max_x, max_y, abs(h) if h != 0 else z_max]
-        }
+        sdf_logger.debug(f"BoxCreator.update_preview: bounds={bounds_min}/{bounds_max}")
+        
+        params = {"bounds_min": bounds_min, "bounds_max": bounds_max}
+        if debug_pt:
+            params["debug_pt"] = debug_pt
+            
+        self.update_sdf_preview("box", params, placement=final_placement)
+        
+        self._last_sdf_params = params
+        self._last_placement = final_placement
 
     def event_cb(self, event_dict):
         event_type = event_dict["Type"]
@@ -245,8 +233,15 @@ class BoxCreator(SDFMeshPrimitiveCreator):
             o = self.working_plane.Base
             
         pt = self.get_point_on_plane(event_dict, n, o)
+        print(f"[DEBUG] BoxClick: pt={pt}, state={self.state}")
         
         if self.state == 0: # Start
+            # We fix the working plane origin to exactly the click point
+            # This makes all local coords relative to start_point = [0,0,0]
+            rot = self.working_plane.Rotation if self.working_plane else FreeCAD.Rotation()
+            self.working_plane = FreeCAD.Placement(pt, rot)
+            print(f"[DEBUG] BoxStart: working_plane.Base={self.working_plane.Base}")
+
             self.start_point = pt
             self.current_point = pt
             self.state = 1
@@ -275,15 +270,21 @@ class BoxCreator(SDFMeshPrimitiveCreator):
             if obj and subname and "Face" in subname:
                 try:
                     face = obj.Shape.getElement(subname)
+                    # Support all faces by using their local placement
+                    # For planes, Surface.Position is reliable.
                     if hasattr(face, "Surface") and "GeomPlane" in face.Surface.TypeId:
                         self.working_plane = face.Surface.Position
                         self.snap_face = (obj, subname)
                     else:
-                        self.working_plane = None
+                        # Fallback for non-planar (though we mostly want planes for now)
+                        self.working_plane = None # Will default to Z=0 in base
                         self.snap_face = None
                 except Exception:
                     self.working_plane = None
                     self.snap_face = None
+            else:
+                self.working_plane = None
+                self.snap_face = None
             return
             
         elif self.state == 1:
@@ -294,6 +295,9 @@ class BoxCreator(SDFMeshPrimitiveCreator):
                 o = self.working_plane.Base
             
             raw_pt = self.get_point_on_plane(event_dict, n, o)
+            # Log delta from start to help alignment verification
+            delta = (raw_pt - self.start_point)
+            print(f"[DEBUG] BoxMove: dist={delta.Length:.2f}, raw_pt={raw_pt.x:.2f},{raw_pt.y:.2f},{raw_pt.z:.2f}")
             
             # Work in Local Coords for standard delta logic
             local_raw_pt = self.to_local(raw_pt)
@@ -321,7 +325,7 @@ class BoxCreator(SDFMeshPrimitiveCreator):
             new_local_pt = FreeCAD.Vector(new_local_x, new_local_y, 0)
             self.current_point = self.to_global(new_local_pt)
             
-            self.update_preview()
+            self.update_preview(debug_pt=raw_pt)
             self.update_ui()
             
         elif self.state == 2:
@@ -349,7 +353,12 @@ class BoxCreator(SDFMeshPrimitiveCreator):
                          self.is_cutter = False
                          self.update_material()
             
-            self.update_preview()
+            # We still want the mouse dot during height mode
+            n = self.working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
+            o = self.working_plane.Base
+            raw_pt = self.get_point_on_plane(event_dict, n, o)
+
+            self.update_preview(debug_pt=raw_pt)
             self.update_ui()
 
     def _do_finish(self):
@@ -357,6 +366,39 @@ class BoxCreator(SDFMeshPrimitiveCreator):
              # If completely uninitialized, just terminate
             self.terminate()
             return
-            
-        super()._do_finish()
+
+        from FCDirectModeling.sdf_object import create_sdf_object
+        from FCDirectModeling import sdf_logger
+        
+        # Adjust placement for corner-scaling consistency
+        # SDFObject.build_sdf uses [0,0,0] -> [L,W,H]. 
+        # So we MUST set Placement to the MINIMAL corner.
+        p1_local = self.to_local(self.start_point)
+        p2_local = self.to_local(self.current_point)
+        h = self.height
+        
+        dx = p2_local.x - p1_local.x
+        dy = p2_local.y - p1_local.y
+        
+        # Local offset to the minimal corner
+        min_corner_local = FreeCAD.Vector(min(0.0, dx), min(0.0, dy), min(0.0, h))
+        
+        # Final Placement = Start Placement * Local Offset
+        # This keeps the box exactly where it was during preview
+        final_placement = self.working_plane * FreeCAD.Placement(min_corner_local, FreeCAD.Rotation())
+        
+        params = {
+            "length": abs(dx),
+            "width":  abs(dy),
+            "height": abs(h)
+        }
+        
+        # Pass bounds for initialization
+        params["bounds_min"] = [0.0, 0.0, 0.0]
+        params["bounds_max"] = [abs(dx), abs(dy), abs(h)]
+        
+        sdf_logger.debug(f"BoxCreator._do_finish: final_placement={final_placement.Base}, dims={params['length']}/{params['width']}/{params['height']}")
+        
+        create_sdf_object("Box", "box", params, placement=final_placement)
+        self.terminate()
 

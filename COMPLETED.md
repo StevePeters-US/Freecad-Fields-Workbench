@@ -66,3 +66,7 @@ Tasks moved here from `TODO.md` after verification.
 - **Completed**: Added typed properties (`Length`, `Radius`, etc.) to all SDF primitive types and updated `build_sdf` to use them as the source of truth.
 - **Result**: Primitives can now be edited parametrically through the FreeCAD property panel after creation.
 
+## ✅ Fix: Object Placement and Container Type
+- **Completed**: Switched container to `Part::FeaturePython`, moved child mesh creation to the factory function using `App::PropertyLink`, and implemented `SDFObjectProxy` placement logic for centered primitives. Fixed `sdf_logger` calls from `.warning()` to `.warn()`.
+- **Result**: Final objects are now correctly placed, and high-resolution meshing completes successfully without document locking or logging errors.
+
