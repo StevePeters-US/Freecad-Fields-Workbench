@@ -76,3 +76,9 @@ Tasks moved here from `TODO.md` after verification.
 
 ### ✅ Phase 0b: Delete command_tweak
 - **Completed**: Removed the Tweak command entirely. Deleted dm_commands/command_tweak.py and removed its references from InitGui.py.
+
+### ✅ Phase 0c: Delete mesh_features.py and surface_fitting.py
+- **Completed**: Removed all meshing and surface fitting code. Deleted FCDirectModeling/mesh_features.py and FCDirectModeling/surface_fitting.py. Deleted FCDirectModeling/tests/test_nurbs_primitives.py.
+
+### ✅ Phase 0d: Strip primitive shape types from dm_object.py
+- **Completed**: Removed box, sphere, cone, and torus shape types from DMObjectProxy initialization and shape building. Only 'curve' remains, with a placeholder for future 'surface' patches.

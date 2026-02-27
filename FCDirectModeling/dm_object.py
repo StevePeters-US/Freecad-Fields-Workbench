@@ -55,49 +55,20 @@ class DMObjectProxy:
         
         # Add typed properties for parametric editing
         params = params or {}
-        if shape_type == "box":
-            for p in ["Length", "Width", "Height"]:
-                if not hasattr(obj, p): obj.addProperty("App::PropertyFloat", p, "Box", p)
-            obj.Length = params.get("length", 10.0)
-            obj.Width  = params.get("width", 10.0)
-            obj.Height = params.get("height", 10.0)
-                
-        elif shape_type == "sphere":
-            if not hasattr(obj, "Radius"): obj.addProperty("App::PropertyFloat", "Radius", "Sphere", "Radius")
-            obj.Radius = params.get("radius", 5.0)
-            
-        elif shape_type == "cone":
-            if not hasattr(obj, "Radius"): obj.addProperty("App::PropertyFloat", "Radius", "Cone", "Radius")
-            if not hasattr(obj, "Height"): obj.addProperty("App::PropertyFloat", "Height", "Cone", "Height")
-            obj.Radius = params.get("radius", 5.0)
-            obj.Height = params.get("height", 10.0)
-            
-        elif shape_type == "torus":
-            if not hasattr(obj, "MajorRadius"): obj.addProperty("App::PropertyFloat", "MajorRadius", "Torus", "Major Radius")
-            if not hasattr(obj, "MinorRadius"): obj.addProperty("App::PropertyFloat", "MinorRadius", "Torus", "Minor Radius")
-            obj.MajorRadius = params.get("major_r", 10.0)
-            obj.MinorRadius = params.get("minor_r", 2.0)
-
-        elif shape_type == "curve":
+        if shape_type == "curve":
             if not hasattr(obj, "Points"):
                 obj.addProperty("App::PropertyVectorList", "Points", "Curve", "Spline fit points")
             obj.Points = params.get("points", [])
+        # Future: "surface" shape type for BSplineSurface patches
 
     def build_shape(self, fp):
         """Return a Part.Shape based on the object's properties."""
         from . import nurbs_primitives as np_builders
         
         st = fp.ShapeType
-        if st == "box":
-            return np_builders.build_box(fp.Length, fp.Width, fp.Height)
-        elif st == "sphere":
-            return np_builders.build_sphere(fp.Radius)
-        elif st == "cone":
-            return np_builders.build_cone(fp.Radius, fp.Height)
-        elif st == "torus":
-            return np_builders.build_torus(fp.MajorRadius, fp.MinorRadius)
-        elif st == "curve":
+        if st == "curve":
             return np_builders.build_curve(fp.Points)
+        # Future: "surface" shape type
             
         import Part
         return Part.Shape()
