@@ -85,3 +85,6 @@ Tasks moved here from `TODO.md` after verification.
 
 ### ✅ Phase 0e: Strip primitive builders from nurbs_primitives.py
 - **Completed**: Removed build_box(), build_sphere(), build_cone(), and build_torus() from nurbs_primitives.py. Updated the module to focus exclusively on NURBS curve builders.
+
+### ✅ Phase 0f: Clean up primitive_base.py
+- **Completed**: Removed dead code from primitive_base.py preview logic. Simplified _update_preview_object() to only handle NURBS curves.

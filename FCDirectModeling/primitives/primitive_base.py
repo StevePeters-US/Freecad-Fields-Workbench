@@ -491,15 +491,7 @@ class NURBSPrimitiveCreator(PrimitiveBase):
             import Part
 
             # Build the raw shape at origin
-            if shape_type == "box":
-                shape = nurbs_primitives.build_box(params.get("length", 1), params.get("width", 1), params.get("height", 1))
-            elif shape_type == "sphere":
-                shape = nurbs_primitives.build_sphere(params.get("radius", 1))
-            elif shape_type == "cone":
-                shape = nurbs_primitives.build_cone(params.get("radius", 1), params.get("height", 1))
-            elif shape_type == "torus":
-                shape = nurbs_primitives.build_torus(params.get("major_r", 1), params.get("minor_r", 1))
-            elif shape_type == "curve":
+            if shape_type == "curve":
                 shape = nurbs_primitives.build_curve(params.get("points", []))
             else:
                 shape = Part.Shape()

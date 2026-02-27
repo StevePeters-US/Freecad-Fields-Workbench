@@ -34,27 +34,6 @@ These tasks remove code that no longer fits the pure-NURBS architecture.
 
 ---
 
-### 0f. Clean up primitive_base.py (Complexity: 3/10)
-
-- **Goal**: Remove dead code from `primitive_base.py` — specifically the `_update_preview_object` branches for box/sphere/cone/torus shape types in `NURBSPrimitiveCreator`.
-- **Files to read**:
-  - `FCDirectModeling/primitives/primitive_base.py` — especially `_update_preview_object()` (lines 480-570), which has `if shape_type == "box":`, `elif shape_type == "sphere":`, etc.
-- **Files to modify**:
-  - `FCDirectModeling/primitives/primitive_base.py`
-- **Steps**:
-  1. In `_update_preview_object()`, replace the shape type dispatch (lines 494-505) with only the curve branch:
-     ```python
-     if shape_type == "curve":
-         shape = nurbs_primitives.build_curve(params.get("points", []))
-     else:
-         shape = Part.Shape()
-     ```
-  2. Remove imports or references to deleted builder functions if any exist.
-  3. The base classes `PrimitiveBase` and `NURBSPrimitiveCreator` remain — they provide the event loop, work plane integration, and preview system that `CurveCreator` uses.
-- **Acceptance**: Drawing a curve with `CurveCreator` still works (click points → preview curve → Enter to finalize). No errors in console.
-
----
-
 ## Phase 1: Core NURBS Geometry + Extrude
 
 These tasks build the curve→surface workflow.
