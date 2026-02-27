@@ -70,3 +70,6 @@ Tasks moved here from `TODO.md` after verification.
 
 ### ✅ Unified primitive creator base
 - **Completed**: `PrimitiveBase` + `NURBSPrimitiveCreator` with consistent event handling.
+
+### ✅ Phase 0a: Delete primitive creators and commands
+- **Completed**: Removed all primitive-specific creators (box, sphere, cone, torus) and their associated commands to align with the NURBS-centric architecture. Updated InitGui.py and package initialization.

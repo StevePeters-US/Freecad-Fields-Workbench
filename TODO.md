@@ -34,7 +34,7 @@ These tasks remove code that no longer fits the pure-NURBS architecture.
 
 ---
 
-### 0a. Delete primitive creators and commands (Complexity: 2/10)
+### 0a. Delete primitive creators and commands (Complexity: 2/10) [x]
 
 - **Goal**: Remove all primitive-specific creators (box, sphere, cone, torus) and their commands. Only `CurveCreator` and `command_create_curve.py` survive.
 - **Files to read**:
