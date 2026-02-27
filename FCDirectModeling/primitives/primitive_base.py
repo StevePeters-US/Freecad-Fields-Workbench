@@ -34,7 +34,7 @@ def _cam_pos(view):
 # PrimitiveCreatorBase
 # ─────────────────────────────────────────────────────────────────────────────
 
-class PrimitiveCreatorBase:
+class PrimitiveBase:
     def __init__(self):
         self._terminated = False
         self.view     = FreeCADGui.ActiveDocument.ActiveView
@@ -45,8 +45,24 @@ class PrimitiveCreatorBase:
 
         self.start_point   = None
         self.current_point = None
-        self.center        = None
+        self.center        = None # Legacy, use start_point
         self.state         = 0
+        
+        self.working_plane = None
+        self.snap_face = None
+        self.drag_start_screen_y = None
+
+        # Shared UX state
+        self.height = 0.0
+        self.is_cutter = False
+        self.manual_mode_override = False
+        self.panel = None
+
+        # Shared constraint state
+        self.active_axis = None
+        self.locked_length = None
+        self.locked_width = None
+        self.locked_height = None
 
     def terminate(self):
         self._terminated = True
@@ -54,92 +70,59 @@ class PrimitiveCreatorBase:
             if self.callback:
                 self.view.removeEventCallback("SoEvent", self.callback)
                 self.callback = None
+            
+            # Close task panel if open
+            import FreeCADGui
+            FreeCADGui.Control.closeDialog()
         except Exception:
             pass
 
-    # Removed _get_y_inverted in favor of inline diagnostic logic in get_point_on_plane
-
     def finish(self):
+        pass
+
+    def set_panel(self, panel):
+        self.panel = panel
+
+    def toggle_cutter_mode(self):
+         self.is_cutter = not self.is_cutter
+         self.manual_mode_override = True
+         self.update_material()
+         self.view.redraw()
+
+    def update_material(self):
+        pass
+
+    def update_ui(self):
         pass
 
     # ------------------------------------------------------------------
     # Geometry helpers — use FreeCAD view API, not Coin3D directly
     # ------------------------------------------------------------------
 
-    def get_point_on_plane(self, event_dict, plane_normal, plane_point):
-        """Standard Ray-Plane Intersection using FreeCAD Raycasting."""
-        try:
-            x = event_dict['Position'][0]
-            y = event_dict['Position'][1]
+    def get_mouse_world_pos(self, event_dict, plane_normal=None, plane_point=None):
+        """
+        Unified Ray-Plane intersection. 
+        If plane_normal is None, defaults to a camera-facing plane at the focal depth.
+        """
+        pos = event_dict.get("Position", (0, 0))
+        x, y = pos[0], pos[1]
+        
+        world_pos = self.view.getPoint(x, y)
+        return world_pos
+
+    def get_base_plane(self):
+        """Returns (normal, origin) for the current working plane."""
+        if not self.working_plane:
+            return None, None
+        n = self.working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
+        o = self.working_plane.Base
+        return n, o
+
+    def get_mouse_plane_pt(self, event_dict):
+        """Intersection of mouse ray with working plane."""
+        n, o = self.get_base_plane()
+        return self.get_mouse_world_pos(event_dict, n, o)
             
-            # TELEMETRY: Get viewport size
-            v_size = self.view.getSize()
-            w, h = (v_size[0], v_size[1]) if v_size else (0, 0)
-            
-            # getPoint expects (x, y) where y=0 is BOTTOM-UP (Coin3D)
-            inv_y = y
-            focal = self.view.getPoint(x, inv_y)
-            
-            # Re-implementing robust ray-plane intersection.
-            # Raw getPoint is at a fixed depth; we need to project onto target plane.
-            if _is_orthographic(self.view):
-                ray_origin = focal
-                ray_dir    = self.view.getViewDirection()
-            else:
-                ray_origin = _cam_pos(self.view)
-                ray_dir    = focal - ray_origin
-                ray_dir.normalize()
-
-            n = plane_normal or FreeCAD.Vector(0, 0, 1)
-            o = plane_point  or FreeCAD.Vector(0, 0, 0)
-
-            denom = ray_dir.dot(n)
-            if abs(denom) < 1e-6:
-                return o
-            t = (o - ray_origin).dot(n) / denom
-            pt = ray_origin + ray_dir * t
-            
-            # dm_logger.debug(f"DEBUG: Ray Intersection: {pt.x:.2f}, {pt.y:.2f}, {pt.z:.2f}")
-            return pt
-        except Exception as e:
-            dm_logger.debug(f"DEBUG: get_point_on_plane error: {e}")
-            FreeCAD.Console.PrintError(f"get_point_on_plane: {e}\n")
-            return FreeCAD.Vector(0, 0, 0)
-
-    def get_closest_point_on_axis(self, event_dict, axis_start, axis_dir):
-        """Returns the point on the given axis closest to the cursor ray."""
-        try:
-            pos = event_dict["Position"]
-            v_size = self.view.getSize()
-            w, h = (v_size[0], v_size[1]) if v_size else (1, 1)
-            inv_y = pos[1]
-            focal = self.view.getPoint(pos[0], inv_y)
-
-            if _is_orthographic(self.view):
-                ray_origin = focal
-                ray_dir    = self.view.getViewDirection()
-            else:
-                ray_origin = _cam_pos(self.view)
-                ray_dir    = focal - ray_origin
-                ray_dir.normalize()
-
-            P1, V1 = ray_origin, ray_dir
-            P2, V2 = axis_start, axis_dir
-
-            DP  = P2 - P1
-            v12 = V1.dot(V2)
-            v11 = V1.dot(V1)
-            v22 = V2.dot(V2)
-            det = v11 * v22 - v12 * v12
-
-            if abs(det) < 1e-6:
-                return P2
-            dp_v1 = DP.dot(V1)
-            dp_v2 = DP.dot(V2)
-            u = (v12 * dp_v1 - v11 * dp_v2) / det
-            return P2 + V2 * u
-        except Exception:
-            return axis_start
 
     # ------------------------------------------------------------------
     # Event loop
@@ -148,26 +131,164 @@ class PrimitiveCreatorBase:
     def event_cb(self, event_dict):
         try:
             event_type = event_dict.get("Type", "Unknown")
-            # Only log non-move events to avoid spam
-            if event_type != "SoLocation2Event":
-                dm_logger.debug(f"DEBUG: event_cb: {event_type}")
 
             if event_type == "SoMouseButtonEvent":
                 if event_dict["State"] == "DOWN" and event_dict["Button"] == "BUTTON1":
-                    dm_logger.debug("DEBUG: Left click detected")
                     return self.handle_click(event_dict)
             elif event_type == "SoLocation2Event":
                 self.handle_move(event_dict)
             elif event_type == "SoKeyboardEvent":
-                key = str(event_dict.get("Key", "None")).upper()
-                dm_logger.debug(f"DEBUG: Key event: {key}")
-                if event_dict["State"] == "DOWN" and key == "ESCAPE":
-                    QtCore.QTimer.singleShot(0, self.terminate)
-                    return True
-            dm_logger.debug("event_cb: Returning False")
+                if event_dict["State"] == "DOWN":
+                    return self.handle_keyboard(event_dict)
             return False
         except Exception:
             return False
+
+    def handle_keyboard(self, event_dict):
+        key = str(event_dict.get("Key", "None")).upper()
+        
+        # ESC to cancel
+        if key == "ESCAPE":
+            QtCore.QTimer.singleShot(0, self.terminate)
+            return True
+            
+        # Toggle Cutter Mode (C)
+        if key == "C":
+             self.toggle_cutter_mode()
+             return True
+
+        # Axis Toggles (X, Y, Z) -> Focus Panel
+        target_axis = None
+        if key == "X": target_axis = "x"
+        elif key == "Y": target_axis = "y"
+        elif key == "Z": target_axis = "z"
+        
+        if target_axis:
+            self.toggle_axis(target_axis)
+            return True
+        return False
+
+    def toggle_axis(self, target_axis):
+        if not self.panel:
+            return
+            
+        if self.active_axis == target_axis:
+            # Toggle OFF
+            self.active_axis = None
+            if target_axis == 'x': self.locked_length = None
+            if target_axis == 'y': self.locked_width = None
+            if target_axis == 'z': self.locked_height = None
+            
+            # Clear focus from panel fields
+            self.panel.clear_focus()
+            # Trigger update to snap back to mouse
+            self.update_from_locks()
+        else:
+            # Focus Field
+            self.active_axis = target_axis
+            self.panel.focus_field(target_axis)
+
+    def set_length_lock(self, length):
+        self.locked_length = length
+        self.update_from_locks()
+        
+    def set_width_lock(self, width):
+        self.locked_width = width
+        self.update_from_locks()
+        
+    def set_height_lock(self, height):
+        self.locked_height = height
+        self.height = height
+        self.view.redraw()
+
+    def update_from_locks(self):
+        pass
+
+    def handle_click(self, event_dict):
+        # We always use the raw mouse pos for transitions
+        pt = self.get_mouse_world_pos(event_dict)
+        
+        if self.state == 0:
+            # Pin 1: Fix the working plane and move to State 1
+            # In state 0, working_plane is already being previewed by face-snapping
+            rot = self.working_plane.Rotation if self.working_plane else FreeCAD.Rotation()
+            self.working_plane = FreeCAD.Placement(pt, rot)
+            self.start_point = pt
+            self.current_point = pt
+            self.state = 1
+            self.on_state_change(self.state)
+            return True
+            
+        elif self.state == 1:
+            # Pin 2: Move to State 2
+            # current_point is already projected in handle_move
+            self.state = 2
+            self.drag_start_screen_y = event_dict["Position"][1]
+            self.on_state_change(self.state)
+            return True
+            
+        elif self.state == 2:
+            # Pin 3: Finish
+            self.finish()
+            return True
+        return False
+
+    def handle_move(self, event_dict):
+        if self.state == 0:
+            # Detect face under mouse
+            obj, subname = self.get_face_under_mouse(event_dict)
+            if obj and subname and "Face" in subname:
+                try:
+                    face = obj.Shape.getElement(subname)
+                    if hasattr(face, "Surface") and "GeomPlane" in face.Surface.TypeId:
+                        self.working_plane = face.Surface.Position
+                        self.snap_face = (obj, subname)
+                    else:
+                        self.working_plane = None
+                        self.snap_face = None
+                except Exception:
+                    self.working_plane = None
+                    self.snap_face = None
+            else:
+                self.working_plane = None
+                self.snap_face = None
+
+            raw_pt = self.get_mouse_world_pos(event_dict)
+            self.update_preview(debug_pt=raw_pt)
+            
+        elif self.state == 1:
+            pt = self.get_mouse_world_pos(event_dict)
+            # Ensure it stays on the working plane by transforming through local space
+            lp = self.to_local(pt)
+            self.current_point = self.to_global(FreeCAD.Vector(lp.x, lp.y, 0))
+            self.update_preview(debug_pt=pt)
+            self.update_ui()
+            
+        elif self.state == 2:
+            # Standard height drag calculation
+            current_screen_y = event_dict["Position"][1]
+            if self.drag_start_screen_y is not None:
+                delta = self.drag_start_screen_y - current_screen_y
+                # Subclasses might override how height is applied
+                self.apply_height(delta / 4.0)
+            
+            # Show crosshair at the top
+            n, o = self.get_base_plane()
+            if o and hasattr(self, "height"):
+                o = o + n * self.height
+                raw_pt = self.get_mouse_world_pos(event_dict, n, o)
+                self.update_preview(debug_pt=raw_pt)
+            else:
+                raw_pt = self.get_mouse_world_pos(event_dict)
+                self.update_preview(debug_pt=raw_pt)
+            self.update_ui()
+
+    def on_state_change(self, new_state):
+        self.update_ui()
+
+    def apply_height(self, height):
+        if hasattr(self, "height"):
+            self.height = height
 
     def to_local(self, p):
         if not hasattr(self, "working_plane") or not self.working_plane:
@@ -191,18 +312,11 @@ class PrimitiveCreatorBase:
             pass
         return None, None
 
-    def handle_click(self, event_dict):
-        pass
-
-    def handle_move(self, event_dict):
-        pass
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # DMPrimitiveCreator
 # ─────────────────────────────────────────────────────────────────────────────
 
-class DMPrimitiveCreator(PrimitiveCreatorBase):
+class DMPrimitiveCreator(PrimitiveBase):
     """
     Base for creators that produce a DM object.
     Live preview updates the main object's shape directly.
@@ -314,9 +428,6 @@ class DMPrimitiveCreator(PrimitiveCreatorBase):
 
             # Update Debug Cursor
             if self._debug_pt:
-                # Log intersection to help user debug
-                print(f"[DEBUG] Ray Intersection: {self._debug_pt.x:.2f}, {self._debug_pt.y:.2f}, {self._debug_pt.z:.2f}")
-
                 if self._preview_cursor is None or self._preview_cursor not in doc.Objects:
                     self._preview_cursor = doc.addObject("Part::Feature", "DM_DebugCursor")
                     
