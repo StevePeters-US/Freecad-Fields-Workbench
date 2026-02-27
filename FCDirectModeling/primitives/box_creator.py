@@ -8,42 +8,48 @@ from FCDirectModeling import dm_logger
 class BoxCreator(DMPrimitiveCreator):
     def __init__(self):
         super().__init__()
-        # Common state (height, panel, is_cutter, locks) initialized by super
         
     def update_material(self):
-        pass # Optional: can implement if needed specifically for Box
+        # Preview object is managed by base
+        if self._preview_obj and hasattr(self._preview_obj, "ViewObject"):
+            if self.is_cutter:
+                self._preview_obj.ViewObject.ShapeColor = (0.8, 0.2, 0.2) # Red
+            else:
+                self._preview_obj.ViewObject.ShapeColor = (0.2, 0.6, 0.85) # Blue
 
     def update_from_locks(self):
         if not self.start_point:
-            self.start_point = FreeCAD.Vector(0,0,0)
+            return
             
         p1 = self.start_point
-        p2 = self.current_point if self.current_point else FreeCAD.Vector(0,0,0)
+        p2 = self.current_point if self.current_point else p1
         
-        # Calculate raw deltas (signed)
+        # Calculate world deltas
         dx = p2.x - p1.x
         dy = p2.y - p1.y
+        dz = p2.z - p1.z
         
-        # Determine signs from mouse (for unlocked dimensions)
+        # Determine signs from mouse
         sign_x = 1.0 if dx >= 0 else -1.0
         sign_y = 1.0 if dy >= 0 else -1.0
         
-        # Use simple mouse delta magnitude if unlocked
+        # Override with locks if active
         new_dx = abs(dx) * sign_x
         new_dy = abs(dy) * sign_y
         
-        # If locked, OVERRIDE with the lock value directly (Signed Input = Signed Direction)
         if self.locked_length is not None:
              new_dx = self.locked_length
              
         if self.locked_width is not None:
              new_dy = self.locked_width
              
-        # Reconstruct point
-        new_x = p1.x + new_dx
-        new_y = p1.y + new_dy
+        # Reconstruct in world space. Use p1's Z if we are just doing plane-drag (dz=0)
+        # Actually, in stage 1, p2.z is already p1.z usually.
+        self.current_point = FreeCAD.Vector(p1.x + new_dx, p1.y + new_dy, p2.z)
         
-        self.current_point = FreeCAD.Vector(new_x, new_y, 0)
+        dm_logger.debug(f"DEBUG: Box Lock world delta dx/dy: {new_dx:.2f}, {new_dy:.2f}")
+        dm_logger.debug(f"DEBUG: Box Result World Corner: {self.current_point.x:.2f}, {self.current_point.y:.2f}, {self.current_point.z:.2f}")
+        
         self.update_preview()
         self.view.redraw()
 
@@ -55,7 +61,7 @@ class BoxCreator(DMPrimitiveCreator):
             p1_local = self.to_local(self.start_point)
             p2_local = self.to_local(self.current_point)
             
-            # Send SIGNED deltas to UI so positive = positive local direction
+            # Send SIGNED local deltas to UI for consistency with Task Panel logic
             length = p2_local.x - p1_local.x
             width = p2_local.y - p1_local.y
             height = self.height
@@ -65,58 +71,21 @@ class BoxCreator(DMPrimitiveCreator):
         except Exception:
             pass
 
-    def update_preview(self, debug_pt=None):
-        if not self.start_point or not self.current_point:
-            return
-            
-        # Coordinates are now strictly relative to start_point in local space
-        # working_plane origin is now p1.
-        p1_local = self.to_local(self.start_point) # Should be [0,0,0]
-        p2_local = self.to_local(self.current_point)
-        h = self.height
-        
-        dx = p2_local.x - p1_local.x
-        dy = p2_local.y - p1_local.y
-        
-        # Local offset to the minimal corner (where builders start)
-        mc = FreeCAD.Vector(min(0.0, dx), min(0.0, dy), min(0.0, h))
-        
-        # Final World Placement is just the working_plane (which is centered at p1)
-        final_placement = self.working_plane
-        
-        params = {
-            "length": abs(dx), 
-            "width": abs(dy), 
-            "height": abs(h),
-            "min_corner_local": mc
-        }
-        if debug_pt:
-            params["debug_pt"] = debug_pt
-            
-        self.update_dm_preview("box", params, placement=final_placement)
-        
-        self._last_sdf_params = params
-        self._last_placement = final_placement
-
-
-        
-
-
-
-
-
     def handle_click(self, event_dict):
         # Delegate to base for state transitions
+        old_state = self.state
         handled = super().handle_click(event_dict)
-        if handled and self.state == 1:
-            print(f"Pin location 1: {self.start_point.x:.2f}, {self.start_point.y:.2f}, {self.start_point.z:.2f}")
-        elif handled and self.state == 2:
-            print(f"Pin location 2: {self.current_point.x:.2f}, {self.current_point.y:.2f}, {self.current_point.z:.2f}")
+        if handled:
+            print(f"Pin location {old_state+1}: {self.current_point.x:.2f}, {self.current_point.y:.2f}, {self.current_point.z:.2f}")
+        return handled
+
+    def on_state_change(self, new_state):
+        if new_state == 2:
             if self.locked_height is not None:
                 self.height = self.locked_height
             else:
-                self.height = 0.0
-        return handled
+                self.height = 0.001
+        self.update_ui()
 
     def apply_height(self, height):
         if self.locked_height is not None:
@@ -138,55 +107,46 @@ class BoxCreator(DMPrimitiveCreator):
                      self.is_cutter = False
                      self.update_material()
 
-    def handle_move(self, event_dict):
-        # State 0 is handled by base (face detection)
-        # State 1 is handled by base (plane projection into self.current_point)
-        # State 2 (height) is handled by base (calls apply_height)
-        super().handle_move(event_dict)
-
-        if self.state == 1:
-            # Sync current_point with locks if needed
-            lp = self.to_local(self.current_point)
-            p1l = self.to_local(self.start_point)
+    def update_preview(self, debug_pt=None):
+        if not self.start_point or not self.current_point:
+            return
             
-            dx = lp.x - p1l.x
-            dy = lp.y - p1l.y
+        lp1 = self.to_local(self.start_point)
+        lp2 = self.to_local(self.current_point)
+        h = self.height
+        
+        dx = lp2.x - lp1.x
+        dy = lp2.y - lp1.y
+        
+        # Builder handles (dx, dy, h) as signed dimensions relative to (0,0,0)
+        params = {
+            "length": dx, 
+            "width": dy, 
+            "height": h
+        }
+        if debug_pt:
+            params["debug_pt"] = debug_pt
             
-            if self.locked_length is not None: dx = self.locked_length
-            if self.locked_width is not None: dy = self.locked_width
-            
-            self.current_point = self.to_global(FreeCAD.Vector(p1l.x + dx, p1l.y + dy, 0))
+        self.update_dm_preview("box", params, placement=self.working_plane)
 
     def _do_finish(self):
-        if not self.start_point or (not self.current_point and self.state == 0):
-             # If completely uninitialized, just terminate
+        if not self.start_point or (not self.current_point and self.state == 1):
             self.terminate()
             return
 
-        from FCDirectModeling.dm_object import create_dm_object
-        from FCDirectModeling import dm_logger
-        
-        # Adjust placement for corner-scaling consistency
-        p1_local = self.to_local(self.start_point)
-        p2_local = self.to_local(self.current_point)
+        lp1 = self.to_local(self.start_point)
+        lp2 = self.to_local(self.current_point)
         h = self.height
         
-        dx = p2_local.x - p1_local.x
-        dy = p2_local.y - p1_local.y
-        
-        # Local offset to the minimal corner
-        min_corner_local = FreeCAD.Vector(min(0.0, dx), min(0.0, dy), min(0.0, h))
-        
-        # Final Placement = Start Placement * Local Offset
-        final_placement = self.working_plane * FreeCAD.Placement(min_corner_local, FreeCAD.Rotation())
+        dx = lp2.x - lp1.x
+        dy = lp2.y - lp1.y
         
         params = {
-            "length": abs(dx),
-            "width":  abs(dy),
-            "height": abs(h),
-            "min_corner_local": min_corner_local
+            "length": dx,
+            "width":  dy,
+            "height": h
         }
         
-        create_dm_object("Box", "box", params, placement=final_placement)
+        from FCDirectModeling.dm_object import create_dm_object
+        create_dm_object("Box", "box", params, placement=self.working_plane)
         self.terminate()
-

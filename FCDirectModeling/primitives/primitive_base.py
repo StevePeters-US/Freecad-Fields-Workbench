@@ -133,7 +133,7 @@ class PrimitiveBase:
             event_type = event_dict.get("Type", "Unknown")
 
             if event_type == "SoMouseButtonEvent":
-                if event_dict["State"] == "DOWN" and event_dict["Button"] == "BUTTON1":
+                if event_dict["State"] == "DOWN":
                     return self.handle_click(event_dict)
             elif event_type == "SoLocation2Event":
                 self.handle_move(event_dict)
@@ -205,6 +205,19 @@ class PrimitiveBase:
         pass
 
     def handle_click(self, event_dict):
+        btn = event_dict.get("Button")
+        
+        # Right-click (BUTTON3) to finish or drop
+        if btn == "BUTTON3":
+            if self.state > 0:
+                self.finish()
+            else:
+                self.terminate()
+            return True
+
+        if btn != "BUTTON1":
+            return False
+
         # We always use the raw mouse pos for transitions
         pt = self.get_mouse_world_pos(event_dict)
         
@@ -258,9 +271,11 @@ class PrimitiveBase:
             
         elif self.state == 1:
             pt = self.get_mouse_world_pos(event_dict)
-            # Ensure it stays on the working plane by transforming through local space
-            lp = self.to_local(pt)
-            self.current_point = self.to_global(FreeCAD.Vector(lp.x, lp.y, 0))
+            self.current_point = pt
+            
+            dm_logger.debug(f"DEBUG: Mouse Position (World): {pt.x:.2f}, {pt.y:.2f}, {pt.z:.2f}")
+            dm_logger.debug(f"DEBUG: Corner Position (World): {self.current_point.x:.2f}, {self.current_point.y:.2f}, {self.current_point.z:.2f}")
+            
             self.update_preview(debug_pt=pt)
             self.update_ui()
             
@@ -268,7 +283,7 @@ class PrimitiveBase:
             # Standard height drag calculation
             current_screen_y = event_dict["Position"][1]
             if self.drag_start_screen_y is not None:
-                delta = self.drag_start_screen_y - current_screen_y
+                delta = current_screen_y - self.drag_start_screen_y
                 # Subclasses might override how height is applied
                 self.apply_height(delta / 4.0)
             
@@ -401,9 +416,7 @@ class DMPrimitiveCreator(PrimitiveBase):
             else:
                 shape = Part.Shape()
 
-            # Apply local offset (corner scaling)
-            mc = params.get("min_corner_local", FreeCAD.Vector(0,0,0))
-            shape.translate(mc)
+
 
             doc = FreeCAD.activeDocument()
             if not doc:
@@ -426,44 +439,39 @@ class DMPrimitiveCreator(PrimitiveBase):
             if self._last_placement:
                  self._preview_obj.Placement = self._last_placement
 
-            # Update Debug Cursor
-            if self._debug_pt:
+            # Update Debug Cursor(s)
+            debug_pts = []
+            if self.start_point: debug_pts.append(self.start_point)
+            if self.current_point: debug_pts.append(self.current_point)
+            
+            # Plus any explicit debug_pt passed in params
+            if "debug_pt" in params and params["debug_pt"] not in debug_pts:
+                debug_pts.append(params["debug_pt"])
+
+            if debug_pts:
                 if self._preview_cursor is None or self._preview_cursor not in doc.Objects:
                     self._preview_cursor = doc.addObject("Part::Feature", "DM_DebugCursor")
-                    
-                    import Part
-                    size = 25.0 # 50mm total spread
-                    l1 = Part.LineSegment(FreeCAD.Vector(-size,0,0), FreeCAD.Vector(size,0,0)).toShape()
-                    l2 = Part.LineSegment(FreeCAD.Vector(0,-size,0), FreeCAD.Vector(0,size,0)).toShape()
-                    l3 = Part.LineSegment(FreeCAD.Vector(0,0,-size), FreeCAD.Vector(0,0,size)).toShape()
-                    self._preview_cursor.Shape = Part.Compound([l1, l2, l3])
-                    
                     if hasattr(self._preview_cursor, "ViewObject") and self._preview_cursor.ViewObject:
-                        self._preview_cursor.ViewObject.ShapeColor = (1.0, 0.0, 0.0) # Red
-                        self._preview_cursor.ViewObject.LineColor = (1.0, 0.0, 0.0)
-                        self._preview_cursor.ViewObject.LineWidth = 12.0
-                        self._preview_cursor.ViewObject.PointColor = (1.0, 0.0, 0.0)
-                        self._preview_cursor.ViewObject.PointSize = 16.0
-                        self._preview_cursor.ViewObject.Transparency = 0
+                        self._preview_cursor.ViewObject.ShapeColor = (0.0, 0.4, 1.0) # Blue
+                        self._preview_cursor.ViewObject.LineColor = (0.0, 0.4, 1.0)
+                        self._preview_cursor.ViewObject.LineWidth = 3.0
+                        self._preview_cursor.ViewObject.PointSize = 10.0
                         self._preview_cursor.ViewObject.Selectable = False
-                        
-                        # Use flat emissive coloring (no lighting/shading)
                         if hasattr(self._preview_cursor.ViewObject, "LightModel"):
                             self._preview_cursor.ViewObject.LightModel = "NoLight"
-                        
-                        # Hide from tree view to avoid clutter
-                        self._preview_cursor.ViewObject.Visibility = True
                         if hasattr(self._preview_cursor, "ShowInTree"):
                              self._preview_cursor.ShowInTree = False
-                
-                # Use larger lines (30mm) for high visibility
-                debug_shape = Part.Compound([
-                    Part.makeLine((self._debug_pt.x-15,self._debug_pt.y,self._debug_pt.z),(self._debug_pt.x+15,self._debug_pt.y,self._debug_pt.z)),
-                    Part.makeLine((self._debug_pt.x,self._debug_pt.y-15,self._debug_pt.z),(self._debug_pt.x,self._debug_pt.y+15,self._debug_pt.z)),
-                    Part.makeLine((self._debug_pt.x,self._debug_pt.y,self._debug_pt.z-15),(self._debug_pt.x,self._debug_pt.y,self._debug_pt.z+15))
-                ])
-                self._preview_cursor.Shape = debug_shape
-                self._preview_cursor.Placement = FreeCAD.Placement(FreeCAD.Vector(0,0,0), FreeCAD.Rotation())
+
+                # Create a compound of crosshairs
+                crosses = []
+                for pt in debug_pts:
+                    crosses.extend([
+                        Part.makeLine((pt.x-5,pt.y,pt.z),(pt.x+5,pt.y,pt.z)),
+                        Part.makeLine((pt.x,pt.y-5,pt.z),(pt.x,pt.y+5,pt.z)),
+                        Part.makeLine((pt.x,pt.y,pt.z-5),(pt.x,pt.y,pt.z+5))
+                    ])
+                self._preview_cursor.Shape = Part.Compound(crosses)
+                self._preview_cursor.Placement = FreeCAD.Placement()
 
             # A plain updateGui() is sufficient to repaint. No recompute needed.
             FreeCADGui.updateGui()

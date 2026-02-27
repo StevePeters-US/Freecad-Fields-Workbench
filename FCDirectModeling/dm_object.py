@@ -78,6 +78,11 @@ class DMObjectProxy:
             obj.MajorRadius = params.get("major_r", 10.0)
             obj.MinorRadius = params.get("minor_r", 2.0)
 
+        elif shape_type == "curve":
+            if not hasattr(obj, "Points"):
+                obj.addProperty("App::PropertyVectorList", "Points", "Curve", "Spline fit points")
+            obj.Points = params.get("points", [])
+
     def build_shape(self, fp):
         """Return a Part.Shape based on the object's properties."""
         from . import nurbs_primitives as np_builders
@@ -91,6 +96,8 @@ class DMObjectProxy:
             return np_builders.build_cone(fp.Radius, fp.Height)
         elif st == "torus":
             return np_builders.build_torus(fp.MajorRadius, fp.MinorRadius)
+        elif st == "curve":
+            return np_builders.build_curve(fp.Points)
             
         import Part
         return Part.Shape()

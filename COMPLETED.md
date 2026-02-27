@@ -13,7 +13,7 @@ Tasks moved here from `TODO.md` after verification.
 - **Result**: No more segfaults from mutating the document inside Coin3D event callbacks.
 
 ## ✅ Interactive 3D view dragging for shape creation
-- **Completed**: `PrimitiveCreatorBase` in `primitives/base.py` provides `get_point_on_plane()`, `get_closest_point_on_axis()`, and `event_cb()` for orthographic and perspective cameras.
+- **Completed**: `PrimitiveCreatorBase` in `primitives/primitive_base.py` provides `get_point_on_plane()`, `get_closest_point_on_axis()`, and `event_cb()` for orthographic and perspective cameras.
 - **Result**: Users can click-drag to define shapes in the viewport with live mesh preview via `SDFMeshPrimitiveCreator._process_preview_queue()`.
 
 ## ✅ Centralized logging system
@@ -51,7 +51,7 @@ Tasks moved here from `TODO.md` after verification.
 - **Result**: SDF objects now appear as distinct orange containers in the tree view, better distinguishing them from standard meshes.
 
 ## ✅ Fix Preview Visibility and Hierarchy
-- **Completed**: Fixed `base.py` `_process_preview_queue` to correctly reconstruct SDF functions and maintain a temporary Part-Mesh hierarchy during creation.
+- **Completed**: Fixed `primitive_base.py` `_process_preview_queue` to correctly reconstruct SDF functions and maintain a temporary Part-Mesh hierarchy during creation.
 - **Result**: Real-time visual feedback is now reliably displayed during interactive shape dragging.
 
 ## ✅ BUG-C. Fix boolean commands — property mismatch
@@ -81,3 +81,19 @@ Tasks moved here from `TODO.md` after verification.
 ## ✅ Core Object and Boolean Refactoring
 - **Completed**: Renamed `sdf_object.py` to `dm_object.py`, refactored `Proxy` and `ViewProvider` for NURBS, and updated boolean operations to use native BRep.
 - **Result**: Codebase is transitioned to a NURBS-native architecture; legacy SDF logic and properties are removed.
+
+## ✅ Create NURBS primitive builders
+- **Completed**: Implemented `nurbs_primitives.py` with functions returning `Part.Shape` objects for Box, Sphere, Cone, and Torus.
+- **Result**: Each builder returns a valid non-null `Part.Shape` that displays correctly in FreeCAD's 3D view.
+
+## ✅ Remove `sdf_utils.py`
+- **Completed**: Deleted `FCDirectModeling/sdf_utils.py` and removed all references.
+- **Result**: No remaining imports or references to `sdf_utils` in the codebase.
+
+## ✅ Remove legacy `command_draw_box.py`
+- **Completed**: Deleted `dm_commands/command_draw_box.py` and removed references from `InitGui.py`.
+- **Result**: Legacy draw box command is fully removed with no import errors.
+
+## ✅ Clean up test files
+- **Completed**: Removed or rewrote test files that referenced the old SDF pipeline.
+- **Result**: No test files reference SDF modules.

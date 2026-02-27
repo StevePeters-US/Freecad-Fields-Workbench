@@ -41,7 +41,21 @@ class CreateTorus:
     def IsActive(self):
         return FreeCAD.activeDocument() is not None
 
+class CreateCurve:
+    def GetResources(self):
+        return {'Pixmap': 'DrawStyleAsIs', 'MenuText': 'Create Curve', 'ToolTip': 'Click-to-place NURBS (BSpline) curve points. Enter to finish.'}
+
+    def Activated(self):
+        try:
+            self.creator = primitive_creators.CurveCreator()
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"CreateCurve: Error: {e}\n")
+
+    def IsActive(self):
+        return FreeCAD.activeDocument() is not None
+
 # Register
 FreeCADGui.addCommand('DM_CreateSphere', CreateSphere())
 FreeCADGui.addCommand('DM_CreateCone', CreateCone())
 FreeCADGui.addCommand('DM_CreateTorus', CreateTorus())
+FreeCADGui.addCommand('DM_CreateCurve', CreateCurve())

@@ -36,23 +36,34 @@ class ConeCreator(DMPrimitiveCreator):
         if self.working_plane:
             n = self.working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
         
-        # Local offset to move [0,0,0] to the midpoint of the height
-        mid_pt = self.start_point + n * (self.height / 2.0)
-        
-        # Construct placement using the world midpoint and face rotation
+        # Local offset to move [0,0,0] to the base (start_point)
+        # Note: build_cone starts at 0 and goes up Z.
+        # Direction handled by working_plane.
         rot = self.working_plane.Rotation if self.working_plane else FreeCAD.Rotation()
-        final_placement = FreeCAD.Placement(mid_pt, rot)
+        
+        # If height is negative, we want the cone to point "down" from the start point.
+        # We can achieve this by flipping the orientation or offsetting.
+        # Easiest: keep orientation, use abs(height) for shape, and translate base.
+        # But wait, makeCone(r, 0, h) always goes along +Z.
+        # If we use the face rotation, it goes along +Normal.
+        # If height is negative, it should go along -Normal.
+        
+        h = self.height
+        if h < 0:
+            # Flip rotation by 180 around X or Y locally
+            rot = rot * FreeCAD.Rotation(FreeCAD.Vector(1,0,0), 180)
+            h = abs(h)
+            
+        final_placement = FreeCAD.Placement(self.start_point, rot)
         
         params = {
             "center": [0, 0, 0],
             "radius": abs(self.radius),
-            "height": self.height,
+            "height": h,
         }
         if debug_pt:
             params["debug_pt"] = debug_pt
+            
         self.update_dm_preview("cone", params, placement=final_placement)
-        
-        self._last_sdf_params = params
-        self._last_placement = final_placement
 
 

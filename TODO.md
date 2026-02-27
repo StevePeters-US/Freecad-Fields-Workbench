@@ -34,50 +34,21 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
 
 ---
 
-### 7. Create NURBS primitive builders [x] (Complexity: 4/10)
-
-- **Goal**: Implement `nurbs_primitives.py` with functions that return `Part.Shape` objects for each primitive type.
-- **Files to read**:
-  - FreeCAD `Part` module documentation — `Part.makeBox()`, `Part.makeSphere()`, `Part.makeCone()`, `Part.makeTorus()`, and `Part.BSplineSurface`.
-- **Files to create**:
-  - `FCDirectModeling/nurbs_primitives.py`
-- **Steps**:
-  1. Implement `build_box(length, width, height) → Part.Shape`.
-  2. Implement `build_sphere(radius) → Part.Shape`.
-  3. Implement `build_cone(radius, height) → Part.Shape`.
-  4. Implement `build_torus(major_r, minor_r) → Part.Shape`.
-  5. Each function should return a valid `Part.Shape` centered at the local origin.
-  6. Use `Part.makeBox`, `Part.makeSphere`, etc. for initial implementation — these produce BRep shapes that can later be converted to explicit NURBS surfaces if needed.
-- **Acceptance**: Each builder returns a valid non-null `Part.Shape`. Shapes display correctly in FreeCAD's 3D view.
-
----
-
 ### 8. Refactor primitive creators to use NURBS instead of SDF (Complexity: 5/10)
 
 - **Goal**: Update `primitives/base.py` and all creator subclasses to produce NURBS shapes instead of SDF meshes during preview and finalization.
 - **Files to read**:
-  - `FCDirectModeling/primitives/base.py` — `PrimitiveCreatorBase`, `SDFMeshPrimitiveCreator`.
+  - `FCDirectModeling/primitives/primitive_base.py` — `PrimitiveCreatorBase`, `SDFMeshPrimitiveCreator`.
   - `FCDirectModeling/primitives/box_creator.py`, `sphere_creator.py`, `cone_creator.py`, `torus_creator.py`.
 - **Files to modify**:
-  - `FCDirectModeling/primitives/base.py` — rename `SDFMeshPrimitiveCreator` → `NURBSPrimitiveCreator`. Replace SDF evaluation + meshing with calls to `nurbs_primitives.py` builders.
+  - `FCDirectModeling/primitives/primitive_base.py` — rename `SDFMeshPrimitiveCreator` → `NURBSPrimitiveCreator`. Replace SDF evaluation + meshing with calls to `nurbs_primitives.py` builders.
   - All creator subclasses — update to call `build_box()`, `build_sphere()`, etc. instead of constructing SDF params.
 - **Steps**:
-  1. In `base.py`, remove all SDF preview queue logic (`_process_preview_queue`, SDF evaluation, mesh assignment).
+  1. In `primitive_base.py`, remove all SDF preview queue logic (`_process_preview_queue`, SDF evaluation, mesh assignment).
   2. Replace with: on each drag update, call the appropriate NURBS builder with current dimensions, assign `preview_obj.Shape = shape`.
   3. On finalize (3rd click), call `create_dm_object()` with the final dimensions.
   4. Update each creator subclass to pass dimensions to the NURBS builder instead of constructing SDF param dicts.
 - **Acceptance**: Click-drag to create a Box → live NURBS shape preview updates in viewport → on 3rd click, final `Part::FeaturePython` appears with correct dimensions.
-
----
-
-### 9. Remove `sdf_utils.py` [x] (Complexity: 1/10)
-
-- **Goal**: Delete the SDF utility module. Any needed factory logic moves to `dm_object.py`.
-- **Files to delete**:
-  - `FCDirectModeling/sdf_utils.py`
-- **Files to modify**:
-  - Any file importing from `sdf_utils` — find with `grep -r "sdf_utils" .`.
-- **Acceptance**: `grep -r "sdf_utils" .` returns zero results. No import errors.
 
 ---
 
@@ -111,7 +82,7 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
 
 - **Goal**: Users can draw freeform B-spline curves directly in the 3D viewport by clicking control points.
 - **Files to read**:
-  - `FCDirectModeling/primitives/base.py` — understand the event callback pattern for mouse interaction.
+  - `FCDirectModeling/primitives/primitive_base.py` — understand the event callback pattern for mouse interaction.
   - FreeCAD `Part.BSplineCurve` API — `interpolate()`, `buildFromPoles()`.
 - **Files to create**:
   - `FCDirectModeling/curve_tools.py` — curve construction utilities.
@@ -128,17 +99,6 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
      - `build_bspline_curve(points, degree=3) → Part.BSplineCurve`
      - `project_point_to_plane(screen_pos, plane) → FreeCAD.Vector`
 - **Acceptance**: Activate Draw Curve → click 4+ points in viewport → a smooth B-spline curve appears through them → finalize → a `Part::Feature` edge is created in the document.
-
----
-
-### 12. Remove legacy `command_draw_box.py` (Complexity: 1/10)
-
-- **Goal**: Delete the legacy draw box command that is no longer used.
-- **Files to delete**:
-  - `dm_commands/command_draw_box.py`
-- **Files to modify**:
-  - `InitGui.py` — remove any reference to `DM_DrawBox` if present.
-- **Acceptance**: The file is gone. No import errors.
 
 ---
 
@@ -195,13 +155,148 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
 
 ---
 
+### 16. Define visible work plane from mouse cursor context (Complexity: 5/10)
 
-### 17. Clean up test files (Complexity: 1/10)
+- **Goal**: Before any drawing operation, define and display a work plane. The plane's orientation should be derived from whatever geometry the mouse cursor is hovering over (face normal, edge tangent, etc.), defaulting to the XY origin plane with Z+ as the normal.
+- **Files to read**:
+  - `FCDirectModeling/primitives/primitive_base.py` — understand `get_point_on_plane()` and the current working plane logic.
+  - FreeCAD `Part.Plane`, `Draft.WorkingPlane` API.
+  - FreeCAD Coin3D scene graph API for visual plane display.
+- **Files to create**:
+  - `FCDirectModeling/work_plane.py` — work plane manager (orientation detection, visual display, plane math).
+- **Files to modify**:
+  - `FCDirectModeling/primitives/primitive_base.py` — integrate work plane detection into the creation flow.
+- **Steps**:
+  1. On tool activation, raycast from the mouse cursor into the scene.
+  2. If the ray hits a face, set the work plane to that face's surface normal at the hit point.
+  3. If no geometry is hit, default to the XY plane at the origin with Z+ normal.
+  4. Display the work plane as a semi-transparent grid/rectangle in the 3D viewport using Coin3D nodes.
+  5. All subsequent drawing operations should project onto this work plane.
+  6. Provide a way to reset/change the work plane (e.g., clicking a different face).
+- **Acceptance**: Hover over a face → activate a draw tool → a visible work plane appears aligned to that face. Hover over empty space → work plane defaults to XY at origin.
 
-- **Goal**: Remove or rewrite test files that reference the old SDF pipeline.
-- **Files to delete**:
-  - `test_sdf_mesher.py`
-  - `test_primitives.py`
-- **Files to create** (optional):
-  - `test_nurbs_primitives.py` — basic tests for the NURBS builders.
-- **Acceptance**: No test files reference SDF modules. New tests pass.
+---
+
+### 17. Recreate primitive cube using NURBS surfaces per face (Complexity: 6/10)
+
+- **Goal**: Completely rewrite the box/cube primitive so that each face is an individual NURBS surface (`Part.BSplineSurface`), stitched together into a solid shell. This replaces the current `Part.makeBox()` approach with explicit NURBS face construction.
+- **Files to read**:
+  - `FCDirectModeling/nurbs_primitives.py` — current `build_box()` implementation.
+  - FreeCAD `Part.BSplineSurface`, `Part.Face`, `Part.Shell`, `Part.Solid` API.
+- **Files to modify**:
+  - `FCDirectModeling/nurbs_primitives.py` — rewrite `build_box()` to construct 6 NURBS surface faces.
+- **Steps**:
+  1. For each of the 6 cube faces, define a degree-1 B-spline surface with 4 corner control points.
+  2. Create a `Part.Face` from each `Part.BSplineSurface`.
+  3. Stitch all 6 faces into a `Part.Shell`.
+  4. Create a `Part.Solid` from the shell.
+  5. Validate the solid is closed and has correct normals.
+- **Acceptance**: `build_box(l, w, h)` returns a valid `Part.Solid` made of 6 NURBS faces. The shape displays identically to the current box and passes `Shape.isValid()`.
+
+---
+
+### 18. Chamfer and fillet edges on the cube primitive (Complexity: 5/10)
+
+- **Goal**: Add optional chamfer and fillet operations to the cube primitive, allowing users to apply edge treatments during or after creation.
+- **Files to read**:
+  - `FCDirectModeling/nurbs_primitives.py` — the NURBS box builder (task #17 prerequisite).
+  - FreeCAD `Part.Shape.makeChamfer()`, `Part.Shape.makeFillet()` API.
+  - `FCDirectModeling/primitives/box_creator.py` — the box creation flow.
+- **Files to modify**:
+  - `FCDirectModeling/nurbs_primitives.py` — add `chamfer_edges()` and `fillet_edges()` helpers.
+  - `FCDirectModeling/primitives/box_creator.py` — integrate chamfer/fillet options.
+  - `FCDirectModeling/primitives/box_task_panel.py` — add UI controls for chamfer/fillet radius and edge selection.
+- **Steps**:
+  1. Implement `chamfer_edges(shape, edges, distance) → Part.Shape` using `shape.makeChamfer()`.
+  2. Implement `fillet_edges(shape, edges, radius) → Part.Shape` using `shape.makeFillet()`.
+  3. Add chamfer/fillet radius spinbox and edge selection mode to the box task panel.
+  4. Allow selecting individual edges or "all edges" for the operation.
+  5. Apply chamfer/fillet after box creation as a post-processing step.
+- **Acceptance**: Create a box → select edges → apply fillet with radius 2 → edges are smoothly rounded. Same for chamfer with a flat bevel.
+
+---
+
+### 19. Rewrite cone primitive to keep circle on starting plane (Complexity: 4/10)
+
+- **Goal**: Rewrite the cone primitive so that the base circle stays on the starting work plane, rather than being offset or misaligned during creation.
+- **Files to read**:
+  - `FCDirectModeling/primitives/cone_creator.py` — current cone creation logic.
+  - `FCDirectModeling/nurbs_primitives.py` — `build_cone()` implementation.
+  - `FCDirectModeling/primitives/primitive_base.py` — `get_point_on_plane()` and work plane logic.
+- **Files to modify**:
+  - `FCDirectModeling/primitives/cone_creator.py` — fix placement so base circle aligns to the starting plane.
+  - `FCDirectModeling/nurbs_primitives.py` — ensure `build_cone()` places the base at z=0 of the local frame.
+- **Steps**:
+  1. In `cone_creator.py`, record the starting plane (from work plane or click point) on the first click.
+  2. Ensure the cone's base circle center is placed at the first click point on that plane.
+  3. The cone's height extends along the plane's normal direction.
+  4. Update `build_cone()` to always place the base at the local origin (z=0).
+  5. Apply the work plane transform to position the cone correctly in world space.
+- **Acceptance**: Click on any plane → drag to set radius → the base circle visually sits on the clicked plane. The cone extends upward along the plane's normal.
+
+---
+
+### 20. Transform selected sub-elements (point, face, edge) (Complexity: 6/10)
+
+- **Goal**: Allow users to select individual sub-elements (vertices, edges, or faces) of a shape and apply translate/rotate/scale transforms to them directly.
+- **Files to read**:
+  - FreeCAD `Part.Shape` sub-element API — `Shape.Vertexes`, `Shape.Edges`, `Shape.Faces`, `FreeCADGui.Selection.getSelectionEx()`.
+  - `dm_commands/command_transform.py` — existing whole-object transform (if present).
+  - FreeCAD `Part` module — `BRepOffsetAPI_MakeOffset`, `BRepBuilderAPI_Transform`.
+- **Files to create**:
+  - `dm_commands/command_transform_subelement.py` — sub-element transform command.
+- **Files to modify**:
+  - `InitGui.py` — register the command.
+- **Steps**:
+  1. Use `FreeCADGui.Selection.getSelectionEx()` to get the selected sub-elements (vertices, edges, or faces).
+  2. Determine the sub-element type and present appropriate transform options (translate for points, rotate/translate for edges/faces).
+  3. Apply the transform to the sub-element using OpenCASCADE's BRep modification APIs.
+  4. Rebuild the parent shape with the modified sub-element.
+  5. Update the document object with the new shape.
+- **Acceptance**: Select a face on a box → translate it 5mm along its normal → the box deforms, stretching that face outward. Select a vertex → drag it → the surrounding geometry updates.
+
+---
+
+### 21. Extrude a face (Complexity: 5/10)
+
+- **Goal**: Select a face on any solid and extrude it along its normal (or a user-specified direction) to add or remove material.
+- **Files to read**:
+  - FreeCAD `Part` module — `Part.Face.extrude()`, `Part.Shape.fuse()`, `Part.Shape.cut()`.
+  - `FreeCADGui.Selection.getSelectionEx()` — for face selection.
+- **Files to create**:
+  - `dm_commands/command_extrude_face.py` — face extrusion command.
+- **Files to modify**:
+  - `InitGui.py` — register the command.
+- **Steps**:
+  1. Get the selected face from `FreeCADGui.Selection.getSelectionEx()`.
+  2. Determine the face normal direction.
+  3. Present a dialog or interactive drag to set the extrusion distance (positive = add material, negative = cut).
+  4. Extrude the face using `face.extrude(normal * distance)` to create a solid.
+  5. Fuse (positive) or cut (negative) the extruded solid with the parent shape.
+  6. Update the document object with the resulting shape.
+- **Acceptance**: Select a face on a box → extrude 10mm outward → the box gains a protrusion on that face. Extrude inward → material is removed.
+
+---
+
+### 22. Dimensioning for edges, radii, and point-to-point (Complexity: 5/10)
+
+- **Goal**: Add a dimensioning tool that displays measurement annotations in the 3D viewport for edges (length), radii (of arcs/circles), or the distance between two selected points.
+- **Files to read**:
+  - FreeCAD `Part` sub-element API — `Shape.Edges`, `Shape.Vertexes`, edge `Length`, `Curve.Radius`.
+  - FreeCAD Coin3D scene graph API — `SoSeparator`, `SoText2`, `SoTranslation` for annotation display.
+  - FreeCAD `TechDraw` or `Draft.makeDimension` for reference on dimension annotation patterns.
+- **Files to create**:
+  - `dm_commands/command_dimension.py` — dimensioning command.
+  - `FCDirectModeling/dimension_display.py` — Coin3D-based annotation rendering.
+- **Files to modify**:
+  - `InitGui.py` — register the command.
+- **Steps**:
+  1. On activation, enter a selection mode where the user picks edges, arcs, or pairs of points.
+  2. For an **edge**: compute its length, display it as a text annotation near the edge midpoint.
+  3. For an **arc/circle edge**: compute the radius, display "R = X" near the arc.
+  4. For **two points**: compute the Euclidean distance, display it with a leader line between the points.
+  5. Render annotations using Coin3D `SoText2` nodes attached to the scene graph.
+  6. Annotations should persist until dismissed or the tool is deactivated.
+- **Acceptance**: Select an edge → a dimension label showing its length appears in the viewport. Select a circular edge → radius is displayed. Click two points → the distance between them is shown.
+
+---
