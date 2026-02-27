@@ -52,7 +52,7 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
 
 ---
 
-### 3. Remove SDF distance functions from `sdf_object.py` (Complexity: 2/10)
+### 3. Remove SDF distance functions from `sdf_object.py` [x] (Complexity: 2/10)
 
 - **Goal**: Delete the SDF evaluator functions (`_sdf_box`, `_sdf_sphere`, `_sdf_cone`, `_sdf_torus`, `_sdf_boolean`, `_SDF_BUILDERS`). These are replaced by NURBS builders.
 - **Files to read**:
@@ -78,13 +78,7 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
   - `FCDirectModeling/sdf_object.py` (or the new `dm_object.py`) — remove `get_mesh_algorithm`, `set_mesh_algorithm`, `get_mesh_resolution`, `set_mesh_resolution`, `get_preview_resolution`, `set_preview_resolution`.
 - **Steps**:
   1. In the settings dialog, remove the algorithm and resolution widgets from the layout.
-  2. Remove the corresponding getter/setter helper functions.
-  3. Keep `get_show_wireframe` / `set_show_wireframe`.
-- **Acceptance**: DM Settings dialog opens showing only the wireframe toggle. No errors.
-
----
-
-### 5. Rename `sdf_object.py` → `dm_object.py` and strip SDF internals (Complexity: 3/10)
+### 3. Rename `sdf_object.py` to `dm_object.py` and refactor proxy [x] (Complexity: 3/10)
 
 - **Goal**: Rename the core object module and refactor `SDFObjectProxy` → `DMObjectProxy`, `SDFViewProvider` → `DMViewProvider`. Strip all SDF-related properties and logic.
 - **Files to read**:
@@ -107,7 +101,7 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
 
 ---
 
-### 6. Rename boolean commands: remove "SDF" prefix (Complexity: 2/10)
+### 4. Refactor `SDFObjectProxy` to remove legacy properties [x] (Complexity: 2/10)
 
 - **Goal**: The boolean commands (`DM_Fuse`, `DM_Cut`, `DM_Common`) should operate on `Part::Feature` shapes using OpenCASCADE boolean operations instead of SDF composition.
 - **Files to read**:
@@ -159,7 +153,7 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
 
 ---
 
-### 9. Remove `sdf_utils.py` (Complexity: 1/10)
+### 9. Remove `sdf_utils.py` [x] (Complexity: 1/10)
 
 - **Goal**: Delete the SDF utility module. Any needed factory logic moves to `dm_object.py`.
 - **Files to delete**:

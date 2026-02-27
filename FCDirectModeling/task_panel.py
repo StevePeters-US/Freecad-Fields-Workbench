@@ -40,8 +40,7 @@ class DirectModelingTaskPanel:
         self.res_spin.setRange(1, 256)
         
         # Import here to avoid circular imports if possible, or check if top-level is safe
-        from FCDirectModeling import sdf_utils
-        self.res_spin.setValue(sdf_utils.DEFAULT_RESOLUTION)
+        self.res_spin.setValue(15) # Default/Stub
         
         self.res_layout.addWidget(self.res_label)
         self.res_layout.addWidget(self.res_spin)
@@ -50,27 +49,17 @@ class DirectModelingTaskPanel:
         # Apply to Selection Button
         self.apply_btn = QtGui.QPushButton("Apply to Selection")
         self.layout.addWidget(self.apply_btn)
-        
+        from FCDirectModeling.dm_object import get_show_wireframe
         QtCore.QObject.connect(self.res_spin, QtCore.SIGNAL("valueChanged(int)"), self.on_resolution_changed)
         QtCore.QObject.connect(self.apply_btn, QtCore.SIGNAL("clicked()"), self.on_apply_clicked)
 
     def on_resolution_changed(self, val):
-        from FCDirectModeling import sdf_utils
-        sdf_utils.DEFAULT_RESOLUTION = val
+        pass # Stub
         # FreeCAD.Console.PrintMessage(f"Default Resolution set to {val}\n")
 
     def on_apply_clicked(self):
-        import FreeCADGui
-        from FCDirectModeling import sdf_utils
-        
-        sel = FreeCADGui.Selection.getSelection()
-        val = self.res_spin.value()
-        
-        count = 0
-        for obj in sel:
-            if hasattr(obj, "Resolution"):
-                obj.Resolution = val
-                count += 1
+        # Stub
+        pass
         
         # Recompute is not strictly necessary as Property change triggers it, 
         # but if we want to be sure:

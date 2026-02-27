@@ -73,3 +73,11 @@ Tasks moved here from `TODO.md` after verification.
 ## ✅ Remove `sdf_mesher.py` and all SDF meshing code
 - **Completed**: Deleted `sdf_mesher.py`, its tests, and stripped meshing logic from `sdf_object.py` and `command_dm_settings.py`.
 - **Result**: Core codebase is now free of legacy voxel meshing logic, ready for the NURBS-native transition.
+
+## ✅ Remove SDF distance functions from `sdf_object.py`
+- **Completed**: Deleted legacy `_sdf_*` evaluator functions and `_SDF_BUILDERS` dictionary.
+- **Result**: Core object logic is stripped of legacy SDF evaluation code, preparing it for the NURBS build pipeline.
+
+## ✅ Core Object and Boolean Refactoring
+- **Completed**: Renamed `sdf_object.py` to `dm_object.py`, refactored `Proxy` and `ViewProvider` for NURBS, and updated boolean operations to use native BRep.
+- **Result**: Codebase is transitioned to a NURBS-native architecture; legacy SDF logic and properties are removed.

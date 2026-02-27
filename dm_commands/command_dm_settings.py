@@ -29,7 +29,7 @@ class _SettingsDialog(QtGui.QDialog):
         self.setWindowTitle("Direct Modeling Settings")
         self.setMinimumWidth(320)
 
-        from FCDirectModeling.sdf_object import get_show_wireframe
+        from FCDirectModeling.dm_object import get_show_wireframe
         current_wire = get_show_wireframe()
 
         layout = QtGui.QFormLayout(self)
@@ -49,7 +49,7 @@ class _SettingsDialog(QtGui.QDialog):
         layout.addRow(btn_box)
 
     def _on_accept(self):
-        from FCDirectModeling.sdf_object import set_show_wireframe
+        from FCDirectModeling.dm_object import set_show_wireframe
         wire = self._wire_check.isChecked()
         set_show_wireframe(wire)
         FreeCAD.Console.PrintMessage(f"DM Settings: wireframe={wire}\n")

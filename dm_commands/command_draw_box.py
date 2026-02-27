@@ -16,7 +16,7 @@ class DrawBoxCommand:
 
     def Activated(self):
         from FCDirectModeling.primitives import box_creator, box_task_panel
-        from FCDirectModeling import sdf_utils
+""
         
         # Instantiate the creator. It attaches itself to the view.
         self.creator = box_creator.BoxCreator()

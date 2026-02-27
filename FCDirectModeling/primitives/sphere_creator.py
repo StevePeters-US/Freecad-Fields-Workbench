@@ -3,10 +3,10 @@ Sphere creator — no Coin3D, uses Mesh::Feature preview.
 """
 
 import FreeCAD
-from .base import SDFMeshPrimitiveCreator
+from .base import DMPrimitiveCreator
 from FCDirectModeling import dm_logger
 
-class SphereCreator(SDFMeshPrimitiveCreator):
+class SphereCreator(DMPrimitiveCreator):
     def __init__(self):
         super().__init__()
         dm_logger.debug("SphereCreator: Initializing...")
@@ -77,7 +77,7 @@ class SphereCreator(SDFMeshPrimitiveCreator):
         final_placement = FreeCAD.Placement(self.center, FreeCAD.Rotation())
         
         params = {"center": [0, 0, 0], "radius": r}
-        self.update_sdf_preview("sphere", params, placement=final_placement)
+        self.update_dm_preview("sphere", params, placement=final_placement)
         
         self._last_sdf_params = params
         self._last_placement = final_placement

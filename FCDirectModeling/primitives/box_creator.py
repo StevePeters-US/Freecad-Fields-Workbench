@@ -2,10 +2,10 @@ import FreeCAD
 import FreeCADGui
 import Part
 from PySide import QtCore, QtGui
-from .base import SDFMeshPrimitiveCreator
+from .base import DMPrimitiveCreator
 from FCDirectModeling import dm_logger
 
-class BoxCreator(SDFMeshPrimitiveCreator):
+class BoxCreator(DMPrimitiveCreator):
     def __init__(self):
         super().__init__()
         
@@ -143,11 +143,11 @@ class BoxCreator(SDFMeshPrimitiveCreator):
         
         dm_logger.debug(f"BoxCreator.update_preview: bounds={bounds_min}/{bounds_max}")
         
-        params = {"bounds_min": bounds_min, "bounds_max": bounds_max}
+        params = {"length": abs(dx), "width": abs(dy), "height": abs(h)}
         if debug_pt:
             params["debug_pt"] = debug_pt
             
-        self.update_sdf_preview("box", params, placement=final_placement)
+        self.update_dm_preview("box", params, placement=final_placement)
         
         self._last_sdf_params = params
         self._last_placement = final_placement
@@ -367,12 +367,10 @@ class BoxCreator(SDFMeshPrimitiveCreator):
             self.terminate()
             return
 
-        from FCDirectModeling.sdf_object import create_sdf_object
+        from FCDirectModeling.dm_object import create_dm_object
         from FCDirectModeling import dm_logger
         
         # Adjust placement for corner-scaling consistency
-        # SDFObject.build_sdf uses [0,0,0] -> [L,W,H]. 
-        # So we MUST set Placement to the MINIMAL corner.
         p1_local = self.to_local(self.start_point)
         p2_local = self.to_local(self.current_point)
         h = self.height
@@ -384,7 +382,6 @@ class BoxCreator(SDFMeshPrimitiveCreator):
         min_corner_local = FreeCAD.Vector(min(0.0, dx), min(0.0, dy), min(0.0, h))
         
         # Final Placement = Start Placement * Local Offset
-        # This keeps the box exactly where it was during preview
         final_placement = self.working_plane * FreeCAD.Placement(min_corner_local, FreeCAD.Rotation())
         
         params = {
@@ -393,12 +390,8 @@ class BoxCreator(SDFMeshPrimitiveCreator):
             "height": abs(h)
         }
         
-        # Pass bounds for initialization
-        params["bounds_min"] = [0.0, 0.0, 0.0]
-        params["bounds_max"] = [abs(dx), abs(dy), abs(h)]
-        
         dm_logger.debug(f"BoxCreator._do_finish: final_placement={final_placement.Base}, dims={params['length']}/{params['width']}/{params['height']}")
         
-        create_sdf_object("Box", "box", params, placement=final_placement)
+        create_dm_object("Box", "box", params, placement=final_placement)
         self.terminate()
 

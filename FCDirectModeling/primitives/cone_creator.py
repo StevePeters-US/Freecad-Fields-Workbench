@@ -4,10 +4,10 @@ Cone creator — no Coin3D, uses Mesh::Feature preview.
 
 import FreeCAD
 from PySide import QtCore
-from .base import SDFMeshPrimitiveCreator
+from .base import DMPrimitiveCreator
 from FCDirectModeling import dm_logger
 
-class ConeCreator(SDFMeshPrimitiveCreator):
+class ConeCreator(DMPrimitiveCreator):
     def __init__(self):
         super().__init__()
         self.radius = 0.1
@@ -97,7 +97,7 @@ class ConeCreator(SDFMeshPrimitiveCreator):
             "radius": abs(self.radius),
             "height": self.height,
         }
-        self.update_sdf_preview("cone", params, placement=final_placement)
+        self.update_dm_preview("cone", params, placement=final_placement)
         
         self._last_sdf_params = params
         self._last_placement = final_placement

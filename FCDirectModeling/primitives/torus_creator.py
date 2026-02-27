@@ -4,10 +4,10 @@ Torus creator — no Coin3D, uses Mesh::Feature preview.
 
 import FreeCAD
 from PySide import QtCore
-from .base import SDFMeshPrimitiveCreator
+from .base import DMPrimitiveCreator
 from FCDirectModeling import dm_logger
 
-class TorusCreator(SDFMeshPrimitiveCreator):
+class TorusCreator(DMPrimitiveCreator):
     def __init__(self):
         super().__init__()
         self.R = 1.0   # Major radius
@@ -80,7 +80,7 @@ class TorusCreator(SDFMeshPrimitiveCreator):
             "major_r": self.R,
             "minor_r": self.r,
         }
-        self.update_sdf_preview("torus", params, placement=final_placement)
+        self.update_dm_preview("torus", params, placement=final_placement)
         
         self._last_sdf_params = params
         self._last_placement = final_placement

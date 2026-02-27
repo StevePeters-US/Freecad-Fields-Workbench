@@ -1,9 +1,4 @@
-"""
-Base classes for SDF primitive creators.
-No Coin3D / pivy anywhere.
-
-Camera/ray math uses FreeCADGui.ActiveDocument.ActiveView public API only.
-"""
+Base classes for DM primitive creators.
 
 import FreeCAD
 import FreeCADGui
@@ -205,14 +200,13 @@ class PrimitiveCreatorBase:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SDFMeshPrimitiveCreator
+# DMPrimitiveCreator
 # ─────────────────────────────────────────────────────────────────────────────
 
-class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
+class DMPrimitiveCreator(PrimitiveCreatorBase):
     """
-    Base for creators that produce an SDF object via Mesh::FeaturePython.
-    Live preview is a Mesh::Feature whose .Mesh is replaced in-place each frame.
-    No Coin3D.
+    Base for creators that produce a DM object.
+    Live preview updates the main object's shape directly.
     """
 
     def __init__(self):
@@ -234,7 +228,7 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
     # Preview — create once, replace .Mesh in-place (no recompute)
     # ------------------------------------------------------------------
 
-    def update_sdf_preview(self, sdf_type, params, resolution=None, placement=None):
+    def update_dm_preview(self, shape_type, params, resolution=None, placement=None):
         """
         Setup the pending mesh request, but defer the exact execution 
         to avoid crashing in Coin3D event traversal.
@@ -246,8 +240,8 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         self._pending_sdf_params = params
         
         if resolution is None:
-            from ..sdf_object import get_preview_resolution
-            resolution = get_preview_resolution()
+            # Resolution no longer used for NURBS, keeping stub for compatibility
+            resolution = 15
             
         self._pending_resolution = resolution
         
@@ -279,15 +273,8 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             if not sdf_type or not params:
                 return
 
-            from ..sdf_object import _SDF_BUILDERS, mesh_sdf, _to_mesh_facets
-            import Mesh as MeshModule
-            
-            bld = _SDF_BUILDERS.get(sdf_type)
-            if not bld:
-                return
-            
-            sdf_fn, (mn, mx) = bld(params)
-            verts, tris = mesh_sdf(sdf_fn, mn, mx, resolution=self._pending_resolution)
+            from ..dm_object import create_dm_object
+            import Part
 
             if len(verts) == 0:
                 return
@@ -299,35 +286,20 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             if not doc:
                 return
 
-            # Hierarchy: App::Part (SDF_Preview) -> Mesh::Feature (SDF_[Type]_Preview)
+            # Hierarchy: Part::FeaturePython (DM_Preview)
             if self._preview_obj is None or self._preview_obj not in doc.Objects:
-                self._preview_obj = doc.addObject("App::Part", "SDF_Preview")
+                self._preview_obj = doc.addObject("Part::FeaturePython", "DM_Preview")
                 if hasattr(self._preview_obj, "ViewObject") and self._preview_obj.ViewObject:
                     try:
-                        # Use a recognizable preview color
                         self._preview_obj.ViewObject.Visibility = True
-                    except Exception:
-                        pass
-                
-                # Create child mesh
-                mesh_name = f"SDF_{sdf_type.capitalize()}_Preview"
-                self._preview_mesh = doc.addObject("Mesh::Feature", mesh_name)
-                self._preview_obj.addObject(self._preview_mesh)
-                
-                if hasattr(self._preview_mesh, "ViewObject") and self._preview_mesh.ViewObject:
-                    try:
-                        self._preview_mesh.ViewObject.ShapeColor = (0.20, 0.60, 0.85)
-                        self._preview_mesh.ViewObject.Transparency = 20
-                        self._preview_mesh.ViewObject.DisplayMode = "Flat Lines"
+                        self._preview_obj.ViewObject.ShapeColor = (0.20, 0.60, 0.85)
+                        self._preview_obj.ViewObject.Transparency = 20
                     except Exception:
                         pass
 
-            # Store current SDF info on the creator so finish() can access it.
-            self._preview_sdf_type = sdf_type
-            self._preview_sdf_params = params
-
-            # Assign mesh directly to the child mesh object
-            self._preview_mesh.Mesh = mesh
+            # Assign shape directly
+            # For now, we use an empty shape or a simple box if box_creator provides it in params
+            self._preview_obj.Shape = Part.Shape()
 
             # Update Debug Cursor
             if self._debug_pt:
@@ -335,7 +307,7 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
                 print(f"[DEBUG] Ray Intersection: {self._debug_pt.x:.2f}, {self._debug_pt.y:.2f}, {self._debug_pt.z:.2f}")
 
                 if self._preview_cursor is None or self._preview_cursor not in doc.Objects:
-                    self._preview_cursor = doc.addObject("Part::Feature", "SDF_DebugCursor")
+                    self._preview_cursor = doc.addObject("Part::Feature", "DM_DebugCursor")
                     
                     import Part
                     size = 25.0 # 50mm total spread
@@ -388,16 +360,16 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
         QtCore.QTimer.singleShot(0, self._do_finish)
 
     def _do_finish(self):
-        """Standard finalization for all SDF primitives."""
+        """Standard finalization for all DM primitives."""
         if self._finished:
             return
             
         try:
             if self._last_sdf_type and self._last_sdf_params:
-                from ..sdf_object import create_sdf_object
+                from ..dm_object import create_dm_object
                 dm_logger.debug(f"_do_finish: Finalizing. type={self._last_sdf_type}, params={self._last_sdf_params}, placement={self._last_placement}")
-                # Create the final high-res SDFObject
-                create_sdf_object(
+                # Create the final high-res DMObject
+                create_dm_object(
                     self._last_sdf_type.capitalize(), 
                     self._last_sdf_type, 
                     self._last_sdf_params,
@@ -421,22 +393,17 @@ class SDFMeshPrimitiveCreator(PrimitiveCreatorBase):
             pass
 
     def terminate(self):
-        """Remove preview objects (Part container + child mesh) and unregister the event callback."""
+        """Remove preview objects and unregister the event callback."""
         if self._preview_obj is not None:
             try:
                 doc = FreeCAD.activeDocument()
                 if doc:
-                    # Remove child mesh first
-                    if hasattr(self, '_preview_mesh') and self._preview_mesh is not None:
-                        if self._preview_mesh in doc.Objects:
-                            doc.removeObject(self._preview_mesh.Name)
-                        self._preview_mesh = None
                     # Remove debug cursor
                     if self._preview_cursor is not None:
                         if self._preview_cursor in doc.Objects:
                             doc.removeObject(self._preview_cursor.Name)
                         self._preview_cursor = None
-                    # Then remove the parent container
+                    # Remove the preview object
                     if self._preview_obj in doc.Objects:
                         doc.removeObject(self._preview_obj.Name)
                     doc.recompute()

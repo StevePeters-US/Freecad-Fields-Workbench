@@ -1,10 +1,10 @@
 """
-DM Boolean commands — Union / Cut / Intersect on SDFObjects.
-Each creates a new SDFObject whose execute() composes children's SDFs.
+DM Boolean commands — Fuse / Cut / Common using native BRep operations.
 """
 
 import FreeCAD
 import FreeCADGui
+import Part
 
 
 class CommandDMBoolean:
@@ -25,8 +25,8 @@ class CommandDMBoolean:
     def GetResources(self):
         return {
             'Pixmap':   self._ICONS.get(self.operation, 'Part_Booleans.svg'),
-            'MenuText': f"SDF {self.operation}",
-            'ToolTip':  f"Select two SDFObjects and perform SDF {self.operation}.",
+            'MenuText': f"{self.operation}",
+            'ToolTip':  f"Select two objects and perform {self.operation}.",
         }
 
     def IsActive(self):
@@ -36,35 +36,42 @@ class CommandDMBoolean:
         sel = FreeCADGui.Selection.getSelection()
         if len(sel) < 2:
             FreeCAD.Console.PrintError(
-                f"DM_{self.operation}: Select at least two SDF objects.\n"
+                f"DM_{self.operation}: Select at least two objects.\n"
             )
             return
 
-        # Verify all selected objects are SDFObjects
+        # Verify all selected objects are DM objects
         for obj in sel:
-            if not hasattr(obj, "SDFType"):
+            if not hasattr(obj, "ShapeType"):
                 FreeCAD.Console.PrintError(
-                    f"DM_{self.operation}: '{obj.Label}' is not an SDFObject. "
-                    f"Only SDF primitives can be combined.\n"
+                    f"DM_{self.operation}: '{obj.Label}' is not a DM object.\n"
                 )
                 return
 
-        from FCDirectModeling.sdf_object import create_sdf_object
-
-        sdf_op   = self._OP_MAP[self.operation]
-        new_name = f"SDF_{self.operation}"
+        from FCDirectModeling.dm_object import create_dm_object
 
         try:
-            result = create_sdf_object(
-                name       = new_name,
-                sdf_type   = "boolean",
-                params     = {"op": sdf_op},
-                sdf_op     = sdf_op,
-                children   = sel,
-            )
-
-            # Hide originals (non-destructive; user can delete manually)
             doc = FreeCAD.activeDocument()
+            
+            # Combine shapes using native Part operations
+            shape_a = sel[0].Shape
+            for i in range(1, len(sel)):
+                shape_b = sel[i].Shape
+                if self.operation == "Fuse":
+                    shape_a = shape_a.fuse(shape_b)
+                elif self.operation == "Cut":
+                    shape_a = shape_a.cut(shape_b)
+                elif self.operation == "Common":
+                    shape_a = shape_a.common(shape_b)
+            
+            new_name = f"{self.operation}"
+            result = create_dm_object(
+                name       = new_name,
+                shape_type = "boolean",
+            )
+            result.Shape = shape_a
+
+            # Hide originals
             for obj in sel:
                 if hasattr(obj, "ViewObject") and obj.ViewObject:
                     obj.ViewObject.Visibility = False
@@ -73,7 +80,7 @@ class CommandDMBoolean:
             FreeCADGui.Selection.clearSelection()
             FreeCADGui.Selection.addSelection(result)
             FreeCAD.Console.PrintMessage(
-                f"SDF {self.operation} created from {names[0]} and {names[1]}.\n"
+                f"{self.operation} operation completed.\n"
             )
         except Exception as e:
             FreeCAD.Console.PrintError(f"DM_{self.operation} failed: {e}\n")
