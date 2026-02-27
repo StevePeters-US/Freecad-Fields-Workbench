@@ -91,3 +91,6 @@ Tasks moved here from `TODO.md` after verification.
 
 ### ✅ Phase 1a: Create NurbsPoint class
 - **Completed**: Defined the NurbsPoint class in FCDirectModeling/nurbs_geometry.py. This class wraps FreeCAD.Vector with support for NURBS-specific metadata like handles and weights.
+
+### ✅ Phase 1f: Create Point tool
+- **Completed**: Implemented PointCreator tool and DM_CreatePoint command. Registered the tool in the workbench toolbar and added point support to the core DMObjectProxy.

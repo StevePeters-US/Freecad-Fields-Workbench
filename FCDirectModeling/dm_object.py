@@ -13,6 +13,7 @@ generate the native BRep geometry.
 """
 
 import FreeCAD
+import Part
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DM Settings helpers
@@ -59,6 +60,10 @@ class DMObjectProxy:
             if not hasattr(obj, "Points"):
                 obj.addProperty("App::PropertyVectorList", "Points", "Curve", "Spline fit points")
             obj.Points = params.get("points", [])
+        elif shape_type == "point":
+            if not hasattr(obj, "Position"):
+                obj.addProperty("App::PropertyVector", "Position", "Point", "Position")
+            obj.Position = params.get("position", FreeCAD.Vector(0,0,0))
         # Future: "surface" shape type for BSplineSurface patches
 
     def build_shape(self, fp):
@@ -68,9 +73,10 @@ class DMObjectProxy:
         st = fp.ShapeType
         if st == "curve":
             return np_builders.build_curve(fp.Points)
+        elif st == "point":
+            return Part.Point(fp.Position).toShape()
         # Future: "surface" shape type
             
-        import Part
         return Part.Shape()
 
     def execute(self, fp):
