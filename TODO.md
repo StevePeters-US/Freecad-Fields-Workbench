@@ -24,280 +24,505 @@ no prior context beyond the files listed. Follow this template:
 
 ## Architecture Overview
 
-> **Principle**: NURBS surfaces are the primary data model. Every primitive in the workbench is created as a native `Part::Feature` using FreeCAD's OpenCASCADE NURBS/BRep kernel. No SDF evaluation, no voxel grids, no mesh generation from distance fields. Shapes are exact, smooth, and export-ready.
-
-The following tasks establish the NURBS-native pipeline: strip all SDF code, replace with NURBS primitive builders, update booleans to use BRep operations, and add freeform curve tools.
+> **Principle**: `Part.BSplineSurface` is the native geometry — NOT BRep shells or solids. The three atoms are **Point**, **Edge (BSplineCurve)**, and **Patch (BSplineSurface)**. BRep is only used for conversion/export. The primary workflow is: draw a curve → extrude into a surface → compose.
 
 ---
 
-## Tasks (sorted by complexity, lowest → highest)
+## Phase 0: Strip Legacy Code
+
+These tasks remove code that no longer fits the pure-NURBS architecture.
 
 ---
 
-### 8. Refactor primitive creators to use NURBS instead of SDF [x] (Complexity: 5/10)
+### 0a. Delete primitive creators and commands (Complexity: 2/10)
 
-- **Goal**: Update `primitives/base.py` and all creator subclasses to produce NURBS shapes instead of SDF meshes during preview and finalization.
+- **Goal**: Remove all primitive-specific creators (box, sphere, cone, torus) and their commands. Only `CurveCreator` and `command_create_curve.py` survive.
 - **Files to read**:
-  - `FCDirectModeling/primitives/primitive_base.py` — `PrimitiveCreatorBase`, `SDFMeshPrimitiveCreator`.
-  - `FCDirectModeling/primitives/box_creator.py`, `sphere_creator.py`, `cone_creator.py`, `torus_creator.py`.
+  - `FCDirectModeling/primitives/__init__.py` — see what's exported.
+  - `InitGui.py` — see which commands are registered.
+- **Files to delete**:
+  - `FCDirectModeling/primitives/box_creator.py`
+  - `FCDirectModeling/primitives/box_task_panel.py`
+  - `FCDirectModeling/primitives/sphere_creator.py`
+  - `FCDirectModeling/primitives/cone_creator.py`
+  - `FCDirectModeling/primitives/torus_creator.py`
+  - `dm_commands/command_create_box.py`
+  - `dm_commands/command_create_primitives.py`
 - **Files to modify**:
-  - `FCDirectModeling/primitives/primitive_base.py` — rename `SDFMeshPrimitiveCreator` → `NURBSPrimitiveCreator`. Replace SDF evaluation + meshing with calls to `nurbs_primitives.py` builders.
-  - All creator subclasses — update to call `build_box()`, `build_sphere()`, etc. instead of constructing SDF params.
+  - `FCDirectModeling/primitives/__init__.py` — remove all imports except `PrimitiveBase`, `NURBSPrimitiveCreator`, `CurveCreator`.
+  - `InitGui.py` — remove imports of `command_create_box`, `command_create_primitives`. Remove `DM_CreateBox`, `DM_CreateSphere`, `DM_CreateCone`, `DM_CreateTorus` from toolbar and menu lists.
 - **Steps**:
-  1. In `primitive_base.py`, remove all SDF preview queue logic (`_process_preview_queue`, SDF evaluation, mesh assignment).
-  2. Replace with: on each drag update, call the appropriate NURBS builder with current dimensions, assign `preview_obj.Shape = shape`.
-  3. On finalize (3rd click), call `create_dm_object()` with the final dimensions.
-  4. Update each creator subclass to pass dimensions to the NURBS builder instead of constructing SDF param dicts.
-- **Acceptance**: Click-drag to create a Box → live NURBS shape preview updates in viewport → on 3rd click, final `Part::FeaturePython` appears with correct dimensions.
+  1. Delete the 7 files listed above.
+  2. Edit `FCDirectModeling/primitives/__init__.py`:
+     ```python
+     from .primitive_base import PrimitiveBase, NURBSPrimitiveCreator
+     from .curve_creator import CurveCreator
+
+     __all__ = ["PrimitiveBase", "NURBSPrimitiveCreator", "CurveCreator"]
+     ```
+  3. Edit `InitGui.py`:
+     - Remove the lines `from dm_commands import command_create_box` and `from dm_commands import command_create_primitives`.
+     - Remove `'DM_CreateBox'`, `'DM_CreateSphere'`, `'DM_CreateCone'`, `'DM_CreateTorus'` from both `self.appendToolbar(...)` and `self.appendMenu(...)` lists.
+  4. Verify no other files import the deleted modules. Search for `box_creator`, `sphere_creator`, `cone_creator`, `torus_creator`, `command_create_box`, `command_create_primitives` across the whole project.
+- **Acceptance**: FreeCAD loads the workbench without errors. Only `DM_CreateCurve` appears in the Creation section of the toolbar. No import errors in the FreeCAD console.
 
 ---
 
-### 10. Create task panels for Sphere, Cone, and Torus (Complexity: 4/10)
+### 0b. Delete command_tweak (Complexity: 1/10)
 
-- **Goal**: Box has `box_task_panel.py` with dimension spinboxes. Sphere, Cone, and Torus have no panels — create them.
+- **Goal**: Remove the Tweak command entirely.
+- **Files to delete**:
+  - `dm_commands/command_tweak.py`
+- **Files to modify**:
+  - `InitGui.py` — remove `from dm_commands import command_tweak` and `'DM_Tweak'` from toolbar/menu lists.
+- **Steps**:
+  1. Delete `dm_commands/command_tweak.py`.
+  2. In `InitGui.py`, remove the tweak import line and `'DM_Tweak'` from both `self.appendToolbar(...)` and `self.appendMenu(...)`.
+- **Acceptance**: Workbench loads without errors or tweak references.
+
+---
+
+### 0c. Delete mesh_features.py and surface_fitting.py (Complexity: 1/10)
+
+- **Goal**: Remove all meshing and surface fitting code.
+- **Files to delete**:
+  - `FCDirectModeling/mesh_features.py`
+  - `FCDirectModeling/surface_fitting.py`
+- **Steps**:
+  1. Delete both files.
+  2. Search the entire project for `mesh_features` and `surface_fitting` imports. Remove any found.
+  3. Delete the test file `FCDirectModeling/tests/test_nurbs_primitives.py` (tests box/sphere/cone/torus builders we're removing).
+- **Acceptance**: No files import `mesh_features` or `surface_fitting`. No test files reference deleted modules.
+
+---
+
+### 0d. Strip primitive shape types from dm_object.py (Complexity: 3/10)
+
+- **Goal**: Remove box, sphere, cone, and torus shape types from `DMObjectProxy`. Only `curve` (and later `surface`) shape types should remain.
 - **Files to read**:
-  - `FCDirectModeling/primitives/box_task_panel.py` — the full reference panel (has `QDoubleSpinBox` inputs, `update_values()`, `focus_field()`, `accept()`, `reject()`).
-  - `FCDirectModeling/primitives/sphere_creator.py` — needs `radius` input.
-  - `FCDirectModeling/primitives/cone_creator.py` — needs `radius` and `height` inputs.
-  - `FCDirectModeling/primitives/torus_creator.py` — needs `major_r` and `minor_r` inputs.
-  - `dm_commands/command_create_primitives.py` — where the creators are instantiated (you'll need to attach panels here).
+  - `FCDirectModeling/dm_object.py` — the full file, especially `DMObjectProxy.__init__()` (lines 42-84) and `build_shape()` (lines 86-103).
+- **Files to modify**:
+  - `FCDirectModeling/dm_object.py`
+- **Steps**:
+  1. In `DMObjectProxy.__init__()`, delete the `if shape_type == "box":`, `elif shape_type == "sphere":`, `elif shape_type == "cone":`, and `elif shape_type == "torus":` blocks (lines 58-79). Keep only the `elif shape_type == "curve":` block.
+  2. In `build_shape()`, delete the `if st == "box":`, `elif st == "sphere":`, `elif st == "cone":`, and `elif st == "torus":` branches (lines 91-98). Keep only `elif st == "curve":`.
+  3. Add a comment: `# Future: "surface" shape type for BSplineSurface patches`.
+- **Acceptance**: `create_dm_object("Curve", "curve", {"points": [...]})` still works. Passing `shape_type="box"` returns an empty shape (not an error).
+
+---
+
+### 0e. Strip primitive builders from nurbs_primitives.py (Complexity: 2/10)
+
+- **Goal**: Remove `build_box()`, `build_sphere()`, `build_cone()`, `build_torus()` from `nurbs_primitives.py`. Keep only `build_curve()`.
+- **Files to modify**:
+  - `FCDirectModeling/nurbs_primitives.py` — delete lines 12-66 (the four builder functions).
+- **Steps**:
+  1. Delete the `build_box()`, `build_sphere()`, `build_cone()`, `build_torus()` functions.
+  2. Keep `build_curve()` (lines 68-111) intact.
+  3. Update the module docstring to say "NURBS curve builders" instead of "NURBS primitive builders".
+- **Acceptance**: `nurbs_primitives.build_curve(points)` still works. No functions named `build_box`, `build_sphere`, `build_cone`, `build_torus` exist.
+
+---
+
+### 0f. Clean up primitive_base.py (Complexity: 3/10)
+
+- **Goal**: Remove dead code from `primitive_base.py` — specifically the `_update_preview_object` branches for box/sphere/cone/torus shape types in `NURBSPrimitiveCreator`.
+- **Files to read**:
+  - `FCDirectModeling/primitives/primitive_base.py` — especially `_update_preview_object()` (lines 480-570), which has `if shape_type == "box":`, `elif shape_type == "sphere":`, etc.
+- **Files to modify**:
+  - `FCDirectModeling/primitives/primitive_base.py`
+- **Steps**:
+  1. In `_update_preview_object()`, replace the shape type dispatch (lines 494-505) with only the curve branch:
+     ```python
+     if shape_type == "curve":
+         shape = nurbs_primitives.build_curve(params.get("points", []))
+     else:
+         shape = Part.Shape()
+     ```
+  2. Remove imports or references to deleted builder functions if any exist.
+  3. The base classes `PrimitiveBase` and `NURBSPrimitiveCreator` remain — they provide the event loop, work plane integration, and preview system that `CurveCreator` uses.
+- **Acceptance**: Drawing a curve with `CurveCreator` still works (click points → preview curve → Enter to finalize). No errors in console.
+
+---
+
+## Phase 1: Core NURBS Geometry + Extrude
+
+These tasks build the curve→surface workflow.
+
+---
+
+### 1a. Create NurbsPoint class (Complexity: 2/10)
+
+- **Goal**: Define a `NurbsPoint` class wrapping a `FreeCAD.Vector` with optional control handles for smooth/sharp corners.
 - **Files to create**:
-  - `FCDirectModeling/primitives/sphere_task_panel.py`
-  - `FCDirectModeling/primitives/cone_task_panel.py`
-  - `FCDirectModeling/primitives/torus_task_panel.py`
-- **Files to modify**:
-  - `dm_commands/command_create_primitives.py` — attach each panel to its creator when activated, same way `command_create_box.py` uses `BoxTaskPanel`.
+  - `FCDirectModeling/nurbs_geometry.py`
 - **Steps**:
-  1. Copy `box_task_panel.py` as a template.
-  2. For **Sphere**: one `QDoubleSpinBox` for Radius. `update_values(radius)` updates the display.
-  3. For **Cone**: two spinboxes — Radius and Height. `update_values(radius, height)`.
-  4. For **Torus**: two spinboxes — Major Radius and Minor Radius. `update_values(major_r, minor_r)`.
-  5. In each creator, add a `set_panel(panel)` call and in `handle_move` call `self.panel.update_values(...)`.
-  6. In `command_create_primitives.py`, after creating the creator, create the panel and show it via `FreeCADGui.Control.showDialog(panel)`.
-- **Acceptance**: Activate Sphere/Cone/Torus tool → a panel appears showing live dimensions as you drag.
+  1. Create `FCDirectModeling/nurbs_geometry.py`.
+  2. Define:
+     ```python
+     import FreeCAD
+
+     class NurbsPoint:
+         """3D point with optional control handles for NURBS curves."""
+         def __init__(self, position, handle_in=None, handle_out=None, weight=1.0):
+             self.position = FreeCAD.Vector(position)
+             self.handle_in = handle_in     # FreeCAD.Vector or None
+             self.handle_out = handle_out   # FreeCAD.Vector or None
+             self.weight = weight
+
+         def to_vector(self):
+             return FreeCAD.Vector(self.position)
+
+         def is_sharp(self):
+             return self.handle_in is None and self.handle_out is None
+
+         def __repr__(self):
+             return f"NurbsPoint({self.position.x:.2f}, {self.position.y:.2f}, {self.position.z:.2f})"
+     ```
+- **Acceptance**: `NurbsPoint(FreeCAD.Vector(1,2,3)).to_vector()` returns `Vector(1,2,3)`. `.is_sharp()` returns `True` when no handles set.
 
 ---
 
-### 11. Implement freeform 3D curve drawing tool (Complexity: 6/10)
+### 1b. Create NurbsEdge class (Complexity: 3/10)
 
-- **Goal**: Users can draw freeform B-spline curves directly in the 3D viewport by clicking control points.
+- **Goal**: A `NurbsEdge` class that builds a `Part.BSplineCurve` from `NurbsPoint` objects.
 - **Files to read**:
-  - `FCDirectModeling/primitives/primitive_base.py` — understand the event callback pattern for mouse interaction.
-  - FreeCAD `Part.BSplineCurve` API — `interpolate()`, `buildFromPoles()`.
+  - `FCDirectModeling/nurbs_geometry.py` — the `NurbsPoint` class (task 1a).
+  - FreeCAD `Part.BSplineCurve` docs — `buildFromPolesMultsKnots()`, `interpolate()`.
+- **Files to modify**:
+  - `FCDirectModeling/nurbs_geometry.py` — add `NurbsEdge`.
+- **Steps**:
+  1. Add class `NurbsEdge`:
+     ```python
+     import Part
+
+     class NurbsEdge:
+         """NURBS curve from a sequence of NurbsPoint objects."""
+         def __init__(self, points, degree=3):
+             self.points = list(points)  # List[NurbsPoint]
+             self.degree = degree
+     ```
+  2. Method `to_bspline_curve() -> Part.BSplineCurve`:
+     - If all points `.is_sharp()`: use `Part.BSplineCurve()` + `interpolate()` with the position vectors. For degree-1 (straight segments), use `buildFromPolesMultsKnots` with `degree=1`.
+     - If handles exist: build poles array = `[p.handle_in, p.position, p.handle_out, ...]` and use `buildFromPolesMultsKnots` with appropriate multiplicity.
+  3. Method `to_shape() -> Part.Shape`: calls `self.to_bspline_curve().toShape()`.
+  4. Property `is_closed`: returns `True` if first and last positions within 0.001 distance.
+- **Acceptance**: `NurbsEdge([NurbsPoint(V(0,0,0)), NurbsPoint(V(10,0,0))]).to_shape()` returns a valid `Part.Edge`.
+
+---
+
+### 1c. Create NurbsPatch class (Complexity: 4/10)
+
+- **Goal**: A `NurbsPatch` class that builds a `Part.BSplineSurface` from a control point grid.
+- **Files to read**:
+  - `FCDirectModeling/nurbs_geometry.py` — `NurbsPoint`, `NurbsEdge` (tasks 1a, 1b).
+  - FreeCAD `Part.BSplineSurface` docs — `buildFromPolesMultsKnots()`.
+- **Files to modify**:
+  - `FCDirectModeling/nurbs_geometry.py` — add `NurbsPatch`.
+- **Steps**:
+  1. Add class `NurbsPatch`:
+     ```python
+     class NurbsPatch:
+         """NURBS surface from a control point grid."""
+         def __init__(self, control_grid, u_degree=1, v_degree=1):
+             self.control_grid = control_grid  # List[List[NurbsPoint]] — rows x cols
+             self.u_degree = u_degree
+             self.v_degree = v_degree
+     ```
+  2. Class method `from_corners(p1, p2, p3, p4)` — flat degree-1 surface from 4 corners. Grid = `[[p1,p2],[p4,p3]]`.
+  3. Method `to_bspline_surface() -> Part.BSplineSurface`:
+     - Extract poles: 2D list of `FreeCAD.Vector` from `self.control_grid[row][col].position`.
+     - Extract weights: 2D list of floats from `self.control_grid[row][col].weight`.
+     - Compute knots/mults for the given degree (uniform clamped: knots `[0, 1]`, mults `[degree+1, degree+1]` for each direction, adjusted for grid size).
+     - Call `bs = Part.BSplineSurface()` then `bs.buildFromPolesMultsKnots(poles, umults, vmults, uknots, vknots, False, False, udeg, vdeg, weights)`.
+     - Return `bs`.
+  4. Method `to_face() -> Part.Face`: `Part.Face(self.to_bspline_surface().toShape())`. This creates a `Part.Face` for display but the **canonical representation is the BSplineSurface itself**, not the face.
+- **Acceptance**: `NurbsPatch.from_corners(p1,p2,p3,p4).to_bspline_surface()` returns a valid `Part.BSplineSurface`. `.to_face()` returns a displayable `Part.Face`.
+
+---
+
+### 1d. Implement curve extrusion to BSplineSurface (Complexity: 5/10)
+
+- **Goal**: Extrude a `Part.BSplineCurve` (edge) along a direction vector to produce a `Part.BSplineSurface`. This is the core curve→surface operation. The result is a BSplineSurface, NOT a BRep solid.
+- **Files to read**:
+  - `FCDirectModeling/nurbs_geometry.py` — `NurbsEdge`, `NurbsPatch` (tasks 1b, 1c).
+  - `FCDirectModeling/nurbs_primitives.py` — `build_curve()` for how curves are made.
+  - FreeCAD `Part.BSplineSurface` and `Part.BSplineCurve` API.
+- **Files to modify**:
+  - `FCDirectModeling/nurbs_primitives.py` — add `extrude_curve_to_surface()`.
+- **Steps**:
+  1. Add function `extrude_curve_to_surface(curve, direction, distance)`:
+     ```python
+     def extrude_curve_to_surface(bspline_curve, direction, distance):
+         """
+         Extrude a BSplineCurve along a direction to produce a BSplineSurface.
+
+         Args:
+             bspline_curve: Part.BSplineCurve — the profile curve
+             direction: FreeCAD.Vector — extrusion direction (normalized)
+             distance: float — extrusion distance
+
+         Returns:
+             Part.BSplineSurface
+         """
+     ```
+  2. Implementation strategy:
+     - Get the curve's poles: `poles_bottom = bspline_curve.getPoles()`.
+     - Compute the extrusion offset: `offset = direction.normalize() * distance`.
+     - Create top poles: `poles_top = [p + offset for p in poles_bottom]`.
+     - Build a degree-1 surface in the extrusion direction (V), using the curve's degree in the profile direction (U):
+       ```python
+       # poles_2d[v_row][u_col]
+       poles_2d = [poles_bottom, poles_top]
+       weights = bspline_curve.getWeights()
+       weights_2d = [weights, weights]  # Same weights for both rows
+
+       u_knots = bspline_curve.getKnots()
+       u_mults = bspline_curve.getMultiplicities()
+       v_knots = [0.0, 1.0]
+       v_mults = [2, 2]  # degree 1 → mult = degree + 1 = 2
+
+       bs = Part.BSplineSurface()
+       bs.buildFromPolesMultsKnots(
+           poles_2d, u_mults, v_mults, u_knots, v_knots,
+           bspline_curve.isPeriodic(), False,
+           bspline_curve.Degree, 1,  # u_degree from curve, v_degree = 1
+           weights_2d
+       )
+       return bs
+       ```
+  3. Add a convenience wrapper `extrude_curve(points, direction, distance)`:
+     - Calls `build_curve(points)` to get the edge, extracts the BSplineCurve, then calls `extrude_curve_to_surface()`.
+- **Acceptance**: Draw 4 points → `build_curve(points)` → get curve → `extrude_curve_to_surface(curve, Vector(0,0,1), 10)` → returns a valid `Part.BSplineSurface`. Converting to a face via `Part.Face(bs.toShape())` displays correctly in FreeCAD.
+
+---
+
+### 1e. Create DM_Extrude command (Complexity: 5/10)
+
+- **Goal**: An interactive command that takes a selected curve and extrudes it into a `BSplineSurface` by dragging along the work plane normal.
+- **Files to read**:
+  - `FCDirectModeling/nurbs_primitives.py` — `extrude_curve_to_surface()` (task 1d).
+  - `FCDirectModeling/primitives/primitive_base.py` — understand the event callback pattern.
+  - `FCDirectModeling/primitives/curve_creator.py` — how curves are finalized.
+  - `FCDirectModeling/dm_object.py` — `create_dm_object()`.
 - **Files to create**:
-  - `FCDirectModeling/curve_tools.py` — curve construction utilities.
-  - `dm_commands/command_draw_curve.py` — `DM_DrawCurve` command.
+  - `dm_commands/command_extrude.py`
 - **Files to modify**:
-  - `InitGui.py` — register `DM_DrawCurve` in the toolbar.
+  - `InitGui.py` — register `DM_Extrude` command and add to toolbar.
+  - `FCDirectModeling/dm_object.py` — add `"surface"` shape type to `DMObjectProxy.__init__()` and `build_shape()`.
+  - `FCDirectModeling/nurbs_primitives.py` — ensure `extrude_curve_to_surface()` exists (task 1d).
 - **Steps**:
-  1. In `command_draw_curve.py`, create a `DM_DrawCurve` command that enters a click-to-place-control-point mode.
-  2. Each click adds a control point (projected onto the working plane or nearest surface).
-  3. Display a live preview of the B-spline curve through the current points using `Part.BSplineCurve().interpolate(points)`.
-  4. Double-click or press Enter to finalize — create a `Part::Feature` containing the curve as `Part.Edge`.
-  5. Press Escape to cancel.
-  6. In `curve_tools.py`, implement helper functions:
-     - `build_bspline_curve(points, degree=3) → Part.BSplineCurve`
-     - `project_point_to_plane(screen_pos, plane) → FreeCAD.Vector`
-- **Acceptance**: Activate Draw Curve → click 4+ points in viewport → a smooth B-spline curve appears through them → finalize → a `Part::Feature` edge is created in the document.
+  1. In `dm_object.py`, add `"surface"` shape type:
+     ```python
+     elif shape_type == "surface":
+         if not hasattr(obj, "SourceCurvePoints"):
+             obj.addProperty("App::PropertyVectorList", "SourceCurvePoints", "Surface", "Source curve points")
+         if not hasattr(obj, "ExtrudeDirection"):
+             obj.addProperty("App::PropertyVector", "ExtrudeDirection", "Surface", "Extrusion direction")
+         if not hasattr(obj, "ExtrudeDistance"):
+             obj.addProperty("App::PropertyFloat", "ExtrudeDistance", "Surface", "Extrusion distance")
+         obj.SourceCurvePoints = params.get("source_curve_points", [])
+         obj.ExtrudeDirection = params.get("extrude_direction", FreeCAD.Vector(0,0,1))
+         obj.ExtrudeDistance = params.get("extrude_distance", 10.0)
+     ```
+  2. In `build_shape()`, add:
+     ```python
+     elif st == "surface":
+         curve_shape = np_builders.build_curve(fp.SourceCurvePoints)
+         if curve_shape.isNull():
+             return Part.Shape()
+         bspline_curve = curve_shape.Edges[0].Curve.toBSpline()
+         bs = np_builders.extrude_curve_to_surface(bspline_curve, fp.ExtrudeDirection, fp.ExtrudeDistance)
+         return Part.Face(bs.toShape())  # Wrap in Face for display
+     ```
+  3. Create `dm_commands/command_extrude.py`:
+     ```python
+     class DM_Extrude:
+         def GetResources(self):
+             return {
+                 'MenuText': 'Extrude Curve',
+                 'ToolTip': 'Extrude a curve into a NURBS surface',
+                 'Accel': 'E'
+             }
+
+         def Activated(self):
+             # Get the selected curve object
+             sel = FreeCADGui.Selection.getSelection()
+             if not sel or not hasattr(sel[0], 'ShapeType'):
+                 FreeCAD.Console.PrintError("Select a curve first\n")
+                 return
+             obj = sel[0]
+             if obj.ShapeType != "curve":
+                 FreeCAD.Console.PrintError("Selected object is not a curve\n")
+                 return
+             # Enter interactive extrude mode (drag to set distance)
+             # ... create ExtrudeInteractor(obj) ...
+
+         def IsActive(self):
+             return FreeCAD.activeDocument() is not None
+     ```
+  4. The `ExtrudeInteractor` class:
+     - Registers a mouse event callback.
+     - On mouse move: compute extrusion distance from screen Y delta.
+     - Show live preview: build the BSplineSurface, assign to preview object.
+     - On click: finalize via `create_dm_object("Surface", "surface", params)`.
+  5. Register in `InitGui.py`: add `from dm_commands import command_extrude` and `'DM_Extrude'` to toolbar/menu.
+- **Acceptance**: Draw a curve with `DM_CreateCurve` → select it → press `E` → drag to set extrusion height → click to finalize → a `Part::FeaturePython` with a `BSplineSurface` face appears in the document.
 
 ---
 
-### 13. Implement Array command — BRep-level repetition (Complexity: 5/10)
+## Phase 2: NURBS ↔ BRep Conversion
 
-- **Goal**: Repeat a shape along a vector, circular pattern, or grid using BRep boolean unions.
+---
+
+### 2a. NURBS to BRep converter (Complexity: 4/10)
+
+- **Goal**: Convert a DM object's `BSplineSurface` patches into a `Part.Shell` or `Part.Solid` for STEP export or boolean operations.
 - **Files to read**:
-  - `dm_commands/command_boolean.py` — understand how boolean results are composed.
-  - FreeCAD `Part` module — `Part.Shape.fuse()`, `Part.Shape.translated()`, `Part.Shape.rotated()`.
+  - FreeCAD `Part.Shell`, `Part.Solid`, `Part.Face` API.
+  - `FCDirectModeling/dm_object.py` — understand `DMObjectProxy` shape storage.
+- **Files to create**:
+  - `FCDirectModeling/nurbs_brep_convert.py`
+  - `dm_commands/command_convert.py`
+- **Files to modify**:
+  - `InitGui.py` — register `DM_NurbsToBRep`.
+- **Steps**:
+  1. Create `FCDirectModeling/nurbs_brep_convert.py`:
+     ```python
+     def nurbs_to_brep(nurbs_shape):
+         """Convert a shape containing BSplineSurface faces into a BRep solid.
+
+         Args:
+             nurbs_shape: Part.Shape — must have at least one Face with a BSplineSurface.
+
+         Returns:
+             Part.Solid if the faces form a closed shell, Part.Shell otherwise.
+         """
+         faces = nurbs_shape.Faces
+         shell = Part.Shell(faces)
+         if shell.isClosed():
+             solid = Part.Solid(shell)
+             solid.fix(0.001, 0.001, 0.001)
+             return solid
+         return shell
+     ```
+  2. Add `brep_to_nurbs(brep_shape)`:
+     ```python
+     def brep_to_nurbs(brep_shape):
+         """Convert a BRep shape's faces to BSplineSurface representation.
+
+         Returns:
+             Part.Shape — the .toNurbs() version of the input.
+         """
+         return brep_shape.toNurbs()
+     ```
+  3. Create `dm_commands/command_convert.py` with `DM_NurbsToBRep` and `DM_BRepToNurbs` commands:
+     - `DM_NurbsToBRep`: get selected object → call `nurbs_to_brep(obj.Shape)` → create a new `Part::Feature` with the result.
+     - `DM_BRepToNurbs`: get selected Part::Feature → call `brep_to_nurbs(obj.Shape)` → create a new DM object with the NURBS result.
+  4. Register in `InitGui.py`.
+- **Acceptance**: Create a surface via extrude → select it → `NURBS → BRep` → a `Part::Feature` solid/shell appears. Select a standard FreeCAD Part → `BRep → NURBS` → a DM object appears with BSplineSurface faces.
+
+---
+
+## Phase 3: Instance, Boolean, Array
+
+---
+
+### 3a. Implement Instance and Copy commands (Complexity: 4/10)
+
+- **Goal**: Create linked instances (`App::Link`) and independent copies of DM objects.
+- **Files to read**:
+  - `FCDirectModeling/dm_object.py` — `create_dm_object()`.
+  - FreeCAD `App::Link` API.
+- **Files to create**:
+  - `dm_commands/command_instance.py`
+- **Files to modify**:
+  - `InitGui.py` — register commands.
+- **Steps**:
+  1. `DM_Instance`: select object → `link = doc.addObject("App::Link", name)` → `link.LinkedObject = obj` → offset placement.
+  2. `DM_Copy`: select object → read its `ShapeType` and properties → call `create_dm_object()` with same params → offset placement.
+  3. Register with hotkeys `I` and `Ctrl+D`.
+- **Acceptance**: Instance updates when original changes. Copy does not.
+
+---
+
+### 3b. Update booleans to use instance system (Complexity: 4/10)
+
+- **Goal**: Booleans auto-create instance of second operand and hide original (toggleable).
+- **Files to read**:
+  - `dm_commands/command_boolean.py` — current boolean implementation.
+  - `dm_commands/command_instance.py` — instance creation (task 3a).
+- **Files to modify**:
+  - `dm_commands/command_boolean.py`
+- **Steps**:
+  1. Before boolean op, if `BoolUseInstance` setting is `True`: create `App::Link` of second operand, hide original.
+  2. Perform boolean on the instance.
+  3. Store setting in `FreeCAD.ParamGet("User parameter:FCDirectModeling").SetBool("BoolUseInstance", True)`.
+- **Acceptance**: Fuse two objects → original second object hidden, instance used for result.
+
+---
+
+### 3c. Linear Array command (Complexity: 4/10)
+
+- **Goal**: Repeat a shape along a direction vector.
 - **Files to create**:
   - `dm_commands/command_array.py`
 - **Files to modify**:
-  - `InitGui.py` — register the new command.
+  - `InitGui.py`
 - **Steps**:
-  1. Create a dialog with inputs for: count, offset vector, pattern type (linear / circular / grid).
-  2. For linear: translate the shape by `i * offset` for each copy, fuse all copies.
-  3. For circular: rotate the shape by `i * (360/count)` degrees around an axis for each copy, fuse.
-  4. Create the result as a new `Part::FeaturePython` via `create_dm_object()`.
-- **Acceptance**: Create a Sphere → Array 5 times along X with spacing 3 → a row of 5 fused spheres appears.
+  1. Dialog: count, direction vector, spacing, fuse checkbox.
+  2. For each copy: `shape.translated(direction * spacing * i)`.
+  3. If fuse: `result.fuse(copy)` iteratively, then `removeSplitter()`.
+  4. Create result as `Part::Feature`.
+- **Acceptance**: Array a surface 5 times along X → 5 translated copies (or one fused shape).
 
 ---
 
-### 14. Implement Transform command (Complexity: 4/10)
+### 3d. Polar Array command (Complexity: 4/10)
 
-- **Goal**: Apply translate / rotate / scale to a shape interactively.
-- **Files to read**:
-  - FreeCAD `Part` module — `Part.Shape.translated()`, `Part.Shape.rotated()`, `Part.Shape.scaled()`.
+- **Goal**: Repeat a shape around a central axis.
+- **Files to create/modify**:
+  - `dm_commands/command_array.py` — add `DM_PolarArray`.
+  - `InitGui.py`
+- **Steps**:
+  1. Dialog: count, axis center, axis direction, angle span, fuse checkbox.
+  2. `copy = shape.rotated(center, axis, angle_per_copy * i)`.
+  3. Fuse or keep separate.
+- **Acceptance**: Polar array 6 copies around Z → circular pattern.
+
+---
+
+## Phase 4: Radial Menu & Hotkeys
+
+---
+
+### 4a. Register hotkeys for all commands (Complexity: 2/10)
+
+- **Goal**: Add `'Accel'` entries to all command `GetResources()` methods.
+- **Files to modify**:
+  - `dm_commands/command_create_curve.py` — add `'Accel': 'D'`.
+  - `dm_commands/command_extrude.py` — add `'Accel': 'E'`.
+  - `dm_commands/command_boolean.py` — `'Accel': 'Ctrl+F'` (fuse), `'Ctrl+X'` (cut), `'Ctrl+I'` (common).
+- **Steps**:
+  1. In each command class's `GetResources()`, add `'Accel': '<key>'`.
+- **Acceptance**: Each hotkey activates the correct command when workbench is active.
+
+---
+
+### 4b. Radial menu system (Complexity: 6/10)
+
+- **Goal**: Coin3D-based radial menu at cursor position, activated by `Space`.
 - **Files to create**:
-  - `dm_commands/command_transform.py`
+  - `FCDirectModeling/radial_menu.py`
+  - `dm_commands/command_radial_menu.py`
 - **Files to modify**:
-  - `InitGui.py` — register the command.
+  - `InitGui.py`
 - **Steps**:
-  1. Create a dialog with translate (X, Y, Z), rotate (angle + axis), and scale inputs.
-  2. Apply the transform to the selected shape.
-  3. Update the object's shape in place or create a new transformed object.
-- **Acceptance**: Select a Box → Transform (rotate 45° around Z) → the shape updates to show the rotated box.
-
----
-
-### 15. Sketch-driven NURBS extrusion (Complexity: 6/10)
-
-- **Goal**: After the user closes the Sketcher, convert the sketch profile into an extruded NURBS solid.
-- **Files to read**:
-  - `dm_commands/command_open_sketcher.py` — launches the Sketcher.
-  - FreeCAD `Part` module — `Part.Face.extrude()`, `Part.Wire`, `Part.BSplineCurve`.
-- **Files to create**:
-  - `dm_commands/command_sketch_extrude.py`
-- **Steps**:
-  1. Read the `Sketcher::SketchObject` wire: extract edges as a `Part.Wire`.
-  2. Create a `Part.Face` from the wire.
-  3. Extrude the face using `face.extrude(FreeCAD.Vector(0, 0, height))`.
-  4. Create a `Part::FeaturePython` with the extruded solid.
-- **Acceptance**: Draw a sketch → run extrude → a 3D NURBS extrusion appears matching the sketch profile.
-
----
-
-### 16. Define visible work plane from mouse cursor context (Complexity: 5/10)
-
-- **Goal**: Before any drawing operation, define and display a work plane. The plane's orientation should be derived from whatever geometry the mouse cursor is hovering over (face normal, edge tangent, etc.), defaulting to the XY origin plane with Z+ as the normal.
-- **Files to read**:
-  - `FCDirectModeling/primitives/primitive_base.py` — understand `get_point_on_plane()` and the current working plane logic.
-  - FreeCAD `Part.Plane`, `Draft.WorkingPlane` API.
-  - FreeCAD Coin3D scene graph API for visual plane display.
-- **Files to create**:
-  - `FCDirectModeling/work_plane.py` — work plane manager (orientation detection, visual display, plane math).
-- **Files to modify**:
-  - `FCDirectModeling/primitives/primitive_base.py` — integrate work plane detection into the creation flow.
-- **Steps**:
-  1. On tool activation, raycast from the mouse cursor into the scene.
-  2. If the ray hits a face, set the work plane to that face's surface normal at the hit point.
-  3. If no geometry is hit, default to the XY plane at the origin with Z+ normal.
-  4. Display the work plane as a semi-transparent grid/rectangle in the 3D viewport using Coin3D nodes.
-  5. All subsequent drawing operations should project onto this work plane.
-  6. Provide a way to reset/change the work plane (e.g., clicking a different face).
-- **Acceptance**: Hover over a face → activate a draw tool → a visible work plane appears aligned to that face. Hover over empty space → work plane defaults to XY at origin.
-
----
-
-### 17. Recreate primitive cube using NURBS surfaces per face (Complexity: 6/10)
-
-- **Goal**: Completely rewrite the box/cube primitive so that each face is an individual NURBS surface (`Part.BSplineSurface`), stitched together into a solid shell. This replaces the current `Part.makeBox()` approach with explicit NURBS face construction.
-- **Files to read**:
-  - `FCDirectModeling/nurbs_primitives.py` — current `build_box()` implementation.
-  - FreeCAD `Part.BSplineSurface`, `Part.Face`, `Part.Shell`, `Part.Solid` API.
-- **Files to modify**:
-  - `FCDirectModeling/nurbs_primitives.py` — rewrite `build_box()` to construct 6 NURBS surface faces.
-- **Steps**:
-  1. For each of the 6 cube faces, define a degree-1 B-spline surface with 4 corner control points.
-  2. Create a `Part.Face` from each `Part.BSplineSurface`.
-  3. Stitch all 6 faces into a `Part.Shell`.
-  4. Create a `Part.Solid` from the shell.
-  5. Validate the solid is closed and has correct normals.
-- **Acceptance**: `build_box(l, w, h)` returns a valid `Part.Solid` made of 6 NURBS faces. The shape displays identically to the current box and passes `Shape.isValid()`.
-
----
-
-### 18. Chamfer and fillet edges on the cube primitive (Complexity: 5/10)
-
-- **Goal**: Add optional chamfer and fillet operations to the cube primitive, allowing users to apply edge treatments during or after creation.
-- **Files to read**:
-  - `FCDirectModeling/nurbs_primitives.py` — the NURBS box builder (task #17 prerequisite).
-  - FreeCAD `Part.Shape.makeChamfer()`, `Part.Shape.makeFillet()` API.
-  - `FCDirectModeling/primitives/box_creator.py` — the box creation flow.
-- **Files to modify**:
-  - `FCDirectModeling/nurbs_primitives.py` — add `chamfer_edges()` and `fillet_edges()` helpers.
-  - `FCDirectModeling/primitives/box_creator.py` — integrate chamfer/fillet options.
-  - `FCDirectModeling/primitives/box_task_panel.py` — add UI controls for chamfer/fillet radius and edge selection.
-- **Steps**:
-  1. Implement `chamfer_edges(shape, edges, distance) → Part.Shape` using `shape.makeChamfer()`.
-  2. Implement `fillet_edges(shape, edges, radius) → Part.Shape` using `shape.makeFillet()`.
-  3. Add chamfer/fillet radius spinbox and edge selection mode to the box task panel.
-  4. Allow selecting individual edges or "all edges" for the operation.
-  5. Apply chamfer/fillet after box creation as a post-processing step.
-- **Acceptance**: Create a box → select edges → apply fillet with radius 2 → edges are smoothly rounded. Same for chamfer with a flat bevel.
-
----
-
-### 19. Rewrite cone primitive to keep circle on starting plane (Complexity: 4/10)
-
-- **Goal**: Rewrite the cone primitive so that the base circle stays on the starting work plane, rather than being offset or misaligned during creation.
-- **Files to read**:
-  - `FCDirectModeling/primitives/cone_creator.py` — current cone creation logic.
-  - `FCDirectModeling/nurbs_primitives.py` — `build_cone()` implementation.
-  - `FCDirectModeling/primitives/primitive_base.py` — `get_point_on_plane()` and work plane logic.
-- **Files to modify**:
-  - `FCDirectModeling/primitives/cone_creator.py` — fix placement so base circle aligns to the starting plane.
-  - `FCDirectModeling/nurbs_primitives.py` — ensure `build_cone()` places the base at z=0 of the local frame.
-- **Steps**:
-  1. In `cone_creator.py`, record the starting plane (from work plane or click point) on the first click.
-  2. Ensure the cone's base circle center is placed at the first click point on that plane.
-  3. The cone's height extends along the plane's normal direction.
-  4. Update `build_cone()` to always place the base at the local origin (z=0).
-  5. Apply the work plane transform to position the cone correctly in world space.
-- **Acceptance**: Click on any plane → drag to set radius → the base circle visually sits on the clicked plane. The cone extends upward along the plane's normal.
-
----
-
-### 20. Transform selected sub-elements (point, face, edge) (Complexity: 6/10)
-
-- **Goal**: Allow users to select individual sub-elements (vertices, edges, or faces) of a shape and apply translate/rotate/scale transforms to them directly.
-- **Files to read**:
-  - FreeCAD `Part.Shape` sub-element API — `Shape.Vertexes`, `Shape.Edges`, `Shape.Faces`, `FreeCADGui.Selection.getSelectionEx()`.
-  - `dm_commands/command_transform.py` — existing whole-object transform (if present).
-  - FreeCAD `Part` module — `BRepOffsetAPI_MakeOffset`, `BRepBuilderAPI_Transform`.
-- **Files to create**:
-  - `dm_commands/command_transform_subelement.py` — sub-element transform command.
-- **Files to modify**:
-  - `InitGui.py` — register the command.
-- **Steps**:
-  1. Use `FreeCADGui.Selection.getSelectionEx()` to get the selected sub-elements (vertices, edges, or faces).
-  2. Determine the sub-element type and present appropriate transform options (translate for points, rotate/translate for edges/faces).
-  3. Apply the transform to the sub-element using OpenCASCADE's BRep modification APIs.
-  4. Rebuild the parent shape with the modified sub-element.
-  5. Update the document object with the new shape.
-- **Acceptance**: Select a face on a box → translate it 5mm along its normal → the box deforms, stretching that face outward. Select a vertex → drag it → the surrounding geometry updates.
-
----
-
-### 21. Extrude a face (Complexity: 5/10)
-
-- **Goal**: Select a face on any solid and extrude it along its normal (or a user-specified direction) to add or remove material.
-- **Files to read**:
-  - FreeCAD `Part` module — `Part.Face.extrude()`, `Part.Shape.fuse()`, `Part.Shape.cut()`.
-  - `FreeCADGui.Selection.getSelectionEx()` — for face selection.
-- **Files to create**:
-  - `dm_commands/command_extrude_face.py` — face extrusion command.
-- **Files to modify**:
-  - `InitGui.py` — register the command.
-- **Steps**:
-  1. Get the selected face from `FreeCADGui.Selection.getSelectionEx()`.
-  2. Determine the face normal direction.
-  3. Present a dialog or interactive drag to set the extrusion distance (positive = add material, negative = cut).
-  4. Extrude the face using `face.extrude(normal * distance)` to create a solid.
-  5. Fuse (positive) or cut (negative) the extruded solid with the parent shape.
-  6. Update the document object with the resulting shape.
-- **Acceptance**: Select a face on a box → extrude 10mm outward → the box gains a protrusion on that face. Extrude inward → material is removed.
-
----
-
-### 22. Dimensioning for edges, radii, and point-to-point (Complexity: 5/10)
-
-- **Goal**: Add a dimensioning tool that displays measurement annotations in the 3D viewport for edges (length), radii (of arcs/circles), or the distance between two selected points.
-- **Files to read**:
-  - FreeCAD `Part` sub-element API — `Shape.Edges`, `Shape.Vertexes`, edge `Length`, `Curve.Radius`.
-  - FreeCAD Coin3D scene graph API — `SoSeparator`, `SoText2`, `SoTranslation` for annotation display.
-  - FreeCAD `TechDraw` or `Draft.makeDimension` for reference on dimension annotation patterns.
-- **Files to create**:
-  - `dm_commands/command_dimension.py` — dimensioning command.
-  - `FCDirectModeling/dimension_display.py` — Coin3D-based annotation rendering.
-- **Files to modify**:
-  - `InitGui.py` — register the command.
-- **Steps**:
-  1. On activation, enter a selection mode where the user picks edges, arcs, or pairs of points.
-  2. For an **edge**: compute its length, display it as a text annotation near the edge midpoint.
-  3. For an **arc/circle edge**: compute the radius, display "R = X" near the arc.
-  4. For **two points**: compute the Euclidean distance, display it with a leader line between the points.
-  5. Render annotations using Coin3D `SoText2` nodes attached to the scene graph.
-  6. Annotations should persist until dismissed or the tool is deactivated.
-- **Acceptance**: Select an edge → a dimension label showing its length appears in the viewport. Select a circular edge → radius is displayed. Click two points → the distance between them is shown.
+  1. `RadialMenu` class: Coin3D `SoSeparator` with `SoText2` labels at angular intervals.
+  2. Mouse event callback: highlight nearest sector, click to activate command, ESC to dismiss.
+  3. `DM_RadialMenu` command creates RadialMenu with configurable items.
+  4. Bind to `Space`.
+- **Acceptance**: Press Space → radial menu appears → click item → command activates → ESC dismisses.
 
 ---
 

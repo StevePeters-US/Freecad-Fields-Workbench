@@ -2,7 +2,28 @@
 
 ## Project Description
 
-FreeCAD Direct Modeling is a Python workbench for FreeCAD that provides fast, intuitive, drag-and-drop 3D modeling using **NURBS (Non-Uniform Rational B-Splines)** as the core geometric representation. Instead of the traditional parametric tree workflow, users sketch and define shapes interactively in the 3D viewport. Primitives are created as native NURBS surfaces via FreeCAD's `Part.BSplineSurface` API — producing smooth, resolution-independent geometry suitable for STEP/IGES export with no faceting artifacts.
+FreeCAD Direct Modeling is a Python workbench for FreeCAD that provides fast, precise NURBS modeling. The core geometric representation is `Part.BSplineSurface` — not BRep shells or solids. Users draw NURBS curves in the viewport, extrude them into surfaces, and compose geometry through boolean-like operations. A conversion tool bridges between NURBS and BRep when needed for export or interop with standard FreeCAD tools.
+
+The three fundamental types are **Point**, **Edge (BSplineCurve)**, and **Patch (BSplineSurface)**.
+
+---
+
+## Core Geometry Model
+
+```
+Point                          — FreeCAD.Vector + optional control handles
+  │
+  └─ Edge (BSplineCurve)       — NURBS curve through/from control points
+       │
+       └─ Patch (BSplineSurface) — NURBS surface from curves or control grids
+```
+
+### Design Principles
+
+1. **`Part.BSplineSurface` is the native representation** — geometry lives as NURBS, not as BRep solids/shells.
+2. **BRep is an export format** — a `NURBS → BRep` converter builds `Part.Shell`/`Part.Solid` when needed (STEP export, boolean ops). A `BRep → NURBS` converter goes the other direction for importing standard Parts.
+3. **Curves first** — the primary workflow is: draw a curve → extrude it into a surface → compose surfaces. Primitives (box, sphere, etc.) can be added later as convenience wrappers.
+4. **Everything builds on Point, Edge, Patch** — these three types are the atoms. Every higher-level tool composes them.
 
 ---
 
@@ -12,7 +33,7 @@ FreeCAD Direct Modeling is a Python workbench for FreeCAD that provides fast, in
 Freecad-Direct-Modeling/
 ├── InitGui.py                     # Workbench registration & toolbar/menu setup
 ├── PROJECT_GUIDELINES.md          # This file
-├── TODO.md                        # Task breakdown by difficulty
+├── TODO.md                        # Task breakdown (self-contained, LLM-friendly)
 ├── COMPLETED.md                   # Archive of completed tasks
 ├── README.md                      # Installation & quick-start
 ├── DirectModeling.FCStd           # Sample document
@@ -20,34 +41,28 @@ Freecad-Direct-Modeling/
 ├── FCDirectModeling/              # Core Python package
 │   ├── __init__.py                # Package init (exports dm_logger)
 │   ├── dm_logger.py               # Centralized logging
-│   ├── nurbs_primitives.py        # NURBS primitive builders (box, sphere, cone, torus)
-│   ├── nurbs_boolean.py           # Boolean operations on NURBS/BRep shapes
-│   ├── dm_object.py               # DMObjectProxy, NURBS shape dispatch, factory
-│   ├── mesh_features.py           # Adjacency, segmentation, face normals
-│   ├── surface_fitting.py         # Primitive fitting (plane, sphere, cylinder, cone)
-│   ├── dm_part.py                 # DM_Part FeaturePython wrapper
-│   ├── task_panel.py              # Base task panel utilities
-│   ├── curve_tools.py             # Freeform 3D curve drawing utilities
-│   └── primitives/                # Interactive primitive creators
-│       ├── __init__.py            # Re-exports all creator classes
-│       ├── base.py                # PrimitiveCreatorBase & NURBSPrimitiveCreator
-│       ├── box_creator.py         # BoxCreator (3-click Place → Size → Set)
-│       ├── box_task_panel.py      # BoxTaskPanel (dimension inputs)
-│       ├── sphere_creator.py      # SphereCreator
-│       ├── cone_creator.py        # ConeCreator
-│       └── torus_creator.py       # TorusCreator
+│   ├── nurbs_primitives.py        # NURBS builders (curve, extrude surface)
+│   ├── nurbs_geometry.py          # Core types: NurbsPoint, NurbsEdge, NurbsPatch [PLANNED]
+│   ├── nurbs_brep_convert.py      # NURBS ↔ BRep conversion utilities [PLANNED]
+│   ├── dm_object.py               # DMObjectProxy, DMViewProvider, factory
+│   ├── dm_part.py                 # DM_Part FeaturePython wrapper (control point display)
+│   ├── work_plane.py              # WorkPlaneManager — tangent plane detection & Coin3D grid
+│   └── primitives/                # Interactive creators
+│       ├── __init__.py            # Re-exports creator classes
+│       ├── primitive_base.py      # PrimitiveBase & NURBSPrimitiveCreator
+│       └── curve_creator.py       # CurveCreator (click-to-place BSpline points)
 │
 ├── dm_commands/                   # FreeCADGui command definitions
 │   ├── __init__.py
-│   ├── command_create_box.py      # DM_CreateBox
-│   ├── command_create_primitives.py  # DM_CreateSphere / Cone / Torus
-│   ├── command_boolean.py         # DM_Fuse / DM_Cut / DM_Common (renamed from SDF booleans)
-│   ├── command_tweak.py           # DM_Tweak
+│   ├── command_create_curve.py    # DM_CreateCurve
+│   ├── command_extrude.py         # DM_Extrude (curve → surface) [PLANNED]
+│   ├── command_boolean.py         # DM_Fuse / DM_Cut / DM_Common
+│   ├── command_array.py           # DM_Array / DM_PolarArray [PLANNED]
+│   ├── command_instance.py        # DM_Instance / DM_Copy [PLANNED]
+│   ├── command_convert.py         # DM_NurbsToBRep / DM_BRepToNurbs [PLANNED]
 │   ├── command_dm_settings.py     # DM_Settings dialog
 │   ├── command_open_sketcher.py   # DM_OpenSketcher
-│   ├── command_open_task_panel.py # DM_OpenTaskPanel
-│   ├── command_draw_curve.py      # DM_DrawCurve (freeform 3D curve tool)
-│   └── command_install_deps.py    # Dependency installer (shapely, etc.)
+│   └── command_install_deps.py    # Dependency installer
 │
 └── Resources/
     ├── resources.qrc
@@ -58,170 +73,146 @@ Freecad-Direct-Modeling/
 
 ## Workbench Goals
 
-The Direct Modeling workbench aims to:
-
-1. **Eliminate tree-management overhead** — create, combine, and edit 3D shapes directly without managing a feature tree.
-2. **Use NURBS as the core representation** — all primitives are created as native `Part::Feature` B-spline surfaces via FreeCAD's OpenCASCADE kernel. This produces exact, smooth, resolution-independent geometry.
-3. **Provide real-time 3D preview** — as the user drags to define a shape, a live wireframe or shaded preview updates in the viewport.
-4. **Export-ready geometry** — NURBS shapes export directly to STEP/IGES without meshing artifacts or faceting.
-5. **Boolean operations on BRep shapes** — Fuse, Cut, and Common operate on `Part.Shape` objects via OpenCASCADE boolean solvers.
-6. **Freeform curve drawing** — users can draw 3D B-spline curves directly in the viewport for lofting, sweeping, and boundary patches.
-7. **Integrate with existing FreeCAD tools** — sketcher profiles, constraints, and standard Part operations remain accessible.
+1. **`Part.BSplineSurface` is the native format** — no `Part.Shell`, `Part.Solid`, or BRep topology in the modeling pipeline. BRep is only used for conversion/export.
+2. **Curve-first workflow** — draw a NURBS curve, extrude it to a surface, compose surfaces. This is the fundamental loop.
+3. **Fast and precise** — radial menus and hotkeys for all operations. Minimal mouse travel.
+4. **Tangent workplane** — automatically sits tangent to whatever surface the cursor is over.
+5. **Instance and Copy system** — linked instances vs independent copies. Booleans operate on instances by default (toggleable), hiding the original.
+6. **Real-time preview** — live NURBS curve/surface preview during interaction.
+7. **NURBS ↔ BRep bridge** — convert to BRep for STEP/IGES export or interop; convert imported BRep back to NURBS for editing.
 
 ---
 
 ## Workbench Toolbar Layout
 
-The toolbar and menu are registered in `InitGui.py` and contain the following groups:
-
-### Creation (Primitives)
-| Command | ID | Description |
-|---------|----|-------------|
-| Box | `DM_CreateBox` | Interactive 3-click box creation (Place → Size → Set) |
-| Sphere | `DM_CreateSphere` | Click-drag sphere creation |
-| Cone | `DM_CreateCone` | Click-drag cone creation |
-| Torus | `DM_CreateTorus` | Click-drag torus creation |
-| New Sketch | `DM_OpenSketcher` | Launch FreeCAD Sketcher for profile creation |
-| Draw Curve | `DM_DrawCurve` | Freeform 3D B-spline curve drawing |
+### Creation
+| Command | ID | Hotkey | Description |
+|---------|----|--------|-------------|
+| Draw Curve | `DM_CreateCurve` | `D` | Click-to-place BSpline curve points |
+| Extrude | `DM_Extrude` | `E` | Extrude a curve into a BSplineSurface |
 
 ### Operations
+| Command | ID | Hotkey | Description |
+|---------|----|--------|-------------|
+| Fuse | `DM_Fuse` | `Ctrl+F` | Boolean union |
+| Cut | `DM_Cut` | `Ctrl+X` | Boolean subtraction |
+| Common | `DM_Common` | `Ctrl+I` | Boolean intersection |
+| Array | `DM_Array` | — | Linear repetition |
+| Polar Array | `DM_PolarArray` | — | Circular repetition |
+| Instance | `DM_Instance` | `I` | Create linked instance |
+| Copy | `DM_Copy` | `Ctrl+D` | Create independent copy |
+
+### Conversion
 | Command | ID | Description |
 |---------|----|-------------|
-| Fuse | `DM_Fuse` | Boolean union of two NURBS/BRep shapes |
-| Cut | `DM_Cut` | Boolean subtraction |
-| Common | `DM_Common` | Boolean intersection |
-| Tweak | `DM_Tweak` | Direct vertex/face manipulation |
-
-### Future Operations (Not Yet Implemented)
-| Planned Tool | Description |
-|--------------|-------------|
-| Array | Repeat a shape along a vector or pattern |
-| Transform | Move / rotate / scale a shape |
-| Loft | Create a surface from cross-section curves |
-| Sweep | Sweep a profile along a curve |
+| NURBS → BRep | `DM_NurbsToBRep` | Convert BSplineSurface patches to Part.Solid |
+| BRep → NURBS | `DM_BRepToNurbs` | Convert Part.Shape faces to BSplineSurface patches |
 
 ### Settings
 | Command | ID | Description |
 |---------|----|-------------|
 | DM Settings | `DM_Settings` | Opens the settings dialog |
 
----
-
-## DM Settings (User-Facing)
-
-Accessed via the **DM Settings** toolbar button (`DM_Settings` command). Configured in `dm_commands/command_dm_settings.py`. Settings are persisted in `FreeCAD.ParamGet("User parameter:FCDirectModeling")`.
-
-| Setting | Type | Range/Options | Default | Description |
-|---------|------|---------------|---------|-------------|
-| Show Wireframe | Checkbox | on/off | off | Overlay wireframe on NURBS objects |
-| Preview Quality | Dropdown | `low`, `medium`, `high` | `medium` | Tessellation density for viewport preview |
+### Radial Menu (Planned)
+Coin3D-based radial menu activated by `Space`. Displays tools in a pie layout around the cursor.
 
 ---
 
-## NURBS Rendering Pipeline
+## Workplane System
+
+| Cursor Over | Workplane Orientation | Visual Color |
+|-------------|----------------------|-------------|
+| A face on existing geometry | Tangent to that face (normal = face normal at hit point) | Green tint |
+| Empty space | XY plane at origin, Z+ normal | Blue tint |
+
+Implementation: `FCDirectModeling/work_plane.py` — `WorkPlaneManager` class using Coin3D overlay.
+
+---
+
+## Instance and Copy System (Planned)
+
+- **Instance** = `App::Link` pointing to original. Changes propagate. Own `Placement`.
+- **Copy** = independent duplicate via `create_dm_object()` with same params. No linkage.
+- **Boolean default**: creates instance of second operand, hides original (toggleable via DM Settings).
+
+---
+
+## DM Settings
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| Show Wireframe | Checkbox | off | Overlay wireframe on NURBS objects |
+| Preview Quality | Dropdown | `medium` | Tessellation density for viewport preview |
+| Bool Use Instance | Checkbox | on | Create instance for boolean operands |
+
+---
+
+## NURBS Pipeline
 
 ```
-User Drag → NURBS surface builder (box/sphere/cone/torus)
-         → Part.BSplineSurface / Part.makeBox / Part.makeSphere / etc.
-         → Part::Feature Shape
-         → FreeCAD native rendering (OpenCASCADE tessellation)
+Draw Curve → Part.BSplineCurve (interpolate through clicked points)
+          → Extrude → Part.BSplineSurface
+          → Part::FeaturePython .Shape
+          → FreeCAD viewport (OpenCASCADE tessellation for display only)
+
+Export: NURBS → BRep converter → Part.Shell/Part.Solid → STEP/IGES
+Import: STEP/IGES → Part.Shape → BRep → NURBS converter → BSplineSurface patches
 ```
-
-### Key Files
-- **`nurbs_primitives.py`** — NURBS surface builders for each primitive type.
-- **`dm_object.py`** — `DMObjectProxy`, factory, and shape dispatch.
-- **`primitives/base.py`** — `NURBSPrimitiveCreator` drives live preview updates.
-
-### Preview Strategy
-During interactive creation (drag), a lightweight wireframe or low-tessellation preview is shown. On commit (3rd click / Set), the final `Part::Feature` with full NURBS geometry is created.
 
 ---
 
-## Code Formatting & Style (FreeCAD Standards)
+## Code Formatting & Style
 
-1. **Python 3.8+** — target the Python bundled with FreeCAD 0.21+/1.0.
-2. **PEP 8** with the following project conventions:
-   - 4-space indentation, no tabs.
-   - Max line length: 100 characters (soft limit).
-   - Use `snake_case` for functions and variables, `PascalCase` for classes.
-   - Private helpers prefixed with `_` (e.g., `_build_nurbs_box`, `_process_preview_queue`).
-3. **Imports**:
-   - FreeCAD modules first (`import FreeCAD`, `import FreeCADGui`).
-   - Then PySide (`from PySide import QtCore, QtGui`).
-   - Then project imports (`from FCDirectModeling import dm_logger`).
-   - Then standard library (`import os`, `import numpy as np`).
-4. **Docstrings**: Google-style or NumPy-style. Every public class and function must have a docstring.
-5. **Type hints**: Encouraged but not required on all functions (FreeCAD's own API is untyped).
-6. **FreeCAD Properties**: Use `App::Property*` types (e.g., `App::PropertyFloat`, `App::PropertyString`) for persistent data on FeaturePython objects. Access via `obj.PropertyName`.
+1. **Python 3.8+** — FreeCAD 0.21+/1.0.
+2. **PEP 8**: 4-space indent, 100-char soft limit, `snake_case` functions, `PascalCase` classes, `_` prefix for private helpers.
+3. **Imports**: FreeCAD → PySide → project → stdlib.
+4. **Docstrings**: Google-style. Every public class and function.
+5. **FreeCAD Properties**: `App::Property*` for persistent data.
 
 ---
 
 ## Logging
 
-All logging goes through **`FCDirectModeling/dm_logger.py`**. Never use bare `print()` or `FreeCAD.Console.Print*` directly in new code.
+Use `FCDirectModeling/dm_logger.py`. Never bare `print()`.
 
 ```python
 from FCDirectModeling import dm_logger
-
-dm_logger.debug("message")   # Verbose tracing
-dm_logger.info("message")    # Normal operational info
-dm_logger.warn("message")    # Potential issues
-dm_logger.error("message")   # Errors and failures
+dm_logger.debug("message")
+dm_logger.info("message")
+dm_logger.warn("message")
+dm_logger.error("message")
 ```
 
-### Logging Policies
-| Mode | Console | File (`~/dm_debug.log`) | How to enable |
-|------|---------|--------------------------|---------------|
+| Mode | Console | File | Enable |
+|------|---------|------|--------|
 | Normal | ✅ | ❌ | Default |
-| Crash investigation | ✅ | ✅ | `export DEBUG_DM_CRASH=1` before launching FreeCAD |
-
-### Logging Best Practices
-- **Be concise.** One-line messages with key variable values.
-- **No per-frame spam.** Avoid logging on every `mouseMoveEvent` once logic is verified — use once-per-state-change or gate behind a flag.
-- **Tag log lines** with the module or function name for easy grep: `dm_logger.debug("BoxCreator._on_move: w=%.1f h=%.1f" % (w, h))`.
+| Crash | ✅ | ✅ | `export DEBUG_DM_CRASH=1` |
 
 ---
 
 ## Event Safety
 
-**ALL scene-graph and document-mutating operations** must be deferred via `QTimer.singleShot(0, fn)`. Never mutate the FreeCAD document from inside a Coin3D event callback. This includes:
-- Assigning `.Shape`
-- Creating / deleting document objects
-- Calling `doc.recompute()`
-- Closing dialogs (`FreeCADGui.Control.closeDialog()`)
+**ALL document mutations** must be deferred via `QTimer.singleShot(0, fn)`. This includes assigning `.Shape`, creating/deleting objects, `doc.recompute()`, and closing dialogs.
 
 ---
 
 ## Terminology
 
-### Primitive Creation — 3-Click Flow
-| Click | Term | Description |
-|-------|------|-------------|
-| 1st | **Place** | Set the origin corner on the working plane |
-| 2nd | **Size** | Lock the base footprint; dragging now controls height |
-| 3rd | **Set** | Commit the shape to the document |
+| Term | Meaning |
+|------|---------|
+| Point | `FreeCAD.Vector` + optional control handles |
+| Edge | `Part.BSplineCurve` through control points |
+| Patch | `Part.BSplineSurface` — the core geometry atom |
+| Place / Size / Set | 3-click creation flow (1st=origin, 2nd=footprint, 3rd=commit) |
+| Instance | `App::Link` — linked duplicate |
+| Copy | Independent duplicate |
 
-### DM Part Object (Tree View)
-
-Every Direct Modeling part appears as a single `Part::FeaturePython` with the orange icon. No child mesh is needed — the NURBS shape renders natively via FreeCAD's OpenCASCADE tessellation.
-
+### DM Object (Tree View)
 ```
-🟧 Box                          ← Part::FeaturePython + DMObjectProxy (orange icon)
+🟧 Curve                        ← Part::FeaturePython + DMObjectProxy (orange icon)
+ ├── ShapeType = "curve"          (App::PropertyString)
+ └── Points = [...]               (App::PropertyVectorList)
 ```
-
-During **preview** (dragging), a temporary lightweight shape is shown in the viewport.
-
-On **finalize** (3rd click), the full NURBS `Part::Feature` is committed:
-
-```
-🟧 Box                          ← Part::FeaturePython + DMObjectProxy
- ├── ShapeType = "box"            (App::PropertyString)
- ├── Length = 10.0                (App::PropertyFloat)
- ├── Width = 10.0                 (App::PropertyFloat)
- └── Height = 10.0                (App::PropertyFloat)
-```
-
-**Key invariant**: The parametric properties (Length, Width, Height, Radius, etc.) are the source of truth. The `Part.Shape` is regenerated from `build_shape()` whenever properties change.
 
 ---
 
@@ -229,28 +220,5 @@ On **finalize** (3rd click), the full NURBS `Part::Feature` is committed:
 
 | Package | Required | Purpose |
 |---------|----------|---------|
-| NumPy | ✅ (bundled with FreeCAD) | Linear algebra, point operations |
-| Shapely | ✅ (user-installed) | 2D geometry operations |
-| FreeCAD 0.21+ / 1.0 | ✅ | Host application (OpenCASCADE NURBS kernel) |
-
----
-
-## Future Work
-
-### Curve-Based Modeling
-- **Freeform 3D Curves** — interactive B-spline curve drawing in the viewport.
-- **Loft** — create NURBS surfaces from cross-section curves.
-- **Sweep** — sweep a profile along a guide curve.
-- **Boundary Patch** — fill a closed boundary of curves with a NURBS surface.
-
-### Advanced Operations
-- **Array** — repeat shapes along vectors, circular patterns, or grids.
-- **Transform** — SDF-level translate/rotate/scale (now BRep-level transforms).
-- **Sketch-driven extrusion** — convert Sketcher profiles to extruded NURBS solids.
-
-### Import/Export
-- **Mesh to NURBS** — fit NURBS patches to imported meshes (STL/OBJ) for clean CAD geometry.
-- **Blender Live Link** — import curves from Blender Geometry Nodes as NURBS for reconstruction.
-
-### Higher-Quality Rendering
-- Ambient occlusion and curvature shading in the viewport.
+| NumPy | ✅ (bundled) | Linear algebra |
+| FreeCAD 0.21+ / 1.0 | ✅ | Host application |
