@@ -68,7 +68,7 @@ These tasks remove code that no longer fits the pure-NURBS architecture.
 
 ---
 
-### 0b. Delete command_tweak (Complexity: 1/10)
+### 0b. Delete command_tweak (Complexity: 1/10) [x]
 
 - **Goal**: Remove the Tweak command entirely.
 - **Files to delete**:

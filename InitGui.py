@@ -67,7 +67,6 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
         # in each file, making the commands available to FreeCAD.
         try:
             from dm_commands import command_create_curve
-            from dm_commands import command_tweak
             from dm_commands import command_boolean
             from dm_commands import command_dm_settings
             from dm_commands import command_open_sketcher
@@ -75,7 +74,6 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
             self.appendToolbar("Direct Modeling", [
                 'DM_CreateCurve',
                 'DM_OpenSketcher',
-                'DM_Tweak',
                 'DM_Fuse',
                 'DM_Cut',
                 'DM_Common',
@@ -84,7 +82,6 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
             self.appendMenu("Direct Modeling", [
                 'DM_CreateCurve',
                 'DM_OpenSketcher',
-                'DM_Tweak',
                 'DM_Fuse',
                 'DM_Cut',
                 'DM_Common',

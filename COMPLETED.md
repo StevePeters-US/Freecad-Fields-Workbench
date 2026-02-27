@@ -73,3 +73,6 @@ Tasks moved here from `TODO.md` after verification.
 
 ### ✅ Phase 0a: Delete primitive creators and commands
 - **Completed**: Removed all primitive-specific creators (box, sphere, cone, torus) and their associated commands to align with the NURBS-centric architecture. Updated InitGui.py and package initialization.
+
+### ✅ Phase 0b: Delete command_tweak
+- **Completed**: Removed the Tweak command entirely. Deleted dm_commands/command_tweak.py and removed its references from InitGui.py.
