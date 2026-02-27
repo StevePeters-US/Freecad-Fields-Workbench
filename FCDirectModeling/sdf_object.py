@@ -21,19 +21,6 @@ import FreeCAD
 
 _PARAM_PATH = "User parameter:FCDirectModeling"
 
-def get_mesh_algorithm():
-    """Return the user's chosen meshing algorithm: 'surface_nets' | 'dual_contouring' | 'marching_cubes'."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetString("MeshAlgorithm", "surface_nets")
-
-def get_mesh_resolution():
-    """Return the user's chosen voxel resolution (default 48 for final objects)."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("MeshResolution", 48)
-
-def set_mesh_algorithm(algo):
-    FreeCAD.ParamGet(_PARAM_PATH).SetString("MeshAlgorithm", algo)
-
-def set_mesh_resolution(res):
-    FreeCAD.ParamGet(_PARAM_PATH).SetInt("MeshResolution", int(res))
 
 def get_show_wireframe():
     """Return whether to show wireframe for SDF previews/objects."""
@@ -42,13 +29,6 @@ def get_show_wireframe():
 def set_show_wireframe(show):
     FreeCAD.ParamGet(_PARAM_PATH).SetBool("ShowWireframe", bool(show))
 
-def get_preview_resolution():
-    """Return the user's chosen voxel resolution for live previews (default 15)."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("PreviewResolution", 15)
-
-def set_preview_resolution(res):
-    """Set the user's chosen voxel resolution for live previews."""
-    FreeCAD.ParamGet(_PARAM_PATH).SetInt("PreviewResolution", int(res))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -140,53 +120,6 @@ _SDF_BUILDERS = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Meshing dispatcher
-# ─────────────────────────────────────────────────────────────────────────────
-
-def mesh_sdf(sdf_fn, bounds_min, bounds_max, resolution=None, algorithm=None):
-    """
-    Evaluate sdf_fn on a voxel grid and return (verts, tris).
-    algorithm: 'surface_nets' | 'dual_contouring' | 'marching_cubes'
-    """
-    if resolution is None:
-        resolution = get_mesh_resolution()
-    if algorithm is None:
-        algorithm = get_mesh_algorithm()
-
-    from .sdf_mesher import extract_mesh_numpy
-    from FCDirectModeling import dm_logger
-
-    dm_logger.debug(f"mesh_sdf: Starting {algorithm} meshing at res {resolution}...")
-    import time
-    t0 = time.time()
-    
-    if algorithm == "marching_cubes":
-        res = extract_mesh_numpy(sdf_fn, mn=bounds_min, mx=bounds_max,
-                                   resolution=resolution, sharp=False)
-    else:
-        # surface_nets and dual_contouring both use QEF — sharp=True
-        res = extract_mesh_numpy(sdf_fn, mn=bounds_min, mx=bounds_max,
-                                   resolution=resolution, sharp=True)
-    
-    t1 = time.time()
-    dm_logger.debug(f"mesh_sdf: Meshing took {t1-t0:.3f}s. Result: {len(res[0])} verts, {len(res[1])} tris")
-    return res
-
-
-def _to_mesh_facets(verts, tris):
-    """
-    Convert (N,3) verts and (M,3) tris to a flat list of facets
-    [(v1,v2,v3), ...] where each vertex is a plain (x,y,z) tuple.
-    This is what Mesh.Mesh() expects.
-    """
-    facets = []
-    for t in tris:
-        v0 = (float(verts[t[0],0]), float(verts[t[0],1]), float(verts[t[0],2]))
-        v1 = (float(verts[t[1],0]), float(verts[t[1],1]), float(verts[t[1],2]))
-        v2 = (float(verts[t[2],0]), float(verts[t[2],1]), float(verts[t[2],2]))
-        facets.append((v0, v1, v2))
-    return facets
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -322,84 +255,10 @@ class SDFObjectProxy:
         return bld(params)
 
     def execute(self, fp):
-        """Called by FreeCAD to recompute — we mesh and write to the child Mesh object."""
-        if getattr(self, "is_preview", False):
-            # During live preview dragging, base.py injects .Mesh directly.
-            # Skip slow full-resolution recompute entirely.
-            from FCDirectModeling import dm_logger
-            dm_logger.debug("SDFObjectProxy: execute skipped for live preview")
-            return
-            
-        try:
-            import Mesh as MeshModule
-            import Part
-            from FCDirectModeling import dm_logger
-            import time
-
-            # Ensure the object has a shape (even if empty) to satisfy Part::Feature
-            if not hasattr(fp, "Shape") or fp.Shape.isNull():
-                fp.Shape = Part.Shape()
-
-            # Build SDF function using the new reusable method
-            sdf_fn, (mn, mx) = self.build_sdf(fp)
-            
-            dm_logger.debug(f"SDFObjectProxy: Executing high-res mesh for {fp.SDFType}...")
-            verts, tris = mesh_sdf(sdf_fn, mn, mx)
-            
-            if len(verts) == 0:
-                dm_logger.warn(f"SDFObject: mesher returned no geometry for {fp.SDFType}.")
-                return
-
-            dm_logger.debug(f"SDFObjectProxy: Converting {len(tris)} triangles to Mesh facets...")
-            t_conv_0 = time.time()
-            facets = _to_mesh_facets(verts, tris)
-            t_conv_1 = time.time()
-            dm_logger.debug(f"SDFObjectProxy: Conversion took {t_conv_1-t_conv_0:.3f}s")
-
-            # Get linked child mesh surface
-            mesh_obj = getattr(fp, "SDFMesh", None)
-            
-            if not mesh_obj:
-                # Fallback search in OutList
-                for child in fp.OutList:
-                    if child.isDerivedFrom("Mesh::Feature"):
-                        mesh_obj = child
-                        break
-            
-            if not mesh_obj:
-                dm_logger.warn(f"SDFObjectProxy: No child mesh found for {fp.Label}")
-                return
-
-            mesh_obj.Mesh = MeshModule.Mesh(facets)
-            dm_logger.debug(f"SDFObjectProxy: Mesh assigned to {mesh_obj.Label}")
-            
-            # Sync mesh placement with the container's placement
-            # This ensures the local geometry [0,0,0] coincides with the object's world position.
-            mesh_obj.Placement = fp.Placement
-            
-            # Explicitly force a view update if in GUI mode
-            if FreeCAD.GuiUp:
-                vobj = getattr(mesh_obj, "ViewObject", None)
-                if vobj:
-                    vobj.Visibility = True
-                    # Discover available modes
-                    try:
-                        modes = vobj.getPropertyEnumeration("DisplayMode")
-                        if "Flat Lines" in modes:
-                            vobj.DisplayMode = "Flat Lines"
-                        elif "Shaded" in modes:
-                            vobj.DisplayMode = "Shaded"
-                        elif len(modes) > 0:
-                            vobj.DisplayMode = modes[0]
-                    except Exception as ve:
-                        _ = ve # Silently fail
-                    
-                    vobj.update()
-                    dm_logger.debug(f"ViewObject updated for {mesh_obj.Label}")
-
-        except Exception as e:
-            from FCDirectModeling import dm_logger
-            dm_logger.error(f"SDFObject.execute error: {e}")
+        """Called by FreeCAD to recompute or finalize."""
+        # For now, we've stripped SDF meshing. 
+        # In a follow-up task, this will be replaced with native NURBS build_shape().
+        pass
 
     def __setstate__(self, state):
         pass

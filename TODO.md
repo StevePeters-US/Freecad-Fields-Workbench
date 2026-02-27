@@ -34,24 +34,7 @@ The following tasks establish the NURBS-native pipeline: strip all SDF code, rep
 
 ---
 
-### 1. Rename logger module from `sdf_logger` to `dm_logger` [x] (Complexity: 1/10)
-
-- **Goal**: Rename the logging module to reflect the new architecture; remove all "SDF" branding.
-- **Files to read**:
-  - `FCDirectModeling/dm_logger.py` — the current logger module.
-- **Files to modify**:
-  - Rename `FCDirectModeling/dm_logger.py` → `FCDirectModeling/dm_logger.py`.
-  - `FCDirectModeling/__init__.py` — update the export from `dm_logger` to `dm_logger`.
-  - **Every file** that imports `dm_logger` — find with `grep -r "dm_logger" .` and replace all occurrences.
-- **Steps**:
-  1. Rename the file.
-  2. Inside the file, change the log file path from `~/sdf_debug.log` to `~/dm_debug.log` and the env var from `DEBUG_SDF_CRASH` to `DEBUG_DM_CRASH`.
-  3. Global find-and-replace `from FCDirectModeling import dm_logger` → `from FCDirectModeling import dm_logger`, and `dm_logger.` → `dm_logger.` in all files.
-- **Acceptance**: `grep -r "dm_logger" .` returns zero results. The workbench loads without import errors.
-
----
-
-### 2. Remove `sdf_mesher.py` and all SDF meshing code (Complexity: 2/10)
+### 2. Remove `sdf_mesher.py` and all SDF meshing code [x] (Complexity: 2/10)
 
 - **Goal**: Delete the SDF voxel grid mesher module entirely — it is no longer needed with NURBS primitives.
 - **Files to delete**:

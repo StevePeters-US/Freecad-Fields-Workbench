@@ -70,3 +70,6 @@ Tasks moved here from `TODO.md` after verification.
 - **Completed**: Switched container to `Part::FeaturePython`, moved child mesh creation to the factory function using `App::PropertyLink`, and implemented `SDFObjectProxy` placement logic for centered primitives. Fixed `dm_logger` calls from `.warning()` to `.warn()`.
 - **Result**: Final objects are now correctly placed, and high-resolution meshing completes successfully without document locking or logging errors.
 
+## ✅ Remove `sdf_mesher.py` and all SDF meshing code
+- **Completed**: Deleted `sdf_mesher.py`, its tests, and stripped meshing logic from `sdf_object.py` and `command_dm_settings.py`.
+- **Result**: Core codebase is now free of legacy voxel meshing logic, ready for the NURBS-native transition.
