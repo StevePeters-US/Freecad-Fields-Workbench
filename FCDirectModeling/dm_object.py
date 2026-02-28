@@ -91,6 +91,9 @@ class DMObjectProxy:
                 obj.addProperty("App::PropertyVectorList", "ControlGrid", "NURBS", "Control point grid")
                 obj.addProperty("App::PropertyInteger", "UCount", "NURBS", "Width of grid")
                 obj.addProperty("App::PropertyInteger", "VCount", "NURBS", "Height of grid")
+                obj.addProperty("App::PropertyLink", "SourceCurve", "NURBS", "The curve this surface depends on")
+            
+            obj.SourceCurve = params.get("SourceCurve", None)
             
             grid = params.get("ControlGrid", [[]])
             if grid and grid[0]:
@@ -124,8 +127,42 @@ class DMObjectProxy:
         elif st == "point":
             return Part.Point(fp.Position).toShape()
         elif st == "surface":
-            from .nurbs_geometry import DMSurface
+            from .nurbs_geometry import DMSurface, DMCurve, DMPoint
             
+            # If we have a source curve, rebuild the grid dynamically
+            if hasattr(fp, "SourceCurve") and fp.SourceCurve:
+                curve_obj = fp.SourceCurve
+                pts = curve_obj.Points
+                h_in = getattr(curve_obj, "HandleIn", [])
+                h_out = getattr(curve_obj, "HandleOut", [])
+                dm_points = []
+                for i, p in enumerate(pts):
+                    hi = h_in[i] if i < len(h_in) else None
+                    ho = h_out[i] if i < len(h_out) else None
+                    dm_points.append(DMPoint(p, handle_in=hi, handle_out=ho))
+                
+                curve = DMCurve(dm_points, is_closed=getattr(curve_obj, "Closed", False))
+                
+                # Coons Patch segments
+                class CurveSegment:
+                    def __init__(self, curve, t_start, t_end):
+                        self.curve = curve
+                        self.t_start = t_start
+                        self.t_end = t_end
+                    def value(self, t):
+                        mapped_t = self.t_start + t * (self.t_end - self.t_start)
+                        return self.curve.value(mapped_t % 1.0)
+
+                c1 = CurveSegment(curve, 0.0, 0.25)
+                c2 = CurveSegment(curve, 0.75, 0.5)
+                d1 = CurveSegment(curve, 1.0, 0.75)
+                d2 = CurveSegment(curve, 0.25, 0.5)
+
+                res = fp.UCount if fp.UCount >= 2 else 8
+                surf = DMSurface.from_boundaries(c1, c2, d1, d2, res=res)
+                return surf.to_shape()
+
+            # Otherwise use the static grid
             grid = []
             u_count = fp.UCount
             v_count = fp.VCount
@@ -145,9 +182,11 @@ class DMObjectProxy:
         """Called by FreeCAD to recompute the object."""
         try:
             from FCDirectModeling import dm_logger
-            # dm_logger.debug(f"DMObjectProxy: Recomputing {fp.Label} ({fp.ShapeType})")
-            pass
             
+            # Syncing placement here causes infinite recompute loops.
+            # Handle this in the SourceCurve property's onChanged if desired.
+            pass
+
             # Ensure the object has a shape
             new_shape = self.build_shape(fp)
             
@@ -177,9 +216,12 @@ class DMViewProvider:
         vobj.LineColor = (1.0, 0.5, 0.0)
         vobj.LineWidth = get_line_width()
         vobj.PointSize = get_point_size()
-        if hasattr(vobj, "PointStyle"):
-            vobj.PointStyle = "Spheres"
-        vobj.DisplayMode = "Flat Lines"
+        if hasattr(vobj.Object, "ShapeType") and vobj.Object.ShapeType == "surface":
+            vobj.DisplayMode = "Shaded"
+            vobj.PointSize = 0.0
+            vobj.LineWidth = 0.0
+        else:
+            vobj.DisplayMode = "Flat Lines"
 
     def attach(self, vobj):
         self.Object = vobj.Object

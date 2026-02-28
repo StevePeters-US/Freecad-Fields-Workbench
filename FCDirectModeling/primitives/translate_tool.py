@@ -82,12 +82,24 @@ class TranslateTool(PrimitiveBase):
                                  if (v_world - p_w).Length < 0.001:
                                      self.targets.append({"obj": obj, "type": "point", "idx": 0, "orig_world": v_world})
                          except: pass
-                    # FUTURE: Handle "Edge" selection here if we want to drag segments
+                    elif "Edge" in sub:
+                        # For DMObjects, Edge1 is the main B-spline. Other edges are handles.
+                        # Allow dragging the whole object by its main curve, but ignore handles.
+                        if sub == "Edge1":
+                            self.targets.append({"obj": obj, "type": "placement", "idx": None, "orig_world": FreeCAD.Placement(obj.Placement)})
+                        else:
+                            dm_logger.debug(f"TranslateTool: Ignoring handle Edge {sub}")
+                    # FUTURE: Handle other sub-elements here
             else:
                 self.targets.append({"obj": obj, "type": "placement", "idx": None, "orig_world": FreeCAD.Placement(obj.Placement)})
 
         if not self.targets:
-            dm_logger.debug("TranslateTool: No valid DM targets.")
+            # If we had sub-elements selected but didn't find valid DM vertices/handles,
+            # don't fall back to whole-object move. This prevents accidental move when clicking sticks.
+            if sub_names:
+                dm_logger.debug("TranslateTool: Hit non-Vertex sub-element. ignoring.")
+            else:
+                dm_logger.debug("TranslateTool: No valid DM targets.")
             self.terminate()
             return
 

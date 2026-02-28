@@ -75,37 +75,68 @@ class DMCurve:
             if (fit_pts[0] - fit_pts[-1]).Length < 0.005:
                 fit_pts.pop()
         
-        try:
-            bs = Part.BSplineCurve()
+        n = len(fit_pts)
+        filtered_points = filtered_points[:n]
+        # 1. Helper for auto-tangents (Catmull-Rom)
+        def get_auto_tan(idx):
+            prev = fit_pts[(idx - 1) % n] if (is_closed or idx > 0) else (fit_pts[1] - (fit_pts[1]-fit_pts[0]))
+            nxt = fit_pts[(idx + 1) % n] if (is_closed or idx < n-1) else (fit_pts[-1] + (fit_pts[-1]-fit_pts[-2]))
             
-            # Prepare tangents: if manual handles exist, compute auto-tangents for the rest
-            tangents = []
-            has_manual = any(p.handle_out is not None for p in filtered_points[:len(fit_pts)])
-            
-            if has_manual:
-                n = len(fit_pts)
-                for i in range(n):
-                    p_obj = filtered_points[i]
-                    if p_obj.handle_out is not None:
-                        tangents.append(p_obj.handle_out - p_obj.position)
-                    else:
-                        # Auto-calculate Catmull-Rom tangent
-                        prev_p = fit_pts[(i - 1) % n] if (is_closed or i > 0) else (fit_pts[1] - (fit_pts[1]-fit_pts[0]))
-                        next_p = fit_pts[(i + 1) % n] if (is_closed or i < n-1) else (fit_pts[-1] + (fit_pts[-1]-fit_pts[-2]))
-                        tangents.append((next_p - prev_p) * 0.5)
+            # Use chord to keep tangent magnitude proportional
+            chord = (fit_pts[(idx+1)%n] - fit_pts[idx%n]).Length if (is_closed or idx < n-1) else (fit_pts[idx] - fit_pts[idx-1]).Length
+            return (nxt - prev).normalize() * (chord / 3.0)
 
-            # Native Interpolation
-            if tangents:
-                try:
-                    bs.interpolate(fit_pts, is_closed, 0.001, tangents)
-                except Exception:
-                    bs.interpolate(fit_pts, is_closed)
+        # 2. Build Bezier poles for each cubic segment
+        poles = []
+        num_segments = n if is_closed else n - 1
+        for i in range(num_segments):
+            p1 = fit_pts[i]
+            p2 = fit_pts[(i + 1) % n]
+            
+            p1_obj = filtered_points[i]
+            p2_obj = filtered_points[(i + 1) % n]
+            
+            # Bezier pole v1 (leaving p1)
+            if p1_obj.handle_out and (p1_obj.handle_out - p1).Length > 1e-4:
+                v1 = p1_obj.handle_out
             else:
-                try:
-                    bs.interpolate(fit_pts, is_closed)
-                except:
-                    # Final fallback: OCCT built-in buildFromPoles if interpolate fails
-                    bs.buildFromPoles(fit_pts, is_closed)
+                v1 = p1 + get_auto_tan(i)
+                
+            # Bezier pole v2 (entering p2)
+            if p2_obj.handle_in and (p2_obj.handle_in - p2).Length > 1e-4:
+                v2 = p2_obj.handle_in
+            else:
+                v2 = p2 - get_auto_tan((i + 1) % n)
+            
+            poles.extend([p1, v1, v2])
+        
+        if not is_closed:
+            poles.append(fit_pts[-1])
+
+        try:
+            degree = 3
+            weights = [1.0] * len(poles)
+            knots = [float(j) for j in range(num_segments + 1)]
+            
+            if is_closed:
+                mults = [3] * (num_segments + 1)
+                bs = Part.BSplineCurve(poles, weights, knots, mults, True, degree)
+            else:
+                mults = [4] + [3] * (num_segments - 1) + [4]
+                bs = Part.BSplineCurve(poles, weights, knots, mults, False, degree)
+            
+            self._bspline = bs
+            return bs
+        except Exception as e:
+            from FCDirectModeling import dm_logger
+            dm_logger.debug(f"DEBUG: Part.BSplineCurve constructor failed: {e}. Falling back to default interpolate.")
+            try:
+                bs = Part.BSplineCurve()
+                bs.interpolate(fit_pts, is_closed)
+                self._bspline = bs
+                return bs
+            except:
+                return None
             
             # Final validation
             if bs.Degree == 0 and len(fit_pts) >= 2:
@@ -128,7 +159,8 @@ class DMCurve:
         bs = self.bspline
         if bs:
             try:
-                shapes.append(bs.toShape())
+                # Use Part.Edge(bs) for standard NURBS segment creation
+                shapes.append(Part.Edge(bs))
             except Exception as e:
                 from FCDirectModeling import dm_logger
                 dm_logger.debug(f"DEBUG: DMCurve.to_shape edge error: {e}")
@@ -138,12 +170,17 @@ class DMCurve:
             shapes.append(Part.Vertex(p.position))
             
             # 3. Handle lines and markers for visual feedback & selection
-            if p.handle_in:
-                shapes.append(Part.makeLine(p.position, p.handle_in))
-                shapes.append(Part.Vertex(p.handle_in)) # Marker at end of handle
-            if p.handle_out:
-                shapes.append(Part.makeLine(p.position, p.handle_out))
-                shapes.append(Part.Vertex(p.handle_out)) # Marker at end of handle
+            # Guard against coincident points which crash Part.makeLine
+            if p.handle_in and (p.handle_in - p.position).Length > 1e-4:
+                try:
+                    shapes.append(Part.makeLine(p.position, p.handle_in))
+                    shapes.append(Part.Vertex(p.handle_in))
+                except: pass
+            if p.handle_out and (p.handle_out - p.position).Length > 1e-4:
+                try:
+                    shapes.append(Part.makeLine(p.position, p.handle_out))
+                    shapes.append(Part.Vertex(p.handle_out))
+                except: pass
 
         if not shapes:
             return Part.Shape()
