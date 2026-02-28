@@ -360,7 +360,7 @@ These tasks build the curve→surface workflow.
 
 ### 4b. Radial menu system (Complexity: 6/10)
 
-- **Goal**: Coin3D-based radial menu at cursor position, activated by `Space`.
+- **Goal**: Coin3D-based radial menu at cursor position, activated by `right click`.
 - **Files to create**:
   - `FCDirectModeling/radial_menu.py`
   - `dm_commands/command_radial_menu.py`
@@ -376,3 +376,17 @@ These tasks build the curve→surface workflow.
 ---
 
 Open sketcher tool should create a new sketch on the workplane, not switch to the sketcher workbench.
+
+---
+
+Radial menu for spline points (tangent handles, split, custom angle)
+
+---
+spherical sprite for points
+---
+
+### 1l. Snap Workplane to Camera View (Complexity: 3/10)
+- **Goal**: Add a command or hotkey to snap the working plane to the current camera's orientation.
+- **Goal**: Ensure that if no face is selected, the curve tool defaults to a camera-facing plane at a sensible distance.
+- **Files to modify**: `FCDirectModeling/primitives/primitive_base.py`, `dm_commands/command_snap_wp.py`.
+- **Acceptance**: Pressing 'V' (or similar) aligns the WP to the view. Drawing without a face uses the view plane.

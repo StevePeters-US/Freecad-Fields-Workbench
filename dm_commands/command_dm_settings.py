@@ -63,7 +63,7 @@ class _SettingsDialog(QtGui.QDialog):
         layout.addRow(btn_box)
 
     def _on_accept(self):
-        from FCDirectModeling.dm_object import set_show_wireframe, set_line_width, set_point_size
+        from FCDirectModeling.dm_object import set_show_wireframe, set_line_width, set_point_size, refresh_all_dm_objects
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()
@@ -71,6 +71,9 @@ class _SettingsDialog(QtGui.QDialog):
         set_show_wireframe(wire)
         set_line_width(lw)
         set_point_size(ps)
+        
+        # Apply to all existing objects
+        refresh_all_dm_objects()
 
         FreeCAD.Console.PrintMessage(f"DM Settings: wire={wire}, lw={lw}, ps={ps}\n")
         self.accept()

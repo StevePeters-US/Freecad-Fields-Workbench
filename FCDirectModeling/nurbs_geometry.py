@@ -80,23 +80,24 @@ class DMCurve:
             # Prepare tangents if any points have them
             tangents = []
             has_tangents = False
-            for p in filtered_points:
+            # Tangents list must match the number of points used for interpolation (fit_pts)
+            for p in filtered_points[:len(fit_pts)]:
                 if p.handle_out:
-                    t = p.handle_out - p.position
-                    tangents.append(t)
+                    # handle_out is an absolute position, tangent is the vector from position
+                    v = p.handle_out - p.position
+                    tangents.append(v)
                     has_tangents = True
                 else:
                     tangents.append(FreeCAD.Vector(0,0,0))
             
-            if has_tangents and not is_closed:
-                # OCCT interpolate can take tangents: (points, periodic, tolerance, tangents)
-                # But some versions expect a specific format. Let's stick to points for now 
-                # unless we have a guaranteed working signature.
-                # Actually, try points only if it fails with tangents.
+            if has_tangents:
                 try:
+                    # interpolate(Points, Periodic=False, Tolerance=0.001, Tangents=[], Params=[])
+                    bs.interpolate(fit_pts, is_closed, 0.001, tangents)
+                except Exception as e:
+                    from FCDirectModeling import dm_logger
+                    dm_logger.debug(f"DEBUG: DMCurve interpolate with tangents failed: {e}")
                     bs.interpolate(fit_pts, is_closed)
-                except:
-                    bs.interpolate(fit_pts)
             else:
                 bs.interpolate(fit_pts, is_closed)
             return bs
@@ -115,15 +116,33 @@ class DMCurve:
                 return None
 
     def to_shape(self):
-        """Returns the curve as a Part.Shape (Edge)."""
+        """Returns the curve as a Part.Shape (Compound of Edge, Vertices, and Lines)."""
+        shapes = []
+        
+        # 1. The main B-spline edge
         bs = self.bspline
         if bs:
             try:
-                return bs.toShape()
+                shapes.append(bs.toShape())
             except Exception as e:
                 from FCDirectModeling import dm_logger
-                dm_logger.debug(f"DEBUG: DMCurve.to_shape error: {e}")
-        return Part.Shape()
+                dm_logger.debug(f"DEBUG: DMCurve.to_shape edge error: {e}")
+
+        # 2. Control points as vertices (ensure markers are drawn for all pts)
+        for p in self.points:
+            shapes.append(Part.Vertex(p.position))
+            
+            # 3. Handle lines for visual feedback
+            if p.handle_in:
+                shapes.append(Part.makeLine(p.position, p.handle_in))
+            if p.handle_out:
+                shapes.append(Part.makeLine(p.position, p.handle_out))
+
+        if not shapes:
+            return Part.Shape()
+        if len(shapes) == 1:
+            return shapes[0]
+        return Part.Compound(shapes)
 
     @property
     def is_closed(self):

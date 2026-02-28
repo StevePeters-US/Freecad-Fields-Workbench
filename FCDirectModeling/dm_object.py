@@ -175,6 +175,8 @@ class DMViewProvider:
     def setup_view(self, vobj):
         vobj.PointColor = (1.0, 0.5, 0.0)
         vobj.LineColor = (1.0, 0.5, 0.0)
+        vobj.LineWidth = get_line_width()
+        vobj.PointSize = get_point_size()
         if hasattr(vobj, "PointStyle"):
             vobj.PointStyle = "Spheres"
         vobj.DisplayMode = "Flat Lines"
@@ -268,9 +270,34 @@ def create_dm_object(name, shape_type, params=None, placement=None):
                 pass
         
         dm_logger.debug(f"create_dm_object: {name} created successfully")
+        if hasattr(obj, "ViewObject") and obj.ViewObject:
+            obj.ViewObject.ShapeColor = (1.0, 0.5, 0.0)
+            obj.ViewObject.LineWidth = get_line_width()
+            obj.ViewObject.PointSize = get_point_size()
+        
         return obj
         
     except Exception:
+        from FCDirectModeling import dm_logger
         dm_logger.exception(f"create_dm_object FAILED for {name}")
         return None
+
+def refresh_all_dm_objects():
+    """Update LineWidth and PointSize of all DM objects in the active document."""
+    import FreeCAD
+    doc = FreeCAD.activeDocument()
+    if not doc:
+        return
+    
+    lw = get_line_width()
+    ps = get_point_size()
+    
+    for obj in doc.Objects:
+        if hasattr(obj, "ShapeType") and obj.ViewObject:
+            obj.ViewObject.LineWidth = lw
+            obj.ViewObject.PointSize = ps
+    
+    import FreeCADGui
+    if FreeCAD.GuiUp:
+        FreeCADGui.updateGui()
 
