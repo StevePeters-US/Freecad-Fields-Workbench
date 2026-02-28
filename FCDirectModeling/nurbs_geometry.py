@@ -104,8 +104,15 @@ class DMCurve:
             from FCDirectModeling import dm_logger
             dm_logger.debug(f"DEBUG: DMCurve interpolate fallback (points={len(positions)}, closed={is_closed}): {e}")
             # Fallback: create a BSpline from the polygon wire
-            wire = Part.makePolygon(positions)
-            return wire.toBSpline() if hasattr(wire, "toBSpline") else None
+            try:
+                wire = Part.makePolygon(positions)
+                if hasattr(wire, "toBSpline"):
+                    return wire.toBSpline()
+                # If toBSpline is missing, try creating a B-spline from points manually
+                return Part.BSplineCurve(positions, is_closed)
+            except Exception as e2:
+                dm_logger.debug(f"DEBUG: DMCurve ultimate fallback failed: {e2}")
+                return None
 
     def to_shape(self):
         """Returns the curve as a Part.Shape (Edge)."""

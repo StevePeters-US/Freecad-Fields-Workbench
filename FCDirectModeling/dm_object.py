@@ -38,7 +38,7 @@ def set_line_width(val):
 
 def get_point_size():
     """Return the point size for DM objects."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("PointSize", 8.0)
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("PointSize", 6.0)
 
 def set_point_size(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetFloat("PointSize", float(val))
@@ -145,7 +145,8 @@ class DMObjectProxy:
         """Called by FreeCAD to recompute the object."""
         try:
             from FCDirectModeling import dm_logger
-            dm_logger.debug(f"DMObjectProxy: Recomputing {fp.Label} ({fp.ShapeType})")
+            # dm_logger.debug(f"DMObjectProxy: Recomputing {fp.Label} ({fp.ShapeType})")
+            pass
             
             # Ensure the object has a shape
             new_shape = self.build_shape(fp)
@@ -153,7 +154,8 @@ class DMObjectProxy:
             if new_shape.isNull():
                  dm_logger.debug(f"DMObjectProxy: Built NULL shape for {fp.Label} (expected if object is empty)")
             else:
-                 dm_logger.debug(f"DMObjectProxy: Shape built. Faces={len(new_shape.Faces)}, BoundBox={new_shape.BoundBox}")
+                # dm_logger.debug(f"DMObjectProxy: Shape built. Faces={len(new_shape.Faces)}, BoundBox={new_shape.BoundBox}")
+                pass
                  
             fp.Shape = new_shape
             
@@ -171,9 +173,10 @@ class DMViewProvider:
         self.setup_view(vobj)
         
     def setup_view(self, vobj):
-        vobj.ShapeColor = (0.8, 0.5, 0.2)
-        vobj.LineWidth = get_line_width()
-        vobj.PointSize = get_point_size()
+        vobj.PointColor = (1.0, 0.5, 0.0)
+        vobj.LineColor = (1.0, 0.5, 0.0)
+        if hasattr(vobj, "PointStyle"):
+            vobj.PointStyle = "Spheres"
         vobj.DisplayMode = "Flat Lines"
 
     def attach(self, vobj):

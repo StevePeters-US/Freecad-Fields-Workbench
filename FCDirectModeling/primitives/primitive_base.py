@@ -466,28 +466,44 @@ class NURBSPrimitiveCreator(PrimitiveBase):
         self._last_shape_params = params
         
         # Track 3D cursor for debugging
-        if "debug_pt" in params:
-            self._debug_pt = params["debug_pt"]
+        self._debug_pt = params.get("debug_pt")
         
         # Track placement
-        if placement:
-            self._last_placement = placement
-        elif hasattr(self, "working_plane"):
-            self._last_placement = self.working_plane
+        active_placement = placement
+        if not active_placement and hasattr(self, "working_plane"):
+            active_placement = self.working_plane
+        self._last_placement = active_placement
         
+        # Map world coords to local space if using a placement
+        local_params = dict(params)
+        if active_placement:
+            # Helper to map a point or list of points
+            def map_p(obj):
+                if isinstance(obj, (list, tuple)):
+                    return [self.to_local(p) for p in obj]
+                return self.to_local(obj)
+
+            for k in ["Position", "Points", "HandleIn", "HandleOut"]:
+                if k in local_params and local_params[k] is not None:
+                    local_params[k] = map_p(local_params[k])
+
         # Create or update
         if self._active_obj is None:
             from FCDirectModeling.dm_object import create_dm_object
-            self._active_obj = create_dm_object("DMObject", shape_type, params, placement=self._last_placement)
+            self._active_obj = create_dm_object("DMObject", shape_type, local_params, placement=active_placement)
             # Set initial label if possible
             if self._active_obj:
                 self._active_obj.Label = shape_type.capitalize()
         else:
             # Update properties
-            for k, v in params.items():
+            for k, v in local_params.items():
+                if k == "debug_pt": continue
                 if hasattr(self._active_obj, k):
-                    setattr(self._active_obj, k, v)
-                elif k == "Position" and placement is None: # Special case for position update if not using placement
+                    try:
+                        setattr(self._active_obj, k, v)
+                    except Exception as e:
+                        dm_logger.debug(f"DEBUG: Failed to update property {k}: {e}")
+                elif k == "Position" and placement is None:
                     self._active_obj.Placement.Base = v
             
             if placement:
@@ -501,29 +517,36 @@ class NURBSPrimitiveCreator(PrimitiveBase):
         debug_pt = params.get("debug_pt")
         if debug_pt and self.doc:
             try:
-                if self._preview_cursor is None or self._preview_cursor.Name not in self.doc.Objects:
-                    from FCDirectModeling.dm_object import get_point_size
-                    self._preview_cursor = self.doc.addObject("Part::Feature", "DM_Cursor")
-                    if hasattr(self._preview_cursor, "ViewObject") and self._preview_cursor.ViewObject:
-                        self._preview_cursor.ViewObject.ShapeColor = (0.0, 0.4, 1.0)
-                        self._preview_cursor.ViewObject.PointSize = get_point_size() * 1.5
-                        self._preview_cursor.ViewObject.LineWidth = 2.0
-                        self._preview_cursor.ViewObject.Selectable = False
-                        if hasattr(self._preview_cursor.ViewObject, "LightModel"):
-                            self._preview_cursor.ViewObject.LightModel = "NoLight"
-                        if hasattr(self._preview_cursor, "ShowInTree"):
-                             self._preview_cursor.ShowInTree = False
-
-                # Create a simple cross shape
                 import Part
-                cross = Part.Compound([
-                    Part.makeLine((debug_pt.x-2,debug_pt.y,debug_pt.z),(debug_pt.x+2,debug_pt.y,debug_pt.z)),
-                    Part.makeLine((debug_pt.x,debug_pt.y-2,debug_pt.z),(debug_pt.x,debug_pt.y+2,debug_pt.z)),
-                    Part.makeLine((debug_pt.x,debug_pt.y,debug_pt.z-2),(debug_pt.x,debug_pt.y,debug_pt.z+2))
-                ])
-                self._preview_cursor.Shape = cross
-            except Exception:
-                pass
+                # Reuse existing cursor if valid and in doc
+                cursor_valid = False
+                if hasattr(self, "_preview_cursor") and self._preview_cursor is not None:
+                    try:
+                        if self.doc.getObject(self._preview_cursor.Name) is not None:
+                            cursor_valid = True
+                    except: pass
+                
+                if not cursor_valid:
+                    self._preview_cursor = self.doc.addObject("Part::Feature", "DM_Cursor")
+                    self._preview_cursor.ViewObject.PointSize = 5
+                    self._preview_cursor.ViewObject.LineWidth = 2
+                    self._preview_cursor.ViewObject.LineColor = (0.0, 0.4, 0.8) # Vibrant Blue
+                    self._preview_cursor.ViewObject.PointColor = (0.0, 0.4, 0.8)
+                    if hasattr(self._preview_cursor, "ShowInTree"):
+                        self._preview_cursor.ShowInTree = False
+                
+                # Use centered shape + placement for efficiency and robustness
+                s = 0.5 
+                p_orig = FreeCAD.Vector(0,0,0)
+                lines = [Part.makeLine(p_orig + FreeCAD.Vector(-s,0,0), p_orig + FreeCAD.Vector(s,0,0)),
+                         Part.makeLine(p_orig + FreeCAD.Vector(0,-s,0), p_orig + FreeCAD.Vector(0,s,0)),
+                         Part.makeLine(p_orig + FreeCAD.Vector(0,0,-s), p_orig + FreeCAD.Vector(0,0,s))]
+                self._preview_cursor.Shape = Part.Compound(lines)
+                self._preview_cursor.Placement.Base = debug_pt
+                self._preview_cursor.ViewObject.Visibility = True
+            except Exception as e:
+                from FCDirectModeling import dm_logger
+                dm_logger.debug(f"DEBUG: update_active_object crosshair error: {e}")
 
     def terminate(self):
         """Clean up: delete active object if not finished."""
@@ -532,6 +555,15 @@ class NURBSPrimitiveCreator(PrimitiveBase):
         
         super().terminate()
         
+        # Clean up cursor
+        if hasattr(self, "_preview_cursor") and self._preview_cursor:
+            try:
+                doc = self.doc or FreeCAD.ActiveDocument
+                if doc and doc.getObject(self._preview_cursor.Name):
+                    doc.removeObject(self._preview_cursor.Name)
+            except: pass
+            self._preview_cursor = None
+
         if not self._finished and self._active_obj:
             try:
                 # Use FreeCAD.ActiveDocument if self.doc is stale or None
@@ -559,22 +591,15 @@ class NURBSPrimitiveCreator(PrimitiveBase):
             return
             
         try:
-            if self._last_shape_type and self._last_shape_params:
-                from FCDirectModeling.dm_object import create_dm_object
-                dm_logger.debug(f"_do_finish: Finalizing. type={self._last_shape_type}, params={self._last_shape_params}, placement={self._last_placement}")
-                # Create the final high-res DMObject
-                create_dm_object(
-                    self._last_shape_type.capitalize(), 
-                    self._last_shape_type, 
-                    self._last_shape_params,
-                    placement=self._last_placement
-                )
+            if self._active_obj:
+                dm_logger.debug(f"_do_finish: Finalizing active object {self._active_obj.Name}")
+                # Rename to its final type-based label if it still has the default
+                if "DMObject" in self._active_obj.Label:
+                    self._active_obj.Label = self._active_obj.ShapeType.capitalize()
             else:
-                dm_logger.debug(f"_do_finish: No data to finalize (type={self._last_shape_type})")
+                dm_logger.debug(f"_do_finish: No active object to finalize")
         except Exception as e:
-            dm_logger.error(f"_do_finish FAILED: {e}")
-            import traceback
-            dm_logger.error(traceback.format_exc())
+            dm_logger.error(f"_do_finish error: {e}")
 
         self._finished = True
         self.terminate()
