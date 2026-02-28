@@ -34,7 +34,9 @@ These tasks build the curve→surface workflow.
 
 ---
 
-### 1b. Create DMCurve class (Complexity: 3/10)
+### [x] 1b. Create DMCurve class (Complexity: 3/10)
+    - [x] Create `DMCurve` class in `nurbs_geometry.py`
+    - [x] Basic interpolation and shape building
 
 - **Goal**: A `DMCurve` class that builds a `Part.BSplineCurve` from `DMPoint` objects.
 - **Files to read**:
@@ -62,18 +64,18 @@ These tasks build the curve→surface workflow.
 
 ---
 
-### 1c. Create DMPatch class (Complexity: 4/10)
+### 1c. Create DMSurface class (Complexity: 4/10)
 
-- **Goal**: A `DMPatch` class that builds a `Part.BSplineSurface` from a control point grid.
+- **Goal**: A `DMSurface` class that builds a `Part.BSplineSurface` from a control point grid.
 - **Files to read**:
   - `FCDirectModeling/nurbs_geometry.py` — `DMPoint`, `DMCurve` (tasks 1a, 1b).
   - FreeCAD `Part.BSplineSurface` docs — `buildFromPolesMultsKnots()`.
 - **Files to modify**:
-  - `FCDirectModeling/nurbs_geometry.py` — add `DMPatch`.
+  - `FCDirectModeling/nurbs_geometry.py` — add `DMSurface`.
 - **Steps**:
-  1. Add class `DMPatch`:
+  1. Add class `DMSurface`:
      ```python
-     class DMPatch:
+     class DMSurface:
          """NURBS surface from a control point grid."""
          def __init__(self, control_grid, u_degree=1, v_degree=1):
              self.control_grid = control_grid  # List[List[DMPoint]] — rows x cols
@@ -88,7 +90,7 @@ These tasks build the curve→surface workflow.
      - Call `bs = Part.BSplineSurface()` then `bs.buildFromPolesMultsKnots(poles, umults, vmults, uknots, vknots, False, False, udeg, vdeg, weights)`.
      - Return `bs`.
   4. Method `to_face() -> Part.Face`: `Part.Face(self.to_bspline_surface().toShape())`. This creates a `Part.Face` for display but the **canonical representation is the BSplineSurface itself**, not the face.
-- **Acceptance**: `DMPatch.from_corners(p1,p2,p3,p4).to_bspline_surface()` returns a valid `Part.BSplineSurface`. `.to_face()` returns a displayable `Part.Face`.
+- **Acceptance**: `DMSurface.from_corners(p1,p2,p3,p4).to_bspline_surface()` returns a valid `Part.BSplineSurface`. `.to_face()` returns a displayable `Part.Face`.
 
 ---
 
@@ -361,6 +363,8 @@ These tasks build the curve→surface workflow.
 ### 4b. Radial menu system (Complexity: 6/10)
 
 - **Goal**: Coin3D-based radial menu at cursor position, activated by `right click`.
+
+look into built in quick access menu
 - **Files to create**:
   - `FCDirectModeling/radial_menu.py`
   - `dm_commands/command_radial_menu.py`
@@ -382,17 +386,88 @@ Open sketcher tool should create a new sketch on the workplane, not switch to th
 Radial menu for spline points (tangent handles, split, custom angle)
 
 ---
-spherical sprite for points
+<!-- spherical sprite for points
+
+import FreeCAD, FreeCADGui
+from pivy import coin
+
+doc = FreeCAD.ActiveDocument
+
+# -------------------------------------------------
+# 1. Load the image as a texture
+# -------------------------------------------------
+image_path = "/full/path/to/your/sprite.png"   # <-- change this
+tex = coin.SoTexture2()
+tex.filename = image_path
+tex.model = coin.SoTexture2.MODULATE   # respects image alpha
+
+# -------------------------------------------------
+# 2. Create a simple geometry (a square) that will hold the texture
+# -------------------------------------------------
+size = 10.0                     # sprite size in mm (half‑extent)
+coords = coin.SoCoordinate3()
+coords.point.setValues([
+    (-size, -size, 0), ( size, -size, 0),
+    ( size,  size, 0), (-size,  size, 0)
+])
+
+# Quad (two triangles) – FreeCAD uses SoIndexedFaceSet
+indices = coin.SoIndexedFaceSet()
+indices.coordIndex.setValues([0, 1, 2, 3, -1])
+
+# -------------------------------------------------
+# 3. Billboard node – makes the square always face the camera
+# -------------------------------------------------
+billboard = coin.SoBillboard()
+billboard.axisOfRotation.setValue(coin.SbVec3f(0, 0, 0))  # rotate around all axes
+
+# -------------------------------------------------
+# 4. Assemble the scene graph
+# -------------------------------------------------
+root = coin.SoSeparator()
+root.addChild(billboard)   # billboard must be before geometry
+root.addChild(tex)
+root.addChild(coords)
+root.addChild(indices)
+
+# -------------------------------------------------
+# 5. Insert the node into the active view
+# -------------------------------------------------
+view = FreeCADGui.ActiveDocument.ActiveView
+view.getSceneGraph().addChild(root)
+
+# -------------------------------------------------
+# 6. (Optional) Position the sprite in 3‑D space
+# -------------------------------------------------
+# Create a transform node to move the billboard
+transform = coin.SoTransform()
+transform.translation.setValue(FreeCAD.Vector(30, 20, 0))  # change as needed
+root.insertChild(0, transform)   # put before the billboard -->
 
 ---
 
 connect point with curve
 
 ---
-
+surface image / noise displacement
+---
 join (or heal) curves
 
 ---
+
+extend surface (adds more surfaces following the contours of the surface)
+
+---
+
+### 1o. Create DM_FillCurve command (Complexity: 4/10)
+- **Goal**: Create a `DMSurface` that fills a selected closed `DMCurve`.
+- **Files to modify**: `dm_commands/command_fill_curve.py`, `InitGui.py`, `FCDirectModeling/dm_object.py`.
+- **Steps**:
+  1. Detect selected closed `DMCurve`.
+  2. Use `Part.makeFace(curve.to_shape())` then `.toNurbs()` to get a initial `BSplineSurface`.
+  3. Extract poles/weights/knots/mults to create a `DMSurface` object.
+  4. Finalize as a "surface" type `DMObject`.
+- **Acceptance**: Select closed curve → `DM_FillCurve` → a new surface object appears filling the curve.
 
 ### 1l. Snap Workplane to Camera View (Complexity: 3/10)
 - **Goal**: Add a command or hotkey to snap the working plane to the current camera's orientation.

@@ -408,6 +408,8 @@ class PrimitiveBase:
                 self.height = 0.001 if self.height >= 0 else -0.001
 
     def to_local(self, p):
+        if p is None:
+            return None
         if not hasattr(self, "working_plane") or not self.working_plane:
             return p
         mat = self.working_plane.toMatrix()
@@ -415,6 +417,8 @@ class PrimitiveBase:
         return mat.multVec(p)
 
     def to_global(self, p):
+        if p is None:
+            return None
         if not hasattr(self, "working_plane") or not self.working_plane:
             return p
         return self.working_plane.toMatrix().multVec(p)
@@ -479,13 +483,28 @@ class NURBSPrimitiveCreator(PrimitiveBase):
         if active_placement:
             # Helper to map a point or list of points
             def map_p(obj):
+                if obj is None:
+                    return None
                 if isinstance(obj, (list, tuple)):
                     return [self.to_local(p) for p in obj]
                 return self.to_local(obj)
 
             for k in ["Position", "Points", "HandleIn", "HandleOut"]:
                 if k in local_params and local_params[k] is not None:
-                    local_params[k] = map_p(local_params[k])
+                    # Special case: PropertyVectorList cannot have None
+                    if k in ["HandleIn", "HandleOut"] and isinstance(local_params[k], (list, tuple)):
+                        # If handle is None, use the corresponding point to effectively "disable" the handle
+                        pts = local_params.get("Points", [])
+                        sanitized = []
+                        for i, p in enumerate(local_params[k]):
+                            if p is None:
+                                # Try to match with the point at the same index
+                                sanitized.append(pts[i] if i < len(pts) else FreeCAD.Vector(0,0,0))
+                            else:
+                                sanitized.append(p)
+                        local_params[k] = map_p(sanitized)
+                    else:
+                        local_params[k] = map_p(local_params[k])
 
         # Create or update
         if self._active_obj is None:
@@ -502,7 +521,10 @@ class NURBSPrimitiveCreator(PrimitiveBase):
                     try:
                         setattr(self._active_obj, k, v)
                     except Exception as e:
-                        dm_logger.debug(f"DEBUG: Failed to update property {k}: {e}")
+                        if 'dm_logger' in globals() or 'dm_logger' in locals():
+                            dm_logger.debug(f"DEBUG: Failed to update property {k}: {e}")
+                        else:
+                            print(f"DEBUG: Failed to update property {k}: {e}")
                 elif k == "Position" and placement is None:
                     self._active_obj.Placement.Base = v
             
@@ -545,7 +567,6 @@ class NURBSPrimitiveCreator(PrimitiveBase):
                 self._preview_cursor.Placement.Base = debug_pt
                 self._preview_cursor.ViewObject.Visibility = True
             except Exception as e:
-                from FCDirectModeling import dm_logger
                 dm_logger.debug(f"DEBUG: update_active_object crosshair error: {e}")
 
     def terminate(self):

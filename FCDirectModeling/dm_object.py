@@ -76,22 +76,21 @@ class DMObjectProxy:
                 obj.addProperty("App::PropertyVectorList", "HandleIn", "Curve", "Inbound tangent handles")
             if not hasattr(obj, "HandleOut"):
                 obj.addProperty("App::PropertyVectorList", "HandleOut", "Curve", "Outbound tangent handles")
+            if not hasattr(obj, "Closed"):
+                obj.addProperty("App::PropertyBool", "Closed", "Curve", "Whether the curve is periodic")
             obj.Points = params.get("Points", [])
             obj.HandleIn = params.get("HandleIn", [])
             obj.HandleOut = params.get("HandleOut", [])
+            obj.Closed = params.get("is_closed", False)
         elif shape_type == "point":
             if not hasattr(obj, "Position"):
                 obj.addProperty("App::PropertyVector", "Position", "Point", "Position")
             obj.Position = params.get("Position", FreeCAD.Vector(0,0,0))
-        elif shape_type == "patch":
+        elif shape_type == "surface":
             if not hasattr(obj, "ControlGrid"):
-                # Nested list of vectors is not a standard FreeCAD property type.
-                # Use App::PropertyString to store it as a JSON string or just use 
-                # a flat PropertyVectorList and store the grid dimensions.
-                # For now, let's use PropertyVectorList and a separate UCount/VCount.
-                obj.addProperty("App::PropertyVectorList", "ControlGrid", "Patch", "Control point grid")
-                obj.addProperty("App::PropertyInteger", "UCount", "Patch", "Width of grid")
-                obj.addProperty("App::PropertyInteger", "VCount", "Patch", "Height of grid")
+                obj.addProperty("App::PropertyVectorList", "ControlGrid", "NURBS", "Control point grid")
+                obj.addProperty("App::PropertyInteger", "UCount", "NURBS", "Width of grid")
+                obj.addProperty("App::PropertyInteger", "VCount", "NURBS", "Height of grid")
             
             grid = params.get("ControlGrid", [[]])
             if grid and grid[0]:
@@ -119,12 +118,13 @@ class DMObjectProxy:
                 ho = h_out[i] if i < len(h_out) else None
                 dm_points.append(DMPoint(p, handle_in=hi, handle_out=ho))
                 
-            curve = DMCurve(dm_points)
+            is_closed = fp.Closed if hasattr(fp, "Closed") else False
+            curve = DMCurve(dm_points, is_closed=is_closed)
             return curve.to_shape()
         elif st == "point":
             return Part.Point(fp.Position).toShape()
-        elif st == "patch":
-            from .nurbs_geometry import DMPatch
+        elif st == "surface":
+            from .nurbs_geometry import DMSurface
             
             grid = []
             u_count = fp.UCount
@@ -136,8 +136,8 @@ class DMObjectProxy:
                     row = flat_list[v*u_count : (v+1)*u_count]
                     grid.append(row)
             
-            patch = DMPatch(grid)
-            return patch.to_shape()
+            surf = DMSurface(grid)
+            return surf.to_shape()
             
         return Part.Shape()
 

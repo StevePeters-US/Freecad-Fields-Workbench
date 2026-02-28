@@ -65,6 +65,7 @@ class CurveCreator(NURBSPrimitiveCreator):
                     dist = (pt - self.points[0]).Length
                     if dist < 1.0: # Snapping distance for click
                         self.is_closed = True
+                        self.current_point = None # Avoid double point on closure
                         self.finish()
                         return True
 
@@ -122,25 +123,34 @@ class CurveCreator(NURBSPrimitiveCreator):
             
         return super().handle_keyboard(event_dict)
 
-    def _get_auto_handles(self):
-        """Compute automatic smooth handles for each point."""
-        if len(self.points) < 2:
+    def _get_auto_handles(self, points):
+        """Compute automatic smooth handles for each point in the list."""
+        n = len(points)
+        if n < 2:
             return [], []
             
-        h_in = [None] * len(self.points)
-        h_out = [None] * len(self.points)
+        h_in = [None] * n
+        h_out = [None] * n
         
         # Simple Catmull-Rom like tangent: T_i = (P_{i+1} - P_{i-1}) / 2
         # Handle distance = 1/3 of segment length
-        for i in range(len(self.points)):
-            p = self.points[i]
-            prev_p = self.points[i-1] if i > 0 else (self.points[1] - (self.points[1]-self.points[0]) if len(self.points) > 1 else p)
-            next_p = self.points[i+1] if i < len(self.points)-1 else (self.points[-1] + (self.points[-1]-self.points[-2]) if len(self.points) > 1 else p)
+        for i in range(n):
+            p = points[i]
+            if self.is_closed:
+                # Wrap indices for periodic curve
+                prev_p = points[(i - 1) % n]
+                next_p = points[(i + 1) % n]
+            else:
+                prev_p = points[i-1] if i > 0 else (points[1] - (points[1]-points[0]) if n > 1 else p)
+                next_p = points[i+1] if i < n-1 else (points[-1] + (points[-1]-points[-2]) if n > 1 else p)
             
             tangent = (next_p - prev_p) * 0.5
-            h_in[i] = p - tangent * 0.33
-            h_out[i] = p + tangent * 0.33
-            
+            dist = tangent.Length
+            if dist > 0.0001:
+                # Limit handles to roughly 1/3 of segment length
+                h_out[i] = p + (tangent * 0.33)
+                h_in[i] = p - (tangent * 0.33)
+        
         return h_in, h_out
 
     def update_preview(self, debug_pt=None):
@@ -150,15 +160,14 @@ class CurveCreator(NURBSPrimitiveCreator):
         if self.current_point:
             pts.append(self.current_point)
         
-        # Prepare parameters for DMObject
         params = {
             "Points": pts,
-            "is_closed": self.is_closed
+            "Closed": self.is_closed
         }
         
         # Calculate auto-handles for preview if we have enough points
         if len(pts) >= 2:
-            hi, ho = self._get_auto_handles()
+            hi, ho = self._get_auto_handles(pts)
             params["HandleIn"] = hi
             params["HandleOut"] = ho
         

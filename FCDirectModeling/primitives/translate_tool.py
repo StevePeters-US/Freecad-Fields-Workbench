@@ -42,7 +42,7 @@ class TranslateTool(PrimitiveBase):
                 elif hasattr(obj, "Position"):
                     self.obj_orig_points[obj] = FreeCAD.Vector(obj.Position)
 
-            # 2. Identify specific sub-elements
+            # 2. Identify specific sub-elements (Vertices only for points/handles)
             sub_names = s.SubElementNames
             if sub_names:
                 for sub in sub_names:
@@ -52,33 +52,37 @@ class TranslateTool(PrimitiveBase):
                              v_world = obj.Shape.Vertexes[idx].Point
                              
                              found = False
-                             # Check Handle ends first
-                             if hasattr(obj, "HandleIn"):
-                                 for i, h in enumerate(obj.HandleIn):
-                                     h_w = obj.Placement.multVec(h)
-                                     if (v_world - h_w).Length < 0.001:
-                                         self.targets.append({"obj": obj, "type": "handle_in", "idx": i, "orig_world": v_world})
-                                         found = True; break
-                             if not found and hasattr(obj, "HandleOut"):
-                                 for i, h in enumerate(obj.HandleOut):
-                                     h_w = obj.Placement.multVec(h)
-                                     if (v_world - h_w).Length < 0.001:
-                                         self.targets.append({"obj": obj, "type": "handle_out", "idx": i, "orig_world": v_world})
-                                         found = True; break
-                             
                              # Check Main Points
-                             if not found and hasattr(obj, "Points"):
+                             if hasattr(obj, "Points"):
                                  for i, p in enumerate(obj.Points):
                                      p_w = obj.Placement.multVec(p)
                                      if (v_world - p_w).Length < 0.001:
                                          self.targets.append({"obj": obj, "type": "point", "idx": i, "orig_world": v_world})
                                          found = True; break
                              
+                             # Check Handles
+                             if not found and hasattr(obj, "HandleIn"):
+                                 for i, p in enumerate(obj.HandleIn):
+                                     if p is None: continue
+                                     p_w = obj.Placement.multVec(p)
+                                     if (v_world - p_w).Length < 0.001:
+                                         self.targets.append({"obj": obj, "type": "handle_in", "idx": i, "orig_world": v_world})
+                                         found = True; break
+                             
+                             if not found and hasattr(obj, "HandleOut"):
+                                 for i, p in enumerate(obj.HandleOut):
+                                     if p is None: continue
+                                     p_w = obj.Placement.multVec(p)
+                                     if (v_world - p_w).Length < 0.001:
+                                         self.targets.append({"obj": obj, "type": "handle_out", "idx": i, "orig_world": v_world})
+                                         found = True; break
+                                         
                              if not found and hasattr(obj, "Position"):
                                  p_w = obj.Placement.multVec(obj.Position)
                                  if (v_world - p_w).Length < 0.001:
                                      self.targets.append({"obj": obj, "type": "point", "idx": 0, "orig_world": v_world})
                          except: pass
+                    # FUTURE: Handle "Edge" selection here if we want to drag segments
             else:
                 self.targets.append({"obj": obj, "type": "placement", "idx": None, "orig_world": FreeCAD.Placement(obj.Placement)})
 
@@ -94,9 +98,6 @@ class TranslateTool(PrimitiveBase):
             if isinstance(val, FreeCAD.Placement): self.center_w += val.Base
             else: self.center_w += val
         self.center_w /= len(self.targets)
-
-        # We set start_mouse_pos to center_w. Thus delta = pt - center_w.
-        # This will make the selection center snap to the current mouse position (pt).
         self.start_mouse_pos = self.center_w
         
         self.constraint_axis = None 
@@ -168,13 +169,36 @@ class TranslateTool(PrimitiveBase):
                 if t_type == "point":
                     if hasattr(obj, "Points"):
                         pts = list(obj.Points); pts[idx] = local; obj.Points = pts
+                        
+                        # PERIODIC SYNC: If closed, sync start/end points if they overlap
+                        is_closed = hasattr(obj, "Closed") and obj.Closed
+                        is_fused = is_closed and len(pts) > 2 and (self.obj_orig_points[obj][0] - self.obj_orig_points[obj][-1]).Length < 0.05
+                        
+                        if is_fused:
+                            if idx == 0: pts[-1] = local; obj.Points = pts
+                            elif idx == len(pts)-1: pts[0] = local; obj.Points = pts
+
                         # HANDLES FOLLOW POINTS: move corresponding hi/ho
                         if hasattr(obj, "HandleIn") and idx < len(obj.HandleIn):
                             h_w = obj.Placement.multVec(self.obj_orig_h_in[obj][idx]) + delta
                             h_in = list(obj.HandleIn); h_in[idx] = obj.Placement.inverse().multVec(h_w); obj.HandleIn = h_in
+                            # Sync handles if periodic and fused
+                            if is_fused:
+                                if idx == 0 and len(h_in) >= len(pts):
+                                    h_in[-1] = h_in[0]; obj.HandleIn = h_in
+                                elif idx == len(pts)-1 and len(h_in) >= len(pts):
+                                    h_in[0] = h_in[-1]; obj.HandleIn = h_in
+
                         if hasattr(obj, "HandleOut") and idx < len(obj.HandleOut):
                             h_w = obj.Placement.multVec(self.obj_orig_h_out[obj][idx]) + delta
                             h_out = list(obj.HandleOut); h_out[idx] = obj.Placement.inverse().multVec(h_w); obj.HandleOut = h_out
+                            # Sync handles if periodic and fused
+                            if is_fused:
+                                if idx == 0 and len(h_out) >= len(pts):
+                                    h_out[-1] = h_out[0]; obj.HandleOut = h_out
+                                elif idx == len(pts)-1 and len(h_out) >= len(pts):
+                                    h_out[0] = h_out[-1]; obj.HandleOut = h_out
+
                     elif hasattr(obj, "Position"):
                         obj.Position = local
                 elif t_type == "handle_in":
