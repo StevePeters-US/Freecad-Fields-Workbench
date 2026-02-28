@@ -71,10 +71,12 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
             from dm_commands import command_dm_settings
             from dm_commands import command_open_sketcher
             from dm_commands import command_create_point
+            from dm_commands import command_translate
             
             self.appendToolbar("Direct Modeling", [
                 'DM_CreatePoint',
                 'DM_CreateCurve',
+                'DM_Translate',
                 'DM_OpenSketcher',
                 'DM_Fuse',
                 'DM_Cut',
@@ -84,6 +86,7 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
             self.appendMenu("Direct Modeling", [
                 'DM_CreatePoint',
                 'DM_CreateCurve',
+                'DM_Translate',
                 'DM_OpenSketcher',
                 'DM_Fuse',
                 'DM_Cut',

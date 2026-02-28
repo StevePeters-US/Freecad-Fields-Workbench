@@ -80,40 +80,58 @@ class DMCurve:
             # Prepare tangents if any points have them
             tangents = []
             has_tangents = False
-            # Tangents list must match the number of points used for interpolation (fit_pts)
             for p in filtered_points[:len(fit_pts)]:
-                if p.handle_out:
-                    # handle_out is an absolute position, tangent is the vector from position
+                if p.handle_out is not None:
                     v = p.handle_out - p.position
-                    tangents.append(v)
-                    has_tangents = True
-                else:
-                    tangents.append(FreeCAD.Vector(0,0,0))
+                    if v.Length > 0.0001:
+                        tangents.append(v)
+                        has_tangents = True
+                        continue
+                tangents.append(FreeCAD.Vector(0,0,0))
             
             if has_tangents:
+                # Different FreeCAD versions have different BSplineCurve.interpolate signatures.
+                # Common: (Points, Periodic, Tolerance, Tangents)
+                # Common: (Points, Periodic, Tolerance, StartTangent, EndTangent)
+                
                 try:
-                    # interpolate(Points, Periodic=False, Tolerance=0.001, Tangents=[], Params=[])
+                    # Try 1: Full interpolation with tangent list
                     bs.interpolate(fit_pts, is_closed, 0.001, tangents)
-                except Exception as e:
-                    from FCDirectModeling import dm_logger
-                    dm_logger.debug(f"DEBUG: DMCurve interpolate with tangents failed: {e}")
-                    bs.interpolate(fit_pts, is_closed)
+                except Exception:
+                    try:
+                        # Try 2: End tangents only
+                        if len(tangents) >= 2:
+                            bs.interpolate(fit_pts, is_closed, 0.001, tangents[0], tangents[-1])
+                        else:
+                            bs.interpolate(fit_pts, is_closed)
+                    except Exception:
+                        try:
+                            # Try 3: Basic
+                            bs.interpolate(fit_pts, is_closed)
+                        except:
+                            pass
             else:
-                bs.interpolate(fit_pts, is_closed)
+                try:
+                    bs.interpolate(fit_pts, is_closed)
+                except:
+                    try: bs.interpolate(fit_pts)
+                    except: pass
+            
+            # Final validation: check if B-spline is valid for meshing
+            if bs.Degree == 0 and len(fit_pts) >= 2:
+                 # Fallback to simple polygon if interpolation produced a degenerate curve
+                 return Part.makePolygon(fit_pts).toBSpline()
+
             return bs
-        except Exception as e:
-            from FCDirectModeling import dm_logger
-            dm_logger.debug(f"DEBUG: DMCurve interpolate fallback (points={len(positions)}, closed={is_closed}): {e}")
-            # Fallback: create a BSpline from the polygon wire
+        except Exception:
+            # Silent fallback to avoid log spam during drag
             try:
-                wire = Part.makePolygon(positions)
-                if hasattr(wire, "toBSpline"):
+                if len(positions) >= 2:
+                    wire = Part.makePolygon(positions)
                     return wire.toBSpline()
-                # If toBSpline is missing, try creating a B-spline from points manually
-                return Part.BSplineCurve(positions, is_closed)
-            except Exception as e2:
-                dm_logger.debug(f"DEBUG: DMCurve ultimate fallback failed: {e2}")
-                return None
+            except:
+                pass
+            return None
 
     def to_shape(self):
         """Returns the curve as a Part.Shape (Compound of Edge, Vertices, and Lines)."""
@@ -132,11 +150,13 @@ class DMCurve:
         for p in self.points:
             shapes.append(Part.Vertex(p.position))
             
-            # 3. Handle lines for visual feedback
+            # 3. Handle lines and markers for visual feedback & selection
             if p.handle_in:
                 shapes.append(Part.makeLine(p.position, p.handle_in))
+                shapes.append(Part.Vertex(p.handle_in)) # Marker at end of handle
             if p.handle_out:
                 shapes.append(Part.makeLine(p.position, p.handle_out))
+                shapes.append(Part.Vertex(p.handle_out)) # Marker at end of handle
 
         if not shapes:
             return Part.Shape()

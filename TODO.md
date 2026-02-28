@@ -383,6 +383,15 @@ Radial menu for spline points (tangent handles, split, custom angle)
 
 ---
 spherical sprite for points
+
+---
+
+connect point with curve
+
+---
+
+join (or heal) curves
+
 ---
 
 ### 1l. Snap Workplane to Camera View (Complexity: 3/10)

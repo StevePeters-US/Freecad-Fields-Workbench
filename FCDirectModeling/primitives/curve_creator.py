@@ -111,6 +111,15 @@ class CurveCreator(NURBSPrimitiveCreator):
                 self.terminate()
             return True
             
+        if key == "ESCAPE":
+            if len(self.points) >= 2:
+                # Remove the current trailing mouse point before finishing
+                self.current_point = None
+                self.finish()
+            else:
+                self.terminate()
+            return True
+            
         return super().handle_keyboard(event_dict)
 
     def _get_auto_handles(self):
