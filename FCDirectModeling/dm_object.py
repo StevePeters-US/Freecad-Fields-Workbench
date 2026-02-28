@@ -14,6 +14,10 @@ generate the native BRep geometry.
 
 import FreeCAD
 import Part
+try:
+    from pivy import coin
+except ImportError:
+    coin = None
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DM Settings helpers
@@ -222,12 +226,142 @@ class DMViewProvider:
             vobj.LineWidth = 0.0
         else:
             vobj.DisplayMode = "Flat Lines"
+            
+        # Initialize Coin3D overlay fields
+        self._ctrl_cage_sep = None
+        self._ctrl_coords = None
+        self._ctrl_lines = None
+        self._ctrl_points = None
+        self._style = None
 
     def attach(self, vobj):
+        from FCDirectModeling import dm_logger
         self.Object = vobj.Object
+        dm_logger.debug(f"DMViewProvider.attach: obj={self.Object.Label}, coin_avail={coin is not None}")
+        if coin and hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "curve":
+            self._setup_coin_overlay(vobj)
+
+    def _setup_coin_overlay(self, vobj):
+        if not coin: return
+        from FCDirectModeling import dm_logger
+        dm_logger.debug(f"DMViewProvider._setup_coin_overlay: {vobj.Object.Label}")
         
+        self._ctrl_cage_sep = coin.SoSeparator()
+        
+        # Style for dashed handle lines
+        self._style = coin.SoDrawStyle()
+        self._style.linePattern = 0x0F0F # Dashed
+        self._style.lineWidth = 1
+        self._ctrl_cage_sep.addChild(self._style)
+        
+        # Coordinates shared by lines and points
+        self._ctrl_coords = coin.SoCoordinate3()
+        self._ctrl_cage_sep.addChild(self._ctrl_coords)
+        
+        # Handle lines
+        self._ctrl_lines = coin.SoLineSet()
+        self._ctrl_cage_sep.addChild(self._ctrl_lines)
+        
+        # Control points (markers)
+        pts_sep = coin.SoSeparator()
+        self._ctrl_cage_sep.addChild(pts_sep)
+
+        pts_mat = coin.SoMaterial()
+        pts_mat.diffuseColor = coin.SbColor(1.0, 0.5, 0.0) # Orange
+        pts_sep.addChild(pts_mat)
+        
+        pt_style = coin.SoDrawStyle()
+        pt_style.pointSize.setValue(8) 
+        pts_sep.addChild(pt_style)
+        
+        self._ctrl_points = coin.SoPointSet()
+        pts_sep.addChild(self._ctrl_points)
+
+        # Handle markers (endpoints of handle lines)
+        h_pts_sep = coin.SoSeparator()
+        self._ctrl_cage_sep.addChild(h_pts_sep)
+        
+        h_pts_mat = coin.SoMaterial()
+        h_pts_mat.diffuseColor = coin.SbColor(0.2, 0.7, 1.0) # Light Blue
+        h_pts_sep.addChild(h_pts_mat)
+        
+        h_pt_style = coin.SoDrawStyle()
+        h_pt_style.pointSize.setValue(5)
+        h_pts_sep.addChild(h_pt_style)
+        
+        self._ctrl_handle_points = coin.SoPointSet()
+        h_pts_sep.addChild(self._ctrl_handle_points)
+        
+        vobj.addDisplayMode(self._ctrl_cage_sep, "ControlCage")
+        # Add to the root node if we want it visible in standard modes
+        vobj.RootNode.addChild(self._ctrl_cage_sep)
+        
+        self._rebuild_control_cage(self.Object)
+
+    def _rebuild_control_cage(self, fp):
+        if not coin: return
+        from FCDirectModeling import dm_logger
+
+        # Lazy initialization if attach() missed it or didn't find "curve" yet
+        if not self._ctrl_coords:
+            if not self._ctrl_cage_sep:
+                vobj = fp.ViewObject
+                if vobj and hasattr(fp, "ShapeType") and fp.ShapeType == "curve":
+                    self._setup_coin_overlay(vobj)
+                
+                if not self._ctrl_coords:
+                    return
+
+        pts = list(fp.Points) if hasattr(fp, "Points") else []
+        h_in = list(fp.HandleIn) if hasattr(fp, "HandleIn") else []
+        h_out = list(fp.HandleOut) if hasattr(fp, "HandleOut") else []
+        
+        # dm_logger.debug(f"DMViewProvider._rebuild_control_cage: {fp.Label}, pts={[str(p) for p in pts]}")
+        
+        line_coords = []
+        marker_coords = []
+        handle_marker_coords = []
+        num_vertices = []
+        
+        for i, p in enumerate(pts):
+            marker_coords.append(coin.SbVec3f(p.x, p.y, p.z))
+            
+            # Handle In line: point p to handle h_in[i]
+            if i < len(h_in) and h_in[i] is not None and (h_in[i] - p).Length > 1e-4:
+                line_coords.append(coin.SbVec3f(p.x, p.y, p.z))
+                line_coords.append(coin.SbVec3f(h_in[i].x, h_in[i].y, h_in[i].z))
+                handle_marker_coords.append(coin.SbVec3f(h_in[i].x, h_in[i].y, h_in[i].z))
+                num_vertices.append(2)
+            
+            # Handle Out line: point p to handle h_out[i]
+            if i < len(h_out) and h_out[i] is not None and (h_out[i] - p).Length > 1e-4:
+                line_coords.append(coin.SbVec3f(p.x, p.y, p.z))
+                line_coords.append(coin.SbVec3f(h_out[i].x, h_out[i].y, h_out[i].z))
+                handle_marker_coords.append(coin.SbVec3f(h_out[i].x, h_out[i].y, h_out[i].z))
+                num_vertices.append(2)
+
+        # Update Coin3D coordinates
+        # final_coords = main_markers + handle_markers + line_pairs
+        final_coords = marker_coords + handle_marker_coords + line_coords
+        self._ctrl_coords.point.setValues(final_coords)
+        
+        # Main point set
+        self._ctrl_points.numPoints.setValue(len(marker_coords))
+        self._ctrl_points.startIndex.setValue(0)
+        
+        # Handle point set
+        self._ctrl_handle_points.numPoints.setValue(len(handle_marker_coords))
+        self._ctrl_handle_points.startIndex.setValue(len(marker_coords))
+        
+        # Line set uses the segment pairs starting after both marker sets
+        self._ctrl_lines.numVertices.setValues(num_vertices)
+        self._ctrl_lines.startIndex.setValue(len(marker_coords) + len(handle_marker_coords))
+
     def updateData(self, fp, prop):
-        pass
+        from FCDirectModeling import dm_logger
+        dm_logger.debug(f"DMViewProvider.updateData: obj={fp.Label}, prop={prop}")
+        if prop in ["Points", "HandleIn", "HandleOut"]:
+            self._rebuild_control_cage(fp)
 
     def getIcon(self):
         # Orange stairstep icon (Part)

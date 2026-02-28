@@ -318,14 +318,106 @@ These tasks build the curve→surface workflow.
 - [x] **1g. Improve Curve Tool Visibility and Functionality** (Complexity: 4/10)
 - [x] **1h. Fix Curve Plane Projection and Interpolation** (Complexity: 3/10)
 - [ ] **1j. Unify Preview and Final Objects** (Complexity: 5/10)
-    - **Goal**: Eliminate the separate `DM_Preview` object. Use a real `DMObject` that updates its properties in real-time.
+    - **Goal**: Eliminate the separate `DM_Preview` object. Use a real `DMObject` that updates its properties in real-time during creation.
+    - **Files to read**: `FCDirectModeling/primitives/primitive_base.py`, `FCDirectModeling/primitives/curve_creator.py`, `FCDirectModeling/dm_object.py`.
     - **Files to modify**: `FCDirectModeling/primitives/primitive_base.py`, `FCDirectModeling/primitives/curve_creator.py`, `FCDirectModeling/dm_object.py`.
     - **Steps**:
-      1. Refactor `NURBSPrimitiveCreator` to manage a "live" `DMObject`.
-      2. Update `update_nurbs_preview` to set properties on the live object and trigger `recompute()`.
-      3. Maintain an `is_finalized` flag to delete the object on `terminate` if not finished.
-      4. Simplify `finish` logic in subclasses.
-- **Acceptance**: Array a surface 5 times along X → 5 translated copies (or one fused shape).
+      1. Refactor `NURBSPrimitiveCreator` to manage a single "live" `DMObject` from the first click.
+      2. Update `update_active_object` so it sets properties on the live object and triggers `doc.recompute()` every mouse move.
+      3. Maintain an `_is_finalized` flag; `terminate()` deletes the object if `_is_finalized` is `False`.
+      4. The `_do_finish()` method simply sets `_is_finalized = True` and calls `terminate()` — no separate cleanup needed.
+      5. Simplify `CurveCreator._do_finish` to remove the `_active_obj = None` hack (which was needed to prevent deletion).
+    - **Acceptance**: Draw a curve — the orange curve appears from the first point. Pressing ESC or right-click while drawing removes the unfinished curve. Completing the curve leaves a permanent object.
+
+---
+
+### 1k. Use Built-in BSplineCurve Rendering Instead of Manual Poles (Complexity: 6/10)
+
+- **Goal**: Replace `DMCurve._build_from_points()` — which manually assembles Bezier poles and knots — with FreeCAD's native `Part.BSplineCurve.interpolate()` or `buildFromPolesMultsKnots()`. Replace the manually-drawn control-point vertices and handle lines in `DMCurve.to_shape()` with Coin3D scene-graph overlays so the NURBS edge itself is the canonical rendered object.
+- **Background**: Currently `DMCurve._build_from_points()` computes Catmull-Rom tangents, builds explicit pole lists, knot vectors, and multiplicity arrays by hand, then passes them to `Part.BSplineCurve(poles, weights, knots, mults, periodic, degree)`. `DMCurve.to_shape()` manually adds `Part.Vertex` and `Part.makeLine` objects to the compound to draw the control cage and handles. This means we own the tessellation and rendering — FreeCAD's native curve display infrastructure is bypassed.
+- **Files to read**:
+  - `FCDirectModeling/nurbs_geometry.py` — `DMCurve._build_from_points()` and `DMCurve.to_shape()` (the code to replace).
+  - `FCDirectModeling/dm_object.py` — `DMViewProvider` (where Coin3D overlay should be attached).
+  - `FCDirectModeling/primitives/primitive_base.py` — `NURBSPrimitiveCreator.update_active_object()` (deals with preview updates).
+  - FreeCAD Part API: `Part.BSplineCurve.interpolate(pts, periodic)` and `Part.BSplineCurve.approximate(pts, ...)` — the native fitting methods.
+- **Files to modify**:
+  - `FCDirectModeling/nurbs_geometry.py` — refactor `DMCurve._build_from_points()` and `DMCurve.to_shape()`.
+  - `FCDirectModeling/dm_object.py` — add Coin3D control-cage overlay to `DMViewProvider`.
+- **Steps**:
+  1. **Refactor `_build_from_points()` to use native fitting**:
+     - For the normal (non-handle) case, replace the manual Bezier-pole building with:
+       ```python
+       bs = Part.BSplineCurve()
+       bs.interpolate(fit_pts, PeriodicFlag=is_closed)
+       ```
+       This produces a smooth cubic interpolating B-spline natively via OCCT, with no manual pole arithmetic.
+     - For the handle case (some `DMPoint` has non-`None` `handle_in`/`handle_out`), keep the existing Bezier-segment strategy BUT wrap it in a try/except with `interpolate()` as fallback. This preserves user tangent control while using native APIs for the common case.
+     - Remove the fallback `Part.makePolygon().toBSpline()` — this was a hack. If `interpolate` fails with fewer than 2 points, return `None`.
+  2. **Refactor `DMCurve.to_shape()` to return only the edge**:
+     - Change `to_shape()` to return `Part.Edge(self.bspline)` directly (a single Edge, not a Compound).
+     - Remove all `Part.Vertex`, `Part.makeLine` for handles/control points from this method. These visuals will move to the Coin3D overlay.
+  3. **Add a Coin3D control-cage overlay in `DMViewProvider`**:
+     - In `DMViewProvider.attach(vobj)`, check if `vobj.Object.ShapeType == "curve"`. If so, build a Coin3D `SoSeparator` overlay:
+       ```python
+       from pivy import coin
+       self._ctrl_cage_sep = coin.SoSeparator()
+       # SoDrawStyle for dashed lines
+       style = coin.SoDrawStyle()
+       style.linePattern = 0xF0F0  # dashed
+       style.lineWidth = 1.0
+       self._ctrl_cage_sep.addChild(style)
+       # SoCoordinate3 + SoLineSet for handle lines
+       self._ctrl_coords = coin.SoCoordinate3()
+       self._ctrl_lines = coin.SoLineSet()
+       self._ctrl_cage_sep.addChild(self._ctrl_coords)
+       self._ctrl_cage_sep.addChild(self._ctrl_lines)
+       # SoPointSet for control point markers
+       self._ctrl_pts_sep = coin.SoSeparator()
+       mat = coin.SoMaterial()
+       mat.diffuseColor = coin.SbColor(1.0, 0.5, 0.0)
+       self._ctrl_pts_sep.addChild(mat)
+       self._ctrl_pts_sep.addChild(self._ctrl_coords)  # reuse same coords
+       self._pt_draw = coin.SoDrawStyle()
+       self._pt_draw.pointSize = 6.0
+       self._ctrl_pts_sep.addChild(self._pt_draw)
+       self._ctrl_pts_sep.addChild(coin.SoPointSet())
+       self._ctrl_cage_sep.addChild(self._ctrl_pts_sep)
+       vobj.RootNode.addChild(self._ctrl_cage_sep)
+       ```
+     - In `DMViewProvider.updateData(fp, prop)`, when `prop` is `"Points"`, `"HandleIn"`, or `"HandleOut"`, rebuild the `SoCoordinate3` and `SoLineSet` from the current handle data:
+       ```python
+       def _rebuild_ctrl_cage(self, fp):
+           pts = list(fp.Points) if hasattr(fp, "Points") else []
+           h_in  = list(fp.HandleIn)  if hasattr(fp, "HandleIn")  else []
+           h_out = list(fp.HandleOut) if hasattr(fp, "HandleOut") else []
+           coords = []
+           line_verts = []  # num vertices per line strip
+           # One vertex per knot point
+           for i, p in enumerate(pts):
+               coords.append((p.x, p.y, p.z))
+           # Handle lines: each is a 2-point strip
+           for i, p in enumerate(pts):
+               if i < len(h_out) and h_out[i] != p:
+                   hi_idx = len(coords); coords.append((h_out[i].x, h_out[i].y, h_out[i].z))
+                   # strip: [knot_i, handle_out_i]
+               if i < len(h_in) and h_in[i] != p:
+                   coords.append((h_in[i].x, h_in[i].y, h_in[i].z))
+           self._ctrl_coords.point.setValues(coords)
+           # SoLineSet gets numVertices array for each strip
+           # (details depend on handle availability — implement carefully)
+       ```
+  4. **Update `build_shape()` in `DMObjectProxy`** to handle the new return type:
+     - `DMCurve.to_shape()` now returns a `Part.Edge` (not a Compound). If future code checks `shape.Edges[0]`, it still works.
+     - Remove any code in `build_shape()` that tries to iterate over sub-shapes expecting a Compound for the curve type.
+  5. **Remove the manual crosshair object from `NURBSPrimitiveCreator`** (`_preview_cursor` + `Part::Feature DM_Cursor`):
+     - This was added as a debug aid. Replace it with a Coin3D `SoTransform` + `SoMarkerSet` node attached to the view's scene graph directly, which is cheaper and doesn't pollute the document.
+     - Or just leave it removable — it's a separate cleanup task.
+- **Acceptance**:
+  - Draw a curve with at least 3 points. The curve renders as a smooth orange edge (not a polygon) via the native OCCT tessellator.
+  - Control-point markers and handle lines appear as a Coin3D overlay — they are NOT listed in the Model tree as separate objects.
+  - `DMCurve([p1, p2, p3]).to_shape()` returns a `Part.Edge`, not a `Part.Compound`.
+  - A closed curve renders without a visible seam artifact.
+  - Editing `Points`, `HandleIn`, `HandleOut` properties updates the overlay in real time.
 
 ---
 
@@ -379,11 +471,44 @@ look into built in quick access menu
 
 ---
 
-Open sketcher tool should create a new sketch on the workplane, not switch to the sketcher workbench.
+### 4c. Open Sketcher on Workplane (Complexity: 3/10)
+
+- **Goal**: The "Open Sketcher" action should create a new `Sketcher::SketchObject` attached to the current working plane and open it in sketch-edit mode **without** switching the active workbench. The user stays in the DM workbench.
+- **Files to read**:
+  - `FCDirectModeling/work_plane.py` — `WorkPlaneManager.get_placement()` to get the WP placement.
+  - FreeCAD `Sketcher.makeSketch` / `doc.addObject("Sketcher::SketchObject")` API.
+- **Files to create**:
+  - `dm_commands/command_open_sketcher.py`
+- **Files to modify**:
+  - `InitGui.py` — register `DM_OpenSketcher`.
+- **Steps**:
+  1. `DM_OpenSketcher.Activated()`:
+     - Get the current WP placement from `WorkPlaneManager`.
+     - `sketch = doc.addObject("Sketcher::SketchObject", "Sketch")`.
+     - `sketch.Placement = wp_placement`.
+     - `FreeCADGui.ActiveDocument.setEdit(sketch)` to open sketch editing without switching workbench.
+  2. Register in `InitGui.py` with hotkey `'K'`.
+- **Acceptance**: Press `K` → a new sketch opens in edit mode on the working plane. The active workbench remains DM.
 
 ---
 
-Radial menu for spline points (tangent handles, split, custom angle)
+### 4d. Radial Menu for Spline Points (Complexity: 5/10)
+
+- **Goal**: Right-clicking on a spline control point shows a small radial menu with options: **Smooth** (auto-tangent), **Corner** (break tangents), **Split** (insert point), **Custom Angle** (set handle angle numerically).
+- **Files to read**:
+  - `FCDirectModeling/radial_menu.py` — the base radial menu system (task 4b).
+  - `FCDirectModeling/nurbs_geometry.py` — `DMPoint` handle structure.
+  - `FCDirectModeling/dm_object.py` — property access for `HandleIn`/`HandleOut`.
+- **Files to create**:
+  - `FCDirectModeling/spline_point_menu.py`
+- **Steps**:
+  1. On right-click in the DM view, detect if cursor is within snapping distance of a `DMCurve` control point.
+  2. If so, open a radial menu at the cursor with the 4 options above.
+  3. **Smooth**: zero both handles (forces auto-tangent on next recompute).
+  4. **Corner**: set `handle_in` and `handle_out` to the point position (G0 continuity).
+  5. **Split**: insert a new `DMPoint` at the midpoint of the adjacent segment, updating `Points`, `HandleIn`, `HandleOut`.
+  6. **Custom Angle**: show a numeric input dialog for angle/magnitude; compute new handle vectors.
+- **Acceptance**: Right-click on a spline point → radial menu appears → each action modifies the curve correctly.
 
 ---
 <!-- spherical sprite for points
@@ -446,31 +571,117 @@ root.insertChild(0, transform)   # put before the billboard -->
 
 ---
 
-connect point with curve
+### 1n. Connect Point to Curve (Complexity: 4/10)
+
+- **Goal**: Allow the user to snap-connect a `DMPoint` object onto a `DMCurve`, constraining the point to lie on the curve. This enables parametric point placement along a curve.
+- **Files to read**:
+  - `FCDirectModeling/nurbs_geometry.py` — `DMCurve.value(t)` for evaluating curve position.
+  - `FCDirectModeling/dm_object.py` — `DMObjectProxy`, `create_dm_object()`.
+- **Files to create**:
+  - `dm_commands/command_connect_point.py`
+- **Files to modify**:
+  - `FCDirectModeling/dm_object.py` — add `"App::PropertyLink"` + `"App::PropertyFloat"` (`CurveParam`) to the `point` shape type.
+  - `InitGui.py` — register `DM_ConnectPoint`.
+- **Steps**:
+  1. Add `SourceCurve` (PropertyLink) and `CurveParam` (PropertyFloat, 0–1) properties to a point's shape type in `DMObjectProxy.__init__`.
+  2. In `build_shape()` for `"point"`: if `SourceCurve` is set, evaluate `DMCurve.value(fp.CurveParam)` and use that as the position.
+  3. `DM_ConnectPoint`: user selects a point + curve → sets `SourceCurve` and nearest `CurveParam` on the point object.
+- **Acceptance**: A `DMPoint` with `SourceCurve` set always lies on the curve. Moving curve control points repositions the connected point.
 
 ---
-surface image / noise displacement
----
-join (or heal) curves
+
+### 1p. Surface Image / Noise Displacement (Complexity: 6/10)
+
+- **Goal**: Apply a height-map (image file or procedural noise) to displace the control grid of a `DMSurface` along its normal.
+- **Files to read**:
+  - `FCDirectModeling/nurbs_geometry.py` — `DMSurface.control_grid`.
+  - `FCDirectModeling/dm_object.py` — `"surface"` shape type properties.
+- **Files to create**:
+  - `dm_commands/command_displace.py`
+- **Files to modify**:
+  - `FCDirectModeling/dm_object.py` — add `DisplacementImage` (PropertyFile) and `DisplacementScale` (PropertyFloat) to surface type.
+  - `FCDirectModeling/nurbs_geometry.py` — add `DMSurface.displace(image_path, scale)` method.
+- **Steps**:
+  1. Add `DisplacementImage` and `DisplacementScale` properties to the surface shape type.
+  2. In `DMSurface.displace(image_path, scale)`: load image with PIL/Pillow, sample at UV coordinates of each grid point, offset each point along the surface normal by `pixel_value * scale`.
+  3. In `build_shape()` for `"surface"`: if `DisplacementImage` is set, apply displacement before building the BSplineSurface.
+  4. `DM_DisplaceSurface` command: opens file picker for image, sets properties on selected surface object.
+- **Acceptance**: Select a surface → `DM_DisplaceSurface` → pick a PNG → the surface control grid is displaced by the image heights.
 
 ---
 
-extend surface (adds more surfaces following the contours of the surface)
+### 1q. Join (Heal) Curves (Complexity: 5/10)
+
+- **Goal**: Merge two selected `DMCurve` objects end-to-end into a single continuous `DMCurve`, ensuring G1 continuity at the join point.
+- **Files to read**:
+  - `FCDirectModeling/nurbs_geometry.py` — `DMCurve` points/handles structure.
+  - `FCDirectModeling/dm_object.py` — curve property access.
+- **Files to create**:
+  - `dm_commands/command_join_curves.py`
+- **Files to modify**:
+  - `InitGui.py` — register `DM_JoinCurves`.
+- **Steps**:
+  1. User selects two `DMCurve` objects. Detect which endpoints are closest.
+  2. If endpoints are within tolerance: concatenate `Points`, `HandleIn`, `HandleOut` arrays, ensuring the join-point tangents are averaged for G1 continuity.
+  3. If endpoints are not coincident: optionally insert a bridging segment to close the gap.
+  4. Create a new `DMObject` of type `"curve"` with the merged point list. Optionally delete source curves.
+- **Acceptance**: Select two curves that share a near endpoint → `DM_JoinCurves` → one smooth curve object results.
+
+---
+
+### 1r. Extend Surface (Complexity: 6/10)
+
+- **Goal**: Grow a `DMSurface` beyond its current boundary by adding new rows/columns of control points that follow the surface's existing tangent direction, producing a smooth extension.
+- **Files to read**:
+  - `FCDirectModeling/nurbs_geometry.py` — `DMSurface.control_grid`, `to_bspline_surface()`.
+  - FreeCAD `Part.BSplineSurface` API — `getPoles()`, `getUKnots()`, `getVKnots()`, `insertUKnot()`, `insertVKnot()`.
+- **Files to create**:
+  - `dm_commands/command_extend_surface.py`
+- **Files to modify**:
+  - `InitGui.py` — register `DM_ExtendSurface`.
+- **Steps**:
+  1. User selects a surface and an edge (U-min, U-max, V-min, or V-max) to extend.
+  2. Read the two outermost rows/columns of control points.
+  3. Extrapolate new control points by mirroring the tangent of the last segment: `new_pt = last_pt + (last_pt - second_last_pt)`.
+  4. Append the new row/column to the grid and rebuild the `DMSurface`.
+  5. Interactive mode: drag a handle to set extension distance.
+- **Acceptance**: Select a surface edge → `DM_ExtendSurface` → drag → the surface grows smoothly in the chosen direction.
 
 ---
 
 ### 1o. Create DM_FillCurve command (Complexity: 4/10)
+
 - **Goal**: Create a `DMSurface` that fills a selected closed `DMCurve`.
-- **Files to modify**: `dm_commands/command_fill_curve.py`, `InitGui.py`, `FCDirectModeling/dm_object.py`.
+- **Files to read**:
+  - `FCDirectModeling/nurbs_geometry.py` — `DMCurve.to_shape()`, `DMSurface`.
+  - `FCDirectModeling/dm_object.py` — surface shape type properties.
+- **Files to create**:
+  - `dm_commands/command_fill_curve.py`
+- **Files to modify**:
+  - `InitGui.py` — register `DM_FillCurve`.
+  - `FCDirectModeling/dm_object.py` — ensure `"surface"` type can accept a `SourceCurve` link.
 - **Steps**:
-  1. Detect selected closed `DMCurve`.
-  2. Use `Part.makeFace(curve.to_shape())` then `.toNurbs()` to get a initial `BSplineSurface`.
-  3. Extract poles/weights/knots/mults to create a `DMSurface` object.
-  4. Finalize as a "surface" type `DMObject`.
-- **Acceptance**: Select closed curve → `DM_FillCurve` → a new surface object appears filling the curve.
+  1. Detect that the selected `DMCurve` is closed (`fp.Closed == True`).
+  2. Call `Part.makeFace([curve.to_shape()])` then `.toNurbs()` to get an initial `BSplineSurface` from OCCT's filling algorithm.
+  3. Extract the pole grid, weights, knots, and mults from the resulting `BSplineSurface`.
+  4. Build a `DMSurface` object from that data and finalize as a `"surface"` type `DMObject`.
+- **Acceptance**: Select a closed curve → `DM_FillCurve` → a new orange surface object appears filling the curve interior.
+
+---
 
 ### 1l. Snap Workplane to Camera View (Complexity: 3/10)
-- **Goal**: Add a command or hotkey to snap the working plane to the current camera's orientation.
-- **Goal**: Ensure that if no face is selected, the curve tool defaults to a camera-facing plane at a sensible distance.
-- **Files to modify**: `FCDirectModeling/primitives/primitive_base.py`, `dm_commands/command_snap_wp.py`.
-- **Acceptance**: Pressing 'V' (or similar) aligns the WP to the view. Drawing without a face uses the view plane.
+
+- **Goal**: Add a command/hotkey to snap the working plane to the current camera's view direction, and ensure the curve tool defaults to a camera-facing plane when no face is snapped.
+- **Files to read**:
+  - `FCDirectModeling/work_plane.py` — `WorkPlaneManager`.
+  - `FCDirectModeling/primitives/primitive_base.py` — `get_base_plane()`, `handle_move()` state 0.
+- **Files to create**:
+  - `dm_commands/command_snap_wp.py`
+- **Files to modify**:
+  - `FCDirectModeling/primitives/primitive_base.py` — fallback plane in `handle_move()` state 0 when no face is under cursor.
+  - `InitGui.py` — register `DM_SnapWPToView`.
+- **Steps**:
+  1. `DM_SnapWPToView.Activated()`: get camera orientation from `view.getCameraNode()`, extract the view-direction vector, build a `FreeCAD.Placement` with that rotation, call `WorkPlaneManager.set_placement()`.
+  2. In `PrimitiveBase.handle_move()` state 0: if `wp_manager.update()` finds no face, fall back to a plane normal = view direction, origin = scene center at a sensible depth (use `view.getPoint()` as depth reference).
+  3. Register with hotkey `'V'`.
+- **Acceptance**: Press `V` → WP snaps to the current view. Drawing without hovering a face draws on the view-aligned plane.

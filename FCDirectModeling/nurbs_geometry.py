@@ -20,8 +20,13 @@ class DMPoint:
         return FreeCAD.Vector(self.position)
 
     def is_sharp(self):
-        """Returns True if the point has no handles (G0 continuity)."""
-        return self.handle_in is None and self.handle_out is None
+        """Returns True if the point has no handles or handles are at the position (G0)."""
+        if self.handle_in is None and self.handle_out is None:
+            return True
+        # Check distance to avoid "near-zero" handle issues
+        dist_in = (self.handle_in - self.position).Length if self.handle_in else 0
+        dist_out = (self.handle_out - self.position).Length if self.handle_out else 0
+        return dist_in < 1e-4 and dist_out < 1e-4
 
     def __repr__(self):
         return f"DMPoint({self.position.x:.2f}, {self.position.y:.2f}, {self.position.z:.2f})"
@@ -77,7 +82,26 @@ class DMCurve:
         
         n = len(fit_pts)
         filtered_points = filtered_points[:n]
-        # 1. Helper for auto-tangents (Catmull-Rom)
+
+        # 1. Faster path: If no points have handles, use native OCCT interpolation
+        has_handles = any(not p.is_sharp() for p in filtered_points)
+        
+        if not has_handles and len(fit_pts) >= 2:
+            try:
+                # Try most compatible way: empty constructor + interpolate
+                # If interpolate() takes keyword 'PeriodicFlag', use it, else positional
+                bs = Part.BSplineCurve()
+                try:
+                    bs.interpolate(fit_pts, PeriodicFlag=is_closed)
+                except TypeError:
+                    bs.interpolate(fit_pts, is_closed)
+                self._bspline = bs
+                return bs
+            except Exception as e:
+                from FCDirectModeling import dm_logger
+                dm_logger.debug(f"DEBUG: Native interpolate failed: {e}. Falling back to manual pole building.")
+        
+        # 2. Handle path: Build Bezier poles for each cubic segment (preserved for explicit tangent control)
         def get_auto_tan(idx):
             prev = fit_pts[(idx - 1) % n] if (is_closed or idx > 0) else (fit_pts[1] - (fit_pts[1]-fit_pts[0]))
             nxt = fit_pts[(idx + 1) % n] if (is_closed or idx < n-1) else (fit_pts[-1] + (fit_pts[-1]-fit_pts[-2]))
@@ -120,16 +144,30 @@ class DMCurve:
             
             if is_closed:
                 mults = [3] * (num_segments + 1)
-                bs = Part.BSplineCurve(poles, weights, knots, mults, True, degree)
             else:
                 mults = [4] + [3] * (num_segments - 1) + [4]
-                bs = Part.BSplineCurve(poles, weights, knots, mults, False, degree)
+
+            # Try the complex constructor (FreeCAD 0.21+)
+            try:
+                bs = Part.BSplineCurve(poles, weights, knots, mults, is_closed, degree)
+            except Exception:
+                # Fallback to buildFromPolesMultsKnots method (more compatible)
+                bs = Part.BSplineCurve()
+                if hasattr(bs, "buildFromPolesMultsKnots"):
+                    bs.buildFromPolesMultsKnots(poles, mults, knots, is_closed, degree, weights)
+                else:
+                    # Last resort: simple constructor + interpolate (might lose tangent info)
+                    try:
+                        bs = Part.BSplineCurve(poles, is_closed, degree, True) # Some old versions use 4th arg for interp
+                    except:
+                        # Fallback to pure interpolation on fit_pts
+                        bs.interpolate(fit_pts, is_closed)
             
             self._bspline = bs
             return bs
         except Exception as e:
             from FCDirectModeling import dm_logger
-            dm_logger.debug(f"DEBUG: Part.BSplineCurve constructor failed: {e}. Falling back to default interpolate.")
+            dm_logger.debug(f"DEBUG: DMCurve construction failed: {e}")
             try:
                 bs = Part.BSplineCurve()
                 bs.interpolate(fit_pts, is_closed)
@@ -152,41 +190,21 @@ class DMCurve:
             return None
 
     def to_shape(self):
-        """Returns the curve as a Part.Shape (Compound of Edge, Vertices, and Lines)."""
-        shapes = []
-        
-        # 1. The main B-spline edge
+        """Returns the curve as a Part.Shape (Edge). Control points move to Coin3D overlay."""
         bs = self.bspline
         if bs:
             try:
-                # Use Part.Edge(bs) for standard NURBS segment creation
-                shapes.append(Part.Edge(bs))
+                # Return only the edge. Markers/handles are now handled by DMViewProvider overlay.
+                return Part.Edge(bs)
             except Exception as e:
                 from FCDirectModeling import dm_logger
                 dm_logger.debug(f"DEBUG: DMCurve.to_shape edge error: {e}")
 
-        # 2. Control points as vertices (ensure markers are drawn for all pts)
-        for p in self.points:
-            shapes.append(Part.Vertex(p.position))
+        # Fallback if no BSpline could be built (e.g. 1 point)
+        if len(self.points) == 1:
+            return Part.Vertex(self.points[0].position)
             
-            # 3. Handle lines and markers for visual feedback & selection
-            # Guard against coincident points which crash Part.makeLine
-            if p.handle_in and (p.handle_in - p.position).Length > 1e-4:
-                try:
-                    shapes.append(Part.makeLine(p.position, p.handle_in))
-                    shapes.append(Part.Vertex(p.handle_in))
-                except: pass
-            if p.handle_out and (p.handle_out - p.position).Length > 1e-4:
-                try:
-                    shapes.append(Part.makeLine(p.position, p.handle_out))
-                    shapes.append(Part.Vertex(p.handle_out))
-                except: pass
-
-        if not shapes:
-            return Part.Shape()
-        if len(shapes) == 1:
-            return shapes[0]
-        return Part.Compound(shapes)
+        return Part.Shape()
 
     @property
     def is_closed(self):

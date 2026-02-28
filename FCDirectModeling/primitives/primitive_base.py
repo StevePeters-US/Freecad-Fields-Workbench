@@ -535,39 +535,10 @@ class NURBSPrimitiveCreator(PrimitiveBase):
             if self.doc:
                 self.doc.recompute()
 
-        # Update Crosshair Cursor
-        debug_pt = params.get("debug_pt")
-        if debug_pt and self.doc:
-            try:
-                import Part
-                # Reuse existing cursor if valid and in doc
-                cursor_valid = False
-                if hasattr(self, "_preview_cursor") and self._preview_cursor is not None:
-                    try:
-                        if self.doc.getObject(self._preview_cursor.Name) is not None:
-                            cursor_valid = True
-                    except: pass
-                
-                if not cursor_valid:
-                    self._preview_cursor = self.doc.addObject("Part::Feature", "DM_Cursor")
-                    self._preview_cursor.ViewObject.PointSize = 5
-                    self._preview_cursor.ViewObject.LineWidth = 2
-                    self._preview_cursor.ViewObject.LineColor = (0.0, 0.4, 0.8) # Vibrant Blue
-                    self._preview_cursor.ViewObject.PointColor = (0.0, 0.4, 0.8)
-                    if hasattr(self._preview_cursor, "ShowInTree"):
-                        self._preview_cursor.ShowInTree = False
-                
-                # Use centered shape + placement for efficiency and robustness
-                s = 0.5 
-                p_orig = FreeCAD.Vector(0,0,0)
-                lines = [Part.makeLine(p_orig + FreeCAD.Vector(-s,0,0), p_orig + FreeCAD.Vector(s,0,0)),
-                         Part.makeLine(p_orig + FreeCAD.Vector(0,-s,0), p_orig + FreeCAD.Vector(0,s,0)),
-                         Part.makeLine(p_orig + FreeCAD.Vector(0,0,-s), p_orig + FreeCAD.Vector(0,0,s))]
-                self._preview_cursor.Shape = Part.Compound(lines)
-                self._preview_cursor.Placement.Base = debug_pt
-                self._preview_cursor.ViewObject.Visibility = True
-            except Exception as e:
-                dm_logger.debug(f"DEBUG: update_active_object crosshair error: {e}")
+        # Note: Legacy DM_Cursor (Part::Feature) has been removed in favor of 
+        # more efficient Coin3D overlays or can be re-implemented as a pure 
+        # view-side node if needed.
+        pass
 
     def terminate(self):
         """Clean up: delete active object if not finished."""
@@ -576,14 +547,8 @@ class NURBSPrimitiveCreator(PrimitiveBase):
         
         super().terminate()
         
-        # Clean up cursor
-        if hasattr(self, "_preview_cursor") and self._preview_cursor:
-            try:
-                doc = self.doc or FreeCAD.ActiveDocument
-                if doc and doc.getObject(self._preview_cursor.Name):
-                    doc.removeObject(self._preview_cursor.Name)
-            except: pass
-            self._preview_cursor = None
+        # Legacy cursor cleanup removed
+        pass
 
         if not self._finished and self._active_obj:
             try:
