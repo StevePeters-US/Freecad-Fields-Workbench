@@ -73,8 +73,10 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
             from dm_commands import command_create_point
             from dm_commands import command_translate
             from dm_commands import command_fill_curve
+            from dm_commands import command_work_plane
             
             self.appendToolbar("Direct Modeling", [
+                'DM_WorkPlane',
                 'DM_CreatePoint',
                 'DM_CreateCurve',
                 'DM_FillCurve',
@@ -86,6 +88,7 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
                 'DM_Settings',
             ])
             self.appendMenu("Direct Modeling", [
+                'DM_WorkPlane',
                 'DM_CreatePoint',
                 'DM_CreateCurve',
                 'DM_FillCurve',
@@ -103,11 +106,36 @@ class DirectModelingWorkbench(FreeCADGui.Workbench):
 
     def Activated(self):
         """This function is executed when the workbench is activated."""
-        return
+        try:
+            # Global event filter to suppress context menus
+            if not hasattr(self, "_event_filter"):
+                from PySide import QtCore, QtGui
+                class DMEventFilter(QtCore.QObject):
+                    def eventFilter(self, obj, event):
+                        # Suppress context menu events everywhere in the workbench
+                        if event.type() == QtCore.QEvent.ContextMenu:
+                            return True
+                        
+                        # Aggressively catch right-clicks to prevent menus
+                        if event.type() in [QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
+                            if event.button() == QtCore.Qt.RightButton:
+                                return True
+                                
+                        return False
+                self._event_filter = DMEventFilter()
+            
+            # Install on the main window to catch all context menus
+            FreeCADGui.getMainWindow().installEventFilter(self._event_filter)
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"DM Activated Error: {e}\n")
 
     def Deactivated(self):
         """This function is executed when the workbench is deactivated."""
-        return
+        try:
+            if hasattr(self, "_event_filter"):
+                FreeCADGui.getMainWindow().removeEventFilter(self._event_filter)
+        except Exception as e:
+            FreeCAD.Console.PrintError(f"DM Deactivated Error: {e}\n")
 
 # Add the workbench to FreeCAD's list of available workbenches
 FreeCADGui.addWorkbench(DirectModelingWorkbench())

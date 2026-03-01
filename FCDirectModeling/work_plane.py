@@ -98,6 +98,7 @@ class WorkPlaneManager:
         """Raycasts and updates the work plane transform."""
         pos = event_dict.get("Position")
         if not pos:
+            dm_logger.debug("WorkPlaneManager: No position in event_dict")
             return
             
         try:
@@ -106,45 +107,81 @@ class WorkPlaneManager:
                 obj_name = info["Object"]
                 doc = FreeCAD.ActiveDocument
                 if not doc:
+                    dm_logger.debug("WorkPlaneManager: No active document")
                     return
                 obj = doc.getObject(obj_name)
                 if not obj:
+                    dm_logger.debug(f"WorkPlaneManager: Could not find object {obj_name}")
                     return
 
                 subname = info["Component"]
+                dm_logger.debug(f"WorkPlaneManager: Hovered over {obj_name}.{subname}")
                 if "Face" in subname:
                     face = obj.Shape.getElement(subname)
                     mouse_pt = self.view.getPoint(pos[0], pos[1])
                     
+                    dm_logger.debug(f"WorkPlaneManager: Found face, raycasting hit point...")
                     # More robust way to get UV: distToShape
                     # proj = face.projectPoint(mouse_pt) <- Missing in some FC versions
                     # Use Part.Vertex because distToShape requires a Shape, not a Point (geometry)
                     dists = face.distToShape(Part.Vertex(mouse_pt))
                     if dists and len(dists) >= 3:
-                        dist, pts, params = dists
-                        if pts:
-                            target_pt = pts[0][0]
-                            # params[0] can be (u, v) or (subname, (u, v)) depending on FC version/case
-                            info = params[0]
-                            if len(info) >= 2 and isinstance(info[0], (int, float, float)):
-                                u, v = info[0], info[1]
-                            elif len(info) >= 2 and isinstance(info[1], (list, tuple)):
-                                u, v = info[1][0], info[1][1]
+                            info_param = params[0]
+                            u, v = None, None
+                            # Find the first tuple of 2 floats in info_param
+                            if isinstance(info_param, (list, tuple)):
+                                for item in info_param:
+                                    if isinstance(item, (list, tuple)) and len(item) == 2:
+                                        if isinstance(item[0], (int, float)) and isinstance(item[1], (int, float)):
+                                            u, v = item[0], item[1]
+                                            break
                             else:
-                                # Fallback or skip if we can't find UV
+                                if len(info_param) >= 2 and isinstance(info_param[0], (int, float)):
+                                    u, v = info_param[0], info_param[1]
+                                    
+                            if u is None:
+                                dm_logger.debug(f"WorkPlaneManager: Could not parse UV from {info_param}")
                                 return
+                            
                             normal = face.Surface.normal(u, v)
+                            dm_logger.debug(f"WorkPlaneManager: Face normal {normal}")
                         
-                        # Snapped color (Greenish)
-                        self.plane_mat.diffuseColor.setValue(0.2, 0.8, 0.4)
-                        self.plane_mat.transparency.setValue(0.6)
-                        
-                        self.current_placement = FreeCAD.Placement(target_pt, FreeCAD.Rotation(FreeCAD.Vector(0,0,1), normal))
-                        self._update_transform()
-                        self.show()
-                        return
-        except Exception:
-            dm_logger.exception("WorkPlaneManager.update error")
+                            z_axis = FreeCAD.Vector(normal)
+                            z_axis.normalize()
+                            global_z = FreeCAD.Vector(0, 0, 1)
+                            if abs(z_axis.dot(global_z)) > 1 - 1e-6:
+                                dm_logger.debug("WorkPlaneManager: Normal is parallel to Z")
+                                x_axis = FreeCAD.Vector(1, 0, 0)
+                            else:
+                                dm_logger.debug("WorkPlaneManager: Normal is skewed, projecting X")
+                                x_axis = global_z.cross(z_axis)
+                                x_axis.normalize()
+                                
+                            y_axis = z_axis.cross(x_axis)
+                            y_axis.normalize()
+                            
+                            m = FreeCAD.Matrix(
+                                x_axis.x, y_axis.x, z_axis.x, 0.0,
+                                x_axis.y, y_axis.y, z_axis.y, 0.0,
+                                x_axis.z, y_axis.z, z_axis.z, 0.0,
+                                0.0,      0.0,      0.0,      1.0
+                            )
+                            
+                            # Snapped color (Greenish)
+                            self.plane_mat.diffuseColor.setValue(0.2, 0.8, 0.4)
+                            self.plane_mat.transparency.setValue(0.6)
+                            
+                            self.current_placement = FreeCAD.Placement(target_pt, FreeCAD.Rotation(m))
+                            # Reset scale when attached to face
+                            self.transform.scaleFactor.setValue(1.0, 1.0, 1.0)
+                            self._update_transform()
+                            self.show()
+                            return
+                    else:
+                        dm_logger.debug("WorkPlaneManager: distToShape returned invalid dists")
+        except Exception as e:
+            dm_logger.error(f"WorkPlaneManager.update error: {e}")
+            dm_logger.exception("WorkPlaneManager.update exception trace")
             
         # Default color (Blueish)
         self.plane_mat.diffuseColor.setValue(0.2, 0.6, 0.9)
@@ -152,9 +189,54 @@ class WorkPlaneManager:
         
         mouse_pt = self.view.getPoint(pos[0], pos[1])
         if mouse_pt:
-            # Force Z=0 for default XY plane at origin
-            mouse_pt.z = 0 
-            self.current_placement = FreeCAD.Placement(mouse_pt, FreeCAD.Rotation())
+            # Face camera and scale
+            cam_node = self.view.getCameraNode()
+            if cam_node:
+                try:
+                    vd = self.view.getViewDirection()
+                    ud = self.view.getUpDirection()
+                    z_axis = FreeCAD.Vector(-vd[0], -vd[1], -vd[2])
+                    z_axis.normalize()
+                    y_axis = FreeCAD.Vector(ud[0], ud[1], ud[2])
+                    y_axis.normalize()
+                    x_axis = y_axis.cross(z_axis)
+                    x_axis.normalize()
+                    y_axis = z_axis.cross(x_axis)
+                    
+                    m = FreeCAD.Matrix(
+                        x_axis.x, y_axis.x, z_axis.x, 0.0,
+                        x_axis.y, y_axis.y, z_axis.y, 0.0,
+                        x_axis.z, y_axis.z, z_axis.z, 0.0,
+                        0.0,      0.0,      0.0,      1.0
+                    )
+                    rot = FreeCAD.Rotation(m)
+                except Exception as e:
+                    dm_logger.error(f"WorkPlaneManager rotation fallback: {e}")
+                    rot = FreeCAD.Rotation()
+                
+                self.current_placement = FreeCAD.Placement(mouse_pt, rot)
+                
+                # Dynamic scaling
+                try:
+                    cam_pos = FreeCAD.Vector(*cam_node.position.getValue().getValue())
+                    dist = (cam_pos - mouse_pt).Length
+                    
+                    if hasattr(cam_node, 'height') and hasattr(cam_node.height, 'getValue'):
+                        viewport_height = cam_node.height.getValue()
+                        scale = viewport_height / 50.0
+                    else:
+                        fov = cam_node.heightAngle.getValue() if hasattr(cam_node, 'heightAngle') else 0.785
+                        viewport_height = 2.0 * dist * math.tan(fov / 2.0)
+                        scale = viewport_height / 50.0
+                except Exception as e:
+                    dm_logger.error(f"WorkPlaneManager scaling fallback: {e}")
+                    scale = 1.0
+                
+                self.transform.scaleFactor.setValue(scale, scale, scale)
+            else:
+                self.current_placement = FreeCAD.Placement(mouse_pt, FreeCAD.Rotation())
+                self.transform.scaleFactor.setValue(1.0, 1.0, 1.0)
+                
             self._update_transform()
             self.show()
 

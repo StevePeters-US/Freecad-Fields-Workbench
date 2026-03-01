@@ -4,6 +4,7 @@ import FreeCAD
 import FreeCADGui
 from PySide import QtCore
 import traceback
+import math
 
 from FCDirectModeling import dm_logger
 from FCDirectModeling.work_plane import WorkPlaneManager
@@ -62,7 +63,6 @@ class PrimitiveBase:
         self.state         = 0
         
         self.working_plane = None
-        self.wp_manager = WorkPlaneManager(self.view)
         self.snap_face = None
         self.drag_start_screen_y = None
 
@@ -84,10 +84,6 @@ class PrimitiveBase:
             if self.callback:
                 self.view.removeEventCallback("SoEvent", self.callback)
                 self.callback = None
-            
-            if self.wp_manager:
-                self.wp_manager.hide()
-                self.wp_manager = None
             
             # Close task panel if open
             import FreeCADGui
@@ -169,13 +165,40 @@ class PrimitiveBase:
             dm_logger.error(f"DEBUG: getPoint failed: {e}")
             return None
 
+    def get_active_workplane_obj(self):
+        """Returns the active DMWorkPlane object from the document."""
+        doc = FreeCAD.ActiveDocument
+        if not doc:
+            return None
+        for obj in doc.Objects:
+            if hasattr(obj, "Proxy") and obj.Proxy.__class__.__name__ == "DMWorkPlane":
+                return obj
+        return None
+
     def get_base_plane(self):
         """Returns (normal, origin) for the current working plane."""
-        if not self.working_plane:
-            return None, None
-        n = self.working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
-        o = self.working_plane.Base
-        return n, o
+        wp_obj = self.get_active_workplane_obj()
+        
+        if wp_obj and hasattr(wp_obj, "Placement"):
+            wp_placement = wp_obj.Placement
+            n = wp_placement.Rotation.multVec(FreeCAD.Vector(0,0,1))
+            o = wp_placement.Base
+            return n, o
+
+        # Fallback to camera facing
+        if not self.view:
+            return FreeCAD.Vector(0,0,1), FreeCAD.Vector(0,0,0)
+            
+        cam_node = self.view.getCameraNode()
+        cam_pos = FreeCAD.Vector(*cam_node.position.getValue().getValue()) if cam_node else FreeCAD.Vector(0,0,100)
+        
+        vd = self.view.getViewDirection()
+        n = FreeCAD.Vector(-vd[0], -vd[1], -vd[2])
+        n.normalize()
+        
+        # We can just pick origin as 0,0,0 and offset appropriately or just 0,0,0
+        # If we have a focal point or target we could use that. Let's just use 0,0,0
+        return n, FreeCAD.Vector(0,0,0)
 
     def get_mouse_plane_pt(self, event_dict):
         """Intersection of mouse ray with working plane."""
@@ -192,14 +215,23 @@ class PrimitiveBase:
             event_type = event_dict.get("Type", "Unknown")
 
             if event_type == "SoMouseButtonEvent":
-                if event_dict["State"] == "DOWN":
-                    btn = event_dict.get("Button", "None")
-                    dm_logger.debug(f"DEBUG: SoMouseButtonEvent DOWN: {btn}")
-                    if btn == "BUTTON2":
+                btn = event_dict.get("Button", "None")
+                state = event_dict.get("State", "None")
+                if state == "DOWN":
+                    if btn == "BUTTON3":
                         # Right click drops tool
                         QtCore.QTimer.singleShot(0, self.terminate)
-                        return True
-                    return self.handle_click(event_dict)
+                        return True # CONSUME PRESS
+                    elif btn == "BUTTON1":
+                        return self.handle_click(event_dict)
+                    else:
+                        # Allow all other buttons (BUTTON2, etc) to pass to FreeCAD for navigation
+                        return False
+                
+                elif state == "UP":
+                    if btn == "BUTTON3":
+                        return True # CONSUME RELEASE to suppress context menu
+                    return False
             elif event_type == "SoLocation2Event":
                 self.handle_move(event_dict)
             elif event_type == "SoKeyboardEvent":
@@ -207,6 +239,17 @@ class PrimitiveBase:
                     key = event_dict.get("Key", "None")
                     dm_logger.debug(f"DEBUG: SoKeyboardEvent DOWN: {key}")
                     return self.handle_keyboard(event_dict)
+            else:
+                # For tools that need to update on camera move (like WorkPlaneCreator preview)
+                if self.state == 1:
+                    # We only care about this if it's NOT a mouse click (handled above)
+                    # and we want to refresh the orientation/position
+                    try:
+                        # Synthetic event dict for handle_move
+                        mouse_pos = self.view.getCursorPos()
+                        self.handle_move({"Position": mouse_pos})
+                    except Exception:
+                        pass
             return False
         except Exception:
             dm_logger.exception("event_cb error")
@@ -216,7 +259,7 @@ class PrimitiveBase:
         key = str(event_dict.get("Key", "None")).upper()
         
         # ESC to cancel
-        if key == "ESCAPE":
+        if key in ["ESCAPE", "ESC"]:
             QtCore.QTimer.singleShot(0, self.terminate)
             return True
             
@@ -243,13 +286,11 @@ class PrimitiveBase:
         return False
 
     def reset_state(self):
-        """Resets the tool to state 0, allowing work plane re-detection."""
-        self.state = 0
+        """Resets the tool to state 1."""
+        self.state = 1
         self.start_point = None
         self.current_point = None
         self.height = 0.0
-        if self.wp_manager:
-            self.wp_manager.show()
         self.on_state_change(self.state)
         self.view.redraw()
 
@@ -296,7 +337,7 @@ class PrimitiveBase:
             
             # Right-click (BUTTON3) to finish or drop
             if btn == "BUTTON3":
-                if self.state > 0:
+                if self.state > 1:
                     self.finish()
                 else:
                     self.terminate()
@@ -305,36 +346,29 @@ class PrimitiveBase:
             if btn != "BUTTON1":
                 return False
 
-            pt = self.get_mouse_world_pos(event_dict)
+            n, o = self.get_base_plane()
+            pt = self.get_mouse_world_pos(event_dict, n, o)
             if pt is None:
                 dm_logger.warn("DEBUG: handle_click: pt is None!")
                 return False
                 
             dm_logger.debug(f"DEBUG: handle_click: Mouse World Pos: {pt.x:.2f}, {pt.y:.2f}, {pt.z:.2f}")
 
-            if self.state == 0:
-                # Pin 1: Fix the working plane and move to State 1
-                if self.wp_manager:
-                    self.working_plane = self.wp_manager.get_placement()
-                    dm_logger.debug(f"DEBUG: handle_click: Locked Working Plane: {self.working_plane}")
-                    # Ensure start_point is EXACTLY on this plane
-                    n, o = self.get_base_plane()
-                    pt = self.get_mouse_world_pos(event_dict, n, o)
-                else:
-                    rot = self.working_plane.Rotation if self.working_plane else FreeCAD.Rotation()
-                    self.working_plane = FreeCAD.Placement(pt, rot)
+            if getattr(self, "state", 0) == 0:
+                self.state = 1 # Force state 1 if inadvertently set to 0.
                 
+            if self.state == 1:
+                # Pin 1: Fix the starting point and move to State 2
                 self.start_point = pt
                 self.current_point = pt
-                self.state = 1
-                dm_logger.debug(f"DEBUG: handle_click: Moving to State 1. Start point: {self.start_point}")
-                self.on_state_change(self.state)
-                self.update_preview()
-            elif self.state == 1:
-                # Pin 2: Move to State 2
+                
+                # Setup working_plane based on the base plane for local transformations
+                rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), n)
+                self.working_plane = FreeCAD.Placement(pt, rot)
+                
                 self.state = 2
                 self.drag_start_screen_y = event_dict["Position"][1]
-                dm_logger.debug(f"DEBUG: handle_click: Moving to State 2. State 1 end pt: {pt}")
+                dm_logger.debug(f"DEBUG: handle_click: Moving to State 2. Start point: {self.start_point}")
                 self.on_state_change(self.state)
                 self.update_preview()
             elif self.state == 2:
@@ -350,16 +384,12 @@ class PrimitiveBase:
             return False
 
     def handle_move(self, event_dict):
-        if self.state == 0:
-            # Update work plane manager
-            if self.wp_manager:
-                self.wp_manager.update(event_dict)
+        if getattr(self, "state", 0) == 0:
+            self.state = 1
             
-            raw_pt = self.get_mouse_world_pos(event_dict)
-            self.update_preview(debug_pt=raw_pt)
-            
-        elif self.state == 1:
-            pt = self.get_mouse_world_pos(event_dict)
+        if self.state == 1:
+            n, o = self.get_base_plane()
+            pt = self.get_mouse_world_pos(event_dict, n, o)
             self.current_point = pt
             self.on_move_state_1(event_dict)
             self.update_preview(debug_pt=pt)

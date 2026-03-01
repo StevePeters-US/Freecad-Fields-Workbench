@@ -34,7 +34,7 @@ no prior context beyond the files listed. Follow this template:
 
 ## Phase 1: Work Plane Fixes
 
-### 1.1 Fix Workplane Orientation (Minimum LLM: Gemini Low)
+### [x] 1.1 Fix Workplane Orientation (Minimum LLM: Gemini Low)
 
 - **Goal**: Orient the work plane normal to the surface it's placed on, and ensure the X axis is parallel to any 2 points on the XY plane (so it doesn't twist relative to the surface).
 - **Files to read**:
@@ -46,6 +46,10 @@ no prior context beyond the files listed. Follow this template:
   2. Implement the logic to project the global X/Y axis onto the face tangent plane to define a consistent, non-twisting local coordinate system.
   3. Apply this to the work plane's rotation.
 - **Acceptance**: The work plane appears normal to the hovered face, and moving across non-planar faces keeps the grid visually aligned to the global XY plane as much as possible without unpredictable spinning.
+
+---
+
+workplane snapping. I want to be able to snap to the center of a workplane, optionally at adjustable grid points, or at an adjustable radius from the center of the workplane.
 
 ---
 
