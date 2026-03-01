@@ -6,7 +6,7 @@ Each task must be **self-contained** so an LLM or developer can complete it with
 no prior context beyond the files listed. Follow this template:
 
 ```markdown
-- [ ] **Task Title** (Complexity: N/10)
+- [ ] **Task Title** (Minimum LLM: Gemini Flash/Low/High/Claude Sonnet/Opus)
   - **Goal**: One sentence describing the desired outcome.
   - **Files to read**: List every file the implementer must read first.
   - **Files to modify/create**: List files that will change.
@@ -18,7 +18,8 @@ no prior context beyond the files listed. Follow this template:
 
 - Mark in-progress tasks `[/]`, completed tasks `[x]`.
 - Move completed tasks to `COMPLETED.md` when a milestone is reached.
-- Sort by complexity within each section (lowest first).
+- Sort by required LLM within each section (Flash first, Opus last).
+- We have as options Gemini Flash, Low, High, and on occasion Claude Sonnet and Opus. Only use Claude for very difficult programming issues as I don't have a lot of credits for it.
 
 ---
 
@@ -28,13 +29,74 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-## Phase 1: Core NURBS Geometry + Extrude
+
+---
+
+## Phase 1: Work Plane Fixes
+
+### 1.1 Fix Workplane Orientation (Minimum LLM: Gemini Low)
+
+- **Goal**: Orient the work plane normal to the surface it's placed on, and ensure the X axis is parallel to any 2 points on the XY plane (so it doesn't twist relative to the surface).
+- **Files to read**:
+  - `FCDirectModeling/work_plane.py`
+- **Files to modify**:
+  - `FCDirectModeling/work_plane.py`
+- **Steps**:
+  1. Locate `WorkPlaneManager.update` or where the placement is calculated.
+  2. Implement the logic to project the global X/Y axis onto the face tangent plane to define a consistent, non-twisting local coordinate system.
+  3. Apply this to the work plane's rotation.
+- **Acceptance**: The work plane appears normal to the hovered face, and moving across non-planar faces keeps the grid visually aligned to the global XY plane as much as possible without unpredictable spinning.
+
+---
+
+### 1.2 Implement 3-Click Interaction Flow (Minimum LLM: Gemini High)
+
+- **Goal**: Update the primitive tool interaction so the 1st click defines the workplane, 2nd click starts the tool, 3rd... continues, right click finishes, and ESC cancels.
+- **Files to read**:
+  - `FCDirectModeling/primitives/primitive_base.py`
+  - `FCDirectModeling/primitives/curve_creator.py`
+  - `FCDirectModeling/work_plane.py`
+- **Files to modify**:
+  - `FCDirectModeling/primitives/primitive_base.py`
+  - `FCDirectModeling/primitives/curve_creator.py`
+- **Steps**:
+  1. Add a state in `PrimitiveBase` to wait for the 1st click to lock the workplane.
+  2. While in this state, hovering updates the workplane visually.
+  3. On 1st click, lock the workplane placement so it doesn't move.
+  4. On 2nd click, pass the event to the actual tool (e.g. place the first curve point).
+  5. Ensure Right Click calls `finish()` and ESC calls `cancel()`.
+- **Acceptance**: Clicking once locks the grid. Clicking again starts drawing the curve. Right-click finishes successfully.
+
+---
+
+## Phase 2: Curve Tools & Geometry
+
+### 2.1 Use Built-in BSplineCurve Rendering Instead of Manual Poles (Minimum LLM: Claude Sonnet)
+
+- **Goal**: Replace `DMCurve._build_from_points()` with FreeCAD's native `Part.BSplineCurve.interpolate()` or `buildFromPolesMultsKnots()`. Replace manually-drawn control-point vertices and handle lines with Coin3D overlays.
+- **Files to read**:
+  - `FCDirectModeling/nurbs_geometry.py`
+  - `FCDirectModeling/dm_object.py`
+  - `FCDirectModeling/primitives/primitive_base.py`
+- **Files to modify**:
+  - `FCDirectModeling/nurbs_geometry.py`
+  - `FCDirectModeling/dm_object.py`
+- **Steps**:
+  1. Refactor `_build_from_points()` to use `interpolate` for common cases.
+  2. Refactor `to_shape()` to return `Part.Edge(self.bspline)` natively.
+  3. Add a Coin3D control-cage overlay in `DMViewProvider.attach()`.
+  4. Update `build_shape()` in `DMObjectProxy` to handle `Part.Edge` return type.
+  5. Remove the manual crosshair object from `NURBSPrimitiveCreator`.
+- **Acceptance**: Curve renders smoothly via native OCCT tessellator. Coin3D overlay handles the control points without Model tree clutter.
+
+
+## Phase 3: Curve Extrusion & Editing
 
 These tasks build the curve→surface workflow.
 
 ---
 
-### [x] 1b. Create DMCurve class (Complexity: 3/10)
+### [x] 1b. Create DMCurve class (Minimum LLM: Gemini Flash)
     - [x] Create `DMCurve` class in `nurbs_geometry.py`
     - [x] Basic interpolation and shape building
 
@@ -64,7 +126,7 @@ These tasks build the curve→surface workflow.
 
 ---
 
-### 1c. Create DMSurface class (Complexity: 4/10)
+### 1c. Create DMSurface class (Minimum LLM: Gemini Low)
 
 - **Goal**: A `DMSurface` class that builds a `Part.BSplineSurface` from a control point grid.
 - **Files to read**:
@@ -94,7 +156,7 @@ These tasks build the curve→surface workflow.
 
 ---
 
-### 1d. Implement curve extrusion to BSplineSurface (Complexity: 5/10)
+### 1d. Implement curve extrusion to BSplineSurface (Minimum LLM: Gemini High)
 
 - **Goal**: Extrude a `Part.BSplineCurve` (edge) along a direction vector to produce a `Part.BSplineSurface`. This is the core curve→surface operation. The result is a BSplineSurface, NOT a BRep solid.
 - **Files to read**:
@@ -150,7 +212,7 @@ These tasks build the curve→surface workflow.
 
 ---
 
-### 1e. Create DM_Extrude command (Complexity: 5/10)
+### 1e. Create DM_Extrude command (Minimum LLM: Gemini High)
 
 - **Goal**: An interactive command that takes a selected curve and extrudes it into a `BSplineSurface` by dragging along the work plane normal.
 - **Files to read**:
@@ -224,11 +286,11 @@ These tasks build the curve→surface workflow.
 
 ---
 
-## Phase 2: NURBS ↔ BRep Conversion
+## Phase 4: NURBS ↔ BRep Conversion
 
 ---
 
-### 2a. NURBS to BRep converter (Complexity: 4/10)
+### 2a. NURBS to BRep converter (Minimum LLM: Gemini Low)
 
 - **Goal**: Convert a DM object's `BSplineSurface` patches into a `Part.Shell` or `Part.Solid` for STEP export or boolean operations.
 - **Files to read**:
@@ -277,11 +339,11 @@ These tasks build the curve→surface workflow.
 
 ---
 
-## Phase 3: Instance, Boolean, Array
+## Phase 5: Instance, Boolean, Array
 
 ---
 
-### 3a. Implement Instance and Copy commands (Complexity: 4/10)
+### 3a. Implement Instance and Copy commands (Minimum LLM: Gemini Low)
 
 - **Goal**: Create linked instances (`App::Link`) and independent copies of DM objects.
 - **Files to read**:
@@ -299,7 +361,7 @@ These tasks build the curve→surface workflow.
 
 ---
 
-### 3b. Update booleans to use instance system (Complexity: 4/10)
+### 3b. Update booleans to use instance system (Minimum LLM: Gemini Low)
 
 - **Goal**: Booleans auto-create instance of second operand and hide original (toggleable).
 - **Files to read**:
@@ -313,11 +375,11 @@ These tasks build the curve→surface workflow.
   3. Store setting in `FreeCAD.ParamGet("User parameter:FCDirectModeling").SetBool("BoolUseInstance", True)`.
 - **Acceptance**: Fuse two objects → original second object hidden, instance used for result.
 
-- [x] **1a. Create DMPoint class** (Complexity: 2/10)
-- [x] **1f. Create Point tool** (Complexity: 3/10)
-- [x] **1g. Improve Curve Tool Visibility and Functionality** (Complexity: 4/10)
-- [x] **1h. Fix Curve Plane Projection and Interpolation** (Complexity: 3/10)
-- [ ] **1j. Unify Preview and Final Objects** (Complexity: 5/10)
+- [x] **1a. Create DMPoint class** (Minimum LLM: Gemini Flash)
+- [x] **1f. Create Point tool** (Minimum LLM: Gemini Flash)
+- [x] **1g. Improve Curve Tool Visibility and Functionality** (Minimum LLM: Gemini Low)
+- [x] **1h. Fix Curve Plane Projection and Interpolation** (Minimum LLM: Gemini Flash)
+- [ ] **1j. Unify Preview and Final Objects** (Minimum LLM: Gemini High)
     - **Goal**: Eliminate the separate `DM_Preview` object. Use a real `DMObject` that updates its properties in real-time during creation.
     - **Files to read**: `FCDirectModeling/primitives/primitive_base.py`, `FCDirectModeling/primitives/curve_creator.py`, `FCDirectModeling/dm_object.py`.
     - **Files to modify**: `FCDirectModeling/primitives/primitive_base.py`, `FCDirectModeling/primitives/curve_creator.py`, `FCDirectModeling/dm_object.py`.
@@ -331,97 +393,9 @@ These tasks build the curve→surface workflow.
 
 ---
 
-### 1k. Use Built-in BSplineCurve Rendering Instead of Manual Poles (Complexity: 6/10)
 
-- **Goal**: Replace `DMCurve._build_from_points()` — which manually assembles Bezier poles and knots — with FreeCAD's native `Part.BSplineCurve.interpolate()` or `buildFromPolesMultsKnots()`. Replace the manually-drawn control-point vertices and handle lines in `DMCurve.to_shape()` with Coin3D scene-graph overlays so the NURBS edge itself is the canonical rendered object.
-- **Background**: Currently `DMCurve._build_from_points()` computes Catmull-Rom tangents, builds explicit pole lists, knot vectors, and multiplicity arrays by hand, then passes them to `Part.BSplineCurve(poles, weights, knots, mults, periodic, degree)`. `DMCurve.to_shape()` manually adds `Part.Vertex` and `Part.makeLine` objects to the compound to draw the control cage and handles. This means we own the tessellation and rendering — FreeCAD's native curve display infrastructure is bypassed.
-- **Files to read**:
-  - `FCDirectModeling/nurbs_geometry.py` — `DMCurve._build_from_points()` and `DMCurve.to_shape()` (the code to replace).
-  - `FCDirectModeling/dm_object.py` — `DMViewProvider` (where Coin3D overlay should be attached).
-  - `FCDirectModeling/primitives/primitive_base.py` — `NURBSPrimitiveCreator.update_active_object()` (deals with preview updates).
-  - FreeCAD Part API: `Part.BSplineCurve.interpolate(pts, periodic)` and `Part.BSplineCurve.approximate(pts, ...)` — the native fitting methods.
-- **Files to modify**:
-  - `FCDirectModeling/nurbs_geometry.py` — refactor `DMCurve._build_from_points()` and `DMCurve.to_shape()`.
-  - `FCDirectModeling/dm_object.py` — add Coin3D control-cage overlay to `DMViewProvider`.
-- **Steps**:
-  1. **Refactor `_build_from_points()` to use native fitting**:
-     - For the normal (non-handle) case, replace the manual Bezier-pole building with:
-       ```python
-       bs = Part.BSplineCurve()
-       bs.interpolate(fit_pts, PeriodicFlag=is_closed)
-       ```
-       This produces a smooth cubic interpolating B-spline natively via OCCT, with no manual pole arithmetic.
-     - For the handle case (some `DMPoint` has non-`None` `handle_in`/`handle_out`), keep the existing Bezier-segment strategy BUT wrap it in a try/except with `interpolate()` as fallback. This preserves user tangent control while using native APIs for the common case.
-     - Remove the fallback `Part.makePolygon().toBSpline()` — this was a hack. If `interpolate` fails with fewer than 2 points, return `None`.
-  2. **Refactor `DMCurve.to_shape()` to return only the edge**:
-     - Change `to_shape()` to return `Part.Edge(self.bspline)` directly (a single Edge, not a Compound).
-     - Remove all `Part.Vertex`, `Part.makeLine` for handles/control points from this method. These visuals will move to the Coin3D overlay.
-  3. **Add a Coin3D control-cage overlay in `DMViewProvider`**:
-     - In `DMViewProvider.attach(vobj)`, check if `vobj.Object.ShapeType == "curve"`. If so, build a Coin3D `SoSeparator` overlay:
-       ```python
-       from pivy import coin
-       self._ctrl_cage_sep = coin.SoSeparator()
-       # SoDrawStyle for dashed lines
-       style = coin.SoDrawStyle()
-       style.linePattern = 0xF0F0  # dashed
-       style.lineWidth = 1.0
-       self._ctrl_cage_sep.addChild(style)
-       # SoCoordinate3 + SoLineSet for handle lines
-       self._ctrl_coords = coin.SoCoordinate3()
-       self._ctrl_lines = coin.SoLineSet()
-       self._ctrl_cage_sep.addChild(self._ctrl_coords)
-       self._ctrl_cage_sep.addChild(self._ctrl_lines)
-       # SoPointSet for control point markers
-       self._ctrl_pts_sep = coin.SoSeparator()
-       mat = coin.SoMaterial()
-       mat.diffuseColor = coin.SbColor(1.0, 0.5, 0.0)
-       self._ctrl_pts_sep.addChild(mat)
-       self._ctrl_pts_sep.addChild(self._ctrl_coords)  # reuse same coords
-       self._pt_draw = coin.SoDrawStyle()
-       self._pt_draw.pointSize = 6.0
-       self._ctrl_pts_sep.addChild(self._pt_draw)
-       self._ctrl_pts_sep.addChild(coin.SoPointSet())
-       self._ctrl_cage_sep.addChild(self._ctrl_pts_sep)
-       vobj.RootNode.addChild(self._ctrl_cage_sep)
-       ```
-     - In `DMViewProvider.updateData(fp, prop)`, when `prop` is `"Points"`, `"HandleIn"`, or `"HandleOut"`, rebuild the `SoCoordinate3` and `SoLineSet` from the current handle data:
-       ```python
-       def _rebuild_ctrl_cage(self, fp):
-           pts = list(fp.Points) if hasattr(fp, "Points") else []
-           h_in  = list(fp.HandleIn)  if hasattr(fp, "HandleIn")  else []
-           h_out = list(fp.HandleOut) if hasattr(fp, "HandleOut") else []
-           coords = []
-           line_verts = []  # num vertices per line strip
-           # One vertex per knot point
-           for i, p in enumerate(pts):
-               coords.append((p.x, p.y, p.z))
-           # Handle lines: each is a 2-point strip
-           for i, p in enumerate(pts):
-               if i < len(h_out) and h_out[i] != p:
-                   hi_idx = len(coords); coords.append((h_out[i].x, h_out[i].y, h_out[i].z))
-                   # strip: [knot_i, handle_out_i]
-               if i < len(h_in) and h_in[i] != p:
-                   coords.append((h_in[i].x, h_in[i].y, h_in[i].z))
-           self._ctrl_coords.point.setValues(coords)
-           # SoLineSet gets numVertices array for each strip
-           # (details depend on handle availability — implement carefully)
-       ```
-  4. **Update `build_shape()` in `DMObjectProxy`** to handle the new return type:
-     - `DMCurve.to_shape()` now returns a `Part.Edge` (not a Compound). If future code checks `shape.Edges[0]`, it still works.
-     - Remove any code in `build_shape()` that tries to iterate over sub-shapes expecting a Compound for the curve type.
-  5. **Remove the manual crosshair object from `NURBSPrimitiveCreator`** (`_preview_cursor` + `Part::Feature DM_Cursor`):
-     - This was added as a debug aid. Replace it with a Coin3D `SoTransform` + `SoMarkerSet` node attached to the view's scene graph directly, which is cheaper and doesn't pollute the document.
-     - Or just leave it removable — it's a separate cleanup task.
-- **Acceptance**:
-  - Draw a curve with at least 3 points. The curve renders as a smooth orange edge (not a polygon) via the native OCCT tessellator.
-  - Control-point markers and handle lines appear as a Coin3D overlay — they are NOT listed in the Model tree as separate objects.
-  - `DMCurve([p1, p2, p3]).to_shape()` returns a `Part.Edge`, not a `Part.Compound`.
-  - A closed curve renders without a visible seam artifact.
-  - Editing `Points`, `HandleIn`, `HandleOut` properties updates the overlay in real time.
 
----
-
-### 3d. Polar Array command (Complexity: 4/10)
+### 3d. Polar Array command (Minimum LLM: Gemini Low)
 
 - **Goal**: Repeat a shape around a central axis.
 - **Files to create/modify**:
@@ -435,11 +409,11 @@ These tasks build the curve→surface workflow.
 
 ---
 
-## Phase 4: Radial Menu & Hotkeys
+## Phase 6: Radial Menu & Hotkeys
 
 ---
 
-### 4a. Register hotkeys for all commands (Complexity: 2/10)
+### 4a. Register hotkeys for all commands (Minimum LLM: Gemini Flash)
 
 - **Goal**: Add `'Accel'` entries to all command `GetResources()` methods.
 - **Files to modify**:
@@ -452,7 +426,7 @@ These tasks build the curve→surface workflow.
 
 ---
 
-### 4b. Radial menu system (Complexity: 6/10)
+### 4b. Radial menu system (Minimum LLM: Claude Sonnet)
 
 - **Goal**: Coin3D-based radial menu at cursor position, activated by `right click`.
 
@@ -471,7 +445,7 @@ look into built in quick access menu
 
 ---
 
-### 4c. Open Sketcher on Workplane (Complexity: 3/10)
+### 4c. Open Sketcher on Workplane (Minimum LLM: Gemini Flash)
 
 - **Goal**: The "Open Sketcher" action should create a new `Sketcher::SketchObject` attached to the current working plane and open it in sketch-edit mode **without** switching the active workbench. The user stays in the DM workbench.
 - **Files to read**:
@@ -492,7 +466,7 @@ look into built in quick access menu
 
 ---
 
-### 4d. Radial Menu for Spline Points (Complexity: 5/10)
+### 4d. Radial Menu for Spline Points (Minimum LLM: Gemini High)
 
 - **Goal**: Right-clicking on a spline control point shows a small radial menu with options: **Smooth** (auto-tangent), **Corner** (break tangents), **Split** (insert point), **Custom Angle** (set handle angle numerically).
 - **Files to read**:
@@ -571,7 +545,7 @@ root.insertChild(0, transform)   # put before the billboard -->
 
 ---
 
-### 1n. Connect Point to Curve (Complexity: 4/10)
+### 1n. Connect Point to Curve (Minimum LLM: Gemini Low)
 
 - **Goal**: Allow the user to snap-connect a `DMPoint` object onto a `DMCurve`, constraining the point to lie on the curve. This enables parametric point placement along a curve.
 - **Files to read**:
@@ -590,7 +564,7 @@ root.insertChild(0, transform)   # put before the billboard -->
 
 ---
 
-### 1p. Surface Image / Noise Displacement (Complexity: 6/10)
+### 1p. Surface Image / Noise Displacement (Minimum LLM: Claude Sonnet)
 
 - **Goal**: Apply a height-map (image file or procedural noise) to displace the control grid of a `DMSurface` along its normal.
 - **Files to read**:
@@ -610,7 +584,7 @@ root.insertChild(0, transform)   # put before the billboard -->
 
 ---
 
-### 1q. Join (Heal) Curves (Complexity: 5/10)
+### 1q. Join (Heal) Curves (Minimum LLM: Gemini High)
 
 - **Goal**: Merge two selected `DMCurve` objects end-to-end into a single continuous `DMCurve`, ensuring G1 continuity at the join point.
 - **Files to read**:
@@ -629,7 +603,7 @@ root.insertChild(0, transform)   # put before the billboard -->
 
 ---
 
-### 1r. Extend Surface (Complexity: 6/10)
+### 1r. Extend Surface (Minimum LLM: Claude Sonnet)
 
 - **Goal**: Grow a `DMSurface` beyond its current boundary by adding new rows/columns of control points that follow the surface's existing tangent direction, producing a smooth extension.
 - **Files to read**:
@@ -649,7 +623,7 @@ root.insertChild(0, transform)   # put before the billboard -->
 
 ---
 
-### 1o. Create DM_FillCurve command (Complexity: 4/10)
+### 1o. Create DM_FillCurve command (Minimum LLM: Gemini Low)
 
 - **Goal**: Create a `DMSurface` that fills a selected closed `DMCurve`.
 - **Files to read**:
@@ -669,7 +643,7 @@ root.insertChild(0, transform)   # put before the billboard -->
 
 ---
 
-### 1l. Snap Workplane to Camera View (Complexity: 3/10)
+### 1l. Snap Workplane to Camera View (Minimum LLM: Gemini Flash)
 
 - **Goal**: Add a command/hotkey to snap the working plane to the current camera's view direction, and ensure the curve tool defaults to a camera-facing plane when no face is snapped.
 - **Files to read**:

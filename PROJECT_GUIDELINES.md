@@ -119,9 +119,20 @@ Coin3D-based radial menu activated by `Space`. Displays tools in a pie layout ar
 
 ## Workplane System
 
+### Interaction Flow
+- **1st click:** Defines the workplane
+- **2nd click:** Starts the active tool (point, curve, primitive, etc.)
+- **3rd click onwards:** Continues tool use
+- **Right click:** Finishes the tool
+- **Esc:** Cancels the tool
+
+### Orientation Logic
+- The work plane should be oriented normal to the surface it's placed on.
+- The X-axis should be parallel to any 2 points on the XY plane (so it doesn't twist relative to the surface).
+
 | Cursor Over | Workplane Orientation | Visual Color |
 |-------------|----------------------|-------------|
-| A face on existing geometry | Tangent to that face (normal = face normal at hit point) | Green tint |
+| A face on existing geometry | Normal to face at hit point, X-axis parallel to XY plane | Green tint |
 | Empty space | XY plane at origin, Z+ normal | Blue tint |
 
 Implementation: `FCDirectModeling/work_plane.py` — `WorkPlaneManager` class using Coin3D overlay.
