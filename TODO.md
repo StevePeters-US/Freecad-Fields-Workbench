@@ -25,19 +25,6 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### Clean up silent exception blocks (Minimum LLM: Gemini Flash)
-
-- **Goal**: Remove or properly log empty `except Exception:` blocks across the core files.
-- **Files to read**:
-  - `core/dm_object.py`
-- **Files to modify/create**:
-  - `core/dm_object.py`
-  - `tools/primitive_base.py`
-- **Steps**:
-  1. Find `except Exception:` blocks that just `pass` or contain only commented-out `pass`.
-  2. Use `dm_logger.debug` or `dm_logger.exception` to record what failed unexpectedly (e.g., in `DMObjectProxy.execute` and selection clear/add logic).
-- **Acceptance**: `except` blocks have proper trace logging rather than failing silently.
-
 ---
 ## Phase 1: Workplane & Existing Tools
 

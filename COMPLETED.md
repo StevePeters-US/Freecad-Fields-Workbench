@@ -151,6 +151,9 @@ Architecture changed from NURBS-surface-centric to BRep direct modeling. Point a
 
 ## 🛠️ Code Review & Cleanup (March 2026)
 
+### ✅ Clean up silent exception blocks (Minimum LLM: Gemini Flash)
+- **Completed**: Removed silent `except Exception: pass` blocks across the codebase (`core/`, `tools/`) and replaced them with informative logging using `dm_logger`. This covers over 20 locations, including tool lifecycle events, raycasting fallbacks, and object property updates.
+
 ### ✅ Refine dm_logger and replace FreeCAD.Console (Minimum LLM: Gemini Flash)
 - **Completed**: Enhanced `dm_logger` to support both console and optional file output. Replaced all direct `FreeCAD.Console.Print*` calls in `InitGui.py`, `commands/`, and `tools/` with standardized `dm_logger` methods.
 
