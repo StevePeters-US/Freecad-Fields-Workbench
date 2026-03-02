@@ -49,6 +49,21 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
+fix r click context menu
+
+---
+change guidelines to readme
+
+---
+
+reorganize folder structure
+
+work plane should not be in primitive
+folder for tools
+folder for nurbs logic
+
+---
+
 workplane snapping. I want to be able to snap to the center of a workplane, optionally at adjustable grid points, or at an adjustable radius from the center of the workplane.
 
 ---

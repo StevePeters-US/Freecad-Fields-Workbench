@@ -183,18 +183,23 @@ Import: STEP/IGES → Part.Shape → BRep → NURBS converter → BSplineSurface
 
 ## Logging
 
-Use `FCDirectModeling/dm_logger.py`. Never bare `print()`.
+Use `FCDirectModeling/dm_logger.py`. **Never use bare `print()` or standard Python `logging`.**
+
+FreeCAD users rely on the **Report View** tab, not the Python Console. Standard warnings and errors must be routed to `FreeCAD.Console.PrintWarning` and `FreeCAD.Console.PrintError` so they appear prominently in the UI.
 
 ```python
 from FCDirectModeling import dm_logger
-dm_logger.debug("message")
-dm_logger.info("message")
-dm_logger.warn("message")
-dm_logger.error("message")
+dm_logger.debug("message")  # -> FreeCAD.Console.PrintMessage
+dm_logger.info("message")   # -> FreeCAD.Console.PrintMessage
+dm_logger.warn("message")   # -> FreeCAD.Console.PrintWarning (Shows in Report View)
+dm_logger.error("message")  # -> FreeCAD.Console.PrintError (Shows in Report View)
 ```
 
-| Mode | Console | File | Enable |
-|------|---------|------|--------|
+**Crash Debugging Requirement:**
+If the workbench is experiencing crashing issues, the logger must also write all output to a physical file (e.g. `~/.FreeCAD/DirectModeling.log`), as the FreeCAD Report View is lost upon a hard crash.
+
+| Mode | Report View | File Log | Enable |
+|------|-------------|----------|--------|
 | Normal | ✅ | ❌ | Default |
 | Crash | ✅ | ✅ | `export DEBUG_DM_CRASH=1` |
 

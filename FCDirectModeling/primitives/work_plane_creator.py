@@ -106,79 +106,205 @@ class WorkPlaneCreator(PrimitiveBase):
             return None
             
         try:
-            # Robust hit test
-            info = self.view.getObjectInfo(pos)
-            if info and "Object" in info and "Component" in info:
+            # 1. Pixel-based hit test
+            # Try to get ALL objects under the cursor to bypass the Work Plane Preview
+            infos = []
+            if hasattr(self.view, "getObjectsInfo"):
+                infos = self.view.getObjectsInfo((int(pos[0]), int(pos[1])))
+                if infos is None:
+                    infos = []
+            else:
+                single_info = self.view.getObjectInfo((int(pos[0]), int(pos[1])))
+                infos = [single_info] if single_info else []
+                
+            info = None
+            for i in infos:
+                if not i or "Object" not in i or "Component" not in i:
+                    continue
+                obj_name = i["Object"]
+                
+                # Skip the preview object itself!
+                if self.preview_obj and obj_name == self.preview_obj.Name:
+                    continue
+                    
+                info = i
+                break
+                
+            if info:
                 obj_name = info["Object"]
                 doc = FreeCAD.ActiveDocument
-                obj = doc.getObject(obj_name) if doc else None
+                obj = doc.getObject(obj_name) if doc and obj_name else None
                 
                 # Check if it's a valid object and not our preview
                 if obj and obj.Name != (self.preview_obj.Name if self.preview_obj else ""):
+
                     subname = info["Component"]
                     if "Face" in subname:
                         face = obj.Shape.getElement(subname)
-                        # Fallback for missing 'Point' in some view modes
-                        raw_pt = info.get("Point", self.view.getPoint(pos[0], pos[1]))
-                        hit_pt = FreeCAD.Vector(raw_pt)
                         
-                        # Project hit_pt onto face to get u,v
+                        # Get true 3D surface intersection using face.section().
+                        # view.getPoint() only hits the working plane, not the surface.
+                        # We pick the front-face hit by choosing the vertex closest to the near
+                        # end of the ray (local_near), which is correct for both Perspective
+                        # and Orthographic cameras.
                         import Part
-                        dists = face.distToShape(Part.Vertex(hit_pt))
-                        if dists and len(dists) >= 3:
-                            params = dists[2]
-                            if params and len(params) > 0:
-                                u, v = None, None
-                                info_param = params[0]
-                                if isinstance(info_param, (list, tuple)) and len(info_param) >= 2:
-                                    if isinstance(info_param[0], (int, float)):
-                                        u, v = info_param[0], info_param[1]
-                                    elif isinstance(info_param[0], (list, tuple)):
-                                        u, v = info_param[0][0], info_param[0][1]
+                        world_hit_pt = None
+                        try:
+                            ray_p, ray_d = None, None
+                            if hasattr(self.view, "getRay"):
+                                r = self.view.getRay(pos[0], pos[1])
+                                if r:
+                                    ray_p = FreeCAD.Vector(r[0])
+                                    ray_d = FreeCAD.Vector(r[1])
+                                    ray_d.normalize()
+                            
+                            if ray_p is None:
+                                # Fallback: build direction from camera-to-plane-point  
+                                cam_node = self.view.getCameraNode()
+                                cam_pos = FreeCAD.Vector(*cam_node.position.getValue().getValue())
+                                wp_pt = self.view.getPoint(pos[0], pos[1])
+                                if wp_pt:
+                                    ray_p = cam_pos
+                                    ray_d = (wp_pt - cam_pos)
+                                    ray_d.normalize()
+                            
+                            if ray_p is not None and ray_d is not None:
+                                gpl = obj.getGlobalPlacement() if hasattr(obj, "getGlobalPlacement") else obj.Placement
+                                gpl_inv = gpl.inverse()
                                 
-                                if u is not None:
-                                    # Get normal from surface
-                                    local_n = face.Surface.normal(u, v)
-                                    z_axis = FreeCAD.Vector(local_n)
-                                    
-                                    # Transform normal to world space using the object's transform
-                                    if hasattr(obj, "getGlobalPlacement"):
-                                        z_axis = obj.getGlobalPlacement().Rotation.multVec(z_axis)
-                                    elif hasattr(obj, "Placement"):
-                                        z_axis = obj.Placement.Rotation.multVec(z_axis)
-                                    z_axis.normalize()
-                                    
-                                    # Build orthonormal basis
-                                    global_z = FreeCAD.Vector(0, 0, 1)
-                                    if abs(z_axis.dot(global_z)) > 0.99:
-                                        x_axis = FreeCAD.Vector(1, 0, 0)
-                                    else:
-                                        x_axis = global_z.cross(z_axis)
-                                        x_axis.normalize()
-                                    y_axis = z_axis.cross(x_axis)
-                                    y_axis.normalize()
-                                    
-                                    m = FreeCAD.Matrix(
-                                        x_axis.x, y_axis.x, z_axis.x, hit_pt.x,
-                                        x_axis.y, y_axis.y, z_axis.y, hit_pt.y,
-                                        x_axis.z, y_axis.z, z_axis.z, hit_pt.z,
-                                        0.0,      0.0,      0.0,      1.0
-                                    )
-                                    return FreeCAD.Placement(m)
-        except Exception as e:
-            dm_logger.debug(f"WorkPlaneCreator alignment logic fallback: {e}")
+                                # Build ray in local object space, extending well past the object
+                                local_near = gpl_inv.multVec(ray_p + ray_d * 1)
+                                local_far  = gpl_inv.multVec(ray_p + ray_d * 100000)
+                                
+                                ray_wire = Part.makeLine(tuple(local_near), tuple(local_far))
+                                inter = face.section(ray_wire)
+                                
+                                if inter.Vertexes:
+                                    # Pick the FRONT face: vertex closest to local_near (start of ray).
+                                    # Do NOT use distance to camera — orthographic cameras are at infinity!
+                                    best_pt = min(inter.Vertexes, key=lambda v: (v.Point - local_near).Length).Point
+                                    world_hit_pt = gpl.multVec(best_pt)
+                                
+                        except Exception as ray_e:
+                            FreeCAD.Console.PrintMessage(f"WP DBG: getRay/section error: {ray_e}\n")
+                        
+                        if world_hit_pt is None:
+                            # Fallback: working-plane intersection (may snap to silhouette on curves)
+                            wp_fallback = self.view.getPoint(pos[0], pos[1])
+                            if wp_fallback is None:
+                                return None
+                            world_hit_pt = wp_fallback
 
-        # Fallback to camera-facing grid at origin depth
+                        
+                        # --- DEBUG ---
+                        info_pt = info.get("Point")
+                        FreeCAD.Console.PrintMessage(
+                            f"WP DBG: Hovering {obj_name}.{subname}\n"
+                            f"  pos (SoEvent)         : {pos}\n"
+                            f"  info['Point']         : {info_pt}\n"
+                            f"  view.getPoint()       : ({world_hit_pt.x:.3f}, {world_hit_pt.y:.3f}, {world_hit_pt.z:.3f})\n"
+                        )
+                        # --- END DEBUG ---
+                        
+                        # Get object's world transform
+                        gpl = obj.getGlobalPlacement() if hasattr(obj, "getGlobalPlacement") else obj.Placement
+                        
+                        # Project world point to local space for geometry analysis
+                        local_hit_pt = gpl.inverse().multVec(world_hit_pt)
+                        
+                        # Calculate normal using direct shape projection
+                        local_n = None
+                        projected_local_pt = local_hit_pt
+                        
+                        import Part
+                        dists = face.distToShape(Part.Vertex(local_hit_pt))
+                        
+                        # Layout: (distance, [(pt1, pt2)], [('Face', 0, (u, v), 'Vertex', 0, None)])
+                        if dists and len(dists) >= 3 and len(dists[2]) > 0:
+                            if len(dists[1]) > 0 and len(dists[1][0]) > 0:
+                                projected_local_pt = FreeCAD.Vector(dists[1][0][0])
+                                
+                            info_tuple = dists[2][0]
+                            # Look for the (u, v) parameter tuple in the face info
+                            if len(info_tuple) >= 3 and isinstance(info_tuple[2], (tuple, list)) and len(info_tuple[2]) == 2:
+                                u, v = info_tuple[2]
+                                local_n = face.Surface.normal(u, v)
+                            elif hasattr(face, "Surface") and hasattr(face.Surface, "parameter"):
+                                # Fallback if distToShape structure changes
+                                try:
+                                    u, v = face.Surface.parameter(local_hit_pt)
+                                    local_n = face.Surface.normal(u, v)
+                                except Exception:
+                                    pass
+                        
+                        if not local_n:
+                            FreeCAD.Console.PrintMessage(f"WorkPlaneCreator: Error - Failed to calculate normal for {subname}.\n")
+                            return None
+                        
+                        if face.Orientation == "Reversed":
+                            local_n.multiply(-1.0)
+                        
+                        # Transform normal and exact mathematical point to WORLD space
+                        world_n = gpl.Rotation.multVec(FreeCAD.Vector(local_n))
+                        world_n.normalize()
+                        
+                        projected_world_pt = gpl.multVec(projected_local_pt)
+                        
+                        FreeCAD.Console.PrintMessage(
+                            f"  local_hit_pt          : ({local_hit_pt.x:.3f}, {local_hit_pt.y:.3f}, {local_hit_pt.z:.3f})\n"
+                            f"  distToShape proj pt   : ({projected_local_pt.x:.3f}, {projected_local_pt.y:.3f}, {projected_local_pt.z:.3f})\n"
+                            f"  final world origin    : ({projected_world_pt.x:.3f}, {projected_world_pt.y:.3f}, {projected_world_pt.z:.3f})\n"
+                            f"  normal (world)        : ({world_n.x:.3f}, {world_n.y:.3f}, {world_n.z:.3f})\n"
+                        )
+                        
+                        # Build stable basis: Z=normal, Y=camera-influenced-up, X=across
+                        camera_up = self.view.getUpDirection()
+                        if abs(world_n.dot(camera_up)) > 0.95:
+                            # Normal is parallel to camera up, use view direction
+                            x_axis = self.view.getViewDirection().cross(world_n)
+                        else:
+                            x_axis = camera_up.cross(world_n)
+                        
+                        x_axis.normalize()
+                        y_axis = world_n.cross(x_axis)
+                        y_axis.normalize()
+                        
+                        world_m = FreeCAD.Matrix(
+                            x_axis.x, y_axis.x, world_n.x, projected_world_pt.x,
+                            x_axis.y, y_axis.y, world_n.y, projected_world_pt.y,
+                            x_axis.z, y_axis.z, world_n.z, projected_world_pt.z,
+                            0.0,      0.0,      0.0,      1.0
+                        )
+                        world_placement = FreeCAD.Placement(world_m)
+                        
+                        # Adjust for parent transform (Body/Part/Group)
+                        final_placement = world_placement
+                        if self.preview_obj and hasattr(self.preview_obj, "InList"):
+                            for p in self.preview_obj.InList:
+                                if hasattr(p, "Placement") and p.isDerivedFrom("App::GeoFeature"):
+                                    pgpl = p.getGlobalPlacement() if hasattr(p, "getGlobalPlacement") else p.Placement
+                                    final_placement = pgpl.inverse().multiply(world_placement)
+                                    break
+                        
+                        
+                        return final_placement
+
+        except Exception as e:
+            FreeCAD.Console.PrintMessage(f"WorkPlaneCreator: Exception in snap logic: {e}\n")
+            return None
+
+        # Fallback to camera-facing at origin-plane depth
         try:
             mouse_pt = self.get_mouse_world_pos(event_dict)
-            return self.get_camera_facing_placement(mouse_pt)
+            if mouse_pt:
+                return self.get_camera_facing_placement(mouse_pt)
         except Exception:
-            return None
+            pass
+        return None
 
     def handle_click(self, event_dict):
         try:
             btn = event_dict.get("Button")
-            dm_logger.debug(f"WorkPlaneCreator.handle_click: btn={btn}")
             # Only BUTTON3 (right click) drops the tool. 
             if btn == "BUTTON3":
                 self.terminate()

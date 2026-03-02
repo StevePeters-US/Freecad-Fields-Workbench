@@ -49,6 +49,20 @@ class ViewProviderDMWorkPlane:
         self.root_node.addChild(pick_style)
         
         # Grid visual
+        # Add a bright center marker to visualize the exactly (0,0,0) point of the grid
+        self.center_sep = coin.SoSeparator()
+        self.center_mat = coin.SoMaterial()
+        self.center_mat.diffuseColor.setValue(1.0, 0.0, 0.0) # Red
+        
+        self.center_coords = coin.SoCoordinate3()
+        self.center_coords.point.setValues(0, 4, [(-10.0, 0, 0), (10.0, 0, 0), (0, -10.0, 0), (0, 10.0, 0)])
+        self.center_lines = coin.SoLineSet()
+        self.center_lines.numVertices.setValues(0, 2, [2, 2]) # Two lines, each with 2 vertices
+        self.center_sep.addChild(self.center_mat)
+        self.center_sep.addChild(self.center_coords)
+        self.center_sep.addChild(self.center_lines)
+        self.root_node.addChild(self.center_sep)
+
         self.grid_sep = coin.SoSeparator()
         
         # Material for grid and plane
