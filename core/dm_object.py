@@ -295,7 +295,7 @@ class DMViewProvider:
         if not self._debug_coords or not hasattr(fp, "DebugPoint"):
             return
         p = fp.DebugPoint
-        self._debug_coords.point.setValue(0, p.x, p.y, p.z)
+        self._debug_coords.point.set1Value(0, p.x, p.y, p.z)
 
     def _setup_coin_overlay(self, vobj):
         if not coin: return

@@ -167,52 +167,94 @@ class PrimitiveBase:
             # Ray-Plane intersection
             ray = None
             try:
-                # Diagnostics: View size
-                viewer = self.view.getViewer()
-                sz = viewer.getSize()
-                h = sz[1]
+                # Direct getRay (often added in FC 0.20+)
+                if hasattr(self.view, "getRay"):
+                    ray = self.view.getRay(x, y)
                 
-                # Attempt ray acquisition
-                def try_get_ray(cur_y):
-                    if hasattr(self.view, "getRay"):
-                        return self.view.getRay(int(x), int(cur_y))
-                    if hasattr(viewer, "getRay"):
-                        return viewer.getRay(int(x), int(cur_y))
-                    return None
-
-                # 1. Try raw (Coin3D style, 0 at bottom)
-                ray = try_get_ray(y)
-                
-                # 2. Try flipped (Qt style, 0 at top) if raw fails
+                # If that fails or isn't available, rely on Coin3D viewer
                 if not ray:
-                    ray = try_get_ray(h - y)
-                    if ray:
-                        # If flipped works, continue using it
-                        pass 
+                    viewer = self.view.getViewer()
+                    # Viewport size for Qt vs Coin Y-flip 
+                    # Coin uses bottom-left origin, Qt uses top-left
+                    if hasattr(viewer, "getGlxSize"):
+                        sz = viewer.getGlxSize() # Returns SbVec2s
+                        h = sz[1]
+                    elif hasattr(viewer, "getSize"):
+                        sz = viewer.getSize() # often returns QSize
+                        h = sz.height() if hasattr(sz, "height") else sz[1]
+                    else:
+                        h = 1000 # Blind fallback
 
+                    def try_viewer_ray(cur_y):
+                        if hasattr(viewer, "getRay"):
+                            return viewer.getRay(int(x), int(cur_y))
+                        return None
+                    
+                    ray = try_viewer_ray(y)
+                    if not ray:
+                        ray = try_viewer_ray(h - y)
+                        
             except Exception as e:
                 dm_logger.debug(f"DEBUG: Ray acquisition failed: {e}")
 
             if ray:
-                ray_p = ray[0]
-                ray_d = ray[1]
-                
-                denom = ray_d.dot(plane_normal)
-                if abs(denom) > 1e-6:
-                    t = (plane_point - ray_p).dot(plane_normal) / denom
-                    pt = ray_p + ray_d * t
-                    return pt
-                # dm_logger.debug("DEBUG: Ray is parallel to plane")
-                pass
+                dm_logger.debug(f"DEBUG: ray acquired. Type: {type(ray)}, Value: {ray}")
+                try:
+                    # FreeCAD getRay sometimes returns a dict {'base': Vector, 'dir': Vector}
+                    if isinstance(ray, dict):
+                        ray_p = ray.get('base', ray.get('Base'))
+                        ray_d = ray.get('dir', ray.get('Direction'))
+                    else:
+                        ray_p = ray[0]
+                        ray_d = ray[1]
+                        
+                    dm_logger.debug(f"DEBUG: ray_p={ray_p}, ray_d={ray_d}")
+                    if ray_p and ray_d:
+                        denom = ray_d.dot(plane_normal)
+                        dm_logger.debug(f"DEBUG: denom={denom}")
+                        if abs(denom) > 1e-6:
+                            t = (plane_point - ray_p).dot(plane_normal) / denom
+                            pt = ray_p + ray_d * t
+                            dm_logger.debug(f"DEBUG: Intersection at t={t}, pt={pt}")
+                            return pt
+                        else:
+                            dm_logger.debug("DEBUG: denom too small (ray parallel to plane)")
+                except Exception as e:
+                    dm_logger.debug(f"DEBUG: Error parsing ray data: {e}")
             else:
-                 # dm_logger.warn(f"DEBUG: getRay returned None for {x},{y} (flipped: {h-y if 'h' in locals() else 'N/A'})")
-                 pass
+                 dm_logger.debug(f"DEBUG: getRay returned None for x={x}, y={y}")
         
-        # Fallback to depth-buffered point on surface
+        # Fallback to depth-buffered point on surface or synthesize ray
         try:
             pt = self.view.getPoint(x, y)
-            # if plane_normal is not None:
-            #     dm_logger.info(f"DEBUG: Falling back to getPoint (getRay fail). pt: {pt}")
+            dm_logger.debug(f"DEBUG: Falling back to getPoint. returned pt: {pt}")
+            
+            if plane_normal is not None and plane_point is not None:
+                # Try to synthesize a ray using the camera position and the getPoint result
+                # This works because getPoint(x, y) guaranteed lies on the view ray for pixel (x,y)
+                try:
+                    cam = self.view.getCameraNode()
+                    if cam and hasattr(cam, "position"):
+                        cam_vec = cam.position.getValue()
+                        # SbVec3f gives tuple via getValue() or direct index
+                        if hasattr(cam_vec, "getValue"):
+                            cam_pos_tuple = cam_vec.getValue()
+                        else:
+                            cam_pos_tuple = (cam_vec[0], cam_vec[1], cam_vec[2])
+                        
+                        ray_p = FreeCAD.Vector(*cam_pos_tuple)
+                        ray_d = pt - ray_p
+                        ray_d.normalize()
+                        
+                        denom = ray_d.dot(plane_normal)
+                        if abs(denom) > 1e-6:
+                            t = (plane_point - ray_p).dot(plane_normal) / denom
+                            pt_on_plane = ray_p + ray_d * t
+                            dm_logger.debug(f"DEBUG: Fallback ray intersection at {pt_on_plane}")
+                            return pt_on_plane
+                except Exception as e:
+                    dm_logger.debug(f"DEBUG: Synthesized ray fallback failed: {e}")
+
             return pt
         except Exception as e:
             dm_logger.error(f"DEBUG: getPoint failed: {e}")
