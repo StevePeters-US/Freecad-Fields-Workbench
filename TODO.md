@@ -22,6 +22,62 @@ no prior context beyond the files listed. Follow this template:
 - We have as options Gemini Flash, Low, and High. Only use Claude for very difficult programming issues.
 
 ---
+
+## Code Review & Cleanup
+
+### Refine dm_logger and replace FreeCAD.Console (Minimum LLM: Gemini Flash)
+
+- **Goal**: Enhance `dm_logger` to always log to console and optionally to a log file, and standardize all logging to use it.
+- **Files to read**:
+  - `core/dm_logger.py`
+- **Files to modify/create**:
+  - `core/dm_logger.py`
+  - `InitGui.py`
+  - `tools/work_plane_tool.py`
+  - `commands/cmd_boolean.py`
+  - `commands/cmd_curve.py`
+  - `commands/cmd_settings.py`
+  - `commands/cmd_sketcher.py`
+  - `commands/cmd_install_deps.py`
+- **Steps**:
+  1. Update `core/dm_logger.py` so it always writes to `FreeCAD.Console` and can optionally write to a log file.
+  2. Search for `FreeCAD.Console.Print` in the listed files.
+  3. Replace `PrintMessage` with `dm_logger.info` or `dm_logger.debug`.
+  4. Replace `PrintError` with `dm_logger.error`.
+  5. Remove trailing `\n` from log strings since `dm_logger` handles formatting.
+- **Acceptance**: `dm_logger` supports console and optional file logging. No instances of `FreeCAD.Console` used directly for logging outside `dm_logger.py`.
+
+---
+
+### Refactor get_mouse_world_pos logic (Minimum LLM: Gemini Low)
+
+- **Goal**: Simplify the complex ray-plane intersection and fallback logic in `PrimitiveBase.get_mouse_world_pos` by extracting helpers.
+- **Files to read**:
+  - `tools/primitive_base.py`
+- **Files to modify/create**:
+  - `tools/primitive_base.py`
+- **Steps**:
+  1. Extract the direct `ray` acquisition logic into a neat helper `_get_view_ray(view, x, y)`.
+  2. Extract the ray-plane intersection math into `_intersect_ray_plane(ray_p, ray_d, plane_normal, plane_point)`.
+  3. Rewrite `get_mouse_world_pos` to call these helpers gracefully instead of deeply nested `try...except` blocks.
+- **Acceptance**: `get_mouse_world_pos` is easier to read and shorter, retaining identical functionality.
+
+---
+
+### Clean up silent exception blocks (Minimum LLM: Gemini Flash)
+
+- **Goal**: Remove or properly log empty `except Exception:` blocks across the core files.
+- **Files to read**:
+  - `core/dm_object.py`
+- **Files to modify/create**:
+  - `core/dm_object.py`
+  - `tools/primitive_base.py`
+- **Steps**:
+  1. Find `except Exception:` blocks that just `pass` or contain only commented-out `pass`.
+  2. Use `dm_logger.debug` or `dm_logger.exception` to record what failed unexpectedly (e.g., in `DMObjectProxy.execute` and selection clear/add logic).
+- **Acceptance**: `except` blocks have proper trace logging rather than failing silently.
+
+---
 ## Phase 1: Workplane & Existing Tools
 
 ### 1a. Workplane snapping improvements (Minimum LLM: Gemini Low)
@@ -207,8 +263,6 @@ no prior context beyond the files listed. Follow this template:
   2. Mouse callback: highlight nearest sector, click to activate, Esc to dismiss.
   3. Bind to `Space`.
 - **Acceptance**: Press Space → radial menu → click item → command activates.
-
----
 
 ---
 
