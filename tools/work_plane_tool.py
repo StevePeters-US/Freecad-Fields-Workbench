@@ -77,7 +77,6 @@ class WorkPlaneCreator(PrimitiveBase):
         self.task_panel = WorkPlaneTaskPanel(self)
         FreeCADGui.Control.showDialog(self.task_panel)
 
-        dm_logger.debug("WorkPlaneCreator initialized")
         self.update_handles()
 
     def terminate(self):
@@ -375,31 +374,33 @@ class WorkPlaneCreator(PrimitiveBase):
 
     def _get_ray(self, event_dict):
         pos = event_dict.get("Position", (0, 0))
-        x, y = pos[0], pos[1]
-        if not self.view: return None, None
-        
-        scene_pt = None
+        x, y = int(pos[0]), int(pos[1])
         try:
-            scene_pt = self.view.getPoint(x, y)
+            r = self.view.getRay(x, y)
+            if r and len(r) == 2:
+                ray_p = FreeCAD.Vector(r[0])
+                ray_d = FreeCAD.Vector(r[1])
+                ray_d.normalize()
+                return ray_p, ray_d
         except Exception:
             pass
             
-        if scene_pt is None:
-            vd = self.view.getViewDirection()
-            focus = self.view.getFocus() if hasattr(self.view, "getFocus") else FreeCAD.Vector(0,0,0)
-            scene_pt = focus
-            
+        # Fallback if getRay fails
         try:
+            scene_pt = self.view.getPoint(x, y)
+            focus = self.view.getFocus() if hasattr(self.view, "getFocus") else FreeCAD.Vector(0,0,0)
+            if scene_pt is None: scene_pt = focus
             cam = self.view.getCameraNode()
-            if not cam or not hasattr(cam, "position"): return None, None
-            cam_vec = cam.position.getValue()
-            cam_pos_tuple = cam_vec.getValue() if hasattr(cam_vec, "getValue") else (cam_vec[0], cam_vec[1], cam_vec[2])
-            ray_p = FreeCAD.Vector(*cam_pos_tuple)
-            ray_d = scene_pt - ray_p
-            ray_d.normalize()
-            return ray_p, ray_d
+            if cam and hasattr(cam, "position"):
+                cam_vec = cam.position.getValue()
+                cam_pos_tuple = cam_vec.getValue() if hasattr(cam_vec, "getValue") else (cam_vec[0], cam_vec[1], cam_vec[2])
+                ray_p = FreeCAD.Vector(*cam_pos_tuple)
+                ray_d = scene_pt - ray_p
+                ray_d.normalize()
+                return ray_p, ray_d
         except Exception:
-            return None, None
+            pass
+        return None, None
 
     def _hit_test(self, ray_p, ray_d):
         obj = self.target_wp if self.target_wp else self.preview_obj
@@ -424,17 +425,20 @@ class WorkPlaneCreator(PrimitiveBase):
         best_dist = float('inf')
         best_idx = -1
         
+        dm_logger.debug(f"[_hit_test] Testing ray_p: {ray_p}, ray_d: {ray_d}")
         for i, pos in enumerate(corners_local):
             v = pos - local_ray_p
             dist = v.cross(local_ray_d).Length
             cam_dist = v.dot(local_ray_d)
             if cam_dist < 0: continue
             
-            tolerance = max(1.0, 0.04 * cam_dist) 
+            # Use a more forgiving tolerance for snapping
+            tolerance = max(2.0, 0.08 * cam_dist) 
             if dist < tolerance and dist < best_dist:
                 best_dist = dist
                 best_idx = i
                 
+        dm_logger.debug(f"[_hit_test] Best idx: {best_idx}, Best dist: {best_dist}")
         return best_idx
 
     def event_cb(self, event_dict):
@@ -508,9 +512,12 @@ class WorkPlaneCreator(PrimitiveBase):
                 
             elif self.state == 1:
                 # Check if clicking on a corner
+                dm_logger.debug(f"[handle_click] State 1 - Generating ray for pos: {event_dict.get('Position')}")
                 ray_p, ray_d = self._get_ray(event_dict)
                 hit_idx = self._hit_test(ray_p, ray_d)
+                dm_logger.debug(f"[handle_click] Hit idx: {hit_idx}")
                 if hit_idx != -1:
+                    dm_logger.debug(f"[handle_click] Transitioning to State 2 for corner {hit_idx}")
                     self.active_corner_idx = hit_idx
                     self.state = 2 # dragging
                     # Get drag plane normal and origin
@@ -519,6 +526,7 @@ class WorkPlaneCreator(PrimitiveBase):
                     self.drag_plane_o = plc.Base
                     return True
                 else:
+                    dm_logger.debug(f"[handle_click] Click missed corners, terminating.")
                     self.terminate()
                     return True
                     
@@ -542,6 +550,7 @@ class WorkPlaneCreator(PrimitiveBase):
             elif self.state == 1:
                 pass
             elif self.state == 2 and self.target_wp:
+                dm_logger.debug(f"[handle_move] State 2 - Dragging corner {self.active_corner_idx}")
                 pt_global = self.get_mouse_world_pos(event_dict, self.drag_plane_n, self.drag_plane_o)
                 if pt_global:
                     pt_local = self.target_wp.Placement.inverse().multVec(pt_global)
@@ -552,5 +561,7 @@ class WorkPlaneCreator(PrimitiveBase):
                     if self.doc:
                         self.doc.recompute()
                     self.update_handles()
-        except Exception:
-            pass
+        except Exception as e:
+            dm_logger.error(f"[handle_move] Exception: {e}")
+            import traceback
+            traceback.print_exc()

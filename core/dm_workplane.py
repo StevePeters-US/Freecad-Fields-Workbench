@@ -23,6 +23,9 @@ class DMWorkPlane:
         if not hasattr(obj, "Width"):
             obj.addProperty("App::PropertyLength", "Width", "DirectModeling", "Width of the grid")
             obj.Width = 100.0
+        if not hasattr(obj, "GridSpacing"):
+            obj.addProperty("App::PropertyLength", "GridSpacing", "DirectModeling", "Spacing between grid lines")
+            obj.GridSpacing = 10.0
             
     def execute(self, obj):
         pass
@@ -84,9 +87,10 @@ class ViewProviderDMWorkPlane:
         self.grid_sep.addChild(self.face_set)
         
         # Initial grid geometry
-        l = self.Object.Length if hasattr(self.Object, "Length") else 100.0
-        w = self.Object.Width if hasattr(self.Object, "Width") else 100.0
-        self._setup_grid(l, w, 10)
+        l = self.Object.Length.Value if hasattr(self.Object.Length, "Value") else float(getattr(self.Object, "Length", 100.0))
+        w = self.Object.Width.Value if hasattr(self.Object.Width, "Value") else float(getattr(self.Object, "Width", 100.0))
+        s = self.Object.GridSpacing.Value if hasattr(self.Object, "GridSpacing") and hasattr(self.Object.GridSpacing, "Value") else float(getattr(self.Object, "GridSpacing", 10.0))
+        self._setup_grid(l, w, s)
         
         self.transform = coin.SoTransform()
         self.root_node.insertChild(self.transform, 0)
@@ -96,27 +100,47 @@ class ViewProviderDMWorkPlane:
         
         # No dynamic scale event callback needed anymore.
 
-    def _setup_grid(self, length, width, steps):
+    def _setup_grid(self, length, width, spacing):
         points = []
         half_l = length / 2.0
         half_w = width / 2.0
-        step_l = length / float(steps)
-        step_w = width / float(steps)
         
+        # Avoid zero or negative spacing
+        if spacing <= 0:
+            spacing = 10.0
+            
+        steps_l = int(length / spacing)
+        steps_w = int(width / spacing)
+        
+        # Center the grid lines nicely
         # Lines parallel to X (along width)
-        for i in range(steps + 1):
-            y = -half_w + i * step_w
+        y_starts = [0]
+        for i in range(1, int(half_w / spacing) + 1):
+            y_starts.append(i * spacing)
+            y_starts.append(-i * spacing)
+            
+        for y in y_starts:
             points.append((-half_l, y, 0))
             points.append((half_l, y, 0))
             
         # Lines parallel to Y (along length)
-        for i in range(steps + 1):
-            x = -half_l + i * step_l
+        x_starts = [0]
+        for i in range(1, int(half_l / spacing) + 1):
+            x_starts.append(i * spacing)
+            x_starts.append(-i * spacing)
+            
+        for x in x_starts:
             points.append((x, -half_w, 0))
             points.append((x, half_w, 0))
             
-        self.grid_coords.point.setValues(0, len(points), points)
-        self.grid_lines.numVertices.setValues(0, (steps + 1) * 2, [2] * ((steps + 1) * 2))
+        self.grid_coords.point.setNum(len(points))
+        if len(points) > 0:
+            self.grid_coords.point.setValues(0, len(points), points)
+            
+        num_lines = len(points) // 2
+        self.grid_lines.numVertices.setNum(num_lines)
+        if num_lines > 0:
+            self.grid_lines.numVertices.setValues(0, num_lines, [2] * num_lines)
         
         f_points = [
             (-half_l, -half_w, 0),
@@ -133,10 +157,11 @@ class ViewProviderDMWorkPlane:
         if prop == "Placement":
             # Nothing to do for translation/rotation as Coin3D parent handles it
             pass
-        elif prop in ["Length", "Width"]:
-            l = self.Object.Length if hasattr(self.Object, "Length") else 100.0
-            w = self.Object.Width if hasattr(self.Object, "Width") else 100.0
-            self._setup_grid(l, w, 10)
+        elif prop in ["Length", "Width", "GridSpacing"]:
+            l = self.Object.Length.Value if hasattr(self.Object.Length, "Value") else float(getattr(self.Object, "Length", 100.0))
+            w = self.Object.Width.Value if hasattr(self.Object.Width, "Value") else float(getattr(self.Object, "Width", 100.0))
+            s = self.Object.GridSpacing.Value if hasattr(self.Object.GridSpacing, "Value") else float(getattr(self.Object, "GridSpacing", 10.0))
+            self._setup_grid(l, w, s)
 
     def getDisplayModes(self, obj):
         return ["Standard"]

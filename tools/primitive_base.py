@@ -43,6 +43,12 @@ class PrimitiveBase:
     active_tool = None
 
     def __init__(self):
+        if PrimitiveBase.active_tool and hasattr(PrimitiveBase.active_tool, 'terminate'):
+            try:
+                PrimitiveBase.active_tool.terminate()
+            except Exception:
+                pass
+                
         self._terminated = False
         self.view = FreeCADGui.activeView()
         self.doc = FreeCAD.ActiveDocument
