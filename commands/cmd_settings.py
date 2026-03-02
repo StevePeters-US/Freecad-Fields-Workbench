@@ -29,7 +29,7 @@ class _SettingsDialog(QtGui.QDialog):
         self.setWindowTitle("Direct Modeling Settings")
         self.setMinimumWidth(320)
 
-        from FCDirectModeling.dm_object import get_show_wireframe, get_line_width, get_point_size
+        from core.dm_object import get_show_wireframe, get_line_width, get_point_size
         current_wire = get_show_wireframe()
         current_lw = get_line_width()
         current_ps = get_point_size()
@@ -63,7 +63,7 @@ class _SettingsDialog(QtGui.QDialog):
         layout.addRow(btn_box)
 
     def _on_accept(self):
-        from FCDirectModeling.dm_object import set_show_wireframe, set_line_width, set_point_size, refresh_all_dm_objects
+        from core.dm_object import set_show_wireframe, set_line_width, set_point_size, refresh_all_dm_objects
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()

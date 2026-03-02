@@ -1,7 +1,7 @@
 import FreeCAD
 import FreeCADGui
 import Part
-from FCDirectModeling import dm_logger, dm_object
+from core import dm_logger, dm_object
 
 class DM_FillCurve:
     """Command to fill a closed DM curve with a NURBS surface."""

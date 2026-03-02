@@ -6,8 +6,8 @@ from PySide import QtCore
 import traceback
 import math
 
-from FCDirectModeling import dm_logger
-from FCDirectModeling.work_plane import WorkPlaneManager
+from core import dm_logger
+from core.work_plane import WorkPlaneManager
 
 
 
@@ -538,7 +538,7 @@ class NURBSPrimitiveCreator(PrimitiveBase):
 
         # Create or update
         if self._active_obj is None:
-            from FCDirectModeling.dm_object import create_dm_object
+            from core.dm_object import create_dm_object
             self._active_obj = create_dm_object("DMObject", shape_type, local_params, placement=active_placement)
             # Set initial label if possible
             if self._active_obj:

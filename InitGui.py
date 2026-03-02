@@ -32,48 +32,33 @@ import FreeCADGui
 import os
 import sys
 import inspect
-import FCDirectModeling
 
-# Ensure local imports work by adding the workbench directory to sys.path
-# This is often needed if FreeCAD doesn't add it automatically
-try:
-    # Use inspect to get the file path since __file__ might not be defined
-    wb_root = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
-    if wb_root not in sys.path:
-        sys.path.append(wb_root)
-except Exception as e:
-    FreeCAD.Console.Error("DirectModeling: Error setting up sys.path: " + str(e) + "\n")
-
-# Register the icon path at module level so it's available immediately
-# Use FCDirectModeling module location to reliably find the workbench root
-wb_path = os.path.dirname(os.path.dirname(FCDirectModeling.__file__))
-icon_path = os.path.join(wb_path, 'Resources', 'icons')
-FreeCADGui.addIconPath(icon_path)
-
-class DirectModelingWorkbench(FreeCADGui.Workbench):
-    """
-    Defines the Direct Modeling Workbench.
-    """
+class DirectModelingWorkbench(Workbench):
+    "Direct Modeling workbench object"
+    Icon = os.path.join(os.path.dirname(inspect.getfile(inspect.currentframe())), 'Resources', 'icons', 'DirectModeling.svg')
     MenuText = "Direct Modeling"
-    ToolTip = "Direct Modeling workbench"
-    Icon = "DirectModeling.svg"
+    ToolTip = "Real-time NURBS and BRep modeling"
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"
 
     def Initialize(self):
-        """This function is executed when the workbench is activated."""
-        # Import the command modules. This executes the FreeCADGui.addCommand()
-        # in each file, making the commands available to FreeCAD.
+        """This function is executed when the workbench is activated for the first time."""
+        FreeCAD.Console.PrintLog(f"DM: Loading from {os.path.dirname(inspect.getfile(inspect.currentframe()))}\n")
         try:
-            from dm_commands import command_create_curve
-            from dm_commands import command_boolean
-            from dm_commands import command_dm_settings
-            from dm_commands import command_open_sketcher
-            from dm_commands import command_create_point
-            from dm_commands import command_translate
-            from dm_commands import command_fill_curve
-            from dm_commands import command_work_plane
+            # Import commands from the new commands/ directory
+            import commands.cmd_point
+            import commands.cmd_curve
+            import commands.cmd_workplane
+            import commands.cmd_boolean
+            import commands.cmd_settings
+            import commands.cmd_sketcher
+            import commands.cmd_translate
+            import commands.cmd_fill_curve
+            
+            # Import core modules
+            import core as FCDirectModeling
+            import tools
             
             self.appendToolbar("Direct Modeling", [
                 'DM_WorkPlane',

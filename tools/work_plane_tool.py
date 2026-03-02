@@ -1,8 +1,8 @@
 import FreeCAD
 import FreeCADGui
-from FCDirectModeling.primitives.primitive_base import PrimitiveBase
-from FCDirectModeling.dm_workplane import create_dm_workplane
-from FCDirectModeling import dm_logger
+from .primitive_base import PrimitiveBase
+from core.dm_workplane import create_dm_workplane
+from core import dm_logger
 import math
 
 class WorkPlaneTaskPanel:

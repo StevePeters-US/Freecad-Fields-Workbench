@@ -6,8 +6,8 @@ Moves whole DMObjects or selected sub-elements (vertices/handles).
 import FreeCAD
 import FreeCADGui
 from PySide import QtCore
-from FCDirectModeling import dm_logger
-from FCDirectModeling.primitives.primitive_base import PrimitiveBase
+from core import dm_logger
+from .primitive_base import PrimitiveBase
 
 class TranslateTool(PrimitiveBase):
     def __init__(self):

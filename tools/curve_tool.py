@@ -3,7 +3,7 @@ import FreeCADGui
 import Part
 from PySide import QtCore, QtGui
 from .primitive_base import NURBSPrimitiveCreator
-from FCDirectModeling import dm_logger
+from core import dm_logger
 
 class CurveCreator(NURBSPrimitiveCreator):
     """Tool to create a DMCurve object from clicked points."""

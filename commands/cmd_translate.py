@@ -4,7 +4,7 @@ DM Translate Command — Move objects or control points with axis constraints.
 
 import FreeCAD
 import FreeCADGui
-from FCDirectModeling.primitives.translate_tool import TranslateTool
+from tools.translate_tool import TranslateTool
 
 class CommandDMTranslate:
     def GetResources(self):

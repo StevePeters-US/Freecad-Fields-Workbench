@@ -98,7 +98,7 @@ class DMCurve:
                 self._bspline = bs
                 return bs
             except Exception as e:
-                from FCDirectModeling import dm_logger
+                from . import dm_logger
                 dm_logger.debug(f"DEBUG: Native interpolate failed: {e}. Falling back to manual pole building.")
         
         # 2. Handle path: Build Bezier poles for each cubic segment (preserved for explicit tangent control)
@@ -166,7 +166,7 @@ class DMCurve:
             self._bspline = bs
             return bs
         except Exception as e:
-            from FCDirectModeling import dm_logger
+            from . import dm_logger
             dm_logger.debug(f"DEBUG: DMCurve construction failed: {e}")
             try:
                 bs = Part.BSplineCurve()
@@ -197,7 +197,7 @@ class DMCurve:
                 # Return only the edge. Markers/handles are now handled by DMViewProvider overlay.
                 return Part.Edge(bs)
             except Exception as e:
-                from FCDirectModeling import dm_logger
+                from . import dm_logger
                 dm_logger.debug(f"DEBUG: DMCurve.to_shape edge error: {e}")
 
         # Fallback if no BSpline could be built (e.g. 1 point)
@@ -229,73 +229,4 @@ class DMCurve:
         closed_str = " (closed)" if self.is_closed else ""
         return f"DMCurve({pts_str}){closed_str}"
 
-class DMSurface:
-    """NURBS surface from a control point grid."""
-    def __init__(self, control_grid, u_degree=3, v_degree=3):
-        self.control_grid = control_grid  # List[List[FreeCAD.Vector or DMPoint]]
-        self.u_degree = u_degree
-        self.v_degree = v_degree
 
-    @classmethod
-    def from_boundaries(cls, c1, c2, d1, d2, res=8):
-        """
-        Create a DMSurface using a bilinear Coons patch from 4 boundary curves.
-        c1, c2: V-boundaries at v=0 and v=1 (U directions)
-        d1, d2: U-boundaries at u=0 and u=1 (V directions)
-        """
-        grid = []
-        for j in range(res):
-            v = j / (res - 1)
-            row = []
-            for i in range(res):
-                u = i / (res - 1)
-                
-                # Boundaries
-                p1 = c1.value(u) # S(u, 0)
-                p2 = c2.value(u) # S(u, 1)
-                q1 = d1.value(v) # S(0, v)
-                q2 = d2.value(v) # S(1, v)
-                
-                # Corners
-                s00 = c1.value(0)
-                s10 = c1.value(1)
-                s01 = c2.value(0)
-                s11 = c2.value(1)
-                
-                # Bilinear blend formula
-                sc = p1 * (1 - v) + p2 * v
-                sd = q1 * (1 - u) + q2 * u
-                scd = s00 * (1 - u) * (1 - v) + s10 * u * (1 - v) + s01 * (1 - u) * v + s11 * u * v
-                
-                pos = sc + sd - scd
-                row.append(pos)
-            grid.append(row)
-        return cls(grid)
-
-    def to_bspline_surface(self):
-        """Returns a Part.BSplineSurface by interpolating the control grid."""
-        if not self.control_grid or len(self.control_grid) < 2 or len(self.control_grid[0]) < 2:
-            return None
-            
-        points_grid = []
-        for row in self.control_grid:
-            points_grid.append([p.to_vector() if hasattr(p, "to_vector") else FreeCAD.Vector(p) for p in row])
-            
-        try:
-            bs = Part.BSplineSurface()
-            bs.interpolate(points_grid)
-            return bs
-        except Exception as e:
-            from FCDirectModeling import dm_logger
-            dm_logger.debug(f"DEBUG: DMSurface interpolate error: {e}")
-            return None
-
-    def to_shape(self):
-        """Returns the surface as a Part.Shape (Face)."""
-        bs = self.to_bspline_surface()
-        if bs:
-            try:
-                return bs.toShape()
-            except Exception:
-                pass
-        return Part.Shape()

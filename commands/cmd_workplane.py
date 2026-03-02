@@ -1,6 +1,6 @@
 import FreeCAD
 import FreeCADGui
-from FCDirectModeling.primitives.work_plane_creator import WorkPlaneCreator
+from tools.work_plane_tool import WorkPlaneCreator
 
 class DM_WorkPlane:
     """Command to activate the WorkPlaneCreator tool."""

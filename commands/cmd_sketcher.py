@@ -7,7 +7,7 @@ creating a new sketch on the active face or on the XY plane if nothing is select
 
 import FreeCAD
 import FreeCADGui
-from FCDirectModeling import dm_logger
+from core import dm_logger
 
 
 class DMOpenSketcherCommand:

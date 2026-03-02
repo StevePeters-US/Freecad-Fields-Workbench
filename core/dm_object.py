@@ -1,5 +1,5 @@
 """
-FCDirectModeling/dm_object.py
+core/dm_object.py
 
 Core Direct Modeling document object. Uses Part::FeaturePython for native
 NURBS/BRep rendering.
@@ -65,7 +65,7 @@ class DMObjectProxy:
             obj.addProperty("App::PropertyString", "ShapeType", "DM", "Type of primitive")
         obj.ShapeType = shape_type
         
-        from FCDirectModeling import dm_logger
+        from . import dm_logger
         dm_logger.debug(f"DMObjectProxy.__init__: type={shape_type}, has_placement={placement is not None}")
         
         if placement:
@@ -185,7 +185,7 @@ class DMObjectProxy:
     def execute(self, fp):
         """Called by FreeCAD to recompute the object."""
         try:
-            from FCDirectModeling import dm_logger
+            from . import dm_logger
             
             # Syncing placement here causes infinite recompute loops.
             # Handle this in the SourceCurve property's onChanged if desired.
@@ -203,7 +203,7 @@ class DMObjectProxy:
             fp.Shape = new_shape
             
         except Exception:
-            from FCDirectModeling import dm_logger
+            from . import dm_logger
             dm_logger.exception(f"DMObject.execute error for {fp.Label}")
 
     def __setstate__(self, state):
@@ -235,7 +235,7 @@ class DMViewProvider:
         self._style = None
 
     def attach(self, vobj):
-        from FCDirectModeling import dm_logger
+        from . import dm_logger
         self.Object = vobj.Object
         dm_logger.debug(f"DMViewProvider.attach: obj={self.Object.Label}, coin_avail={coin is not None}")
         if coin and hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "curve":
@@ -243,7 +243,7 @@ class DMViewProvider:
 
     def _setup_coin_overlay(self, vobj):
         if not coin: return
-        from FCDirectModeling import dm_logger
+        from . import dm_logger
         dm_logger.debug(f"DMViewProvider._setup_coin_overlay: {vobj.Object.Label}")
         
         self._ctrl_cage_sep = coin.SoSeparator()
@@ -300,7 +300,7 @@ class DMViewProvider:
 
     def _rebuild_control_cage(self, fp):
         if not coin: return
-        from FCDirectModeling import dm_logger
+        from . import dm_logger
 
         # Lazy initialization if attach() missed it or didn't find "curve" yet
         if not self._ctrl_coords:
@@ -358,7 +358,7 @@ class DMViewProvider:
         self._ctrl_lines.startIndex.setValue(len(marker_coords) + len(handle_marker_coords))
 
     def updateData(self, fp, prop):
-        from FCDirectModeling import dm_logger
+        from . import dm_logger
         dm_logger.debug(f"DMViewProvider.updateData: obj={fp.Label}, prop={prop}")
         if prop in ["Points", "HandleIn", "HandleOut"]:
             self._rebuild_control_cage(fp)
@@ -408,7 +408,7 @@ def create_dm_object(name, shape_type, params=None, placement=None):
     """
     Create a DM object (Part::FeaturePython).
     """
-    from FCDirectModeling import dm_logger
+    from . import dm_logger
     
     doc = FreeCAD.activeDocument()
     if not doc:
@@ -454,7 +454,7 @@ def create_dm_object(name, shape_type, params=None, placement=None):
         return obj
         
     except Exception:
-        from FCDirectModeling import dm_logger
+        from . import dm_logger
         dm_logger.exception(f"create_dm_object FAILED for {name}")
         return None
 

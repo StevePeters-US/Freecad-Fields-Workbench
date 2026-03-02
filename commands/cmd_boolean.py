@@ -48,7 +48,7 @@ class CommandDMBoolean:
                 )
                 return
 
-        from FCDirectModeling.dm_object import create_dm_object
+        from core.dm_object import create_dm_object
 
         try:
             doc = FreeCAD.activeDocument()

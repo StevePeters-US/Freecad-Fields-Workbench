@@ -30,3 +30,5 @@ coverage.xml
 *.cover
 .hypothesis/
 
+# FreeCAD backups
+*.FCBak

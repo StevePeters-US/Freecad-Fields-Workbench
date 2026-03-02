@@ -1,6 +1,6 @@
 import FreeCAD
 import FreeCADGui
-from FCDirectModeling.primitives.point_creator import PointCreator
+from tools.point_tool import PointCreator
 
 class DM_CreatePoint:
     """Command to activate the PointCreator tool."""

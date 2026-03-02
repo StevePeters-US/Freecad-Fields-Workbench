@@ -1,7 +1,7 @@
 import FreeCAD
 import Part
 from .primitive_base import NURBSPrimitiveCreator
-from FCDirectModeling import dm_logger
+from core import dm_logger
 
 class PointCreator(NURBSPrimitiveCreator):
     """Tool to create a DMPoint object at a clicked location."""

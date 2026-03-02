@@ -23,82 +23,6 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-## Phase 0: Cleanup & Restructure
-
-### 0a. Delete obsolete files (Minimum LLM: Gemini Flash)
-
-- **Goal**: Remove `PROJECT_GUIDELINES.md` and `guidelines_prompt.md` — the new `README.md` replaces both.
-- **Files to delete**:
-  - `PROJECT_GUIDELINES.md`
-  - `guidelines_prompt.md`
-- **Steps**:
-  1. Delete both files.
-  2. Verify they are no longer referenced in any `.py` file.
-- **Acceptance**: Files are gone. No broken imports or references.
-
----
-
-### 0b. Reorganize folder structure (Minimum LLM: Gemini Flash)
-
-- **Goal**: Rename `FCDirectModeling/` → `core/`, extract `primitives/` → `tools/`, rename `dm_commands/` → `commands/` to match the target layout in `README.md`.
-- **Files to read**:
-  - `README.md` — target folder structure
-  - `InitGui.py` — import paths to update
-- **Files to modify**:
-  - `InitGui.py` — update all `from FCDirectModeling` and `from dm_commands` imports
-  - All `__init__.py` files
-  - Every file with cross-module imports
-- **Steps**:
-  1. `git mv FCDirectModeling core`
-  2. `git mv core/primitives tools` (move the primitives subfolder out to top-level `tools/`)
-  3. `git mv dm_commands commands`
-  4. Rename files in `tools/`: `curve_creator.py` → `curve_tool.py`, `point_creator.py` → `point_tool.py`, `work_plane_creator.py` → remove (merge into `core/work_plane.py` or keep separate)
-  5. Rename files in `commands/`: `command_create_curve.py` → `cmd_curve.py`, etc.
-  6. Update all import statements across the codebase.
-  7. Update `__init__.py` files.
-- **Acceptance**: FreeCAD loads the workbench without import errors. All tools work as before.
-
----
-
-### 0c. Remove NURBS-specific modules (Minimum LLM: Gemini Flash)
-
-- **Goal**: Remove code that is exclusively for the old NURBS-surface architecture and won't be used in BRep mode.
-- **Files to read**:
-  - `core/nurbs_geometry.py` — review which classes are still useful (DMPoint, DMCurve are KEPT)
-  - `core/nurbs_primitives.py` — review what's used
-- **Files to modify/delete**:
-  - `core/nurbs_primitives.py` — delete if only NURBS surface builders remain
-  - `core/nurbs_geometry.py` — keep `DMPoint` and `DMCurve`, remove `DMSurface` / `DMPatch` if present
-- **Steps**:
-  1. Audit `nurbs_geometry.py` — keep `DMPoint`, `DMCurve`. Remove any NURBS-surface-only classes.
-  2. Audit `nurbs_primitives.py` — if it only contains `build_curve()`, merge into `dm_object.py` or keep. Delete NURBS surface builders.
-  3. Remove any dangling imports.
-- **Acceptance**: No NURBS-surface-specific code remains. Point and curve creation still work.
-
----
-
-### 0d. Consolidate test files (Minimum LLM: Gemini Flash)
-
-- **Goal**: Move all scattered `test_*.py` files from the project root into a `tests/` directory.
-- **Files to move**: `test_datum.py`, `test_dist.py`, `test_getObjectsInfo.py`, `test_getinfo.py`, `test_getobj.py`, `test_grid_center.py`, `test_hitinfo.py`, `test_normal.py`, `test_raycast.py`, `test_sphere_normal.py`, `test_sphere_normal2.py`, `test_wm_props.py`, `test_workplane.py`
-- **Steps**:
-  1. Create `tests/` directory at project root.
-  2. Move all `test_*.py` files into it.
-  3. Update any import paths inside the test files.
-- **Acceptance**: All test files are in `tests/`. Running them still works.
-
----
-
-### 0e. Clean up backup files (Minimum LLM: Gemini Flash)
-
-- **Goal**: Remove or gitignore FreeCAD backup files.
-- **Files**: `DirectModeling.20260226-163123.FCBak`
-- **Steps**:
-  1. Add `*.FCBak` to `.gitignore`.
-  2. Remove the backup file from tracking: `git rm --cached *.FCBak`
-- **Acceptance**: No `.FCBak` files in git. Pattern is in `.gitignore`.
-
----
 
 ## Phase 1: Workplane & Existing Tools
 
@@ -118,24 +42,6 @@ no prior context beyond the files listed. Follow this template:
   4. Wire snapping into `get_point_on_plane()` with toggle via DM Settings.
 - **Acceptance**: Points placed near grid intersections snap to them. Snap modes are toggleable.
 
----
-
-### 1b. Snap workplane to camera view (Minimum LLM: Gemini Low)
-
-- **Goal**: Add a hotkey `V` to snap the workplane to the current camera view direction. When no face is under the cursor, default to a camera-facing plane.
-- **Files to read**:
-  - `core/work_plane.py` — `WorkPlaneManager`
-  - `tools/primitive_base.py` — `handle_move()` state 0
-- **Files to create**:
-  - `commands/cmd_snap_wp.py` — `DM_SnapWPToView`
-- **Files to modify**:
-  - `tools/primitive_base.py` — fallback plane when no face under cursor
-  - `InitGui.py` — register command
-- **Steps**:
-  1. `DM_SnapWPToView.Activated()`: get camera orientation, build placement, call `WorkPlaneManager.set_placement()`.
-  2. In `handle_move()` state 0: if no face found, use camera-aligned plane.
-  3. Register with hotkey `V`.
-- **Acceptance**: Press `V` → WP snaps to camera view. Drawing in empty space draws on camera-aligned plane.
 
 ---
 

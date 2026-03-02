@@ -2,7 +2,7 @@ import FreeCAD
 import Part
 import math
 from pivy import coin
-from FCDirectModeling import dm_logger
+from . import dm_logger
 
 class DMWorkPlane:
     def __init__(self, obj):

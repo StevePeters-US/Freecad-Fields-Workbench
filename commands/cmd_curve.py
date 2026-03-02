@@ -1,6 +1,6 @@
 import FreeCAD
 import FreeCADGui
-from FCDirectModeling import primitives as primitive_creators
+import tools as primitive_creators
 
 class CreateCurveCommand:
     """

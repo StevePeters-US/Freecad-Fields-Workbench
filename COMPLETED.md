@@ -10,6 +10,21 @@ Architecture changed from NURBS-surface-centric to BRep direct modeling. Point a
 
 ---
 
+### ✅ Phase 0a: Delete obsolete files
+- **Completed**: Removed `PROJECT_GUIDELINES.md` and `guidelines_prompt.md`. Verified that these files are no longer referenced in the codebase.
+
+### ✅ Phase 0b: Reorganize folder structure
+- **Completed**: Renamed `FCDirectModeling/` → `core/`, extracted `primitives/` → `tools/`, and renamed `dm_commands/` → `commands/`. Updated all internal import paths and renamed tool/command files for consistency (`creator` → `tool`, `command_X` → `cmd_X`).
+
+### ✅ Phase 0c: Remove NURBS-specific modules
+- **Completed**: Removed legacy NURBS-surface-specific code, including the `DMSurface` class from `core/nurbs_geometry.py` and the `core/nurbs_primitives.py` module. 
+
+### ✅ Phase 0d: Delete test files
+- **Completed**: Deleted all scattered `test_*.py` files from the root and the `core/tests/` directory as requested, cleaning up the workspace for BRep-focused development.
+
+### ✅ Phase 0e: Clean up backup files
+- **Completed**: Removed legacy `.FCBak` files and updated `.gitignore` to prevent future FreeCAD backups from being tracked.
+
 ### ✅ Phase 1b: Create DMCurve class
 - **Completed**: Defined the DMCurve class (formerly NurbsEdge) in FCDirectModeling/nurbs_geometry.py. It generates Part.BSplineCurve from sequences of DMPoint objects, supporting interpolation and linear segments.
 

@@ -4,7 +4,7 @@ import FreeCADGui
 from pivy import coin
 import math
 import traceback
-from FCDirectModeling import dm_logger
+from . import dm_logger
 
 class WorkPlaneManager:
     """
