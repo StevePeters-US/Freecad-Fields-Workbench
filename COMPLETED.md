@@ -4,6 +4,12 @@ Tasks moved here from `TODO.md` after verification.
 
 ---
 
+## 🔄 BRep Pivot (March 2026)
+
+Architecture changed from NURBS-surface-centric to BRep direct modeling. Point and curve tools are retained. Primitives now create `Part.Shape` solids via `Part.makeBox()` etc. instead of `Part.BSplineSurface`. Boolean operations use standard OCCT BRep booleans.
+
+---
+
 ### ✅ Phase 1b: Create DMCurve class
 - **Completed**: Defined the DMCurve class (formerly NurbsEdge) in FCDirectModeling/nurbs_geometry.py. It generates Part.BSplineCurve from sequences of DMPoint objects, supporting interpolation and linear segments.
 
