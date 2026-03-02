@@ -7,6 +7,11 @@ Tasks moved here from `TODO.md` after verification.
 ## 🔄 BRep Pivot (March 2026)
 
 Architecture changed from NURBS-surface-centric to BRep direct modeling. Point and curve tools are retained. Primitives now create `Part.Shape` solids via `Part.makeBox()` etc. instead of `Part.BSplineSurface`. Boolean operations use standard OCCT BRep booleans.
+### ✅ Open Sketcher on Workplane (Minimum LLM: Gemini Flash)
+- **Completed**: Updated `DM_OpenSketcher` command to create a new sketch on the selected `DMWorkPlane`. If nothing is selected, the sketch is aligned to the viewport (facing the camera). Automatically switches to Sketcher workbench and enters edit mode.
+
+---
+
 ### ✅ Scale Workplane (Minimum LLM: Gemini Low)
 - **Completed**: Implemented interactive corner dragging for `DMWorkPlane` objects. Resizing keeps a consistent `GridSpacing` (default 10mm). Added 4 corner handle markers in Coin3D for visual feedback. Fixed critical crashes related to property evaluation and multiple tool initializations. Added persistent crash logging to the DM Settings.
 

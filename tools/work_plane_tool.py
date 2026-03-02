@@ -425,7 +425,6 @@ class WorkPlaneCreator(PrimitiveBase):
         best_dist = float('inf')
         best_idx = -1
         
-        dm_logger.debug(f"[_hit_test] Testing ray_p: {ray_p}, ray_d: {ray_d}")
         for i, pos in enumerate(corners_local):
             v = pos - local_ray_p
             dist = v.cross(local_ray_d).Length
@@ -438,8 +437,7 @@ class WorkPlaneCreator(PrimitiveBase):
                 best_dist = dist
                 best_idx = i
                 
-        dm_logger.debug(f"[_hit_test] Best idx: {best_idx}, Best dist: {best_dist}")
-        return best_idx
+        return best_idx, best_dist
 
     def event_cb(self, event_dict):
         try:
@@ -514,10 +512,9 @@ class WorkPlaneCreator(PrimitiveBase):
                 # Check if clicking on a corner
                 dm_logger.debug(f"[handle_click] State 1 - Generating ray for pos: {event_dict.get('Position')}")
                 ray_p, ray_d = self._get_ray(event_dict)
-                hit_idx = self._hit_test(ray_p, ray_d)
-                dm_logger.debug(f"[handle_click] Hit idx: {hit_idx}")
+                hit_idx, hit_dist = self._hit_test(ray_p, ray_d)
+                # dm_logger.debug(f"[handle_click] Hit idx: {hit_idx}")
                 if hit_idx != -1:
-                    dm_logger.debug(f"[handle_click] Transitioning to State 2 for corner {hit_idx}")
                     self.active_corner_idx = hit_idx
                     self.state = 2 # dragging
                     # Get drag plane normal and origin
@@ -526,7 +523,6 @@ class WorkPlaneCreator(PrimitiveBase):
                     self.drag_plane_o = plc.Base
                     return True
                 else:
-                    dm_logger.debug(f"[handle_click] Click missed corners, terminating.")
                     self.terminate()
                     return True
                     
@@ -550,7 +546,6 @@ class WorkPlaneCreator(PrimitiveBase):
             elif self.state == 1:
                 pass
             elif self.state == 2 and self.target_wp:
-                dm_logger.debug(f"[handle_move] State 2 - Dragging corner {self.active_corner_idx}")
                 pt_global = self.get_mouse_world_pos(event_dict, self.drag_plane_n, self.drag_plane_o)
                 if pt_global:
                     pt_local = self.target_wp.Placement.inverse().multVec(pt_global)

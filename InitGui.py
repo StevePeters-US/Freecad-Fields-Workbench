@@ -98,10 +98,10 @@ class DirectModelingWorkbench(Workbench):
 
     def Activated(self):
         """This function is executed when the workbench is activated."""
+        from PySide import QtCore, QtGui
         try:
             # Global event filter to suppress context menus
             if not hasattr(self, "_event_filter"):
-                from PySide import QtCore, QtGui
                 class DMEventFilter(QtCore.QObject):
                     def eventFilter(self, obj, event):
                         # Suppress context menu events everywhere in the workbench

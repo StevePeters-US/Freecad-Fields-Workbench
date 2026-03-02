@@ -210,18 +210,6 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-### 4d. Open Sketcher on workplane (Minimum LLM: Gemini Flash)
-
-- **Goal**: Open a `Sketcher::SketchObject` on the current workplane without leaving the DM workbench.
-- **Files to read**:
-  - `core/work_plane.py` — `WorkPlaneManager.get_placement()`
-- **Files to modify**:
-  - `commands/cmd_sketcher.py` — already exists, verify it works correctly
-- **Steps**:
-  1. Get WP placement, create sketch, set placement, open edit mode.
-  2. Hotkey `K`.
-- **Acceptance**: Press `K` → sketch opens on workplane. Active workbench stays DM.
-
 ---
 
 ## Phase N: Advanced Editing
