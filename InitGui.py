@@ -44,6 +44,10 @@ class DirectModelingWorkbench(Workbench):
 
     def Initialize(self):
         """This function is executed when the workbench is activated for the first time."""
+        # Add icon path
+        resource_path = os.path.join(os.path.dirname(inspect.getfile(inspect.currentframe())), 'Resources', 'icons')
+        FreeCADGui.addIconPath(resource_path)
+        
         FreeCAD.Console.PrintLog(f"DM: Loading from {os.path.dirname(inspect.getfile(inspect.currentframe()))}\n")
         try:
             # Import commands from the new commands/ directory
