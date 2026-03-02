@@ -260,26 +260,21 @@ class PrimitiveBase:
             dm_logger.error(f"DEBUG: getPoint failed: {e}")
             return None
 
-    def get_active_workplane_obj(self):
-        """Returns the active DMWorkPlane object from the document."""
+    def get_visible_workplanes(self):
+        """Returns a list of all visible DMWorkPlane objects in the document."""
         doc = FreeCAD.ActiveDocument
         if not doc:
-            return None
+            return []
+            
+        planes = []
         for obj in doc.Objects:
             if hasattr(obj, "Proxy") and obj.Proxy.__class__.__name__ == "DMWorkPlane":
-                return obj
-        return None
+                if hasattr(obj, "Visibility") and obj.Visibility:
+                    planes.append(obj)
+        return planes
 
-    def get_base_plane(self):
-        """Returns (normal, origin) for the current working plane."""
-        # If we have a working_plane already established for this tool session, use it.
-        if hasattr(self, "working_plane") and self.working_plane:
-            n = self.working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
-            o = self.working_plane.Base
-            return n, o
-
-        # Otherwise, check for a persistent WorkPlane object in the document.
-        wp_obj = self.get_active_workplane_obj()
+    def get_base_plane(self, wp_obj=None):
+        """Returns (normal, origin) for a given workplane, or the default viewport plane."""
         if wp_obj and hasattr(wp_obj, "Placement"):
             wp_placement = wp_obj.Placement
             n = wp_placement.Rotation.multVec(FreeCAD.Vector(0,0,1))
@@ -297,13 +292,94 @@ class PrimitiveBase:
         n = FreeCAD.Vector(-vd[0], -vd[1], -vd[2])
         n.normalize()
         
-        # We can just pick origin as 0,0,0 and offset appropriately or just 0,0,0
-        # If we have a focal point or target we could use that. Let's just use 0,0,0
+        if hasattr(self.view, "getFocus"):
+            return n, self.view.getFocus()
         return n, FreeCAD.Vector(0,0,0)
 
     def get_mouse_plane_pt(self, event_dict):
-        """Intersection of mouse ray with working plane."""
-        n, o = self.get_base_plane()
+        """Intersection of mouse ray with the closest visible working plane."""
+        # 1. If we have a working_plane already established for this tool session, stick to it.
+        # This prevents the plane from jumping mid-operation (like drawing a box)
+        if hasattr(self, "working_plane") and self.working_plane:
+            n = self.working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
+            o = self.working_plane.Base
+            return self.get_mouse_world_pos(event_dict, n, o)
+
+        # 2. Get the actual 3D point the mouse is hovering over in the scene
+        pos = event_dict.get("Position", (0, 0))
+        x, y = pos[0], pos[1]
+        
+        if not self.view:
+            return FreeCAD.Vector(0,0,0)
+            
+        scene_pt = None
+        try:
+            scene_pt = self.view.getPoint(x, y)
+        except Exception:
+            pass
+
+        # 3. If we don't have a valid scene point, we can't reliably synthesize a ray. 
+        # Fall back to default plane.
+        if scene_pt is None:
+            n, o = self.get_base_plane(None)
+            return self.get_mouse_world_pos(event_dict, n, o)
+
+        # 4. Synthesize the ray from camera through scene_pt
+        try:
+            cam = self.view.getCameraNode()
+            if not cam or not hasattr(cam, "position"):
+                raise ValueError("No camera")
+            cam_vec = cam.position.getValue()
+            if hasattr(cam_vec, "getValue"):
+                cam_pos_tuple = cam_vec.getValue()
+            else:
+                cam_pos_tuple = (cam_vec[0], cam_vec[1], cam_vec[2])
+            
+            ray_p = FreeCAD.Vector(*cam_pos_tuple)
+            ray_d = scene_pt - ray_p
+            ray_d.normalize()
+            
+            # 5. Intersect ray with ALL visible workplanes, pick the closest one
+            visible_wps = self.get_visible_workplanes()
+            closest_t = float('inf')
+            closest_pt = None
+            
+            for wp in visible_wps:
+                n, o = self.get_base_plane(wp)
+                denom = ray_d.dot(n)
+                if abs(denom) > 1e-6:
+                    t = (o - ray_p).dot(n) / denom
+                    if t > 0 and t < closest_t:
+                        # Check if intersection point is within the bounds of the workplane visual
+                        pt_candidate = ray_p + ray_d * t
+                        
+                        # Calculate bounds check (basic rectangle check)
+                        # We bring the point into the workplane's local coordinate system
+                        if hasattr(wp, "Placement"):
+                            wp_inv_plac = wp.Placement.inverse()
+                            local_pt = wp_inv_plac.multVec(pt_candidate)
+                            
+                            w = wp.Width if hasattr(wp, "Width") else 100.0
+                            l = wp.Length if hasattr(wp, "Length") else 100.0
+                            
+                            if abs(local_pt.x) <= l/2.0 and abs(local_pt.y) <= w/2.0:
+                                closest_t = t
+                                closest_pt = pt_candidate
+                                closest_wp = wp
+            
+            if closest_pt is not None:
+                # If we hit a workplane and we don't already have one locked, set it
+                if not getattr(self, "working_plane", None):
+                   FreeCADGui.Selection.clearSelection()
+                   FreeCADGui.Selection.addSelection(closest_wp)
+                return closest_pt
+                
+        except Exception as e:
+            dm_logger.debug(f"DEBUG: Auto-workplane raycast failed: {e}")
+            pass
+
+        # 6. Fallback: just return the getPoint directly, or intersect default plane
+        n, o = self.get_base_plane(None)
         return self.get_mouse_world_pos(event_dict, n, o)
             
 
