@@ -81,7 +81,8 @@ class TranslateTool(PrimitiveBase):
                                  p_w = obj.Placement.multVec(obj.Position)
                                  if (v_world - p_w).Length < 0.001:
                                      self.targets.append({"obj": obj, "type": "point", "idx": 0, "orig_world": v_world})
-                         except: pass
+                         except Exception as e:
+                             dm_logger.debug(f"TranslateTool: Vertex selection parsing failed: {e}")
                     elif "Edge" in sub:
                         # For DMObjects, Edge1 is the main B-spline. Other edges are handles.
                         # Allow dragging the whole object by its main curve, but ignore handles.

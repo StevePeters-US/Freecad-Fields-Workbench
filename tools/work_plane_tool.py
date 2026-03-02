@@ -92,8 +92,8 @@ class WorkPlaneCreator(PrimitiveBase):
         try:
             if self.sg and self.handles_root:
                 self.sg.removeChild(self.handles_root)
-        except Exception:
-            pass
+        except Exception as e:
+            dm_logger.debug(f"WorkPlaneCreator.terminate: Failed to remove handles: {e}")
             
         # Clean up preview
         if self.preview_obj:
@@ -264,8 +264,8 @@ class WorkPlaneCreator(PrimitiveBase):
                                 try:
                                     u, v = face.Surface.parameter(local_hit_pt)
                                     local_n = face.Surface.normal(u, v)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    dm_logger.debug(f"WorkPlaneCreator: parameter/normal calculation failed: {e}")
                         
                         if not local_n:
                             dm_logger.error(f"WorkPlaneCreator: Error - Failed to calculate normal for {subname}.")
@@ -322,8 +322,8 @@ class WorkPlaneCreator(PrimitiveBase):
             mouse_pt = self.get_mouse_world_pos(event_dict)
             if mouse_pt:
                 return self.get_camera_facing_placement(mouse_pt)
-        except Exception:
-            pass
+        except Exception as e:
+            dm_logger.debug(f"WorkPlaneCreator: camera-facing fallback failed: {e}")
         return None
 
     def _get_initial_size(self, pos):
@@ -346,7 +346,8 @@ class WorkPlaneCreator(PrimitiveBase):
                 scale = viewport_height / 300.0
                 
             return max(10.0, 100.0 * scale)
-        except Exception:
+        except Exception as e:
+            dm_logger.debug(f"WorkPlaneCreator: _get_initial_size failed: {e}")
             return 100.0
 
     def update_handles(self):
@@ -382,8 +383,8 @@ class WorkPlaneCreator(PrimitiveBase):
                 ray_d = FreeCAD.Vector(r[1])
                 ray_d.normalize()
                 return ray_p, ray_d
-        except Exception:
-            pass
+        except Exception as e:
+            dm_logger.debug(f"WorkPlaneCreator._get_ray: getRay failed: {e}")
             
         # Fallback if getRay fails
         try:
@@ -398,8 +399,8 @@ class WorkPlaneCreator(PrimitiveBase):
                 ray_d = scene_pt - ray_p
                 ray_d.normalize()
                 return ray_p, ray_d
-        except Exception:
-            pass
+        except Exception as e:
+            dm_logger.debug(f"WorkPlaneCreator._get_ray: Fallback failed: {e}")
         return None, None
 
     def _hit_test(self, ray_p, ray_d):

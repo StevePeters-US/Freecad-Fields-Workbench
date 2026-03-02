@@ -53,8 +53,8 @@ class EditTool(PrimitiveBase):
         scene_pt = None
         try:
             scene_pt = self.view.getPoint(x, y)
-        except Exception:
-            pass
+        except Exception as e:
+            dm_logger.debug(f"EditTool._get_ray: getPoint failed: {e}")
 
         if scene_pt is None:
             # Fallback point generated randomly ahead

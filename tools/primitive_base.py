@@ -20,7 +20,8 @@ def _is_orthographic(view):
     try:
         cam = view.getCameraNode()
         return "Orthographic" in cam.getTypeId().getName()
-    except Exception:
+    except Exception as e:
+        dm_logger.debug(f"Camera orthographic check failed: {e}")
         return False
 
 def _cam_pos(view):
@@ -29,7 +30,8 @@ def _cam_pos(view):
         cam = view.getCameraNode()
         p = cam.position.getValue()
         return FreeCAD.Vector(p[0], p[1], p[2])
-    except Exception:
+    except Exception as e:
+        dm_logger.debug(f"Camera position acquisition failed: {e}")
         return FreeCAD.Vector(0,0,100)
 
 def _get_view_ray(view, x, y):
@@ -71,8 +73,8 @@ def _intersect_ray_plane(ray_p, ray_d, plane_normal, plane_point):
         if abs(denom) > 1e-6:
             t = (plane_point - ray_p).dot(plane_normal) / denom
             return ray_p + ray_d * t
-    except Exception:
-        pass
+    except Exception as e:
+        dm_logger.debug(f"Ray-plane intersection failed: {e}")
     return None
 
 
@@ -89,8 +91,8 @@ class PrimitiveBase:
         if PrimitiveBase.active_tool and hasattr(PrimitiveBase.active_tool, 'terminate'):
             try:
                 PrimitiveBase.active_tool.terminate()
-            except Exception:
-                pass
+            except Exception as e:
+                dm_logger.debug(f"PrimitiveBase.__init__: Failed to terminate previous tool: {e}")
                 
         self._terminated = False
         self.view = FreeCADGui.activeView()
@@ -99,8 +101,8 @@ class PrimitiveBase:
             # Try to get it from ActiveDocument as fallback
             try:
                 self.view = FreeCADGui.ActiveDocument.ActiveView
-            except Exception:
-                pass
+            except Exception as e:
+                dm_logger.debug(f"PrimitiveBase.__init__: Failed to get view from document: {e}")
         
         if not self.view:
             dm_logger.error("DEBUG: PrimitiveBase: Could not find active view!")
@@ -181,8 +183,8 @@ class PrimitiveBase:
             # Close task panel if open
             import FreeCADGui
             FreeCADGui.Control.closeDialog()
-        except Exception:
-            pass
+        except Exception as e:
+            dm_logger.debug(f"PrimitiveBase.terminate: Cleanup failed: {e}")
 
     def finish(self):
         pass
@@ -290,8 +292,8 @@ class PrimitiveBase:
         scene_pt = None
         try:
             scene_pt = self.view.getPoint(x, y)
-        except Exception:
-            pass
+        except Exception as e:
+            dm_logger.debug(f"get_mouse_plane_pt: getPoint failed: {e}")
 
         # 3. If we don't have a valid scene point, we can't reliably synthesize a ray. 
         # Fall back to default plane.
@@ -350,8 +352,7 @@ class PrimitiveBase:
                 return closest_pt
                 
         except Exception as e:
-            dm_logger.debug(f"DEBUG: Auto-workplane raycast failed: {e}")
-            pass
+            dm_logger.debug(f"Auto-workplane raycast failed: {e}")
 
         # 6. Fallback: just return the getPoint directly, or intersect default plane
         n, o = self.get_base_plane(None)
@@ -400,8 +401,8 @@ class PrimitiveBase:
                         # Synthetic event dict for handle_move
                         mouse_pos = self.view.getCursorPos()
                         self.handle_move({"Position": mouse_pos})
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        dm_logger.debug(f"event_cb: Synthetic handle_move failed: {e}")
             return False
         except Exception:
             dm_logger.exception("event_cb error")
@@ -531,8 +532,8 @@ class PrimitiveBase:
             if self.current_point:
                 dm_logger.info(f"Pin location {self.state}: {self.current_point.x:.2f}, {self.current_point.y:.2f}, {self.current_point.z:.2f}")
             return True
-        except Exception:
-            dm_logger.exception("handle_click error")
+        except Exception as e:
+            dm_logger.exception(f"handle_click error: {e}")
             return False
 
     def handle_move(self, event_dict):
@@ -610,8 +611,8 @@ class PrimitiveBase:
             info = self.view.getObjectInfo((pos[0], pos[1]))
             if info and "Object" in info and "Component" in info:
                  return info["Object"], info["Component"]
-        except Exception:
-            pass
+        except Exception as e:
+            dm_logger.debug(f"get_face_under_mouse failed: {e}")
         return None, None
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -765,8 +766,8 @@ class NURBSPrimitiveCreator(PrimitiveBase):
         try:
             import FreeCADGui
             FreeCADGui.Control.closeDialog()
-        except Exception:
-            pass
+        except Exception as e:
+            dm_logger.debug(f"_do_finish: Failed to close dialog: {e}")
 
 
 

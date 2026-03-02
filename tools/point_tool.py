@@ -50,8 +50,8 @@ class PointCreator(NURBSPrimitiveCreator):
                 if doc:
                     doc.removeObject(self._active_obj.Name)
                     doc.recompute()
-            except Exception:
-                pass
+            except Exception as e:
+                dm_logger.debug(f"PointCreator._do_finish: Failed to remove preview object: {e}")
             self._active_obj = None
             
         self._finished = True
@@ -77,8 +77,8 @@ class PointCreator(NURBSPrimitiveCreator):
             if self._active_obj:
                 try:
                     doc.removeObject(self._active_obj.Name)
-                except Exception:
-                    pass
+                except Exception as e:
+                    dm_logger.debug(f"PointCreator.cancel_points: Failed to remove active object: {e}")
             self._active_obj = None
             
             doc.recompute()

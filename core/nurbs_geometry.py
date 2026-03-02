@@ -150,7 +150,9 @@ class DMCurve:
             # Try the complex constructor (FreeCAD 0.21+)
             try:
                 bs = Part.BSplineCurve(poles, weights, knots, mults, is_closed, degree)
-            except Exception:
+            except Exception as e:
+                from . import dm_logger
+                dm_logger.debug(f"DMCurve: Complex constructor failed: {e}. Trying fallback buildFromPolesMultsKnots.")
                 # Fallback to buildFromPolesMultsKnots method (more compatible)
                 bs = Part.BSplineCurve()
                 if hasattr(bs, "buildFromPolesMultsKnots"):
@@ -182,11 +184,15 @@ class DMCurve:
 
             return bs
         except Exception as e:
+            from . import dm_logger
+            dm_logger.debug(f"DMCurve construction: Final fallback failed: {e}")
             # Silent fallback during drag
             if len(fit_pts) >= 2:
                 try:
                     return Part.makePolygon(fit_pts).toBSpline()
-                except: pass
+                except Exception as e:
+                    from . import dm_logger
+                    dm_logger.debug(f"DMCurve.to_shape: Polygon fallback failed: {e}")
             return None
 
     def to_shape(self):

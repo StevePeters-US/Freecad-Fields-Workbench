@@ -227,6 +227,8 @@ class DMObjectProxy:
             dm_logger.exception(f"DMObject.execute error for {fp.Label}")
 
     def __setstate__(self, state):
+        from . import dm_logger
+        # dm_logger.debug(f"DMObjectProxy.__setstate__: {state}")
         pass
 
 class DMViewProvider:
@@ -451,8 +453,8 @@ def create_dm_object(name, shape_type, params=None, placement=None):
             if hasattr(obj, "ViewObject") and obj.ViewObject:
                 try:
                     obj.ViewObject.Visibility = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    dm_logger.debug(f"create_dm_object: Failed to set visibility for {name}: {e}")
         
         dm_logger.debug(f"create_dm_object: Created {name} ({shape_type}), triggering recompute...")
         obj.touch()
@@ -469,8 +471,8 @@ def create_dm_object(name, shape_type, params=None, placement=None):
                     active_view.viewSelection()
                 
                 FreeCADGui.updateGui()
-            except Exception:
-                pass
+            except Exception as e:
+                dm_logger.debug(f"create_dm_object: Selection/View setup failed for {name}: {e}")
         
         dm_logger.debug(f"create_dm_object: {name} created successfully")
         if hasattr(obj, "ViewObject") and obj.ViewObject:

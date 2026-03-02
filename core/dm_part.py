@@ -72,7 +72,9 @@ class ViewProviderDMPart:
                 # Part OCCException might be thrown if the shape isn't valid yet
                 if not self.Object.Shape.isValid():
                     return
-            except Exception:
+            except Exception as e:
+                from . import dm_logger
+                dm_logger.debug(f"ViewProviderDMPart.updateData: Shape validation failed: {e}")
                 return
                 
             shape = self.Object.Shape
