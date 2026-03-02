@@ -22,10 +22,6 @@ no prior context beyond the files listed. Follow this template:
 - We have as options Gemini Flash, Low, and High. Only use Claude for very difficult programming issues.
 
 ---
-
-scale (drag to scale )
- workplane
----
 ## Phase 1: Workplane & Existing Tools
 
 ### 1a. Workplane snapping improvements (Minimum LLM: Gemini Low)

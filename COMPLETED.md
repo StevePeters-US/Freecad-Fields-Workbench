@@ -7,6 +7,8 @@ Tasks moved here from `TODO.md` after verification.
 ## 🔄 BRep Pivot (March 2026)
 
 Architecture changed from NURBS-surface-centric to BRep direct modeling. Point and curve tools are retained. Primitives now create `Part.Shape` solids via `Part.makeBox()` etc. instead of `Part.BSplineSurface`. Boolean operations use standard OCCT BRep booleans.
+### ✅ Scale Workplane (Minimum LLM: Gemini Low)
+- **Completed**: Implemented interactive corner dragging for `DMWorkPlane` objects. Resizing keeps a consistent `GridSpacing` (default 10mm). Added 4 corner handle markers in Coin3D for visual feedback. Fixed critical crashes related to property evaluation and multiple tool initializations. Added persistent crash logging to the DM Settings.
 
 ---
 
@@ -137,3 +139,5 @@ Architecture changed from NURBS-surface-centric to BRep direct modeling. Point a
 
 ### ✅ Phase 1j: Unify Preview and Final Objects
 - **Completed**: Eliminated the 'is_preview' flag and the temporary 'DM_Preview' object. Primitives are now created as real objects immediately upon starting the tool, providing direct feedback via their actual properties. Cancelling a tool (Esc) correctly removes the unfinalized object.
+
+---
