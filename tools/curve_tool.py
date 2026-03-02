@@ -98,9 +98,8 @@ class CurveCreator(NURBSPrimitiveCreator):
                 dist = (pt - self.points[0]).Length
                 if dist < 1.0: # Snapping distance for move
                     pt = self.points[0]
-
             self.current_point = pt
-            self.update_preview(debug_pt=pt)
+            self.update_preview()
             self.update_ui()
 
     def handle_keyboard(self, event_dict):
@@ -154,7 +153,7 @@ class CurveCreator(NURBSPrimitiveCreator):
         
         return h_in, h_out
 
-    def update_preview(self, debug_pt=None):
+    def update_preview(self):
         if not self.points:
             return
         pts = list(self.points)
@@ -171,10 +170,7 @@ class CurveCreator(NURBSPrimitiveCreator):
             hi, ho = self._get_auto_handles(pts)
             params["HandleIn"] = hi
             params["HandleOut"] = ho
-        
-        if debug_pt:
-            params["debug_pt"] = debug_pt
-            
+                
         self.update_active_object("curve", params)
 
     def update_ui(self):

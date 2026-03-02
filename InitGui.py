@@ -59,6 +59,7 @@ class DirectModelingWorkbench(Workbench):
             import commands.cmd_sketcher
             import commands.cmd_translate
             import commands.cmd_fill_curve
+            import commands.cmd_edit
             
             # Import core modules
             import core as FCDirectModeling
@@ -69,6 +70,7 @@ class DirectModelingWorkbench(Workbench):
                 'DM_CreatePoint',
                 'DM_CreateCurve',
                 'DM_FillCurve',
+                'DM_EditObject',
                 'DM_Translate',
                 'DM_OpenSketcher',
                 'DM_Fuse',
@@ -81,6 +83,7 @@ class DirectModelingWorkbench(Workbench):
                 'DM_CreatePoint',
                 'DM_CreateCurve',
                 'DM_FillCurve',
+                'DM_EditObject',
                 'DM_Translate',
                 'DM_OpenSketcher',
                 'DM_Fuse',
@@ -113,8 +116,8 @@ class DirectModelingWorkbench(Workbench):
                         return False
                 self._event_filter = DMEventFilter()
             
-            # Install on the main window to catch all context menus
-            FreeCADGui.getMainWindow().installEventFilter(self._event_filter)
+            # Install on the qApp to catch all context menus globally
+            QtGui.QApplication.instance().installEventFilter(self._event_filter)
         except Exception as e:
             FreeCAD.Console.PrintError(f"DM Activated Error: {e}\n")
 
@@ -122,7 +125,8 @@ class DirectModelingWorkbench(Workbench):
         """This function is executed when the workbench is deactivated."""
         try:
             if hasattr(self, "_event_filter"):
-                FreeCADGui.getMainWindow().removeEventFilter(self._event_filter)
+                from PySide import QtGui
+                QtGui.QApplication.instance().removeEventFilter(self._event_filter)
         except Exception as e:
             FreeCAD.Console.PrintError(f"DM Deactivated Error: {e}\n")
 

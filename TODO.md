@@ -23,7 +23,6 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
-
 ## Phase 1: Workplane & Existing Tools
 
 ### 1a. Workplane snapping improvements (Minimum LLM: Gemini Low)
@@ -223,3 +222,9 @@ no prior context beyond the files listed. Follow this template:
   1. Get WP placement, create sketch, set placement, open edit mode.
   2. Hotkey `K`.
 - **Acceptance**: Press `K` → sketch opens on workplane. Active workbench stays DM.
+
+---
+
+## Phase N: Advanced Editing
+- [ ] **Custom Control Points Effects**
+  - **Goal**: Allow points to affect bevel radius, chamfer, and other localized curve parameters instead of just positioning.

@@ -222,12 +222,11 @@ class PrimitiveBase:
                 except Exception as e:
                     dm_logger.debug(f"DEBUG: Error parsing ray data: {e}")
             else:
-                 dm_logger.debug(f"DEBUG: getRay returned None for x={x}, y={y}")
+                 pass
         
         # Fallback to depth-buffered point on surface or synthesize ray
         try:
             pt = self.view.getPoint(x, y)
-            dm_logger.debug(f"DEBUG: Falling back to getPoint. returned pt: {pt}")
             
             if plane_normal is not None and plane_point is not None:
                 # Try to synthesize a ray using the camera position and the getPoint result
@@ -250,10 +249,9 @@ class PrimitiveBase:
                         if abs(denom) > 1e-6:
                             t = (plane_point - ray_p).dot(plane_normal) / denom
                             pt_on_plane = ray_p + ray_d * t
-                            dm_logger.debug(f"DEBUG: Fallback ray intersection at {pt_on_plane}")
                             return pt_on_plane
                 except Exception as e:
-                    dm_logger.debug(f"DEBUG: Synthesized ray fallback failed: {e}")
+                    pass
 
             return pt
         except Exception as e:
@@ -569,7 +567,7 @@ class PrimitiveBase:
             pt = self.get_mouse_world_pos(event_dict, n, o)
             self.current_point = pt
             self.on_move_state_1(event_dict)
-            self.update_preview(debug_pt=pt)
+            self.update_preview()
             self.update_ui()
             
         elif self.state == 2:
@@ -586,9 +584,8 @@ class PrimitiveBase:
             if o and hasattr(self, "height"):
                 o = o + n * self.height
             
-            raw_pt = self.get_mouse_world_pos(event_dict, n, o)
             self.current_point = raw_pt
-            self.update_preview(debug_pt=raw_pt)
+            self.update_preview()
             self.update_ui()
 
     def on_move_state_1(self, event_dict):
@@ -658,8 +655,6 @@ class NURBSPrimitiveCreator(PrimitiveBase):
         self._last_shape_type = None
         self._last_shape_params = None
         self._last_placement = None
-        
-        self._debug_pt = None      # Store current mouse 3D for debug dot
         self._preview_cursor = None # Crosshair object
 
     # ------------------------------------------------------------------
@@ -674,10 +669,8 @@ class NURBSPrimitiveCreator(PrimitiveBase):
             return
 
         self._last_shape_type = shape_type
+        self._last_shape_type = shape_type
         self._last_shape_params = params
-        
-        # Track 3D cursor for debugging
-        self._debug_pt = params.get("debug_pt")
         
         # Track placement
         active_placement = placement
@@ -698,7 +691,7 @@ class NURBSPrimitiveCreator(PrimitiveBase):
                     return self.to_local(obj)
                 return obj
 
-            for k in ["Position", "Points", "HandleIn", "HandleOut", "debug_pt"]:
+            for k in ["Position", "Points", "HandleIn", "HandleOut"]:
                 if k in local_params and local_params[k] is not None:
                     local_params[k] = map_p(local_params[k])
 
@@ -712,15 +705,14 @@ class NURBSPrimitiveCreator(PrimitiveBase):
         else:
             # Update properties
             for k, v in local_params.items():
-                target_k = "DebugPoint" if k == "debug_pt" else k
-                if hasattr(self._active_obj, target_k):
+                if hasattr(self._active_obj, k):
                     try:
-                        setattr(self._active_obj, target_k, v)
+                        setattr(self._active_obj, k, v)
                     except Exception as e:
                         if 'dm_logger' in globals() or 'dm_logger' in locals():
-                            dm_logger.debug(f"DEBUG: Failed to update property {target_k}: {e}")
+                            dm_logger.debug(f"DEBUG: Failed to update property {k}: {e}")
                         else:
-                            print(f"DEBUG: Failed to update property {target_k}: {e}")
+                            print(f"DEBUG: Failed to update property {k}: {e}")
                 elif k == "Position" and placement is None:
                     self._active_obj.Placement.Base = v
             

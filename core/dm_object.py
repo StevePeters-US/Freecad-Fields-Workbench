@@ -82,28 +82,29 @@ class DMObjectProxy:
                 obj.addProperty("App::PropertyVectorList", "HandleOut", "Curve", "Outbound tangent handles")
             if not hasattr(obj, "Closed"):
                 obj.addProperty("App::PropertyBool", "Closed", "Curve", "Whether the curve is periodic")
+            if not hasattr(obj, "PointTypes"):
+                obj.addProperty("App::PropertyIntegerList", "PointTypes", "Curve", "Control point types (0=Tangent, 1=Split, 2=Custom)")
             obj.Points = params.get("Points", [])
             
             # Ensure handles are lists of Vectors, never None
             pts = params.get("Points", [])
             h_in = params.get("HandleIn", [])
             h_out = params.get("HandleOut", [])
+            p_types = params.get("PointTypes", [])
             
             # Fill missing handles with the point itself (zero-length handle)
             in_vals = []
             out_vals = []
+            pt_vals = []
             for i, p in enumerate(pts):
                 in_vals.append(h_in[i] if (i < len(h_in) and h_in[i] is not None) else p)
                 out_vals.append(h_out[i] if (i < len(h_out) and h_out[i] is not None) else p)
+                pt_vals.append(p_types[i] if (i < len(p_types) and p_types[i] is not None) else 0)
             
             obj.HandleIn = in_vals
             obj.HandleOut = out_vals
+            obj.PointTypes = pt_vals
             obj.Closed = params.get("is_closed", False)
-
-        # Add generic debug property
-        if not hasattr(obj, "DebugPoint"):
-            obj.addProperty("App::PropertyVector", "DebugPoint", "Debug", "Current mouse intersection point")
-        obj.DebugPoint = params.get("debug_pt", FreeCAD.Vector(0,0,0))
 
         if shape_type == "point":
             if not hasattr(obj, "Position"):
@@ -265,37 +266,6 @@ class DMViewProvider:
             # Setup curve overlay if it's a curve
             if hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "curve":
                  self._setup_coin_overlay(vobj)
-            
-            # Setup debug dot (available for all DM objects)
-            self._setup_debug_overlay(vobj)
-
-    def _setup_debug_overlay(self, vobj):
-        if not coin: return
-        self._debug_sep = coin.SoSeparator()
-        
-        mat = coin.SoMaterial()
-        mat.diffuseColor = coin.SbColor(1.0, 0.0, 0.0) # Red
-        self._debug_sep.addChild(mat)
-        
-        style = coin.SoDrawStyle()
-        style.pointSize.setValue(10)
-        self._debug_sep.addChild(style)
-        
-        self._debug_coords = coin.SoCoordinate3()
-        self._debug_sep.addChild(self._debug_coords)
-        
-        pt_set = coin.SoPointSet()
-        pt_set.numPoints.setValue(1)
-        self._debug_sep.addChild(pt_set)
-        
-        vobj.RootNode.addChild(self._debug_sep)
-        self._update_debug_dot(vobj.Object)
-
-    def _update_debug_dot(self, fp):
-        if not self._debug_coords or not hasattr(fp, "DebugPoint"):
-            return
-        p = fp.DebugPoint
-        self._debug_coords.point.set1Value(0, p.x, p.y, p.z)
 
     def _setup_coin_overlay(self, vobj):
         if not coin: return
@@ -419,8 +389,6 @@ class DMViewProvider:
         if not prop or prop in ["Points", "HandleIn", "HandleOut"]:
             self._rebuild_control_cage(fp)
         
-        if not prop or prop == "DebugPoint":
-            self._update_debug_dot(fp)
 
     def getIcon(self):
         # Orange stairstep icon (Part)
