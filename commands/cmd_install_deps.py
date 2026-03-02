@@ -3,6 +3,7 @@ import FreeCAD
 import FreeCADGui
 import sys
 import subprocess
+from core import dm_logger
 from PySide import QtGui, QtCore
 
 class InstallDependenciesCommand:
@@ -66,14 +67,14 @@ class InstallDependenciesCommand:
                     "Success",
                     "Dependencies installed successfully!\nPlease restart FreeCAD."
                 )
-                FreeCAD.Console.PrintMessage("Dependency Install Output:\n" + result.stdout + "\n")
+                dm_logger.info("Dependency Install Output:\n" + result.stdout)
             else:
                  QtGui.QMessageBox.critical(
                     FreeCADGui.getMainWindow(),
                     "Installation Failed",
                     f"Error Occurred:\n{result.stderr}"
                 )
-                 FreeCAD.Console.PrintError("Dependency Install Failed:\n" + result.stderr + "\n")
+                 dm_logger.error("Dependency Install Failed:\n" + result.stderr)
 
         except Exception as e:
             QtGui.QMessageBox.critical(
@@ -81,7 +82,7 @@ class InstallDependenciesCommand:
                 "Error",
                 str(e)
             )
-            FreeCAD.Console.PrintError(f"Exception during install: {e}\n")
+            dm_logger.error(f"Exception during install: {e}")
 
     def IsActive(self):
         return True

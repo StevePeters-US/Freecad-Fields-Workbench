@@ -26,31 +26,42 @@ def get_log_path():
 def _log(level, msg):
     """Internal helper to write to file and console."""
     # Handle multi-line messages (e.g. tracebacks)
-    lines = str(msg).splitlines()
+    text = str(msg)
+    lines = text.splitlines()
+    
+    # Always print to FreeCAD console
+    # Use Message for INFO/DEBUG, Warning for WARN, Error for ERROR
     for line in lines:
-        formatted = f"[{level}] {line}"
+        formatted = f"[{level}] {line}" if level else line
         
-        # Log to file if enabled OR if it's an ERROR (crash investigation)
-        if get_enable_crash_log() or level == "ERROR":
-            try:
-                log_p = get_log_path()
-                d = os.path.dirname(log_p)
-                if d and not os.path.exists(d):
-                    os.makedirs(d, exist_ok=True)
-                with open(log_p, "a", encoding="utf-8") as f:
-                    f.write(formatted + "\n")
-                    f.flush()
-            except:
-                pass
-            
-        # Always print to FreeCAD console
-        # Use Message for INFO/DEBUG, Warning for WARN, Error for ERROR
         if level == "ERROR":
             FreeCAD.Console.PrintError(formatted + "\n")
         elif level == "WARN":
             FreeCAD.Console.PrintWarning(formatted + "\n")
+        elif level == "LOG":
+            FreeCAD.Console.PrintLog(formatted + "\n")
         else:
             FreeCAD.Console.PrintMessage(formatted + "\n")
+
+    # Log to file if enabled OR if it's an ERROR (crash investigation)
+    if get_enable_crash_log() or level == "ERROR":
+        try:
+            log_p = get_log_path()
+            d = os.path.dirname(log_p)
+            if d and not os.path.exists(d):
+                os.makedirs(d, exist_ok=True)
+            
+            with open(log_p, "a", encoding="utf-8") as f:
+                for line in lines:
+                    formatted = f"[{level}] {line}" if level else line
+                    f.write(formatted + "\n")
+                f.flush()
+        except:
+            pass
+
+def log(msg):
+    """Generic log message (FreeCAD.Console.PrintLog equivalent)."""
+    _log("LOG", msg)
 
 def info(msg):
     _log("INFO", msg)

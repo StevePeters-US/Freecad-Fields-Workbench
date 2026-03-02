@@ -225,7 +225,7 @@ class WorkPlaneCreator(PrimitiveBase):
                                     world_hit_pt = gpl.multVec(best_pt)
                                 
                         except Exception as ray_e:
-                            FreeCAD.Console.PrintMessage(f"WP DBG: getRay/section error: {ray_e}\n")
+                            dm_logger.info(f"WP DBG: getRay/section error: {ray_e}")
                         
                         if world_hit_pt is None:
                             # Fallback: working-plane intersection (may snap to silhouette on curves)
@@ -268,7 +268,7 @@ class WorkPlaneCreator(PrimitiveBase):
                                     pass
                         
                         if not local_n:
-                            FreeCAD.Console.PrintMessage(f"WorkPlaneCreator: Error - Failed to calculate normal for {subname}.\n")
+                            dm_logger.error(f"WorkPlaneCreator: Error - Failed to calculate normal for {subname}.")
                             return None
                         
                         if face.Orientation == "Reversed":
@@ -314,7 +314,7 @@ class WorkPlaneCreator(PrimitiveBase):
                         return final_placement
 
         except Exception as e:
-            FreeCAD.Console.PrintMessage(f"WorkPlaneCreator: Exception in snap logic: {e}\n")
+            dm_logger.error(f"WorkPlaneCreator: Exception in snap logic: {e}")
             return None
 
         # Fallback to camera-facing at origin-plane depth

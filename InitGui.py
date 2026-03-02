@@ -48,7 +48,8 @@ class DirectModelingWorkbench(Workbench):
         resource_path = os.path.join(os.path.dirname(inspect.getfile(inspect.currentframe())), 'Resources', 'icons')
         FreeCADGui.addIconPath(resource_path)
         
-        FreeCAD.Console.PrintLog(f"DM: Loading from {os.path.dirname(inspect.getfile(inspect.currentframe()))}\n")
+        from core import dm_logger
+        dm_logger.log(f"DM: Loading from {os.path.dirname(inspect.getfile(inspect.currentframe()))}")
         try:
             # Import commands from the new commands/ directory
             import commands.cmd_point
@@ -92,7 +93,8 @@ class DirectModelingWorkbench(Workbench):
                 'DM_Settings',
             ])
         except Exception as e:
-            FreeCAD.Console.PrintError(f"Error importing Direct Modeling commands: {e}\n")
+            from core import dm_logger
+            dm_logger.error(f"Error importing Direct Modeling commands: {e}")
             import traceback
             traceback.print_exc()
 
@@ -123,7 +125,8 @@ class DirectModelingWorkbench(Workbench):
             # Install on the qApp to catch all context menus globally
             QtGui.QApplication.instance().installEventFilter(self._event_filter)
         except Exception as e:
-            FreeCAD.Console.PrintError(f"DM Activated Error: {e}\n")
+            from core import dm_logger
+            dm_logger.error(f"DM Activated Error: {e}")
 
     def Deactivated(self):
         """This function is executed when the workbench is deactivated."""
@@ -132,7 +135,8 @@ class DirectModelingWorkbench(Workbench):
                 from PySide import QtGui
                 QtGui.QApplication.instance().removeEventFilter(self._event_filter)
         except Exception as e:
-            FreeCAD.Console.PrintError(f"DM Deactivated Error: {e}\n")
+            from core import dm_logger
+            dm_logger.error(f"DM Deactivated Error: {e}")
 
 # Add the workbench to FreeCAD's list of available workbenches
 FreeCADGui.addWorkbench(DirectModelingWorkbench())

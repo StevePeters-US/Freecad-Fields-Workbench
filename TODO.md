@@ -25,7 +25,7 @@ no prior context beyond the files listed. Follow this template:
 
 ## Code Review & Cleanup
 
-### Refine dm_logger and replace FreeCAD.Console (Minimum LLM: Gemini Flash)
+### [x] Refine dm_logger and replace FreeCAD.Console (Minimum LLM: Gemini Flash)
 
 - **Goal**: Enhance `dm_logger` to always log to console and optionally to a log file, and standardize all logging to use it.
 - **Files to read**:

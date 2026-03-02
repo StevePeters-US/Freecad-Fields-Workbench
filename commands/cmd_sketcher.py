@@ -165,7 +165,7 @@ class DMOpenSketcherCommand:
             dm_logger.info(f"DM_OpenSketcher: Created sketch '{sketch.Label}' at {placement.Base}")
             
         except Exception as e:
-            FreeCAD.Console.PrintError(f"DM_OpenSketcher: Failed to create/open Sketcher: {e}\n")
+            dm_logger.error(f"DM_OpenSketcher: Failed to create/open Sketcher: {e}")
             dm_logger.exception("DM_OpenSketcher failure")
 
 

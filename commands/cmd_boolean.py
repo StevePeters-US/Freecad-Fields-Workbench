@@ -5,6 +5,7 @@ DM Boolean commands — Fuse / Cut / Common using native BRep operations.
 import FreeCAD
 import FreeCADGui
 import Part
+from core import dm_logger
 
 
 class CommandDMBoolean:
@@ -35,17 +36,13 @@ class CommandDMBoolean:
     def Activated(self):
         sel = FreeCADGui.Selection.getSelection()
         if len(sel) < 2:
-            FreeCAD.Console.PrintError(
-                f"DM_{self.operation}: Select at least two objects.\n"
-            )
+            dm_logger.error(f"DM_{self.operation}: Select at least two objects.")
             return
 
         # Verify all selected objects are DM objects
         for obj in sel:
             if not hasattr(obj, "ShapeType"):
-                FreeCAD.Console.PrintError(
-                    f"DM_{self.operation}: '{obj.Label}' is not a DM object.\n"
-                )
+                dm_logger.error(f"DM_{self.operation}: '{obj.Label}' is not a DM object.")
                 return
 
         from core.dm_object import create_dm_object
@@ -79,11 +76,9 @@ class CommandDMBoolean:
             doc.recompute()
             FreeCADGui.Selection.clearSelection()
             FreeCADGui.Selection.addSelection(result)
-            FreeCAD.Console.PrintMessage(
-                f"{self.operation} operation completed.\n"
-            )
+            dm_logger.info(f"{self.operation} operation completed.")
         except Exception as e:
-            FreeCAD.Console.PrintError(f"DM_{self.operation} failed: {e}\n")
+            dm_logger.error(f"DM_{self.operation} failed: {e}")
 
 
 FreeCADGui.addCommand('DM_Fuse',   CommandDMBoolean("Fuse"))

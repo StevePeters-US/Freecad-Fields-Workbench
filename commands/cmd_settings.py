@@ -5,6 +5,7 @@ DM Settings Command — configure the SDF meshing algorithm and resolution.
 import FreeCAD
 import FreeCADGui
 from PySide import QtGui, QtCore
+from core import dm_logger
 
 
 class CommandDMSettings:
@@ -85,7 +86,7 @@ class _SettingsDialog(QtGui.QDialog):
         # Apply to all existing objects
         refresh_all_dm_objects()
 
-        FreeCAD.Console.PrintMessage(f"DM Settings: wire={wire}, lw={lw}, ps={ps}\n")
+        dm_logger.info(f"DM Settings: wire={wire}, lw={lw}, ps={ps}")
         self.accept()
 
 
