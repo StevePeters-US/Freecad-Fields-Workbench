@@ -32,6 +32,49 @@ def _cam_pos(view):
     except Exception:
         return FreeCAD.Vector(0,0,100)
 
+def _get_view_ray(view, x, y):
+    """Acquire a (Base, Direction) ray from the view/viewer."""
+    try:
+        # Direct getRay (FC 0.20+)
+        if hasattr(view, "getRay"):
+            ray = view.getRay(x, y)
+            if ray:
+                return (FreeCAD.Vector(ray[0]), FreeCAD.Vector(ray[1]))
+
+        # Coin3D viewer fallback
+        viewer = view.getViewer()
+        h = 1000
+        if hasattr(viewer, "getGlxSize"):
+            h = viewer.getGlxSize()[1]
+        elif hasattr(viewer, "getSize"):
+            sz = viewer.getSize()
+            h = sz.height() if hasattr(sz, "height") else sz[1]
+
+        def try_ray(cur_y):
+            if hasattr(viewer, "getRay"):
+                r = viewer.getRay(int(x), int(cur_y))
+                if r:
+                    return (FreeCAD.Vector(r[0]), FreeCAD.Vector(r[1]))
+            return None
+
+        res = try_ray(y) or try_ray(h - y)
+        if res:
+            return res
+    except Exception as e:
+        dm_logger.debug(f"Ray acquisition failed: {e}")
+    return None, None
+
+def _intersect_ray_plane(ray_p, ray_d, plane_normal, plane_point):
+    """Standard Ray-Plane intersection. Returns Vector or None."""
+    try:
+        denom = ray_d.dot(plane_normal)
+        if abs(denom) > 1e-6:
+            t = (plane_point - ray_p).dot(plane_normal) / denom
+            return ray_p + ray_d * t
+    except Exception:
+        pass
+    return None
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PrimitiveCreatorBase
@@ -165,110 +208,31 @@ class PrimitiveBase:
 
     def get_mouse_world_pos(self, event_dict, plane_normal=None, plane_point=None):
         """
-        Unified Ray-Plane intersection. 
-        If plane_normal and plane_point are provided, intersects the mouse ray with that plane.
-        Otherwise, uses the default view.getPoint().
+        Unified mouse-to-world position. 
+        If plane_normal and plane_point are provided, intersects with that plane.
+        Otherwise, returns the depth-buffered point on geometry.
         """
         if not self.view:
-            dm_logger.error("DEBUG: get_mouse_world_pos: No active view!")
             return None
 
-        pos = event_dict.get("Position", (0, 0))
+        pos = event_dict.get("Position")
+        if pos is None:
+            pos = (0, 0)
         x, y = pos[0], pos[1]
         
+        # 1. Plane Intersection
         if plane_normal is not None and plane_point is not None:
-            # Ray-Plane intersection
-            ray = None
-            try:
-                # Direct getRay (often added in FC 0.20+)
-                if hasattr(self.view, "getRay"):
-                    ray = self.view.getRay(x, y)
-                
-                # If that fails or isn't available, rely on Coin3D viewer
-                if not ray:
-                    viewer = self.view.getViewer()
-                    # Viewport size for Qt vs Coin Y-flip 
-                    # Coin uses bottom-left origin, Qt uses top-left
-                    if hasattr(viewer, "getGlxSize"):
-                        sz = viewer.getGlxSize() # Returns SbVec2s
-                        h = sz[1]
-                    elif hasattr(viewer, "getSize"):
-                        sz = viewer.getSize() # often returns QSize
-                        h = sz.height() if hasattr(sz, "height") else sz[1]
-                    else:
-                        h = 1000 # Blind fallback
+            ray_p, ray_d = _get_view_ray(self.view, x, y)
+            if ray_p and ray_d:
+                pt = _intersect_ray_plane(ray_p, ray_d, plane_normal, plane_point)
+                if pt:
+                    return pt
 
-                    def try_viewer_ray(cur_y):
-                        if hasattr(viewer, "getRay"):
-                            return viewer.getRay(int(x), int(cur_y))
-                        return None
-                    
-                    ray = try_viewer_ray(y)
-                    if not ray:
-                        ray = try_viewer_ray(h - y)
-                        
-            except Exception as e:
-                dm_logger.debug(f"DEBUG: Ray acquisition failed: {e}")
-
-            if ray:
-                dm_logger.debug(f"DEBUG: ray acquired. Type: {type(ray)}, Value: {ray}")
-                try:
-                    # FreeCAD getRay sometimes returns a dict {'base': Vector, 'dir': Vector}
-                    if isinstance(ray, dict):
-                        ray_p = ray.get('base', ray.get('Base'))
-                        ray_d = ray.get('dir', ray.get('Direction'))
-                    else:
-                        ray_p = ray[0]
-                        ray_d = ray[1]
-                        
-                    dm_logger.debug(f"DEBUG: ray_p={ray_p}, ray_d={ray_d}")
-                    if ray_p and ray_d:
-                        denom = ray_d.dot(plane_normal)
-                        dm_logger.debug(f"DEBUG: denom={denom}")
-                        if abs(denom) > 1e-6:
-                            t = (plane_point - ray_p).dot(plane_normal) / denom
-                            pt = ray_p + ray_d * t
-                            dm_logger.debug(f"DEBUG: Intersection at t={t}, pt={pt}")
-                            return pt
-                        else:
-                            dm_logger.debug("DEBUG: denom too small (ray parallel to plane)")
-                except Exception as e:
-                    dm_logger.debug(f"DEBUG: Error parsing ray data: {e}")
-            else:
-                 pass
-        
-        # Fallback to depth-buffered point on surface or synthesize ray
+        # 2. Fallback: Depth-buffered point on surface
         try:
-            pt = self.view.getPoint(x, y)
-            
-            if plane_normal is not None and plane_point is not None:
-                # Try to synthesize a ray using the camera position and the getPoint result
-                # This works because getPoint(x, y) guaranteed lies on the view ray for pixel (x,y)
-                try:
-                    cam = self.view.getCameraNode()
-                    if cam and hasattr(cam, "position"):
-                        cam_vec = cam.position.getValue()
-                        # SbVec3f gives tuple via getValue() or direct index
-                        if hasattr(cam_vec, "getValue"):
-                            cam_pos_tuple = cam_vec.getValue()
-                        else:
-                            cam_pos_tuple = (cam_vec[0], cam_vec[1], cam_vec[2])
-                        
-                        ray_p = FreeCAD.Vector(*cam_pos_tuple)
-                        ray_d = pt - ray_p
-                        ray_d.normalize()
-                        
-                        denom = ray_d.dot(plane_normal)
-                        if abs(denom) > 1e-6:
-                            t = (plane_point - ray_p).dot(plane_normal) / denom
-                            pt_on_plane = ray_p + ray_d * t
-                            return pt_on_plane
-                except Exception as e:
-                    pass
-
-            return pt
+            return self.view.getPoint(x, y)
         except Exception as e:
-            dm_logger.error(f"DEBUG: getPoint failed: {e}")
+            dm_logger.error(f"getPoint failed: {e}")
             return None
 
     def get_visible_workplanes(self):

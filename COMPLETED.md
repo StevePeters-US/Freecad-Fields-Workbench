@@ -146,3 +146,13 @@ Architecture changed from NURBS-surface-centric to BRep direct modeling. Point a
 - **Completed**: Eliminated the 'is_preview' flag and the temporary 'DM_Preview' object. Primitives are now created as real objects immediately upon starting the tool, providing direct feedback via their actual properties. Cancelling a tool (Esc) correctly removes the unfinalized object.
 
 ---
+
+---
+
+## 🛠️ Code Review & Cleanup (March 2026)
+
+### ✅ Refine dm_logger and replace FreeCAD.Console (Minimum LLM: Gemini Flash)
+- **Completed**: Enhanced `dm_logger` to support both console and optional file output. Replaced all direct `FreeCAD.Console.Print*` calls in `InitGui.py`, `commands/`, and `tools/` with standardized `dm_logger` methods.
+
+### ✅ Refactor `get_mouse_world_pos` logic (Minimum LLM: Gemini Flash)
+- **Completed**: Simplified complex ray-plane intersection and fallback logic in `PrimitiveBase.get_mouse_world_pos` by extracting reused logic into `_get_view_ray` and `_intersect_ray_plane` helpers. Fixed a regression where `None` positions could cause crashes.
