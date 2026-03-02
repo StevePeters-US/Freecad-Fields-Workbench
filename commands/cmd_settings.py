@@ -42,6 +42,13 @@ class _SettingsDialog(QtGui.QDialog):
         self._wire_check.setToolTip("Show triangle wireframe on NURBS objects")
         layout.addRow("Show Wireframe:", self._wire_check)
 
+        # Crash Logging
+        from core.dm_logger import get_enable_crash_log
+        self._log_check = QtGui.QCheckBox()
+        self._log_check.setChecked(get_enable_crash_log())
+        self._log_check.setToolTip("Enable persistent crash logging to DirectModeling.log")
+        layout.addRow("Enable Crash Logs:", self._log_check)
+
         # Line Width spinbox
         self._lw_spin = QtGui.QDoubleSpinBox()
         self._lw_spin.setRange(0.5, 20.0)
@@ -71,6 +78,9 @@ class _SettingsDialog(QtGui.QDialog):
         set_show_wireframe(wire)
         set_line_width(lw)
         set_point_size(ps)
+        
+        from core.dm_logger import set_enable_crash_log
+        set_enable_crash_log(self._log_check.isChecked())
         
         # Apply to all existing objects
         refresh_all_dm_objects()

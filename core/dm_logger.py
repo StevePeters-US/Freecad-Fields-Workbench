@@ -2,10 +2,26 @@ import os
 import FreeCAD
 import traceback
 
-LOG_PATH = os.path.expanduser("~/dm_debug.log")
+_PARAM_PATH = "User parameter:FCDirectModeling"
 
-# Path to log file
-ENABLE_LOG_FILE = os.getenv("DEBUG_DM_CRASH", "0") == "1"
+def get_enable_crash_log():
+    try:
+        return FreeCAD.ParamGet(_PARAM_PATH).GetBool("EnableCrashLog", True) # Default True
+    except:
+        return True
+
+def set_enable_crash_log(val):
+    try:
+        FreeCAD.ParamGet(_PARAM_PATH).SetBool("EnableCrashLog", bool(val))
+    except:
+        pass
+
+def get_log_path():
+    try:
+        app_data = FreeCAD.ConfigGet("UserAppData")
+        return os.path.join(app_data, "DirectModeling.log")
+    except:
+        return os.path.expanduser("~/DirectModeling.log")
 
 def _log(level, msg):
     """Internal helper to write to file and console."""
@@ -15,11 +31,13 @@ def _log(level, msg):
         formatted = f"[{level}] {line}"
         
         # Log to file if enabled OR if it's an ERROR (crash investigation)
-        if ENABLE_LOG_FILE or level == "ERROR":
+        if get_enable_crash_log() or level == "ERROR":
             try:
-                # Ensure directory exists if we use a different path
-                # For ~/ we assume it exists.
-                with open(LOG_PATH, "a", encoding="utf-8") as f:
+                log_p = get_log_path()
+                d = os.path.dirname(log_p)
+                if d and not os.path.exists(d):
+                    os.makedirs(d, exist_ok=True)
+                with open(log_p, "a", encoding="utf-8") as f:
                     f.write(formatted + "\n")
                     f.flush()
             except:

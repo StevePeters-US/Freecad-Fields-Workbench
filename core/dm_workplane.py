@@ -94,15 +94,7 @@ class ViewProviderDMWorkPlane:
         
         vobj.addDisplayMode(self.root_node, "Standard")
         
-        # To dynamically scale with the camera
-        try:
-            import FreeCADGui
-            # Use the view associated with the ViewObject if possible, otherwise activeView
-            self.view = vobj.ViewWindow if hasattr(vobj, "ViewWindow") else FreeCADGui.activeView()
-            if self.view:
-                self.callback_id = self.view.addEventCallback("SoEvent", self._on_event)
-        except Exception as e:
-            dm_logger.error(f"DMWorkPlane ViewProvider attach error: {e}")
+        # No dynamic scale event callback needed anymore.
 
     def _setup_grid(self, length, width, steps):
         points = []
@@ -135,41 +127,7 @@ class ViewProviderDMWorkPlane:
         self.face_coords.point.setValues(0, 4, f_points)
         self.face_set.numVertices.setValue(4)
 
-    def _on_event(self, event_dict):
-        # Update scale dynamically based on camera
-        if not hasattr(self, 'view') or self.view is None:
-            return False
-            
-        try:
-            cam_node = self.view.getCameraNode()
-            if not cam_node:
-                return False
-                
-            # The object's Placement already handles world position and orientation.
-            # We ONLY want to apply the dynamic scale here.
-            self.transform.translation.setValue(0, 0, 0)
-            self.transform.rotation.setValue(0, 0, 0, 1)
 
-            if self.Object and hasattr(self.Object, "Placement"):
-                p = self.Object.Placement
-                pos = p.Base
-                
-                # Calculate scale based on distance to camera
-                cam_pos = FreeCAD.Vector(*cam_node.position.getValue().getValue())
-                dist = (cam_pos - pos).Length
-                
-                if hasattr(cam_node, 'height') and hasattr(cam_node.height, 'getValue'):
-                    viewport_height = cam_node.height.getValue()
-                    scale = viewport_height / 300.0
-                else:
-                    fov = cam_node.heightAngle.getValue() if hasattr(cam_node, 'heightAngle') else 0.785
-                    viewport_height = 2.0 * dist * math.tan(fov / 2.0)
-                    scale = viewport_height / 300.0
-                    
-                self.transform.scaleFactor.setValue(scale, scale, scale)
-        except Exception:
-            pass
-        return False
 
     def updateData(self, fp, prop):
         if prop == "Placement":
@@ -190,11 +148,7 @@ class ViewProviderDMWorkPlane:
         return mode
 
     def __del__(self):
-        try:
-            if hasattr(self, 'view') and hasattr(self, 'callback_id'):
-                self.view.removeEventCallback("SoEvent", self.callback_id)
-        except Exception:
-            pass
+        pass
 
     def __getstate__(self):
         return None

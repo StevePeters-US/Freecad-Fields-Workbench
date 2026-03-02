@@ -4,6 +4,7 @@ from .primitive_base import PrimitiveBase
 from core.dm_workplane import create_dm_workplane
 from core import dm_logger
 import math
+from pivy import coin
 
 class WorkPlaneTaskPanel:
     """Task panel for the Work Plane tool to ensure proper cleanup."""
@@ -12,7 +13,7 @@ class WorkPlaneTaskPanel:
         from PySide import QtGui
         self.form = QtGui.QWidget()
         layout = QtGui.QVBoxLayout(self.form)
-        label = QtGui.QLabel("Work Plane Tool active.\n\nClick on a face to align,\nor click in space to create a camera-facing plane.\n\nESC to cancel.")
+        label = QtGui.QLabel("Work Plane Tool active.\n\nClick to drop plane.\nDrag corners to resize.\n\nESC to cancel.")
         layout.addWidget(label)
         
     def accept(self):
@@ -34,27 +35,66 @@ class WorkPlaneCreator(PrimitiveBase):
             self.wp_manager = None
 
         self.preview_obj = None
-        self.state = 0 # 0 = waiting for click
+        self.target_wp = None
+        self.state = 0 # 0 = waiting for click, 1 = resizing/idle, 2 = dragging corner
+        self.active_corner_idx = -1
+        self._cursor_active = False
+
+        # Check if an existing WP is selected
+        sel = FreeCADGui.Selection.getSelection()
+        for obj in sel:
+            if hasattr(obj, "Proxy") and getattr(obj.Proxy, "__class__", None).__name__ == "DMWorkPlane":
+                self.target_wp = obj
+                self.state = 1
+                break
         
-        # Create preview object
-        try:
-            self.preview_obj = create_dm_workplane(name="DM_WorkPlane_Preview")
-            if self.preview_obj:
-                self.preview_obj.Label = "Work Plane Preview"
-                # Make it look slightly different? Or same.
-                # ViewProvider doesn't have a 'preview' mode yet, but we could add one.
-        except Exception as e:
-            dm_logger.error(f"WorkPlaneCreator preview creation error: {e}")
+        if not self.target_wp:
+            # Create preview object
+            try:
+                self.preview_obj = create_dm_workplane(name="DM_WorkPlane_Preview")
+                if self.preview_obj:
+                    self.preview_obj.Label = "Work Plane Preview"
+            except Exception as e:
+                dm_logger.error(f"WorkPlaneCreator preview creation error: {e}")
+
+        # Setup handles visual
+        self.sg = self.view.getSceneGraph()
+        self.handles_root = coin.SoSeparator()
+        self.handles_coords = coin.SoCoordinate3()
+        self.handles_nodes = coin.SoMarkerSet()
+        self.handles_nodes.markerIndex = coin.SoMarkerSet.CIRCLE_FILLED_9_9
+        self.handles_mat = coin.SoMaterial()
+        self.handles_mat.diffuseColor.setValue(1, 0.5, 0)
+        
+        self.handles_root.addChild(self.handles_mat)
+        self.handles_root.addChild(self.handles_coords)
+        self.handles_root.addChild(self.handles_nodes)
+        
+        if self.sg:
+            self.sg.addChild(self.handles_root)
 
         # Show Task Panel to manage lifecycle
         self.task_panel = WorkPlaneTaskPanel(self)
         FreeCADGui.Control.showDialog(self.task_panel)
 
         dm_logger.debug("WorkPlaneCreator initialized")
+        self.update_handles()
 
     def terminate(self):
-        if self._terminated:
+        if hasattr(self, "_terminated") and self._terminated:
             return
+            
+        if getattr(self, "_cursor_active", False):
+            from PySide import QtGui
+            QtGui.QApplication.restoreOverrideCursor()
+            self._cursor_active = False
+            
+        # Clean up handles
+        try:
+            if self.sg and self.handles_root:
+                self.sg.removeChild(self.handles_root)
+        except Exception:
+            pass
             
         # Clean up preview
         if self.preview_obj:
@@ -287,45 +327,230 @@ class WorkPlaneCreator(PrimitiveBase):
             pass
         return None
 
+    def _get_initial_size(self, pos):
+        if not self.view: return 100.0
+        try:
+            cam_node = self.view.getCameraNode()
+            if not cam_node: return 100.0
+            
+            cam_vec = cam_node.position.getValue()
+            cam_pos_tuple = cam_vec.getValue() if hasattr(cam_vec, "getValue") else (cam_vec[0], cam_vec[1], cam_vec[2])
+            cam_pos = FreeCAD.Vector(*cam_pos_tuple)
+            dist = (cam_pos - pos).Length
+            
+            if hasattr(cam_node, 'height') and hasattr(cam_node.height, 'getValue'):
+                viewport_height = cam_node.height.getValue()
+                scale = viewport_height / 300.0
+            else:
+                fov = cam_node.heightAngle.getValue() if hasattr(cam_node, 'heightAngle') else 0.785
+                viewport_height = 2.0 * dist * math.tan(fov / 2.0)
+                scale = viewport_height / 300.0
+                
+            return max(10.0, 100.0 * scale)
+        except Exception:
+            return 100.0
+
+    def update_handles(self):
+        obj = self.target_wp if self.target_wp else self.preview_obj
+        if not obj or not hasattr(obj, "Length"):
+            self.handles_coords.point.setNum(0)
+            return
+            
+        l_val = obj.Length.Value if hasattr(obj.Length, "Value") else float(obj.Length)
+        w_val = obj.Width.Value if hasattr(obj.Width, "Value") else float(obj.Width)
+        l = l_val / 2.0
+        w = w_val / 2.0
+        
+        corners_local = [
+            FreeCAD.Vector(-l, -w, 0),
+            FreeCAD.Vector(l, -w, 0),
+            FreeCAD.Vector(l, w, 0),
+            FreeCAD.Vector(-l, w, 0)
+        ]
+        
+        plc = obj.Placement
+        corners_global = [plc.multVec(c) for c in corners_local]
+        
+        self.handles_coords.point.setValues(0, 4, [(c.x, c.y, c.z) for c in corners_global])
+
+    def _get_ray(self, event_dict):
+        pos = event_dict.get("Position", (0, 0))
+        x, y = pos[0], pos[1]
+        if not self.view: return None, None
+        
+        scene_pt = None
+        try:
+            scene_pt = self.view.getPoint(x, y)
+        except Exception:
+            pass
+            
+        if scene_pt is None:
+            vd = self.view.getViewDirection()
+            focus = self.view.getFocus() if hasattr(self.view, "getFocus") else FreeCAD.Vector(0,0,0)
+            scene_pt = focus
+            
+        try:
+            cam = self.view.getCameraNode()
+            if not cam or not hasattr(cam, "position"): return None, None
+            cam_vec = cam.position.getValue()
+            cam_pos_tuple = cam_vec.getValue() if hasattr(cam_vec, "getValue") else (cam_vec[0], cam_vec[1], cam_vec[2])
+            ray_p = FreeCAD.Vector(*cam_pos_tuple)
+            ray_d = scene_pt - ray_p
+            ray_d.normalize()
+            return ray_p, ray_d
+        except Exception:
+            return None, None
+
+    def _hit_test(self, ray_p, ray_d):
+        obj = self.target_wp if self.target_wp else self.preview_obj
+        if not obj or not ray_p or not ray_d: return -1
+        
+        l_val = obj.Length.Value if hasattr(obj.Length, "Value") else float(obj.Length)
+        w_val = obj.Width.Value if hasattr(obj.Width, "Value") else float(obj.Width)
+        l = l_val / 2.0
+        w = w_val / 2.0
+        corners_local = [
+            FreeCAD.Vector(-l, -w, 0),
+            FreeCAD.Vector(l, -w, 0),
+            FreeCAD.Vector(l, w, 0),
+            FreeCAD.Vector(-l, w, 0)
+        ]
+        
+        plc = obj.Placement
+        inv_plac = plc.inverse()
+        local_ray_p = inv_plac.multVec(ray_p)
+        local_ray_d = inv_plac.Rotation.multVec(ray_d)
+        
+        best_dist = float('inf')
+        best_idx = -1
+        
+        for i, pos in enumerate(corners_local):
+            v = pos - local_ray_p
+            dist = v.cross(local_ray_d).Length
+            cam_dist = v.dot(local_ray_d)
+            if cam_dist < 0: continue
+            
+            tolerance = max(1.0, 0.04 * cam_dist) 
+            if dist < tolerance and dist < best_dist:
+                best_dist = dist
+                best_idx = i
+                
+        return best_idx
+
+    def event_cb(self, event_dict):
+        try:
+            event_type = event_dict.get("Type", "Unknown")
+
+            if event_type == "SoMouseButtonEvent":
+                btn = event_dict.get("Button", "None")
+                state = event_dict.get("State", "None")
+                if state == "DOWN":
+                    if btn == "BUTTON1":
+                        return self.handle_click(event_dict)
+                    elif btn == "BUTTON3":
+                        self.terminate()
+                        return True
+                    return False
+                elif state == "UP":
+                    if btn == "BUTTON1" and self.state == 2:
+                        self.state = 1
+                        self.active_corner_idx = -1
+                        return True
+                    if btn == "BUTTON3":
+                        return True 
+                    return False
+            elif event_type == "SoLocation2Event":
+                self.handle_move(event_dict)
+            elif event_type == "SoKeyboardEvent":
+                if event_dict["State"] == "DOWN":
+                    return self.handle_keyboard(event_dict)
+
+        except Exception as e:
+            dm_logger.error(f"Error in WorkPlaneCreator event_cb: {e}")
+            import traceback
+            traceback.print_exc()
+        return False
+
     def handle_click(self, event_dict):
         try:
             btn = event_dict.get("Button")
-            # Only BUTTON3 (right click) drops the tool. 
+            
             if btn == "BUTTON3":
                 self.terminate()
-                return True # Suppress context menu
+                return True
 
             if btn != "BUTTON1":
-                # Ensure navigation (MMB / BUTTON2) doesn't set the workplane
                 return False
 
-            placement = self.get_snapped_placement(event_dict)
-            if placement:
-                # Commit the preview object by renaming it and clearing reference
-                if self.preview_obj:
-                    # Final placement
-                    self.preview_obj.Placement = placement
-                    # Rename to final name
-                    self.preview_obj.Label = "Work Plane"
-                    self.preview_obj = None # Don't delete on terminate
-                else:
-                    create_dm_workplane(placement=placement)
-                    
-                if FreeCAD.ActiveDocument:
-                    FreeCAD.ActiveDocument.recompute()
+            if self.state == 0:
+                # First click drops the workplane
+                placement = self.get_snapped_placement(event_dict)
+                if placement:
+                    size = self._get_initial_size(placement.Base)
+                    if self.preview_obj:
+                        self.preview_obj.Placement = placement
+                        self.preview_obj.Label = "Work Plane"
+                        self.preview_obj.Length = size
+                        self.preview_obj.Width = size
+                        self.target_wp = self.preview_obj
+                        self.preview_obj = None
+                    else:
+                        self.target_wp = create_dm_workplane(placement=placement)
+                        self.target_wp.Length = size
+                        self.target_wp.Width = size
+                        
+                    if FreeCAD.ActiveDocument:
+                        FreeCAD.ActiveDocument.recompute()
+                        
+                    self.state = 1
+                    self.update_handles()
+                return True
                 
-            self.terminate()
-            return True
+            elif self.state == 1:
+                # Check if clicking on a corner
+                ray_p, ray_d = self._get_ray(event_dict)
+                hit_idx = self._hit_test(ray_p, ray_d)
+                if hit_idx != -1:
+                    self.active_corner_idx = hit_idx
+                    self.state = 2 # dragging
+                    # Get drag plane normal and origin
+                    plc = self.target_wp.Placement
+                    self.drag_plane_n = plc.Rotation.multVec(FreeCAD.Vector(0,0,1))
+                    self.drag_plane_o = plc.Base
+                    return True
+                else:
+                    self.terminate()
+                    return True
+                    
         except Exception:
             dm_logger.exception("WorkPlaneCreator.handle_click error")
             return False
+        return False
 
     def handle_move(self, event_dict):
         try:
-            placement = self.get_snapped_placement(event_dict)
-            if placement and self.preview_obj:
-                self.preview_obj.Placement = placement
-                if self.doc:
-                    self.doc.recompute()
+            if self.state == 0:
+                placement = self.get_snapped_placement(event_dict)
+                if placement and self.preview_obj:
+                    self.preview_obj.Placement = placement
+                    size = self._get_initial_size(placement.Base)
+                    self.preview_obj.Length = size
+                    self.preview_obj.Width = size
+                    if self.doc:
+                        self.doc.recompute()
+                    self.update_handles()
+            elif self.state == 1:
+                pass
+            elif self.state == 2 and self.target_wp:
+                pt_global = self.get_mouse_world_pos(event_dict, self.drag_plane_n, self.drag_plane_o)
+                if pt_global:
+                    pt_local = self.target_wp.Placement.inverse().multVec(pt_global)
+                    new_l = abs(pt_local.x) * 2.0
+                    new_w = abs(pt_local.y) * 2.0
+                    self.target_wp.Length = max(1.0, new_l)
+                    self.target_wp.Width = max(1.0, new_w)
+                    if self.doc:
+                        self.doc.recompute()
+                    self.update_handles()
         except Exception:
             pass
