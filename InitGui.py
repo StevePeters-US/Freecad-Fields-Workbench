@@ -107,11 +107,15 @@ class DirectModelingWorkbench(Workbench):
                         # Suppress context menu events everywhere in the workbench
                         if event.type() == QtCore.QEvent.ContextMenu:
                             return True
-                        
-                        # Aggressively catch right-clicks to prevent menus
+                            
+                        # If a tool is active, Right Click finishes it and we consume the event
                         if event.type() in [QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
                             if event.button() == QtCore.Qt.RightButton:
-                                return True
+                                from tools.primitive_base import PrimitiveBase
+                                if PrimitiveBase.active_tool:
+                                    if event.type() == QtCore.QEvent.MouseButtonPress:
+                                        PrimitiveBase.active_tool.finish()
+                                    return True # Block FreeCAD's context menu and rotation
                                 
                         return False
                 self._event_filter = DMEventFilter()

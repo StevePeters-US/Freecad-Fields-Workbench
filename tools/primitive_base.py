@@ -38,6 +38,10 @@ def _cam_pos(view):
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PrimitiveBase:
+    # Class-level reference to the currently active tool to allow 
+    # global event filters (like right-click suppression) to reach it.
+    active_tool = None
+
     def __init__(self):
         self._terminated = False
         self.view = FreeCADGui.activeView()
@@ -55,6 +59,7 @@ class PrimitiveBase:
 
 
         dm_logger.debug(f"{self.__class__.__name__} initialized")
+        PrimitiveBase.active_tool = self
         self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
 
         self.start_point   = None
@@ -116,6 +121,8 @@ class PrimitiveBase:
             dm_logger.debug(f"Error detecting selected workplane: {e}")
 
     def terminate(self):
+        if PrimitiveBase.active_tool is self:
+            PrimitiveBase.active_tool = None
         self._terminated = True
         try:
             if self.callback:
@@ -394,8 +401,8 @@ class PrimitiveBase:
                 state = event_dict.get("State", "None")
                 if state == "DOWN":
                     if btn == "BUTTON3":
-                        # Right click drops tool
-                        QtCore.QTimer.singleShot(0, self.terminate)
+                        # Right click finishes tool
+                        QtCore.QTimer.singleShot(0, self.finish)
                         return True # CONSUME PRESS
                     elif btn == "BUTTON1":
                         return self.handle_click(event_dict)
@@ -405,7 +412,7 @@ class PrimitiveBase:
                 
                 elif state == "UP":
                     if btn == "BUTTON3":
-                        return True # CONSUME RELEASE to suppress context menu
+                        return True # CONSUME RELEASE to suppress FreeCAD context menu
                     return False
             elif event_type == "SoLocation2Event":
                 self.handle_move(event_dict)
@@ -742,11 +749,17 @@ class NURBSPrimitiveCreator(PrimitiveBase):
             try:
                 # Use FreeCAD.ActiveDocument if self.doc is stale or None
                 doc = self.doc or FreeCAD.ActiveDocument
-                if doc and self._active_obj.Name in doc.Objects:
+                dm_logger.debug(f"DEBUG terminate: Attempting to remove {self._active_obj.Name}")
+                if doc and doc.getObject(self._active_obj.Name):
                     doc.removeObject(self._active_obj.Name)
                     doc.recompute()
-            except Exception:
-                pass
+                    dm_logger.debug(f"DEBUG terminate: Removed successfully.")
+                else:
+                    dm_logger.debug(f"DEBUG terminate: Object {self._active_obj.Name} not found in doc.")
+            except Exception as e:
+                dm_logger.error(f"DEBUG terminate Error: {e}")
+                import traceback
+                traceback.print_exc()
         
         self._active_obj = None
 

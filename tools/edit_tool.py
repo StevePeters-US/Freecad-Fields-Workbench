@@ -179,7 +179,7 @@ class EditTool(PrimitiveBase):
                 btn = event_dict.get("Button", "None")
                 state = event_dict.get("State", "None")
                 if state == "DOWN":
-                    if btn == "BUTTON3":
+                    if btn == "BUTTON2": # Middle Mouse
                         return self.handle_right_click(event_dict)
                     elif btn == "BUTTON1":
                         return self.handle_click(event_dict)
@@ -190,7 +190,7 @@ class EditTool(PrimitiveBase):
                         self.state = 0
                         self._selected_element = None
                         return True
-                    if btn == "BUTTON3":
+                    if btn == "BUTTON2":
                         return True 
                     return False
             elif event_type == "SoLocation2Event":
