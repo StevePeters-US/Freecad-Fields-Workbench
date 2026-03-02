@@ -16,7 +16,6 @@ class CurveCreator(NURBSPrimitiveCreator):
     def handle_click(self, event_dict):
         try:
             btn = event_dict.get("Button")
-            dm_logger.debug(f"DEBUG: Curve handle_click: State={self.state}, Button={btn}")
 
             # Right-click (BUTTON3) to finish
             if btn == "BUTTON3":
@@ -29,37 +28,36 @@ class CurveCreator(NURBSPrimitiveCreator):
             if btn != "BUTTON1":
                 return False
 
-            pt = self.get_mouse_world_pos(event_dict)
+            pt = self.get_mouse_plane_pt(event_dict)
             if pt is None:
                 return False
             
-            # In state 0, first click sets the working plane
+            # In state 0, first click sets the working plane (if not already set via selection)
             if self.state == 0:
-                if self.wp_manager:
-                    self.working_plane = self.wp_manager.get_placement()
-                    # Ensure start_point is EXACTLY on this plane
-                    n, o = self.get_base_plane()
-                    pt = self.get_mouse_world_pos(event_dict, n, o)
-                else:
-                    rot = self.working_plane.Rotation if self.working_plane else FreeCAD.Rotation()
+                if not self.working_plane:
+                    # Establish a new working plane at the first click
+                    # get_base_plane() will return face-tangent or camera-facing normal
+                    n, _ = self.get_base_plane()
+                    rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), n)
                     self.working_plane = FreeCAD.Placement(pt, rot)
+                    # Re-project pt onto the newly established plane to be safe
+                    pt = self.get_mouse_plane_pt(event_dict)
                     
                 self.start_point = pt
                 self.points.append(pt)
+                
+                # Debug logging
+                n, o = self.get_base_plane()
+                dist = (pt - o).dot(n)
+                dm_logger.info(f"Curve Point 0: {pt} (dist to plane: {dist:.6f})")
+                
                 self.state = 1
-                dm_logger.debug(f"DEBUG: Curve State 0 -> 1. Working plane origin: {self.working_plane.Base}")
                 self.update_preview()
                 self.update_ui()
                 return True
             
             # In state 1, subsequent clicks add points
             elif self.state == 1:
-                # Ensure point is on the established plane
-                n, o = self.get_base_plane()
-                pt = self.get_mouse_world_pos(event_dict, n, o)
-                if pt is None:
-                    return False
-
                 # Check for click on start point (close the curve)
                 if len(self.points) >= 2:
                     dist = (pt - self.points[0]).Length
@@ -70,7 +68,12 @@ class CurveCreator(NURBSPrimitiveCreator):
                         return True
 
                 self.points.append(pt)
-                dm_logger.debug(f"DEBUG: Curve point added. Total: {len(self.points)} at {pt}")
+                
+                # Debug logging
+                n, o = self.get_base_plane()
+                dist = (pt - o).dot(n)
+                dm_logger.info(f"Curve Point {len(self.points)-1}: {pt} (dist to plane: {dist:.6f})")
+                
                 self.update_preview()
                 self.update_ui()
                 return True
@@ -82,13 +85,11 @@ class CurveCreator(NURBSPrimitiveCreator):
 
     def handle_move(self, event_dict):
         if self.state == 0:
-            # Face snapping logic from base
+            # Snap to faces etc.
             super().handle_move(event_dict)
         elif self.state == 1:
             # Update temporary "current_point" for preview
-            # Ensure point is on the established plane
-            n, o = self.get_base_plane()
-            pt = self.get_mouse_world_pos(event_dict, n, o)
+            pt = self.get_mouse_plane_pt(event_dict)
             if pt is None:
                 return
             
@@ -129,8 +130,8 @@ class CurveCreator(NURBSPrimitiveCreator):
         if n < 2:
             return [], []
             
-        h_in = [None] * n
-        h_out = [None] * n
+        h_in = [p for p in points]
+        h_out = [p for p in points]
         
         # Simple Catmull-Rom like tangent: T_i = (P_{i+1} - P_{i-1}) / 2
         # Handle distance = 1/3 of segment length
@@ -190,7 +191,7 @@ class CurveCreator(NURBSPrimitiveCreator):
         self.update_preview()
         
         self._finished = True
-        dm_logger.debug(f"Curve finalized: {self._active_obj.Name if self._active_obj else 'None'}")
+        # dm_logger.debug(f"Curve finalized: {self._active_obj.Name if self._active_obj else 'None'}")
         
         # Reset but keep object
         self._active_obj = None

@@ -125,23 +125,26 @@ class WorkPlaneManager:
                     # proj = face.projectPoint(mouse_pt) <- Missing in some FC versions
                     # Use Part.Vertex because distToShape requires a Shape, not a Point (geometry)
                     dists = face.distToShape(Part.Vertex(mouse_pt))
-                    if dists and len(dists) >= 3:
-                            info_param = params[0]
-                            u, v = None, None
-                            # Find the first tuple of 2 floats in info_param
-                            if isinstance(info_param, (list, tuple)):
-                                for item in info_param:
-                                    if isinstance(item, (list, tuple)) and len(item) == 2:
-                                        if isinstance(item[0], (int, float)) and isinstance(item[1], (int, float)):
-                                            u, v = item[0], item[1]
-                                            break
-                            else:
-                                if len(info_param) >= 2 and isinstance(info_param[0], (int, float)):
-                                    u, v = info_param[0], info_param[1]
+                    if dists and len(dists) > 0:
+                        # dists[0] is the distance
+                        # dists[1] is a list of sub-component info for face
+                        # dists[2] is a list of sub-component info for vertex
+                        # For face-vertex distance, dists[0][1] usually contains the point and UV
+                        info_param = dists[0][1]
+                        u, v = None, None
+                        target_pt = None
+                        
+                        if isinstance(info_param, (list, tuple)) and len(info_param) >= 2:
+                            target_pt = info_param[0]
+                            # UV is usually in the second element of the info tuple
+                            if len(info_param) >= 2 and isinstance(info_param[1], (list, tuple)):
+                                params = info_param[1]
+                                if len(params) >= 2:
+                                    u, v = params[0], params[1]
                                     
-                            if u is None:
-                                dm_logger.debug(f"WorkPlaneManager: Could not parse UV from {info_param}")
-                                return
+                        if u is None or target_pt is None:
+                            dm_logger.debug(f"WorkPlaneManager: Could not parse UV or Point from {info_param}")
+                            return
                             
                             normal = face.Surface.normal(u, v)
                             dm_logger.debug(f"WorkPlaneManager: Face normal {normal}")

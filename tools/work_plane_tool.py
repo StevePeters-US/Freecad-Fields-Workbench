@@ -196,15 +196,6 @@ class WorkPlaneCreator(PrimitiveBase):
                             world_hit_pt = wp_fallback
 
                         
-                        # --- DEBUG ---
-                        info_pt = info.get("Point")
-                        FreeCAD.Console.PrintMessage(
-                            f"WP DBG: Hovering {obj_name}.{subname}\n"
-                            f"  pos (SoEvent)         : {pos}\n"
-                            f"  info['Point']         : {info_pt}\n"
-                            f"  view.getPoint()       : ({world_hit_pt.x:.3f}, {world_hit_pt.y:.3f}, {world_hit_pt.z:.3f})\n"
-                        )
-                        # --- END DEBUG ---
                         
                         # Get object's world transform
                         gpl = obj.getGlobalPlacement() if hasattr(obj, "getGlobalPlacement") else obj.Placement
@@ -250,12 +241,6 @@ class WorkPlaneCreator(PrimitiveBase):
                         
                         projected_world_pt = gpl.multVec(projected_local_pt)
                         
-                        FreeCAD.Console.PrintMessage(
-                            f"  local_hit_pt          : ({local_hit_pt.x:.3f}, {local_hit_pt.y:.3f}, {local_hit_pt.z:.3f})\n"
-                            f"  distToShape proj pt   : ({projected_local_pt.x:.3f}, {projected_local_pt.y:.3f}, {projected_local_pt.z:.3f})\n"
-                            f"  final world origin    : ({projected_world_pt.x:.3f}, {projected_world_pt.y:.3f}, {projected_world_pt.z:.3f})\n"
-                            f"  normal (world)        : ({world_n.x:.3f}, {world_n.y:.3f}, {world_n.z:.3f})\n"
-                        )
                         
                         # Build stable basis: Z=normal, Y=camera-influenced-up, X=across
                         camera_up = self.view.getUpDirection()

@@ -13,6 +13,11 @@ Architecture changed from NURBS-surface-centric to BRep direct modeling. Point a
 ### ✅ Phase 0a: Delete obsolete files
 - **Completed**: Removed `PROJECT_GUIDELINES.md` and `guidelines_prompt.md`. Verified that these files are no longer referenced in the codebase.
 
+### ✅ Phase 1k: Fix Curve Errors & Remove Log Spam
+- **Completed**: Fixed a `TypeError` in `core/dm_object.py` by ensuring `HandleIn` and `HandleOut` always contain valid Vectors (falling back to the point itself for zero-length handles). Removed extensive `dm_logger.debug` and `FreeCAD.Console.PrintMessage` statements from `core/dm_object.py`, `tools/curve_tool.py`, and `tools/primitive_base.py` to clean up the Report View.
+### ✅ Phase 1a: Align Tools to Active Workplane
+- **Completed**: Updated `PrimitiveBase` to automatically detect a selected `DM_WorkPlane` and use it as the tool's coordinate system. Standardized `get_base_plane` and `update_active_object` to ensure all points (including curve handles) are correctly mapped to local space. Simplified `CurveCreator` to strictly use the established workplane.
+
 ### ✅ Phase 0b: Reorganize folder structure
 - **Completed**: Renamed `FCDirectModeling/` → `core/`, extracted `primitives/` → `tools/`, and renamed `dm_commands/` → `commands/`. Updated all internal import paths and renamed tool/command files for consistency (`creator` → `tool`, `command_X` → `cmd_X`).
 

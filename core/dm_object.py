@@ -66,7 +66,7 @@ class DMObjectProxy:
         obj.ShapeType = shape_type
         
         from . import dm_logger
-        dm_logger.debug(f"DMObjectProxy.__init__: type={shape_type}, has_placement={placement is not None}")
+        # dm_logger.debug(f"DMObjectProxy.__init__: type={shape_type}, has_placement={placement is not None}")
         
         if placement:
             obj.Placement = placement
@@ -83,10 +83,29 @@ class DMObjectProxy:
             if not hasattr(obj, "Closed"):
                 obj.addProperty("App::PropertyBool", "Closed", "Curve", "Whether the curve is periodic")
             obj.Points = params.get("Points", [])
-            obj.HandleIn = params.get("HandleIn", [])
-            obj.HandleOut = params.get("HandleOut", [])
+            
+            # Ensure handles are lists of Vectors, never None
+            pts = params.get("Points", [])
+            h_in = params.get("HandleIn", [])
+            h_out = params.get("HandleOut", [])
+            
+            # Fill missing handles with the point itself (zero-length handle)
+            in_vals = []
+            out_vals = []
+            for i, p in enumerate(pts):
+                in_vals.append(h_in[i] if (i < len(h_in) and h_in[i] is not None) else p)
+                out_vals.append(h_out[i] if (i < len(h_out) and h_out[i] is not None) else p)
+            
+            obj.HandleIn = in_vals
+            obj.HandleOut = out_vals
             obj.Closed = params.get("is_closed", False)
-        elif shape_type == "point":
+
+        # Add generic debug property
+        if not hasattr(obj, "DebugPoint"):
+            obj.addProperty("App::PropertyVector", "DebugPoint", "Debug", "Current mouse intersection point")
+        obj.DebugPoint = params.get("debug_pt", FreeCAD.Vector(0,0,0))
+
+        if shape_type == "point":
             if not hasattr(obj, "Position"):
                 obj.addProperty("App::PropertyVector", "Position", "Point", "Position")
             obj.Position = params.get("Position", FreeCAD.Vector(0,0,0))
@@ -108,7 +127,7 @@ class DMObjectProxy:
 
     def build_shape(self, fp):
         """Return a Part.Shape based on the object's properties."""
-        from . import nurbs_primitives as np_builders
+
         
         st = fp.ShapeType
         if st == "curve":
@@ -233,13 +252,50 @@ class DMViewProvider:
         self._ctrl_lines = None
         self._ctrl_points = None
         self._style = None
+        
+        self._debug_sep = None
+        self._debug_coords = None
 
     def attach(self, vobj):
         from . import dm_logger
         self.Object = vobj.Object
         dm_logger.debug(f"DMViewProvider.attach: obj={self.Object.Label}, coin_avail={coin is not None}")
-        if coin and hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "curve":
-            self._setup_coin_overlay(vobj)
+        
+        if coin:
+            # Setup curve overlay if it's a curve
+            if hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "curve":
+                 self._setup_coin_overlay(vobj)
+            
+            # Setup debug dot (available for all DM objects)
+            self._setup_debug_overlay(vobj)
+
+    def _setup_debug_overlay(self, vobj):
+        if not coin: return
+        self._debug_sep = coin.SoSeparator()
+        
+        mat = coin.SoMaterial()
+        mat.diffuseColor = coin.SbColor(1.0, 0.0, 0.0) # Red
+        self._debug_sep.addChild(mat)
+        
+        style = coin.SoDrawStyle()
+        style.pointSize.setValue(10)
+        self._debug_sep.addChild(style)
+        
+        self._debug_coords = coin.SoCoordinate3()
+        self._debug_sep.addChild(self._debug_coords)
+        
+        pt_set = coin.SoPointSet()
+        pt_set.numPoints.setValue(1)
+        self._debug_sep.addChild(pt_set)
+        
+        vobj.RootNode.addChild(self._debug_sep)
+        self._update_debug_dot(vobj.Object)
+
+    def _update_debug_dot(self, fp):
+        if not self._debug_coords or not hasattr(fp, "DebugPoint"):
+            return
+        p = fp.DebugPoint
+        self._debug_coords.point.setValue(0, p.x, p.y, p.z)
 
     def _setup_coin_overlay(self, vobj):
         if not coin: return
@@ -359,9 +415,12 @@ class DMViewProvider:
 
     def updateData(self, fp, prop):
         from . import dm_logger
-        dm_logger.debug(f"DMViewProvider.updateData: obj={fp.Label}, prop={prop}")
-        if prop in ["Points", "HandleIn", "HandleOut"]:
+        # dm_logger.debug(f"DMViewProvider.updateData: obj={fp.Label}, prop={prop}")
+        if not prop or prop in ["Points", "HandleIn", "HandleOut"]:
             self._rebuild_control_cage(fp)
+        
+        if not prop or prop == "DebugPoint":
+            self._update_debug_dot(fp)
 
     def getIcon(self):
         # Orange stairstep icon (Part)
@@ -415,7 +474,7 @@ def create_dm_object(name, shape_type, params=None, placement=None):
         doc = FreeCAD.newDocument()
 
     try:
-        dm_logger.debug(f"create_dm_object: name={name}, type={shape_type}, has_placement={placement is not None}")
+        # dm_logger.debug(f"create_dm_object: name={name}, type={shape_type}, has_placement={placement is not None}")
         obj = doc.addObject("Part::FeaturePython", name)
         DMObjectProxy(obj, shape_type, params, placement=placement)
 

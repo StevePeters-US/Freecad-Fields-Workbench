@@ -53,8 +53,8 @@ class PrimitiveBase:
             dm_logger.error("DEBUG: PrimitiveBase: Could not find active view!")
             return
 
-        dm_logger.debug(f"DEBUG: PrimitiveBase active view: {self.view.ObjectName if hasattr(self.view, 'ObjectName') else 'Unknown'} ({type(self.view)})")
 
+        dm_logger.debug(f"{self.__class__.__name__} initialized")
         self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
 
         self.start_point   = None
@@ -77,6 +77,43 @@ class PrimitiveBase:
         self.locked_length = None
         self.locked_width = None
         self.locked_height = None
+
+        # Check for selected WorkPlane
+        self._detect_selected_workplane()
+
+    def _detect_selected_workplane(self):
+        """Checks if a DM_WorkPlane is selected and sets it as the active working plane."""
+        try:
+            selection = FreeCADGui.Selection.getSelection()
+            if not selection:
+                # dm_logger.debug("DEBUG: Selection is empty")
+                return
+                
+            for obj in selection:
+                is_wp = False
+                proxy_name = "None"
+                if hasattr(obj, "Proxy") and obj.Proxy:
+                    proxy_name = obj.Proxy.__class__.__name__
+                    if proxy_name == "DMWorkPlane":
+                        is_wp = True
+                
+                # dm_logger.debug(f"DEBUG: Checking selection: {obj.Label}, Proxy: {proxy_name}")
+                
+                # 2. Check for specific properties if proxy check is brittle
+                if not is_wp and hasattr(obj, "Proxy") and hasattr(obj.Proxy, "execute") and hasattr(obj, "Length") and hasattr(obj, "Width"):
+                    # This looks like one of our workplanes
+                    is_wp = True
+                
+                if is_wp:
+                    # Use getGlobalPlacement to handle nested objects
+                    if hasattr(obj, "getGlobalPlacement"):
+                        self.working_plane = obj.getGlobalPlacement()
+                    else:
+                        self.working_plane = obj.Placement
+                    dm_logger.info(f"Using selected workplane: {obj.Label}")
+                    break
+        except Exception as e:
+            dm_logger.debug(f"Error detecting selected workplane: {e}")
 
     def terminate(self):
         self._terminated = True
@@ -130,20 +167,31 @@ class PrimitiveBase:
             # Ray-Plane intersection
             ray = None
             try:
-                # Diagnostics
-                # dm_logger.debug(f"DEBUG: view type: {type(self.view)}")
+                # Diagnostics: View size
+                viewer = self.view.getViewer()
+                sz = viewer.getSize()
+                h = sz[1]
                 
-                # Try direct getRay (Standard in most FreeCAD versions)
-                if hasattr(self.view, "getRay"):
-                    ray = self.view.getRay(x, y)
-                else:
-                    # Try via viewer
-                    viewer = self.view.getViewer()
+                # Attempt ray acquisition
+                def try_get_ray(cur_y):
+                    if hasattr(self.view, "getRay"):
+                        return self.view.getRay(int(x), int(cur_y))
                     if hasattr(viewer, "getRay"):
-                        ray = viewer.getRay(x, y)
+                        return viewer.getRay(int(x), int(cur_y))
+                    return None
+
+                # 1. Try raw (Coin3D style, 0 at bottom)
+                ray = try_get_ray(y)
+                
+                # 2. Try flipped (Qt style, 0 at top) if raw fails
+                if not ray:
+                    ray = try_get_ray(h - y)
+                    if ray:
+                        # If flipped works, continue using it
+                        pass 
+
             except Exception as e:
                 dm_logger.debug(f"DEBUG: Ray acquisition failed: {e}")
-                pass
 
             if ray:
                 ray_p = ray[0]
@@ -152,15 +200,20 @@ class PrimitiveBase:
                 denom = ray_d.dot(plane_normal)
                 if abs(denom) > 1e-6:
                     t = (plane_point - ray_p).dot(plane_normal) / denom
-                    return ray_p + ray_d * t
-            else:
-                # If we have no ray but we NEED to be on a plane, 
-                # we are in trouble if we just use getPoint (which is depth-buffered).
-                # Fallback to getPoint if raycasting somehow fails.
+                    pt = ray_p + ray_d * t
+                    return pt
+                # dm_logger.debug("DEBUG: Ray is parallel to plane")
                 pass
+            else:
+                 # dm_logger.warn(f"DEBUG: getRay returned None for {x},{y} (flipped: {h-y if 'h' in locals() else 'N/A'})")
+                 pass
         
+        # Fallback to depth-buffered point on surface
         try:
-            return self.view.getPoint(x, y)
+            pt = self.view.getPoint(x, y)
+            # if plane_normal is not None:
+            #     dm_logger.info(f"DEBUG: Falling back to getPoint (getRay fail). pt: {pt}")
+            return pt
         except Exception as e:
             dm_logger.error(f"DEBUG: getPoint failed: {e}")
             return None
@@ -177,8 +230,14 @@ class PrimitiveBase:
 
     def get_base_plane(self):
         """Returns (normal, origin) for the current working plane."""
+        # If we have a working_plane already established for this tool session, use it.
+        if hasattr(self, "working_plane") and self.working_plane:
+            n = self.working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
+            o = self.working_plane.Base
+            return n, o
+
+        # Otherwise, check for a persistent WorkPlane object in the document.
         wp_obj = self.get_active_workplane_obj()
-        
         if wp_obj and hasattr(wp_obj, "Placement"):
             wp_placement = wp_obj.Placement
             n = wp_placement.Rotation.multVec(FreeCAD.Vector(0,0,1))
@@ -517,24 +576,13 @@ class NURBSPrimitiveCreator(PrimitiveBase):
                     return None
                 if isinstance(obj, (list, tuple)):
                     return [self.to_local(p) for p in obj]
-                return self.to_local(obj)
+                if hasattr(obj, "x"): # It's a Vector
+                    return self.to_local(obj)
+                return obj
 
-            for k in ["Position", "Points", "HandleIn", "HandleOut"]:
+            for k in ["Position", "Points", "HandleIn", "HandleOut", "debug_pt"]:
                 if k in local_params and local_params[k] is not None:
-                    # Special case: PropertyVectorList cannot have None
-                    if k in ["HandleIn", "HandleOut"] and isinstance(local_params[k], (list, tuple)):
-                        # If handle is None, use the corresponding point to effectively "disable" the handle
-                        pts = local_params.get("Points", [])
-                        sanitized = []
-                        for i, p in enumerate(local_params[k]):
-                            if p is None:
-                                # Try to match with the point at the same index
-                                sanitized.append(pts[i] if i < len(pts) else FreeCAD.Vector(0,0,0))
-                            else:
-                                sanitized.append(p)
-                        local_params[k] = map_p(sanitized)
-                    else:
-                        local_params[k] = map_p(local_params[k])
+                    local_params[k] = map_p(local_params[k])
 
         # Create or update
         if self._active_obj is None:
@@ -546,15 +594,15 @@ class NURBSPrimitiveCreator(PrimitiveBase):
         else:
             # Update properties
             for k, v in local_params.items():
-                if k == "debug_pt": continue
-                if hasattr(self._active_obj, k):
+                target_k = "DebugPoint" if k == "debug_pt" else k
+                if hasattr(self._active_obj, target_k):
                     try:
-                        setattr(self._active_obj, k, v)
+                        setattr(self._active_obj, target_k, v)
                     except Exception as e:
                         if 'dm_logger' in globals() or 'dm_logger' in locals():
-                            dm_logger.debug(f"DEBUG: Failed to update property {k}: {e}")
+                            dm_logger.debug(f"DEBUG: Failed to update property {target_k}: {e}")
                         else:
-                            print(f"DEBUG: Failed to update property {k}: {e}")
+                            print(f"DEBUG: Failed to update property {target_k}: {e}")
                 elif k == "Position" and placement is None:
                     self._active_obj.Placement.Base = v
             
