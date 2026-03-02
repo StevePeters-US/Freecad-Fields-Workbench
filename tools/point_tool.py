@@ -8,22 +8,28 @@ class PointCreator(NURBSPrimitiveCreator):
     
     def __init__(self):
         super().__init__()
+        self.created_points = []
         dm_logger.debug("PointCreator initialized")
 
     def handle_click(self, event_dict):
         try:
-            # We only need one click for a point
             if event_dict.get("Button") != "BUTTON1":
                 return False
 
-            pt = self.get_mouse_world_pos(event_dict)
+            pt = self.get_mouse_plane_pt(event_dict)
             if pt is None:
                 return False
 
             dm_logger.info(f"Placing point at: {pt}")
             
             self.update_active_object("point", {"Position": pt, "debug_pt": pt})
-            self._do_finish()
+            
+            if self._active_obj:
+                self._active_obj.Label = "Point"
+                self.created_points.append(self._active_obj.Name)
+                # clear active object so a new one is spawned on next move
+                self._active_obj = None
+                
             return True
         except Exception:
             dm_logger.exception("PointCreator.handle_click error")
@@ -31,18 +37,52 @@ class PointCreator(NURBSPrimitiveCreator):
 
     def handle_move(self, event_dict):
         # Update point preview (just the crosshair)
-        pt = self.get_mouse_world_pos(event_dict)
-        # We don't create/update a DMObject on hover for points, 
-        # but we do for the cursor.
-        # Actually, let's stick to the rule: unify objects.
-        # For a point tool, we maybe don't want to create it until click?
-        # User said: "remove the concept of a preview and final mesh. They should be the same."
-        # If I create it on move, it will follow the mouse.
-        # Let's create it on move if it doesn't exist.
+        pt = self.get_mouse_plane_pt(event_dict)
         if pt:
             self.update_active_object("point", {"Position": pt, "debug_pt": pt})
 
     def _do_finish(self):
+        # Called when right clicking (i.e. accept and finish)
+        # We want to keep all points dropped by L-click, but discard the preview point floating at the cursor
         if self._active_obj:
-            self._finished = True
+            try:
+                doc = self.doc or FreeCAD.ActiveDocument
+                if doc:
+                    doc.removeObject(self._active_obj.Name)
+                    doc.recompute()
+            except Exception:
+                pass
+            self._active_obj = None
+            
+        self._finished = True
+        self.terminate()
+
+    def handle_keyboard(self, event_dict):
+        key = str(event_dict.get("Key", "None")).upper()
+        # ESC to cancel and remove all points created in this session
+        if key in ["ESCAPE", "ESC"]:
+            self.cancel_points()
+            return True
+        return super().handle_keyboard(event_dict)
+
+    def cancel_points(self):
+        doc = self.doc or FreeCAD.ActiveDocument
+        if doc:
+            for pt_name in self.created_points:
+                try:
+                    doc.removeObject(pt_name)
+                except Exception as e:
+                    dm_logger.error(f"Failed to remove point {pt_name}: {e}")
+            
+            if self._active_obj:
+                try:
+                    doc.removeObject(self._active_obj.Name)
+                except Exception:
+                    pass
+            self._active_obj = None
+            
+            doc.recompute()
+            
+        self.created_points.clear()
+        self._finished = True # prevent terminate from trying to remove again
         self.terminate()

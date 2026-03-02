@@ -23,6 +23,9 @@ no prior context beyond the files listed. Follow this template:
 
 ---
 
+scale (drag to scale )
+ workplane
+---
 ## Phase 1: Workplane & Existing Tools
 
 ### 1a. Workplane snapping improvements (Minimum LLM: Gemini Low)
