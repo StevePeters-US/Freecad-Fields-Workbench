@@ -17,25 +17,15 @@ class CurveCreator(NURBSPrimitiveCreator):
         self.dragged_index = -1 
         self._drag_start_pos = None 
 
+    def on_button3_down(self, event_dict):
+        if len(self.points) >= 2:
+            self.finish()
+        else:
+            self.terminate()
+        return True
+
     def handle_click(self, event_dict):
         try:
-            btn = event_dict.get("Button")
-            state = event_dict.get("State")
-            dm_logger.debug(f"DEBUG: curve handle_click: State={self.state}, btn={btn}, state={state}")
-            
-            # Point picking/dragging logic removed from Curve Tool.
-            # Control points are now manipulated exclusively via the Edit Tool (click-to-select/drop).
-
-            if btn == "BUTTON3":
-                if len(self.points) >= 2:
-                    self.finish()
-                else:
-                    self.terminate()
-                return True
-
-            if btn != "BUTTON1":
-                return False
-
             pt = self.get_mouse_plane_pt(event_dict)
             if pt is None:
                 return False

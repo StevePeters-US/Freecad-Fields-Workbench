@@ -6,7 +6,7 @@ Each task must be **self-contained** so an LLM or developer can complete it with
 no prior context beyond the files listed. Follow this template:
 
 ```markdown
-- [ ] **Task Title** (Minimum LLM: Gemini Flash/Low/High)
+- **Task Title** (Minimum LLM: Gemini Flash/Low/High)
   - **Goal**: One sentence describing the desired outcome.
   - **Files to read**: List every file the implementer must read first.
   - **Files to modify/create**: List files that will change.
@@ -16,7 +16,6 @@ no prior context beyond the files listed. Follow this template:
   - **Acceptance**: How to verify the task is done.
 ```
 
-- Mark in-progress tasks `[/]`.
 - Move completed tasks to `COMPLETED.md` when a milestone is reached.
 - Sort by required LLM within each section (Flash first, High last).
 - We have as options Gemini Flash, Low, and High. Only use Claude for very difficult programming issues.
@@ -81,26 +80,6 @@ curve handle snapping by angle (set increment in DM settings, default 15 degrees
   4. Wire snapping into `get_point_on_plane()` with toggle via DM Settings.
 - **Acceptance**: Points placed near grid intersections snap to them. Snap modes are toggleable.
 
-
----
-
-### 1c. 3-click interaction flow (Minimum LLM: Gemini High)
-
-- **Goal**: Update tool interaction: 1st click locks workplane, 2nd click starts the tool, right-click finishes, Esc cancels.
-- **Files to read**:
-  - `tools/primitive_base.py` — event handling
-  - `tools/curve_tool.py` — current curve creation flow
-  - `core/work_plane.py`
-- **Files to modify**:
-  - `tools/primitive_base.py` — add workplane-lock state
-  - `tools/curve_tool.py` — integrate new state
-- **Steps**:
-  1. Add state to `PrimitiveBase` for workplane-not-yet-locked.
-  2. While in this state, hovering updates workplane visually.
-  3. On 1st click, lock workplane placement.
-  4. On 2nd click, pass event to the actual tool.
-  5. Right-click calls `finish()`, Esc calls `cancel()`.
-- **Acceptance**: Click once → grid locks. Click again → drawing starts. Right-click finishes.
 
 ---
 

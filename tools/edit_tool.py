@@ -227,34 +227,18 @@ class EditTool(PrimitiveBase):
                     QtGui.QApplication.restoreOverrideCursor()
                     self._cursor_active = False
 
-    def event_cb(self, event_dict):
-        try:
-            event_type = event_dict.get("Type", "Unknown")
+    def on_button1_down(self, event_dict):
+        return self.handle_click(event_dict)
 
-            if event_type == "SoMouseButtonEvent":
-                btn = event_dict.get("Button", "None")
-                state = event_dict.get("State", "None")
-                if state == "DOWN":
-                    if btn == "BUTTON2": # Middle Mouse
-                        return self.handle_right_click(event_dict)
-                    elif btn == "BUTTON1":
-                        return self.handle_click(event_dict)
-                    return False
-                
-                elif state == "UP":
-                    # Removed dragging on hold in favor of pick-and-drop
-                    return False
-            elif event_type == "SoLocation2Event":
-                self.handle_move(event_dict)
-            elif event_type == "SoKeyboardEvent":
-                if event_dict["State"] == "DOWN":
-                    return self.handle_keyboard(event_dict)
+    def on_button2_down(self, event_dict):
+        # Middle Mouse mapped to context menu previously
+        return self.handle_right_click(event_dict)
 
-        except Exception as e:
-            dm_logger.error(f"Error in EditTool event_cb: {e}")
-            import traceback
-            traceback.print_exc()
-        return False
+    def on_button3_down(self, event_dict):
+        # Right click finishes the tool normally, but user asked for overridable hook
+        # Let this also trigger the context menu as an option, or leave to finish
+        # For now, let's map Right Click to the context menu too, since `handle_right_click` implies so
+        return self.handle_right_click(event_dict)
 
     def _update_element(self, element, new_pos):
         idx, elem_type = element

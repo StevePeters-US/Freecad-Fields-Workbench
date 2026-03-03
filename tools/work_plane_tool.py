@@ -455,43 +455,23 @@ class WorkPlaneCreator(PrimitiveBase):
                 
         return best_idx, best_dist
 
-    def event_cb(self, event_dict):
-        try:
-            event_type = event_dict.get("Type", "Unknown")
+    def on_button1_down(self, event_dict):
+        return self.handle_click(event_dict)
 
-            if event_type == "SoMouseButtonEvent":
-                btn = event_dict.get("Button", "None")
-                state = event_dict.get("State", "None")
-                if state == "DOWN":
-                    if btn == "BUTTON1":
-                        return self.handle_click(event_dict)
-                    elif btn == "BUTTON3":
-                        if self.state == 0:
-                            # Drop and finish
-                            if self.handle_click({"Button": "BUTTON1", "Position": event_dict["Position"]}):
-                                self.terminate()
-                                return True
-                        self.terminate()
-                        return True
-                    return False
-                elif state == "UP":
-                    if btn == "BUTTON1" and self.state == 2:
-                        self.state = 1
-                        self.active_corner_idx = -1
-                        return True
-                    if btn == "BUTTON3":
-                        return True 
-                    return False
-            elif event_type == "SoLocation2Event":
-                self.handle_move(event_dict)
-            elif event_type == "SoKeyboardEvent":
-                if event_dict["State"] == "DOWN":
-                    return self.handle_keyboard(event_dict)
+    def on_button3_down(self, event_dict):
+        if self.state == 0:
+            # Drop and finish
+            if self.handle_click({"Button": "BUTTON1", "Position": event_dict["Position"]}):
+                self.terminate()
+                return True
+        self.terminate()
+        return True
 
-        except Exception as e:
-            dm_logger.error(f"Error in WorkPlaneCreator event_cb: {e}")
-            import traceback
-            traceback.print_exc()
+    def on_button1_up(self, event_dict):
+        if self.state == 2:
+            self.state = 1
+            self.active_corner_idx = -1
+            return True
         return False
 
     def handle_click(self, event_dict):

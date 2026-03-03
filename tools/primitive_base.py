@@ -365,8 +365,27 @@ class PrimitiveBase:
             
 
     # ------------------------------------------------------------------
-    # Event loop
+    # Event loop & Overridable Input Hooks
     # ------------------------------------------------------------------
+
+    def on_button1_down(self, event_dict):
+        return self.handle_click(event_dict)
+
+    def on_button2_down(self, event_dict):
+        return False
+
+    def on_button3_down(self, event_dict):
+        QtCore.QTimer.singleShot(0, self.finish)
+        return True # Consume Press
+
+    def on_button1_up(self, event_dict):
+        return False
+
+    def on_button2_up(self, event_dict):
+        return False
+
+    def on_button3_up(self, event_dict):
+        return True # Consume release to suppress FreeCAD context menu
 
     def event_cb(self, event_dict):
         try:
@@ -375,20 +394,17 @@ class PrimitiveBase:
             if event_type == "SoMouseButtonEvent":
                 btn = event_dict.get("Button", "None")
                 state = event_dict.get("State", "None")
+                
                 if state == "DOWN":
-                    if btn == "BUTTON3":
-                        # Right click finishes tool
-                        QtCore.QTimer.singleShot(0, self.finish)
-                        return True # CONSUME PRESS
-                    elif btn == "BUTTON1":
-                        return self.handle_click(event_dict)
-                    else:
-                        # Allow all other buttons (BUTTON2, etc) to pass to FreeCAD for navigation
-                        return False
+                    if btn == "BUTTON1": return self.on_button1_down(event_dict)
+                    elif btn == "BUTTON2": return self.on_button2_down(event_dict)
+                    elif btn == "BUTTON3": return self.on_button3_down(event_dict)
+                    return False
                 
                 elif state == "UP":
-                    if btn == "BUTTON3":
-                        return True # CONSUME RELEASE to suppress FreeCAD context menu
+                    if btn == "BUTTON1": return self.on_button1_up(event_dict)
+                    elif btn == "BUTTON2": return self.on_button2_up(event_dict)
+                    elif btn == "BUTTON3": return self.on_button3_up(event_dict)
                     return False
             elif event_type == "SoLocation2Event":
                 self.handle_move(event_dict)
