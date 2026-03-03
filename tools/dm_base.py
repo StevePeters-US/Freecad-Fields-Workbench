@@ -438,8 +438,8 @@ class DMBase:
             return True
             
         # ENTER/RETURN to finish
-        if key in ["ENTER", "RETURN"]:
-            QtCore.QTimer.singleShot(0, self.finish)
+        if key in ["ENTER", "RETURN", "PAD_ENTER"]:
+            self.finish()
             return True
             
         # Toggle Cutter Mode (C)

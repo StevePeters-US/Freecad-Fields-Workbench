@@ -107,19 +107,19 @@ class WorkPlaneCreator(DMBase):
                 doc = FreeCAD.ActiveDocument
                 name = self.preview_obj.Name
                 self.preview_obj = None # Clear before deletion to avoid issues
-                if doc and name in doc.Objects:
+                if doc and doc.getObject(name):
                     doc.removeObject(name)
                     doc.recompute()
             except Exception as e:
                 dm_logger.debug(f"Cleanup error: {e}")
                 
         # Clean up target_wp if we created it but didn't finish
-        if getattr(self, "_is_new", False) and not getattr(self, "_finished", False) and getattr(self, "target_wp", None):
+        if getattr(self, "_is_new", False) and not getattr(self, "_finished", False) and self.target_wp is not None:
             try:
                 doc = FreeCAD.ActiveDocument
                 name = self.target_wp.Name
                 self.target_wp = None
-                if doc and name in doc.Objects:
+                if doc and doc.getObject(name):
                     doc.removeObject(name)
                     doc.recompute()
             except Exception as e:
