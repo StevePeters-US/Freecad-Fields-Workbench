@@ -1,6 +1,6 @@
 import FreeCAD
 import Part
-from .primitive_base import NURBSPrimitiveCreator
+from .dm_base import NURBSPrimitiveCreator
 from core import dm_logger
 
 class PointCreator(NURBSPrimitiveCreator):

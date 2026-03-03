@@ -1,6 +1,6 @@
 import FreeCAD
 import FreeCADGui
-from .primitive_base import PrimitiveBase
+from .dm_base import DMBase
 from core.dm_workplane import create_dm_workplane
 from core import dm_logger
 import math
@@ -18,14 +18,17 @@ class WorkPlaneTaskPanel:
         layout.addWidget(label)
         
     def accept(self):
-        self.creator.terminate()
+        if hasattr(self.creator, 'finish'):
+            self.creator.finish()
+        else:
+            self.creator.terminate()
         return True
         
     def reject(self):
         self.creator.terminate()
         return True
 
-class WorkPlaneCreator(PrimitiveBase):
+class WorkPlaneCreator(DMBase):
     """Tool to create a DMWorkPlane object interactively."""
     
     def __init__(self):
@@ -49,7 +52,9 @@ class WorkPlaneCreator(PrimitiveBase):
                 self.state = 1
                 break
         
+        self._is_new = False
         if not self.target_wp:
+            self._is_new = True
             # Create preview object
             try:
                 self.preview_obj = create_dm_workplane(name="DM_WorkPlane_Preview")
@@ -107,8 +112,31 @@ class WorkPlaneCreator(PrimitiveBase):
                     doc.recompute()
             except Exception as e:
                 dm_logger.debug(f"Cleanup error: {e}")
-        
+                
+        # Clean up target_wp if we created it but didn't finish
+        if getattr(self, "_is_new", False) and not getattr(self, "_finished", False) and getattr(self, "target_wp", None):
+            try:
+                doc = FreeCAD.ActiveDocument
+                name = self.target_wp.Name
+                self.target_wp = None
+                if doc and name in doc.Objects:
+                    doc.removeObject(name)
+                    doc.recompute()
+            except Exception as e:
+                dm_logger.debug(f"Cleanup error (target_wp): {e}")
+
         super()._do_terminate()
+
+    def finish(self):
+        self._finished = True
+        if getattr(self, "state", 0) == 0:
+            if self.preview_obj:
+                self.preview_obj.Label = "Work Plane"
+                self.target_wp = self.preview_obj
+                self.preview_obj = None
+                if FreeCAD.ActiveDocument:
+                    FreeCAD.ActiveDocument.recompute()
+        self.terminate()
 
     def get_camera_facing_placement(self, mouse_pt):
         """Returns a placement perfectly parallel to the screen, centered at origin depth."""
@@ -130,7 +158,7 @@ class WorkPlaneCreator(PrimitiveBase):
             n.normalize()
             
             # Use Ray-Plane intersection for stable positioning
-            # Note: PrimitiveBase.get_mouse_world_pos can do this if we pass n and o
+            # Note: DMBase.get_mouse_world_pos can do this if we pass n and o
             pos = self.get_mouse_world_pos({"Position": self.view.getCursorPos()}, n, FreeCAD.Vector(0,0,0))
             if pos is None: pos = mouse_pt
             

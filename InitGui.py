@@ -113,11 +113,11 @@ class DirectModelingWorkbench(Workbench):
                         # If a tool is active, Right Click finishes it and we consume the event
                         if event.type() in [QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
                             if event.button() == QtCore.Qt.RightButton:
-                                from tools.primitive_base import PrimitiveBase
-                                if PrimitiveBase.active_tool:
+                                from tools.dm_base import DMBase
+                                if DMBase.active_tool:
                                     if event.type() == QtCore.QEvent.MouseButtonPress:
-                                        PrimitiveBase.active_tool.finish()
-                                    return True # Block FreeCAD's context menu and rotation
+                                        DMBase.active_tool.finish()
+                                return True # Block FreeCAD's context menu and rotation
                                 
                         return False
                 self._event_filter = DMEventFilter()

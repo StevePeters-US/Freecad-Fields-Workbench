@@ -7,9 +7,9 @@ import FreeCAD
 import FreeCADGui
 from PySide import QtCore
 from core import dm_logger
-from .primitive_base import PrimitiveBase
+from .dm_base import DMBase
 
-class TranslateTool(PrimitiveBase):
+class TranslateTool(DMBase):
     def __init__(self):
         super().__init__()
         self.state = 1 # Start in dragging mode

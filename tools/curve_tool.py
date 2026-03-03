@@ -2,7 +2,7 @@ import FreeCAD
 import FreeCADGui
 import Part
 from PySide import QtCore, QtGui
-from .primitive_base import NURBSPrimitiveCreator
+from .dm_base import NURBSPrimitiveCreator
 from core import dm_logger
 
 class CurveCreator(NURBSPrimitiveCreator):
@@ -107,18 +107,6 @@ class CurveCreator(NURBSPrimitiveCreator):
 
     def handle_keyboard(self, event_dict):
         key = str(event_dict.get("Key", "None")).upper()
-        
-        if key == "RETURN" or key == "ENTER":
-            if len(self.points) >= 2:
-                self.finish()
-            else:
-                self.terminate()
-            return True
-            
-        if key == "ESCAPE":
-            self.terminate()
-            return True
-            
         return super().handle_keyboard(event_dict)
 
     def _get_auto_handles(self, points):

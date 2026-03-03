@@ -150,9 +150,10 @@ class DMCurve:
             else:
                 mults = [4] + [3] * (num_segments - 1) + [4]
 
-            # Try the complex constructor (FreeCAD 0.21+)
+            # Modern FreeCAD BSplineCurve signature (0.21+): 
+            # Poles, Mults, Knots, Periodic, Degree, Weights, CheckRational
             try:
-                bs = Part.BSplineCurve(poles, weights, knots, mults, is_closed, degree)
+                bs = Part.BSplineCurve(poles, mults, knots, is_closed, degree, weights)
             except Exception as e:
                 from . import dm_logger
                 dm_logger.debug(f"DMCurve: Complex constructor failed: {e}. Trying fallback buildFromPolesMultsKnots.")

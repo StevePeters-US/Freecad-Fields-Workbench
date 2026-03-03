@@ -82,17 +82,17 @@ def _intersect_ray_plane(ray_p, ray_d, plane_normal, plane_point):
 # PrimitiveCreatorBase
 # ─────────────────────────────────────────────────────────────────────────────
 
-class PrimitiveBase:
+class DMBase:
     # Class-level reference to the currently active tool to allow 
     # global event filters (like right-click suppression) to reach it.
     active_tool = None
 
     def __init__(self):
-        if PrimitiveBase.active_tool and hasattr(PrimitiveBase.active_tool, 'terminate'):
+        if DMBase.active_tool and hasattr(DMBase.active_tool, 'terminate'):
             try:
-                PrimitiveBase.active_tool.terminate()
+                DMBase.active_tool.terminate()
             except Exception as e:
-                dm_logger.debug(f"PrimitiveBase.__init__: Failed to terminate previous tool: {e}")
+                dm_logger.debug(f"DMBase.__init__: Failed to terminate previous tool: {e}")
                 
         self._terminated = False
         self.view = FreeCADGui.activeView()
@@ -102,15 +102,15 @@ class PrimitiveBase:
             try:
                 self.view = FreeCADGui.ActiveDocument.ActiveView
             except Exception as e:
-                dm_logger.debug(f"PrimitiveBase.__init__: Failed to get view from document: {e}")
+                dm_logger.debug(f"DMBase.__init__: Failed to get view from document: {e}")
         
         if not self.view:
-            dm_logger.error("DEBUG: PrimitiveBase: Could not find active view!")
+            dm_logger.error("DEBUG: DMBase: Could not find active view!")
             return
 
 
         dm_logger.debug(f"{self.__class__.__name__} initialized")
-        PrimitiveBase.active_tool = self
+        DMBase.active_tool = self
         self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
 
         self.start_point   = None
@@ -176,8 +176,8 @@ class PrimitiveBase:
         QtCore.QTimer.singleShot(0, self._do_terminate)
 
     def _do_terminate(self):
-        if PrimitiveBase.active_tool is self:
-            PrimitiveBase.active_tool = None
+        if DMBase.active_tool is self:
+            DMBase.active_tool = None
         self._terminated = True
         try:
             if self.callback:
@@ -188,7 +188,7 @@ class PrimitiveBase:
             import FreeCADGui
             FreeCADGui.Control.closeDialog()
         except Exception as e:
-            dm_logger.debug(f"PrimitiveBase.terminate: Cleanup failed: {e}")
+            dm_logger.debug(f"DMBase.terminate: Cleanup failed: {e}")
 
 
     def finish(self):
@@ -645,7 +645,7 @@ class PrimitiveBase:
 # NURBSPrimitiveCreator
 # ─────────────────────────────────────────────────────────────────────────────
 
-class NURBSPrimitiveCreator(PrimitiveBase):
+class NURBSPrimitiveCreator(DMBase):
     """
     Base for creators that produce a DM object.
     Uses the actual DMObject for real-time feedback.

@@ -1,10 +1,10 @@
 import FreeCAD
 import FreeCADGui
 from PySide import QtCore, QtGui
-from tools.primitive_base import PrimitiveBase
+from tools.dm_base import DMBase
 from core import dm_logger
 
-class EditTool(PrimitiveBase):
+class EditTool(DMBase):
     """
     Interactive tool for editing DM curves control points and handles.
     """
