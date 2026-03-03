@@ -22,14 +22,21 @@ no prior context beyond the files listed. Follow this template:
 - We have as options Gemini Flash, Low, and High. Only use Claude for very difficult programming issues.
 
 ---
+All tools, enter should also accept tool
+---
+
+if an open curve is closed, there are no new control points added.
+make sure extra points are deleted if a closed curve is opened.
+---
+
 ## Curve Tool
 
-### Fix curve handle deletion on accept (Minimum LLM: Gemini Flash)
+### [x] Fix curve handle deletion on accept (Minimum LLM: Gemini Flash)
 - **Goal**: Ensure handles associated with the unaccepted trailing point are correctly deleted when the curve is finalized.
 - **Files to read**: `tools/curve_tool.py`
 - **Files to modify**: `tools/curve_tool.py`
 - **Steps**:
-  1. In `CurveCreator._do_finish()`, when dropping the unclicked trailing point (`self.current_point = None`), ensure `update_preview()` explicitly truncates the `HandleIn` and `HandleOut` lists to match the final number of points before applying to the object.
+    1. In `CurveCreator._do_finish()`, when dropping the unclicked trailing point (`self.current_point = None`), ensure `update_preview()` explicitly truncates the `HandleIn` and `HandleOut` lists to match the final number of points before applying to the object.
 - **Acceptance**: Finalizing a curve leaves no orphaned handle points or segments in the scene.
 
 ### Implement curve handle control (Minimum LLM: Gemini Low)

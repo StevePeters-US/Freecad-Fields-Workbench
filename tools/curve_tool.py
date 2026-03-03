@@ -145,6 +145,14 @@ class CurveCreator(NURBSPrimitiveCreator):
                 # Limit handles to roughly 1/3 of segment length
                 h_out[i] = p + (tangent * 0.33)
                 h_in[i] = p - (tangent * 0.33)
+            
+            # For open curves, suppress the "outbound" handle of the final point
+            # and the "inbound" handle of the first point to avoid sticking out.
+            if not self.is_closed:
+                if i == 0:
+                    h_in[i] = p
+                if i == n - 1:
+                    h_out[i] = p
         
         return h_in, h_out
 
@@ -161,10 +169,16 @@ class CurveCreator(NURBSPrimitiveCreator):
         }
         
         # Calculate auto-handles for preview if we have enough points
+        # Ensure HandleIn, HandleOut, and PointTypes are always synchronized
         if len(pts) >= 2:
             hi, ho = self._get_auto_handles(pts)
             params["HandleIn"] = hi
             params["HandleOut"] = ho
+            params["PointTypes"] = [0] * len(pts) # Default to Tangent type
+        else:
+            params["HandleIn"] = pts
+            params["HandleOut"] = pts
+            params["PointTypes"] = [0] * len(pts)
                 
         self.update_active_object("curve", params)
 

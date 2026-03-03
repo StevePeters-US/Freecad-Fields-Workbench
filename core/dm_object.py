@@ -371,7 +371,8 @@ class DMViewProvider:
         # Update Coin3D coordinates
         # final_coords = main_markers + handle_markers + line_pairs
         final_coords = marker_coords + handle_marker_coords + line_coords
-        self._ctrl_coords.point.setValues(final_coords)
+        self._ctrl_coords.point.setNum(len(final_coords))
+        self._ctrl_coords.point.setValues(0, final_coords)
         
         # Main point set
         self._ctrl_points.numPoints.setValue(len(marker_coords))
@@ -382,7 +383,8 @@ class DMViewProvider:
         self._ctrl_handle_points.startIndex.setValue(len(marker_coords))
         
         # Line set uses the segment pairs starting after both marker sets
-        self._ctrl_lines.numVertices.setValues(num_vertices)
+        self._ctrl_lines.numVertices.setNum(len(num_vertices))
+        self._ctrl_lines.numVertices.setValues(0, num_vertices)
         self._ctrl_lines.startIndex.setValue(len(marker_coords) + len(handle_marker_coords))
 
     def updateData(self, fp, prop):
