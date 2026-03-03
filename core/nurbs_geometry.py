@@ -108,7 +108,10 @@ class DMCurve:
             
             # Use chord to keep tangent magnitude proportional
             chord = (fit_pts[(idx+1)%n] - fit_pts[idx%n]).Length if (is_closed or idx < n-1) else (fit_pts[idx] - fit_pts[idx-1]).Length
-            return (nxt - prev).normalize() * (chord / 3.0)
+            vec = (nxt - prev)
+            if vec.Length > 1e-6:
+                vec.normalize()
+            return vec * (chord / 3.0)
 
         # 2. Build Bezier poles for each cubic segment
         poles = []

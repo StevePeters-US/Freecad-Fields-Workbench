@@ -265,7 +265,8 @@ class EditTool(PrimitiveBase):
                 delta = new_pos - pts[idx]
                 if delta.Length > 1e-6:
                     out_len = (h_out[idx] - pts[idx]).Length
-                    h_out[idx] = pts[idx] - (delta.normalize() * out_len)
+                    delta.normalize()
+                    h_out[idx] = pts[idx] - (delta * out_len)
         elif elem_type == "HandleOut":
             h_out[idx] = new_pos
             if pt_type == 0: # Tangent
@@ -275,7 +276,8 @@ class EditTool(PrimitiveBase):
                 delta = new_pos - pts[idx]
                 if delta.Length > 1e-6:
                     in_len = (h_in[idx] - pts[idx]).Length
-                    h_in[idx] = pts[idx] - (delta.normalize() * in_len)
+                    delta.normalize()
+                    h_in[idx] = pts[idx] - (delta * in_len)
                     
         self._target_obj.Points = pts
         self._target_obj.HandleIn = h_in
