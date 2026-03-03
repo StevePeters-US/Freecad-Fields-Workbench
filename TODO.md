@@ -22,8 +22,41 @@ no prior context beyond the files listed. Follow this template:
 - We have as options Gemini Flash, Low, and High. Only use Claude for very difficult programming issues.
 
 ---
+## Curve Tool
 
----
+### Fix curve handle deletion on accept (Minimum LLM: Gemini Flash)
+- **Goal**: Ensure handles associated with the unaccepted trailing point are correctly deleted when the curve is finalized.
+- **Files to read**: `tools/curve_tool.py`
+- **Files to modify**: `tools/curve_tool.py`
+- **Steps**:
+  1. In `CurveCreator._do_finish()`, when dropping the unclicked trailing point (`self.current_point = None`), ensure `update_preview()` explicitly truncates the `HandleIn` and `HandleOut` lists to match the final number of points before applying to the object.
+- **Acceptance**: Finalizing a curve leaves no orphaned handle points or segments in the scene.
+
+### Implement curve handle control (Minimum LLM: Gemini Low)
+- **Goal**: Allow users to interactively drag curve handles to control curvature without them snapping back to auto-generated positions.
+- **Files to read**: `tools/curve_tool.py`, `tools/translate_tool.py`
+- **Files to modify**: `tools/curve_tool.py`, `tools/translate_tool.py`
+- **Steps**:
+  1. Identify where handles are overwritten by `_get_auto_handles()`.
+  2. Implement an override mechanism so manually moved handles retain their position upon curve update.
+- **Acceptance**: User can manipulate curve handles and standard curve operations do not override them.
+
+### Fix curve point work plane snapping (Minimum LLM: Gemini Flash)
+- **Goal**: Ensure curve points are consistently projected onto the active work plane, preventing unintended 3D drift.
+- **Files to read**: `tools/curve_tool.py`, `tools/primitive_base.py`
+- **Files to modify**: `tools/curve_tool.py`
+- **Steps**:
+  1. Enforce strict projection of `get_mouse_plane_pt` onto `self.working_plane` during curve creation to guarantee they remain coplanar.
+- **Acceptance**: All curve points lie exactly on the selected or dynamically established work plane.
+
+### Fix tool acceptance mapping and view plane reassessment (Minimum LLM: Gemini High)
+- **Goal**: Prevent middle-mouse/right-click navigation chords from accepting the tool, and update the view plane when rotating the camera mid-operation.
+- **Files to read**: `tools/primitive_base.py`, `tools/curve_tool.py`
+- **Files to modify**: `tools/primitive_base.py`, `tools/curve_tool.py`
+- **Steps**:
+  1. In `PrimitiveBase.event_cb`, refine `BUTTON3` handling to ignore navigation chords (e.g., checking if `BUTTON2` is simultaneously held down).
+  2. Ensure the dynamically established view plane (used before the first click) updates if the user rotates the view.
+- **Acceptance**: Viewport rotation using FreeCAD navigation styles does not prematurely finish the tool. Drawing adapts to the new camera orientation if rotated before the first click.
 
 ---
 ## Phase 1: Workplane & Existing Tools
