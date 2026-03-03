@@ -86,3 +86,20 @@ class PointCreator(NURBSPrimitiveCreator):
         self.created_points.clear()
         self._finished = True # prevent terminate from trying to remove again
         self.terminate()
+
+    def on_tool_option_0(self):
+        dm_logger.info("snapping point tool")
+        
+    def on_tool_option_1(self):
+        dm_logger.info("snapping point tool")
+
+    def on_tool_menu(self):
+        try:
+            from PySide import QtGui
+        except ImportError:
+            from PySide2 import QtGui
+            
+        menu = QtGui.QMenu()
+        menu.addAction("Point Option 1", lambda: dm_logger.info("Selected Point Option 1"))
+        menu.addAction("Point Option 2", lambda: dm_logger.info("Selected Point Option 2"))
+        menu.exec_(QtGui.QCursor.pos())

@@ -462,7 +462,31 @@ class DMBase:
             self.reset_state()
             return True
             
+        # Tool Option 0 (Shift)
+        if "SHIFT" in key:
+            self.on_tool_option_0()
+            return True
+            
+        # Tool Option 1 (Ctrl)
+        if "CONTROL" in key or "CTRL" in key:
+            self.on_tool_option_1()
+            return True
+            
+        # Tool Menu (D)
+        if key == "D":
+            self.on_tool_menu()
+            return True
+            
         return False
+
+    def on_tool_option_0(self):
+        pass
+        
+    def on_tool_option_1(self):
+        pass
+        
+    def on_tool_menu(self):
+        pass
 
     def reset_state(self):
         """Resets the tool to state 1."""

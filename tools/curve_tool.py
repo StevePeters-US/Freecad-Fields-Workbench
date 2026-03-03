@@ -202,3 +202,20 @@ class CurveCreator(NURBSPrimitiveCreator):
         # Reset but keep object
         self._active_obj = None
         self.terminate()
+
+    def on_tool_option_0(self):
+        dm_logger.info("snapping curve tool")
+        
+    def on_tool_option_1(self):
+        dm_logger.info("snapping curve tool")
+
+    def on_tool_menu(self):
+        try:
+            from PySide import QtGui
+        except ImportError:
+            from PySide2 import QtGui
+            
+        menu = QtGui.QMenu()
+        menu.addAction("Curve Option 1", lambda: dm_logger.info("Selected Curve Option 1"))
+        menu.addAction("Curve Option 2", lambda: dm_logger.info("Selected Curve Option 2"))
+        menu.exec_(QtGui.QCursor.pos())
