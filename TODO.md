@@ -20,27 +20,75 @@ no prior context beyond the files listed. Follow this template:
 - Sort by required LLM within each section (Flash first, High last).
 - We have as options Gemini Flash, Low, and High. Only use Claude for very difficult programming issues.
 
----
-primitive base should be renamed to dm base
----
-All tools, enter should also accept tool
----
+## General & Architecture
 
-if an open curve is closed, there are no new control points added.
-make sure extra points are deleted if a closed curve is opened.
----
+### Rename PrimitiveBase to DMBase (Minimum LLM: Gemini Flash)
+- **Goal**: Rename `primitive_base.py` to `dm_base.py` to better reflect its role as the foundation for all DM interactive tools.
+- **Files to read**: `tools/primitive_base.py`
+- **Files to modify**: `tools/primitive_base.py`, `tools/curve_tool.py`, `tools/work_plane_tool.py`, `tools/edit_tool.py`, `tools/point_tool.py`
+- **Steps**:
+  1. Rename `tools/primitive_base.py` to `tools/dm_base.py`.
+  2. Update all `from .primitive_base import PrimitiveBase` imports across the codebase.
+  3. Rename the class `PrimitiveBase` to `DMBase`.
+- **Acceptance**: All tools load and function correctly without import errors.
 
-add hotkey to focus the viewport on the plane of a curve, or a plane defined by 3 points on a 3d curve
+### Universal Tool Acceptance via Enter Key (Minimum LLM: Gemini Flash)
+- **Goal**: Ensure that pressing the `Enter` or `Return` key consistently accepts and finishes the operation for *all* tools.
+- **Files to read**: `tools/dm_base.py`
+- **Files to modify**: `tools/dm_base.py`, `tools/*.py`
+- **Steps**:
+  1. Verify `handle_keyboard` natively captures `ENTER` and `RETURN` to trigger `self.finish()`.
+  2. Check child tools to ensure they don't block this key event.
+- **Acceptance**: Pressing Enter while any tool is active immediately completes the operation.
 
----
+## Curve Tool & Editing
 
-Curve handle type menu
+### Fix BSplineCurve Constructor Fallback Warning (Minimum LLM: Gemini Flash)
+- **Goal**: Eliminate the console warning `DMCurve: Complex constructor failed: B-spline constructor accepts... Trying fallback buildFromPolesMultsKnots.`
+- **Files to read**: `core/nurbs_geometry.py`
+- **Files to modify**: `core/nurbs_geometry.py`
+- **Steps**:
+  1. Identify the incorrect argument signature being passed to `Part.BSplineCurve()`.
+  2. Correctly format the arguments (e.g. `poles, periodic, degree, interpolate` or the fallback `buildFromPolesMultsKnots`) to satisfy the FreeCAD C++ APIs without throwing warnings.
+- **Acceptance**: Curve creation is silent in the report view, without `Complex constructor failed` warnings.
 
----
+### Curve Closure Point Management (Minimum LLM: Gemini Low)
+- **Goal**: Prevent extraneous control points from lingering when closing an open curve, and clean up duplicate endpoints when re-opening it.
+- **Files to read**: `core/dm_object.py`, `core/nurbs_geometry.py`
+- **Files to modify**: `core/dm_object.py` or `core/nurbs_geometry.py`
+- **Steps**:
+  1. When changing `Closed` from `False` to `True`, prune the last point if it is spatially coincident with the first point.
+  2. When changing `Closed` from `True` to `False`, ensure no duplicate points are left at the seam.
+- **Acceptance**: Toggling the `Closed` property maintains a clean list of control points.
 
-curve handle snapping by angle (set increment in DM settings, default 15 degrees)
+### Viewport Plane Focus Hotkey (Minimum LLM: Gemini Low)
+- **Goal**: Add a hotkey to instantly orient the camera to face the active curve's plane (or a plane derived from 3 points for a 3D curve).
+- **Files to read**: `tools/edit_tool.py`
+- **Files to modify**: `tools/edit_tool.py`
+- **Steps**:
+  1. Intercept a hotkey (e.g., `F` or `Space`) during curve editing in `handle_keyboard`.
+  2. Calculate the optimal plane normal for the curve.
+  3. Use `view.setViewDirection()` to rotate the camera perpendicular to that plane.
+- **Acceptance**: Pressing the focal hotkey snaps the camera to a flat 2D viewing angle relative to the curve.
 
----
+### Curve Handle Type Context Menu (Minimum LLM: Gemini Low)
+- **Goal**: Provide a context menu on control points to toggle handle types between Tangent (Smooth), Split (V-shape), and Custom (Sharp).
+- **Files to read**: `tools/edit_tool.py`
+- **Files to modify**: `tools/edit_tool.py`
+- **Steps**:
+  1. In `EditTool.on_button2_down` or `on_button3_down` (Right Click), raycast to find the hovered control point.
+  2. Display a `QtGui.QMenu` to select the type.
+  3. Assign the chosen `PointType` back to the DM curve object.
+- **Acceptance**: Right-clicking a control point allows instant continuity mode changes.
+
+### Angle Snapping for Curve Handles (Minimum LLM: Gemini Low)
+- **Goal**: Allow handles to snap to specific angular increments (default 15 degrees, via DM Settings) while dragging.
+- **Files to read**: `tools/edit_tool.py`, `core/dm_object.py` (for settings)
+- **Files to modify**: `tools/edit_tool.py`
+- **Steps**:
+  1. In `EditTool.handle_move`, check if a modifier key (Shift/Ctrl) is held during handle drag.
+  2. Calculate the handle angle, round to the nearest increment, and enforce the output vector.
+- **Acceptance**: Holding the modifier tightly snaps the handle angle.
 
 ## Curve Tool
 
@@ -235,8 +283,12 @@ curve handle snapping by angle (set increment in DM settings, default 15 degrees
   - **Goal**: Allow points to affect bevel radius, chamfer, and other localized curve parameters instead of just positioning.
 
 
----
-
-Add a tool to the radial menu which raycasts from the mouse position and lists all object for the user to select from.
-
----
+### Radial Menu Raycast Selection Tool (Minimum LLM: Gemini High)
+- **Goal**: Add a tool to the radial menu that lists all FreeCAD objects under the cursor, allowing selection of hidden topology.
+- **Files to read**: `core/radial_menu.py`, `tools/dm_base.py`
+- **Files to modify**: `core/radial_menu.py`, `commands/cmd_radial_menu.py`
+- **Steps**:
+  1. Add a "Select Under Cursor" action to the radial menu.
+  2. Perform a deep raycast (`view.getObjectsInfo`) at the activation coordinates.
+  3. Present a popup or visual list to force specific selection.
+- **Acceptance**: Triggering the tool successfully lists and selects objects hidden behind other geometry.
