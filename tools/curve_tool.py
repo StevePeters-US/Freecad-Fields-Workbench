@@ -13,11 +13,19 @@ class CurveCreator(NURBSPrimitiveCreator):
         self.is_closed = False
         self.current_point = None
 
+        # Point dragging state (REMOVED - EditTool handles this now)
+        self.dragged_index = -1 
+        self._drag_start_pos = None 
+
     def handle_click(self, event_dict):
         try:
             btn = event_dict.get("Button")
+            state = event_dict.get("State")
+            dm_logger.debug(f"DEBUG: curve handle_click: State={self.state}, btn={btn}, state={state}")
+            
+            # Point picking/dragging logic removed from Curve Tool.
+            # Control points are now manipulated exclusively via the Edit Tool (click-to-select/drop).
 
-            # Right-click (BUTTON3) to finish
             if btn == "BUTTON3":
                 if len(self.points) >= 2:
                     self.finish()
@@ -60,8 +68,9 @@ class CurveCreator(NURBSPrimitiveCreator):
             elif self.state == 1:
                 # Check for click on start point (close the curve)
                 if len(self.points) >= 2:
+                    from core.dm_object import get_picking_radius
                     dist = (pt - self.points[0]).Length
-                    if dist < 1.0: # Snapping distance for click
+                    if dist < get_picking_radius(): 
                         self.is_closed = True
                         self.current_point = None # Avoid double point on closure
                         self.finish()
@@ -88,6 +97,9 @@ class CurveCreator(NURBSPrimitiveCreator):
             # Snap to faces etc.
             super().handle_move(event_dict)
         elif self.state == 1:
+            # Point Dragging removed from creator tool
+            pass
+
             # Update temporary "current_point" for preview
             pt = self.get_mouse_plane_pt(event_dict)
             if pt is None:
@@ -95,8 +107,9 @@ class CurveCreator(NURBSPrimitiveCreator):
             
             # Snapping to start point
             if len(self.points) >= 2:
+                from core.dm_object import get_picking_radius
                 dist = (pt - self.points[0]).Length
-                if dist < 1.0: # Snapping distance for move
+                if dist < get_picking_radius(): 
                     pt = self.points[0]
             self.current_point = pt
             self.update_preview()
@@ -131,6 +144,11 @@ class CurveCreator(NURBSPrimitiveCreator):
         # Handle distance = 1/3 of segment length
         for i in range(n):
             p = points[i]
+            
+            # If both are manual, skip expensive tangent math for this point
+            # (Reserved for future manual handle control via context menu)
+            # if is_in_manual and is_out_manual: continue
+
             if self.is_closed:
                 # Wrap indices for periodic curve
                 prev_p = points[(i - 1) % n]
@@ -156,11 +174,12 @@ class CurveCreator(NURBSPrimitiveCreator):
         
         return h_in, h_out
 
-    def update_preview(self):
+    def update_preview(self, drag_pt=None):
         if not self.points:
             return
         pts = list(self.points)
-        if self.current_point:
+        # Handle preview for unfinalized point
+        if self.current_point and self.dragged_index == -1:
             pts.append(self.current_point)
         
         params = {
@@ -168,17 +187,18 @@ class CurveCreator(NURBSPrimitiveCreator):
             "Closed": self.is_closed
         }
         
-        # Calculate auto-handles for preview if we have enough points
-        # Ensure HandleIn, HandleOut, and PointTypes are always synchronized
+        # Calculate auto-handles
         if len(pts) >= 2:
             hi, ho = self._get_auto_handles(pts)
             params["HandleIn"] = hi
             params["HandleOut"] = ho
-            params["PointTypes"] = [0] * len(pts) # Default to Tangent type
+            params["PointTypes"] = [0] * len(pts)
+            params["HandleTypes"] = [0] * (2 * len(pts))
         else:
             params["HandleIn"] = pts
             params["HandleOut"] = pts
             params["PointTypes"] = [0] * len(pts)
+            params["HandleTypes"] = [0] * (2 * len(pts))
                 
         self.update_active_object("curve", params)
 

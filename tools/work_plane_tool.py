@@ -5,6 +5,7 @@ from core.dm_workplane import create_dm_workplane
 from core import dm_logger
 import math
 from pivy import coin
+from PySide import QtCore
 
 class WorkPlaneTaskPanel:
     """Task panel for the Work Plane tool to ensure proper cleanup."""
@@ -79,7 +80,7 @@ class WorkPlaneCreator(PrimitiveBase):
 
         self.update_handles()
 
-    def terminate(self):
+    def _do_terminate(self):
         if hasattr(self, "_terminated") and self._terminated:
             return
             
@@ -107,7 +108,7 @@ class WorkPlaneCreator(PrimitiveBase):
             except Exception as e:
                 dm_logger.debug(f"Cleanup error: {e}")
         
-        super().terminate()
+        super()._do_terminate()
 
     def get_camera_facing_placement(self, mouse_pt):
         """Returns a placement perfectly parallel to the screen, centered at origin depth."""
@@ -191,11 +192,14 @@ class WorkPlaneCreator(PrimitiveBase):
                         try:
                             ray_p, ray_d = None, None
                             if hasattr(self.view, "getRay"):
-                                r = self.view.getRay(pos[0], pos[1])
-                                if r:
-                                    ray_p = FreeCAD.Vector(r[0])
-                                    ray_d = FreeCAD.Vector(r[1])
-                                    ray_d.normalize()
+                                try:
+                                    r = self.view.getRay(pos[0], pos[1])
+                                    if r:
+                                        ray_p = FreeCAD.Vector(r[0])
+                                        ray_d = FreeCAD.Vector(r[1])
+                                        ray_d.normalize()
+                                except Exception as call_e:
+                                    dm_logger.debug(f"WP DBG: getRay failed: {call_e}")
                             
                             if ray_p is None:
                                 # Fallback: build direction from camera-to-plane-point  
@@ -377,7 +381,15 @@ class WorkPlaneCreator(PrimitiveBase):
         pos = event_dict.get("Position", (0, 0))
         x, y = int(pos[0]), int(pos[1])
         try:
-            r = self.view.getRay(x, y)
+            r = None
+            if hasattr(self.view, "getRay"):
+                dm_logger.debug(f"WorkPlaneCreator._get_ray: view type={type(self.view)}, view={self.view}, pos={x, y}")
+                try:
+                    r = self.view.getRay(x, y)
+                except Exception as call_e:
+                    dm_logger.debug(f"WorkPlaneCreator._get_ray: Call to getRay threw: {call_e}")
+                    r = None
+            
             if r and len(r) == 2:
                 ray_p = FreeCAD.Vector(r[0])
                 ray_d = FreeCAD.Vector(r[1])
@@ -401,11 +413,13 @@ class WorkPlaneCreator(PrimitiveBase):
                 return ray_p, ray_d
         except Exception as e:
             dm_logger.debug(f"WorkPlaneCreator._get_ray: Fallback failed: {e}")
+        
         return None, None
 
     def _hit_test(self, ray_p, ray_d):
         obj = self.target_wp if self.target_wp else self.preview_obj
-        if not obj or not ray_p or not ray_d: return -1
+        if not obj or ray_p is None or ray_d is None: 
+            return -1, float('inf')
         
         l_val = obj.Length.Value if hasattr(obj.Length, "Value") else float(obj.Length)
         w_val = obj.Width.Value if hasattr(obj.Width, "Value") else float(obj.Width)
@@ -432,8 +446,9 @@ class WorkPlaneCreator(PrimitiveBase):
             cam_dist = v.dot(local_ray_d)
             if cam_dist < 0: continue
             
-            # Use a more forgiving tolerance for snapping
-            tolerance = max(2.0, 0.08 * cam_dist) 
+            # Use configurable picking radius
+            from core.dm_object import get_picking_radius
+            tolerance = max(get_picking_radius(), 0.08 * cam_dist) 
             if dist < tolerance and dist < best_dist:
                 best_dist = dist
                 best_idx = i
@@ -451,6 +466,11 @@ class WorkPlaneCreator(PrimitiveBase):
                     if btn == "BUTTON1":
                         return self.handle_click(event_dict)
                     elif btn == "BUTTON3":
+                        if self.state == 0:
+                            # Drop and finish
+                            if self.handle_click({"Button": "BUTTON1", "Position": event_dict["Position"]}):
+                                self.terminate()
+                                return True
                         self.terminate()
                         return True
                     return False
@@ -513,6 +533,10 @@ class WorkPlaneCreator(PrimitiveBase):
                 # Check if clicking on a corner
                 dm_logger.debug(f"[handle_click] State 1 - Generating ray for pos: {event_dict.get('Position')}")
                 ray_p, ray_d = self._get_ray(event_dict)
+                if ray_p is None or ray_d is None:
+                    dm_logger.debug("[handle_click] State 1 - Ray acquisition failed")
+                    return False
+                
                 hit_idx, hit_dist = self._hit_test(ray_p, ray_d)
                 # dm_logger.debug(f"[handle_click] Hit idx: {hit_idx}")
                 if hit_idx != -1:

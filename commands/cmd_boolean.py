@@ -15,9 +15,9 @@ class CommandDMBoolean:
         "Common": "intersect",
     }
     _ICONS = {
-        "Fuse":   "Part_Fuse.svg",
-        "Cut":    "Part_Cut.svg",
-        "Common": "Part_Common.svg",
+        "Fuse":   "Part_Fuse",
+        "Cut":    "Part_Cut",
+        "Common": "Part_Common",
     }
 
     def __init__(self, operation="Fuse"):

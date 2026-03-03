@@ -84,6 +84,11 @@ class DMObjectProxy:
                 obj.addProperty("App::PropertyBool", "Closed", "Curve", "Whether the curve is periodic")
             if not hasattr(obj, "PointTypes"):
                 obj.addProperty("App::PropertyIntegerList", "PointTypes", "Curve", "Control point types (0=Tangent, 1=Split, 2=Custom)")
+            if not hasattr(obj, "HandleTypes"):
+                obj.addProperty("App::PropertyIntegerList", "HandleTypes", "Curve", "Handle override types (0=Auto, 1=Manual). Length should be 2*Points (In1, Out1, In2, Out2...)")
+            if not hasattr(obj, "EditMode"):
+                obj.addProperty("App::PropertyBool", "EditMode", "Curve", "Whether the object is in interactive edit mode. Controls control cage visibility.")
+                obj.EditMode = False
             obj.Points = params.get("Points", [])
             
             # Ensure handles are lists of Vectors, never None
@@ -91,19 +96,26 @@ class DMObjectProxy:
             h_in = params.get("HandleIn", [])
             h_out = params.get("HandleOut", [])
             p_types = params.get("PointTypes", [])
+            h_types = params.get("HandleTypes", [])
             
             # Fill missing handles with the point itself (zero-length handle)
             in_vals = []
             out_vals = []
             pt_vals = []
+            ht_vals = []
             for i, p in enumerate(pts):
                 in_vals.append(h_in[i] if (i < len(h_in) and h_in[i] is not None) else p)
                 out_vals.append(h_out[i] if (i < len(h_out) and h_out[i] is not None) else p)
                 pt_vals.append(p_types[i] if (i < len(p_types) and p_types[i] is not None) else 0)
+                
+                # Each point i has two handles: In at 2*i, Out at 2*i+1
+                ht_vals.append(h_types[2*i] if (2*i < len(h_types) and h_types[2*i] is not None) else 0)
+                ht_vals.append(h_types[2*i+1] if (2*i+1 < len(h_types) and h_types[2*i+1] is not None) else 0)
             
             obj.HandleIn = in_vals
             obj.HandleOut = out_vals
             obj.PointTypes = pt_vals
+            obj.HandleTypes = ht_vals
             obj.Closed = params.get("is_closed", False)
 
         if shape_type == "point":
@@ -253,8 +265,11 @@ class DMViewProvider:
         self._ctrl_cage_sep = None
         self._ctrl_coords = None
         self._ctrl_lines = None
-        self._ctrl_points = None
+        self._ctrl_handle_points = None
         self._style = None
+        
+        # Persistent knots
+        self._knot_points = None
         
         self._debug_sep = None
         self._debug_coords = None
@@ -320,6 +335,21 @@ class DMViewProvider:
         self._ctrl_handle_points = coin.SoPointSet()
         h_pts_sep.addChild(self._ctrl_handle_points)
         
+        # Knot markers (always visible)
+        k_pts_sep = coin.SoSeparator()
+        self._ctrl_cage_sep.addChild(k_pts_sep)
+        
+        k_pts_mat = coin.SoMaterial()
+        k_pts_mat.diffuseColor = coin.SbColor(1.0, 1.0, 1.0) # White/Default
+        k_pts_sep.addChild(k_pts_mat)
+        
+        k_pt_style = coin.SoDrawStyle()
+        k_pt_style.pointSize.setValue(3) # Small
+        k_pts_sep.addChild(k_pt_style)
+        
+        self._knot_points = coin.SoPointSet()
+        k_pts_sep.addChild(self._knot_points)
+        
         vobj.addDisplayMode(self._ctrl_cage_sep, "ControlCage")
         # Add to the root node if we want it visible in standard modes
         vobj.RootNode.addChild(self._ctrl_cage_sep)
@@ -327,70 +357,81 @@ class DMViewProvider:
         self._rebuild_control_cage(self.Object)
 
     def _rebuild_control_cage(self, fp):
+        """Rebuild the interactive Coin3D overlay for control points and handles."""
         if not coin: return
-        from . import dm_logger
-
-        # Lazy initialization if attach() missed it or didn't find "curve" yet
+        
+        # Lazy initialization if attach() missed it
         if not self._ctrl_coords:
-            if not self._ctrl_cage_sep:
-                vobj = fp.ViewObject
-                if vobj and hasattr(fp, "ShapeType") and fp.ShapeType == "curve":
-                    self._setup_coin_overlay(vobj)
-                
-                if not self._ctrl_coords:
-                    return
+            vobj = fp.ViewObject
+            if vobj and hasattr(fp, "ShapeType") and fp.ShapeType == "curve":
+                self._setup_coin_overlay(vobj)
+        
+        if not self._ctrl_coords:
+            return
 
-        pts = list(fp.Points) if hasattr(fp, "Points") else []
+        if not hasattr(fp, "Points") or not fp.Points:
+            self._ctrl_coords.point.setNum(0)
+            return
+
+        pts = list(fp.Points)
         h_in = list(fp.HandleIn) if hasattr(fp, "HandleIn") else []
         h_out = list(fp.HandleOut) if hasattr(fp, "HandleOut") else []
-        
-        # dm_logger.debug(f"DMViewProvider._rebuild_control_cage: {fp.Label}, pts={[str(p) for p in pts]}")
+        edit_mode = getattr(fp, "EditMode", False)
         
         line_coords = []
         marker_coords = []
         handle_marker_coords = []
         num_vertices = []
+        knot_coords = []
         
         for i, p in enumerate(pts):
-            marker_coords.append(coin.SbVec3f(p.x, p.y, p.z))
+            # Always add knots
+            knot_coords.append(coin.SbVec3f(p.x, p.y, p.z))
             
-            # Handle In line: point p to handle h_in[i]
-            if i < len(h_in) and h_in[i] is not None and (h_in[i] - p).Length > 1e-4:
-                line_coords.append(coin.SbVec3f(p.x, p.y, p.z))
-                line_coords.append(coin.SbVec3f(h_in[i].x, h_in[i].y, h_in[i].z))
-                handle_marker_coords.append(coin.SbVec3f(h_in[i].x, h_in[i].y, h_in[i].z))
-                num_vertices.append(2)
-            
-            # Handle Out line: point p to handle h_out[i]
-            if i < len(h_out) and h_out[i] is not None and (h_out[i] - p).Length > 1e-4:
-                line_coords.append(coin.SbVec3f(p.x, p.y, p.z))
-                line_coords.append(coin.SbVec3f(h_out[i].x, h_out[i].y, h_out[i].z))
-                handle_marker_coords.append(coin.SbVec3f(h_out[i].x, h_out[i].y, h_out[i].z))
-                num_vertices.append(2)
+            if edit_mode:
+                marker_coords.append(coin.SbVec3f(p.x, p.y, p.z))
+                
+                # Handle In line: point p to handle h_in[i]
+                if i < len(h_in) and h_in[i] is not None and (h_in[i] - p).Length > 1e-4:
+                    line_coords.append(coin.SbVec3f(p.x, p.y, p.z))
+                    line_coords.append(coin.SbVec3f(h_in[i].x, h_in[i].y, h_in[i].z))
+                    handle_marker_coords.append(coin.SbVec3f(h_in[i].x, h_in[i].y, h_in[i].z))
+                    num_vertices.append(2)
+                
+                # Handle Out line: point p to handle h_out[i]
+                if i < len(h_out) and h_out[i] is not None and (h_out[i] - p).Length > 1e-4:
+                    line_coords.append(coin.SbVec3f(p.x, p.y, p.z))
+                    line_coords.append(coin.SbVec3f(h_out[i].x, h_out[i].y, h_out[i].z))
+                    handle_marker_coords.append(coin.SbVec3f(h_out[i].x, h_out[i].y, h_out[i].z))
+                    num_vertices.append(2)
 
         # Update Coin3D coordinates
-        # final_coords = main_markers + handle_markers + line_pairs
-        final_coords = marker_coords + handle_marker_coords + line_coords
+        # Coords order: knots | control markers | handle markers | line vertices
+        final_coords = knot_coords + marker_coords + handle_marker_coords + line_coords
         self._ctrl_coords.point.setNum(len(final_coords))
         self._ctrl_coords.point.setValues(0, final_coords)
         
-        # Main point set
+        # Knot point set (ALWAYS VISIBLE)
+        self._knot_points.numPoints.setValue(len(knot_coords))
+        self._knot_points.startIndex.setValue(0)
+        
+        # Main control points (EDIT ONLY)
         self._ctrl_points.numPoints.setValue(len(marker_coords))
-        self._ctrl_points.startIndex.setValue(0)
+        self._ctrl_points.startIndex.setValue(len(knot_coords))
         
-        # Handle point set
+        # Handle markers (EDIT ONLY)
         self._ctrl_handle_points.numPoints.setValue(len(handle_marker_coords))
-        self._ctrl_handle_points.startIndex.setValue(len(marker_coords))
+        self._ctrl_handle_points.startIndex.setValue(len(knot_coords) + len(marker_coords))
         
-        # Line set uses the segment pairs starting after both marker sets
+        # Handle lines (EDIT ONLY)
         self._ctrl_lines.numVertices.setNum(len(num_vertices))
         self._ctrl_lines.numVertices.setValues(0, num_vertices)
-        self._ctrl_lines.startIndex.setValue(len(marker_coords) + len(handle_marker_coords))
+        self._ctrl_lines.startIndex.setValue(len(knot_coords) + len(marker_coords) + len(handle_marker_coords))
 
     def updateData(self, fp, prop):
         from . import dm_logger
         # dm_logger.debug(f"DMViewProvider.updateData: obj={fp.Label}, prop={prop}")
-        if not prop or prop in ["Points", "HandleIn", "HandleOut"]:
+        if not prop or prop in ["Points", "HandleIn", "HandleOut", "Closed"]:
             self._rebuild_control_cage(fp)
         
 
@@ -434,6 +475,22 @@ class DMViewProvider:
 # ─────────────────────────────────────────────────────────────────────────────
 # Factory
 # ─────────────────────────────────────────────────────────────────────────────
+
+def get_point_size():
+    params = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/DirectModeling")
+    return params.GetFloat("PointSize", 10.0)
+
+def set_point_size(val):
+    params = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/DirectModeling")
+    params.SetFloat("PointSize", float(val))
+
+def get_picking_radius():
+    params = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/DirectModeling")
+    return params.GetFloat("PickingRadius", 5.0)
+
+def set_picking_radius(val):
+    params = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/DirectModeling")
+    params.SetFloat("PickingRadius", float(val))
 
 def create_dm_object(name, shape_type, params=None, placement=None):
     """

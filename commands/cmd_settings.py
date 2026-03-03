@@ -34,6 +34,8 @@ class _SettingsDialog(QtGui.QDialog):
         current_wire = get_show_wireframe()
         current_lw = get_line_width()
         current_ps = get_point_size()
+        from core.dm_object import get_picking_radius
+        current_pr = get_picking_radius()
 
         layout = QtGui.QFormLayout(self)
 
@@ -56,11 +58,11 @@ class _SettingsDialog(QtGui.QDialog):
         self._lw_spin.setValue(current_lw)
         layout.addRow("Line Width:", self._lw_spin)
 
-        # Point Size spinbox
-        self._ps_spin = QtGui.QDoubleSpinBox()
-        self._ps_spin.setRange(1.0, 50.0)
-        self._ps_spin.setValue(current_ps)
-        layout.addRow("Point Size:", self._ps_spin)
+        # Picking Radius spinbox
+        self._pr_spin = QtGui.QDoubleSpinBox()
+        self._pr_spin.setRange(1.0, 50.0)
+        self._pr_spin.setValue(current_pr)
+        layout.addRow("Picking Radius (mm):", self._pr_spin)
 
         # Buttons
         btn_box = QtGui.QDialogButtonBox(
@@ -71,14 +73,16 @@ class _SettingsDialog(QtGui.QDialog):
         layout.addRow(btn_box)
 
     def _on_accept(self):
-        from core.dm_object import set_show_wireframe, set_line_width, set_point_size, refresh_all_dm_objects
+        from core.dm_object import set_show_wireframe, set_line_width, set_point_size, set_picking_radius, refresh_all_dm_objects
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()
+        pr = self._pr_spin.value()
 
         set_show_wireframe(wire)
         set_line_width(lw)
         set_point_size(ps)
+        set_picking_radius(pr)
         
         from core.dm_logger import set_enable_crash_log
         set_enable_crash_log(self._log_check.isChecked())
@@ -86,7 +90,7 @@ class _SettingsDialog(QtGui.QDialog):
         # Apply to all existing objects
         refresh_all_dm_objects()
 
-        dm_logger.info(f"DM Settings: wire={wire}, lw={lw}, ps={ps}")
+        dm_logger.info(f"DM Settings: wire={wire}, lw={lw}, ps={ps}, pr={pr}")
         self.accept()
 
 

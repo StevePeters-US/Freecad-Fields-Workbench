@@ -20,6 +20,7 @@ class EditTool(PrimitiveBase):
         self.drag_plane_o = None
         
         self._cursor_active = False
+        self._last_click_time = 0
 
     def activate(self):
         sel = FreeCADGui.Selection.getSelection()
@@ -42,6 +43,12 @@ class EditTool(PrimitiveBase):
             return
             
         dm_logger.info(f"EditTool activated for {self._target_obj.Label}")
+        
+        # Toggle EditMode ON
+        self._target_obj.EditMode = True
+        self._target_obj.ViewObject.show() # Ensure overlay is updated
+        if self._target_obj.Document:
+            self._target_obj.Document.recompute()
 
     def _get_ray(self, event_dict):
         pos = event_dict.get("Position", (0, 0))
@@ -112,21 +119,70 @@ class EditTool(PrimitiveBase):
             if cam_dist < 0: continue
             
             # Approximate visual clicking tolerance
-            tolerance = 0.02 * cam_dist 
+            from core.dm_object import get_picking_radius
+            tolerance = get_picking_radius()
+            
+            # Hit test against the line (dist)
             if dist < tolerance and dist < best_dist:
                 best_dist = dist
                 best_elem = (i, elem_type)
                 
         return best_elem
 
+    def _hit_test_edge(self, ray_p, ray_d):
+        """Hit test against the curve edge itself."""
+        if not self._target_obj or not ray_p or not ray_d: return None
+        
+        shape = self._target_obj.Shape
+        if not shape: return None
+        
+        # Use Part.Shape.distToShape or similar to find distance from ray to edge
+        # We can approximate by checking points on the ray
+        best_t = None
+        best_p = None
+        min_dist = float('inf')
+        
+        # For simplicity, let's use the local plane intersection and check distance to shape
+        vd = self.view.getViewDirection()
+        n = FreeCAD.Vector(-vd.x, -vd.y, -vd.z)
+        o = self._target_obj.Placement.Base
+        
+        pos_global = self.get_mouse_world_pos({"Position": self.view.getCursorPos()}, n, o)
+        if not pos_global: return None
+        
+        dist, detail = shape.distToShape(Part.Point(pos_global).toShape())
+        
+        from core.dm_object import get_picking_radius
+        if dist < get_picking_radius():
+            return detail[0][2] # Closest point on shape (Global)
+            
+        return None
+
     def handle_click(self, event_dict):
+        click_count = event_dict.get("ClickCount", 1)
+        
+        if self.state == 1:
+            # DROP logic
+            self.state = 0
+            self._selected_element = None
+            dm_logger.debug("Dropped element")
+            return True
+            
+        # DOUBLE-CLICK to ADD point
+        if click_count > 1:
+            hit_p = self._hit_test_edge(None, None) # Uses current mouse pos internally
+            if hit_p:
+                self._insert_point(hit_p)
+                return True
+
+        # SELECT logic
         ray_p, ray_d = self._get_ray(event_dict)
         hit = self._hit_test(ray_p, ray_d)
         
         if hit:
             self._selected_element = hit
             
-            # Setup drag plane parallel to camera, pinned at the target element
+            # Setup drag plane
             idx, elem_type = hit
             pts = getattr(self._target_obj, "Points", [])
             h_in = getattr(self._target_obj, "HandleIn", [])
@@ -137,17 +193,17 @@ class EditTool(PrimitiveBase):
             elif elem_type == "HandleIn": val = h_in[idx]
             elif elem_type == "HandleOut": val = h_out[idx]
             
+            # Constraint Plane: Use the world plane if it exists, else camera
+            # (Following user's "curve plane if 2d, camera if 3d")
             vd = self.view.getViewDirection()
             self.drag_plane_n = FreeCAD.Vector(-vd[0], -vd[1], -vd[2])
             self.drag_plane_n.normalize()
-            # The coordinate is in local space, we need the drag plane origin in global space
             self.drag_plane_o = self._target_obj.Placement.multVec(val)
             
-            self.state = 1 # Dragging
-            dm_logger.debug(f"Began dragging {elem_type} at index {idx}")
+            self.state = 1 # Dragging (Selecting -> Moving)
+            dm_logger.debug(f"Selected {elem_type} at index {idx}")
             return True
         else:
-            # Consume click to prevent FreeCAD from selecting other objects
             return True
 
     def handle_move(self, event_dict):
@@ -186,18 +242,12 @@ class EditTool(PrimitiveBase):
                     return False
                 
                 elif state == "UP":
-                    if btn == "BUTTON1" and self.state == 1:
-                        self.state = 0
-                        self._selected_element = None
-                        return True
-                    if btn == "BUTTON2":
-                        return True 
+                    # Removed dragging on hold in favor of pick-and-drop
                     return False
             elif event_type == "SoLocation2Event":
                 self.handle_move(event_dict)
             elif event_type == "SoKeyboardEvent":
                 if event_dict["State"] == "DOWN":
-                    key = event_dict.get("Key", "None")
                     return self.handle_keyboard(event_dict)
 
         except Exception as e:
@@ -220,14 +270,14 @@ class EditTool(PrimitiveBase):
         if elem_type == "Point":
             delta = new_pos - pts[idx]
             pts[idx] = new_pos
-            h_in[idx] += delta
-            h_out[idx] += delta
+            if idx < len(h_in): h_in[idx] += delta
+            if idx < len(h_out): h_out[idx] += delta
         elif elem_type == "HandleIn":
             h_in[idx] = new_pos
             if pt_type == 0: # Tangent
                 delta = new_pos - pts[idx]
                 h_out[idx] = pts[idx] - delta
-            elif pt_type == 1: # Split (collinear, indep length)
+            elif pt_type == 1: # Split
                 delta = new_pos - pts[idx]
                 if delta.Length > 1e-6:
                     out_len = (h_out[idx] - pts[idx]).Length
@@ -249,6 +299,69 @@ class EditTool(PrimitiveBase):
         self._target_obj.touch()
         if self._target_obj.Document:
             self._target_obj.Document.recompute()
+
+    def _insert_point(self, pos_global):
+        """Insert a point into the curve at the given global position."""
+        if not self._target_obj: return
+        
+        pos_local = self._target_obj.Placement.inverse().multVec(pos_global)
+        pts = list(getattr(self._target_obj, "Points", []))
+        
+        if len(pts) < 2:
+            pts.append(pos_local)
+        else:
+            # Find which segment is closest to the hit point
+            # We can use Part.BSplineCurve.parameter() and check it against knot values if we want to be very precise,
+            # or just find the two closest existing points.
+            best_idx = 1
+            min_d = float('inf')
+            for i in range(len(pts)-1):
+                p1, p2 = pts[i], pts[i+1]
+                # Distance to segment p1-p2
+                v = p2 - p1
+                w = pos_local - p1
+                t = w.dot(v) / v.dot(v)
+                t = max(0, min(1, t))
+                proj = p1 + v * t
+                d = (pos_local - proj).Length
+                if d < min_d:
+                    min_d = d
+                    best_idx = i + 1
+            
+            pts.insert(best_idx, pos_local)
+            
+        self._target_obj.Points = pts
+        self._target_obj.touch()
+        if self._target_obj.Document:
+            self._target_obj.Document.recompute()
+        dm_logger.info("Inserted new point into curve")
+
+    def _delete_selected_point(self):
+        """Delete the selected point or handle's parent point."""
+        if not self._target_obj or not self._selected_element: return
+        
+        idx, elem_type = self._selected_element
+        pts = list(getattr(self._target_obj, "Points", []))
+        if len(pts) <= 2:
+            dm_logger.warn("Cannot delete point: curve must have at least 2 points.")
+            return
+
+        pts.pop(idx)
+        self._target_obj.Points = pts
+        
+        # Cleanup other properties
+        for prop in ["HandleIn", "HandleOut", "PointTypes"]:
+            vals = list(getattr(self._target_obj, prop, []))
+            if idx < len(vals):
+                vals.pop(idx)
+                setattr(self._target_obj, prop, vals)
+                
+        self.state = 0
+        self._selected_element = None
+        self._target_obj.touch()
+        if self._target_obj.Document:
+            self._target_obj.Document.recompute()
+        dm_logger.info(f"Deleted point at index {idx}")
 
     def handle_right_click(self, event_dict):
         ray_p, ray_d = self._get_ray(event_dict)
@@ -309,17 +422,37 @@ class EditTool(PrimitiveBase):
         cursor_pos = QtGui.QCursor.pos()
         menu.exec_(cursor_pos)
 
+    def handle_keyboard(self, event_dict):
+        key = str(event_dict.get("Key", "None")).upper()
+        
+        if key in ["ESCAPE", "ESC"]:
+            self.terminate()
+            return True
+        if key in ["ENTER", "RETURN"]:
+            self.finish()
+            return True
+            
+        if key in ["DELETE", "X", "BACKSPACE"]:
+            if self.state == 1 or self._selected_element:
+                self._delete_selected_point()
+                return True
+        return False
+
     def finish(self):
+        if self._target_obj:
+            self._target_obj.EditMode = False
         if self._cursor_active:
             QtGui.QApplication.restoreOverrideCursor()
             self._cursor_active = False
         super().finish()
 
-    def terminate(self):
+    def _do_terminate(self):
+        if self._target_obj:
+            self._target_obj.EditMode = False
         if self._cursor_active:
             QtGui.QApplication.restoreOverrideCursor()
             self._cursor_active = False
-        super().terminate()
+        super()._do_terminate()
 
 def activate():
     tool = EditTool()

@@ -4,6 +4,28 @@ Tasks moved here from `TODO.md` after verification.
 
 ---
 
+## 🎨 Curve Editing & Visibility (2026-03-02)
+- **Persistent Knot Visibility**: Knot points (all points on the spline) are now always visible, fixing the issue where only endpoints were shown.
+- **Edit Mode Toggling**: Large orange control squares and blue tangent handles only appear when a curve is selected and the **Edit Tool** (`T`) is active.
+- **Double-Click Addition**: In the Edit Tool, double-clicking on a curve segment now inserts a new control point at that location.
+- **Point Deletion**: In the Edit Tool, selecting a point and pressing `Delete` (or `X` / `Backspace`) removes it from the curve.
+- **Improved Interaction**: Refined the "click to select, click to drop" model for point manipulation.
+- **Picking Radius**: The picking radius is now a configurable workbench parameter in DM Settings and is respected by all tools.
+- **Tool Acceptance**: Consistent support for the `ENTER` / `RETURN` keys to accept and finish any active tool.
+- **WorkPlane Context**: Added right-click (BUTTON3) support to drop and finish the Work Plane tool.
+
+---
+
+## 🎨 Curve Improvements (March 2026)
+
+### ✅ Implement curve handle control (Minimum LLM: Gemini Low)
+- **Completed**: Enabled interactive dragging of curve **control points** (orange squares) with the left mouse button. Per the final design, tangent handles (blue dots) remain non-selectable to simplify the interaction model.
+
+### ✅ Fix curve handle deletion on accept (Minimum LLM: Gemini Flash)
+- **Completed**: Resolved an issue where orphaned handles and segments would remain in the scene after finalizing a curve. Updated `CurveCreator._do_finish()` to correctly truncate the point and handle lists before applying them to the object.
+
+---
+
 ## 🔄 BRep Pivot (March 2026)
 
 Architecture changed from NURBS-surface-centric to BRep direct modeling. Point and curve tools are retained. Primitives now create `Part.Shape` solids via `Part.makeBox()` etc. instead of `Part.BSplineSurface`. Boolean operations use standard OCCT BRep booleans.

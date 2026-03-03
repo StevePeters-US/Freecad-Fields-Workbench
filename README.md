@@ -105,10 +105,17 @@ The workplane drives all geometry creation. It auto-orients to geometry under th
 
 ### Interaction Flow
 1. **1st click** → Locks the workplane
-2. **2nd click** → Starts the active tool
-3. **Subsequent clicks** → Continues tool use
-4. **Right click** → Finishes the tool
+2. **2nd click** → Starts the active tool (or selects an element in Edit Tool)
+3. **Subsequent clicks** → Continues tool use (or drops the element in Edit Tool)
+4. **Right click / Enter** → Finishes the tool
 5. **Esc** → Cancels the tool
+
+### Edit Tool (BSpline Manipulation)
+To modify an existing curve:
+1. Select the curve and activate the **Edit Tool** (`T` or via toolbar).
+2. **Control Points** (orange) and **Handles** (blue) will become visible.
+3. **Pick and Drop**: Click an element once to select it, move the mouse, and click again to drop it at the new location.
+4. Movement is automatically constrained to the curve's plane or the current view plane.
 
 ---
 

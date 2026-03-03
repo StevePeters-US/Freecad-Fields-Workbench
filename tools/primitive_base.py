@@ -172,6 +172,10 @@ class PrimitiveBase:
             dm_logger.debug(f"Error detecting selected workplane: {e}")
 
     def terminate(self):
+        from PySide import QtCore
+        QtCore.QTimer.singleShot(0, self._do_terminate)
+
+    def _do_terminate(self):
         if PrimitiveBase.active_tool is self:
             PrimitiveBase.active_tool = None
         self._terminated = True
@@ -185,6 +189,7 @@ class PrimitiveBase:
             FreeCADGui.Control.closeDialog()
         except Exception as e:
             dm_logger.debug(f"PrimitiveBase.terminate: Cleanup failed: {e}")
+
 
     def finish(self):
         pass
@@ -413,7 +418,12 @@ class PrimitiveBase:
         
         # ESC to cancel
         if key in ["ESCAPE", "ESC"]:
-            QtCore.QTimer.singleShot(0, self.terminate)
+            self.terminate()
+            return True
+            
+        # ENTER/RETURN to finish
+        if key in ["ENTER", "RETURN"]:
+            QtCore.QTimer.singleShot(0, self.finish)
             return True
             
         # Toggle Cutter Mode (C)

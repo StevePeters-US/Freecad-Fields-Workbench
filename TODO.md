@@ -22,6 +22,8 @@ no prior context beyond the files listed. Follow this template:
 - We have as options Gemini Flash, Low, and High. Only use Claude for very difficult programming issues.
 
 ---
+primitive base should be renamed to dm base
+---
 All tools, enter should also accept tool
 ---
 
@@ -29,24 +31,19 @@ if an open curve is closed, there are no new control points added.
 make sure extra points are deleted if a closed curve is opened.
 ---
 
+add hotkey to focus the viewport on the plane of a curve, or a plane defined by 3 points on a 3d curve
+
+---
+
+Curve handle type menu
+
+---
+
+curve handle snapping by angle (set increment in DM settings, default 15 degrees)
+
+---
+
 ## Curve Tool
-
-### [x] Fix curve handle deletion on accept (Minimum LLM: Gemini Flash)
-- **Goal**: Ensure handles associated with the unaccepted trailing point are correctly deleted when the curve is finalized.
-- **Files to read**: `tools/curve_tool.py`
-- **Files to modify**: `tools/curve_tool.py`
-- **Steps**:
-    1. In `CurveCreator._do_finish()`, when dropping the unclicked trailing point (`self.current_point = None`), ensure `update_preview()` explicitly truncates the `HandleIn` and `HandleOut` lists to match the final number of points before applying to the object.
-- **Acceptance**: Finalizing a curve leaves no orphaned handle points or segments in the scene.
-
-### Implement curve handle control (Minimum LLM: Gemini Low)
-- **Goal**: Allow users to interactively drag curve handles to control curvature without them snapping back to auto-generated positions.
-- **Files to read**: `tools/curve_tool.py`, `tools/translate_tool.py`
-- **Files to modify**: `tools/curve_tool.py`, `tools/translate_tool.py`
-- **Steps**:
-  1. Identify where handles are overwritten by `_get_auto_handles()`.
-  2. Implement an override mechanism so manually moved handles retain their position upon curve update.
-- **Acceptance**: User can manipulate curve handles and standard curve operations do not override them.
 
 ### Fix curve point work plane snapping (Minimum LLM: Gemini Flash)
 - **Goal**: Ensure curve points are consistently projected onto the active work plane, preventing unintended 3D drift.
@@ -257,3 +254,10 @@ make sure extra points are deleted if a closed curve is opened.
 ## Phase N: Advanced Editing
 - [ ] **Custom Control Points Effects**
   - **Goal**: Allow points to affect bevel radius, chamfer, and other localized curve parameters instead of just positioning.
+
+
+---
+
+Add a tool to the radial menu which raycasts from the mouse position and lists all object for the user to select from.
+
+---
