@@ -375,6 +375,10 @@ class DMBase:
         return False
 
     def on_button3_down(self, event_dict):
+        # If Middle Mouse or Shift is held, it's likely a view rotation chord. Do not finish!
+        if getattr(self, "_middle_mouse_down", False) or event_dict.get("ShiftDown", False):
+            return False
+            
         QtCore.QTimer.singleShot(0, self.finish)
         return True # Consume Press
 
@@ -396,12 +400,16 @@ class DMBase:
                 state = event_dict.get("State", "None")
                 
                 if state == "DOWN":
+                    if btn == "BUTTON2": self._middle_mouse_down = True
+                    
                     if btn == "BUTTON1": return self.on_button1_down(event_dict)
                     elif btn == "BUTTON2": return self.on_button2_down(event_dict)
                     elif btn == "BUTTON3": return self.on_button3_down(event_dict)
                     return False
                 
                 elif state == "UP":
+                    if btn == "BUTTON2": self._middle_mouse_down = False
+                    
                     if btn == "BUTTON1": return self.on_button1_up(event_dict)
                     elif btn == "BUTTON2": return self.on_button2_up(event_dict)
                     elif btn == "BUTTON3": return self.on_button3_up(event_dict)

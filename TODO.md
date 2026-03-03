@@ -292,3 +292,12 @@ no prior context beyond the files listed. Follow this template:
   2. Perform a deep raycast (`view.getObjectsInfo`) at the activation coordinates.
   3. Present a popup or visual list to force specific selection.
 - **Acceptance**: Triggering the tool successfully lists and selects objects hidden behind other geometry.
+
+---
+draw curves to surface
+---
+combine workplanes into surface
+---
+
+
+---

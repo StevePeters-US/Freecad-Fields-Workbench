@@ -100,30 +100,9 @@ class DirectModelingWorkbench(Workbench):
 
     def Activated(self):
         """This function is executed when the workbench is activated."""
-        from PySide import QtCore, QtGui
         try:
-            # Global event filter to suppress context menus
-            if not hasattr(self, "_event_filter"):
-                class DMEventFilter(QtCore.QObject):
-                    def eventFilter(self, obj, event):
-                        # Suppress context menu events everywhere in the workbench
-                        if event.type() == QtCore.QEvent.ContextMenu:
-                            return True
-                            
-                        # If a tool is active, Right Click finishes it and we consume the event
-                        if event.type() in [QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
-                            if event.button() == QtCore.Qt.RightButton:
-                                from tools.dm_base import DMBase
-                                if DMBase.active_tool:
-                                    if event.type() == QtCore.QEvent.MouseButtonPress:
-                                        DMBase.active_tool.finish()
-                                return True # Block FreeCAD's context menu and rotation
-                                
-                        return False
-                self._event_filter = DMEventFilter()
-            
-            # Install on the qApp to catch all context menus globally
-            QtGui.QApplication.instance().installEventFilter(self._event_filter)
+            from core.input_manager import DMInputManager
+            DMInputManager.get_instance().initialize()
         except Exception as e:
             from core import dm_logger
             dm_logger.error(f"DM Activated Error: {e}")
@@ -131,9 +110,8 @@ class DirectModelingWorkbench(Workbench):
     def Deactivated(self):
         """This function is executed when the workbench is deactivated."""
         try:
-            if hasattr(self, "_event_filter"):
-                from PySide import QtGui
-                QtGui.QApplication.instance().removeEventFilter(self._event_filter)
+            from core.input_manager import DMInputManager
+            DMInputManager.get_instance().restore()
         except Exception as e:
             from core import dm_logger
             dm_logger.error(f"DM Deactivated Error: {e}")
