@@ -86,6 +86,7 @@ class DMBase:
     # Class-level reference to the currently active tool to allow 
     # global event filters (like right-click suppression) to reach it.
     active_tool = None
+    place_on_geometry = False
 
     def __init__(self):
         if DMBase.active_tool and hasattr(DMBase.active_tool, 'terminate'):
@@ -123,8 +124,6 @@ class DMBase:
         self.drag_start_screen_y = None
         self.snap_enabled = False
         self.snap_type = "Workplane Grid"
-        
-        self.place_on_geometry = False
 
         # Shared UX state
         self.height = 0.0
@@ -217,6 +216,73 @@ class DMBase:
     # Geometry helpers — use FreeCAD view API, not Coin3D directly
     # ------------------------------------------------------------------
 
+    def _get_geometry_point(self, event_dict):
+        pos = event_dict.get("Position")
+        if not pos: 
+            return None
+        try:
+            infos = []
+            if hasattr(self.view, "getObjectsInfo"):
+                infos = self.view.getObjectsInfo((int(pos[0]), int(pos[1])))
+                dm_logger.debug(f"_get_geometry_point: getObjectsInfo returned: {infos}")
+            else:
+                single_info = self.view.getObjectInfo((int(pos[0]), int(pos[1])))
+                dm_logger.debug(f"_get_geometry_point: getObjectInfo returned: {single_info}")
+                infos = [single_info] if single_info else []
+                
+            if not infos:
+                infos = []
+                
+            for info in infos:
+                if not info or "Object" not in info or "Component" not in info:
+                    continue
+                # Skip preview objects by name or proxy type
+                obj_name = info["Object"]
+                doc = FreeCAD.ActiveDocument
+                obj = doc.getObject(obj_name) if doc else None
+                dm_logger.debug(f"_get_geometry_point: Checking object '{obj_name}'")
+                if not obj or not obj.Shape:
+                    continue
+                    
+                subname = info["Component"]
+                if "Face" in subname:
+                    dm_logger.debug(f"_get_geometry_point: Found Face {subname} on {obj_name}")
+                    face = obj.Shape.getElement(subname)
+                    import Part
+                    ray_p, ray_d = _get_view_ray(self.view, pos[0], pos[1])
+                    if ray_p and ray_d:
+                        ray_d.normalize()
+                        gpl = obj.getGlobalPlacement() if hasattr(obj, "getGlobalPlacement") else obj.Placement
+                        gpl_inv = gpl.inverse()
+                        
+                        local_near = gpl_inv.multVec(ray_p + ray_d * 1)
+                        local_far  = gpl_inv.multVec(ray_p + ray_d * 100000)
+                        
+                        ray_wire = Part.makeLine(tuple(local_near), tuple(local_far))
+                        inter = face.section(ray_wire)
+                        if inter.Vertexes:
+                            best_pt = min(inter.Vertexes, key=lambda v: (v.Point - local_near).Length).Point
+                            world_pt = gpl.multVec(best_pt)
+                            dm_logger.debug(f"_get_geometry_point: SUCCESS! Hit point: {world_pt}")
+                            return world_pt
+                        else:
+                            dm_logger.debug(f"_get_geometry_point: Face section returned no vertexes.")
+                    else:
+                        dm_logger.debug(f"_get_geometry_point: _get_view_ray returned None. Using info coordinates.")
+                        # If we can't get a ray, use the exact 3D hit point provided by FreeCAD
+                        if 'x' in info and 'y' in info and 'z' in info:
+                            world_pt = FreeCAD.Vector(info['x'], info['y'], info['z'])
+                            dm_logger.debug(f"_get_geometry_point: SUCCESS! Used info dict point: {world_pt}")
+                            return world_pt
+                            
+            # Fallback
+            fb = self.view.getPoint(pos[0], pos[1])
+            dm_logger.debug(f"_get_geometry_point: Falling back to getPoint: {fb}")
+            return fb
+        except Exception as e:
+            dm_logger.debug(f"_get_geometry_point failed: {e}")
+            return self.view.getPoint(pos[0], pos[1])
+
     def get_mouse_world_pos(self, event_dict, plane_normal=None, plane_point=None):
         """
         Unified mouse-to-world position. 
@@ -231,6 +297,12 @@ class DMBase:
             pos = (0, 0)
         x, y = pos[0], pos[1]
         
+        # 0. Intercept if place on geometry is active, bypassing plane intersection
+        if getattr(self, "place_on_geometry", False):
+            geom_pt = self._get_geometry_point(event_dict)
+            if geom_pt:
+                return geom_pt
+                
         # 1. Plane Intersection
         if plane_normal is not None and plane_point is not None:
             ray_p, ray_d = _get_view_ray(self.view, x, y)
@@ -511,15 +583,15 @@ class DMBase:
 
     def toggle_place_on_geometry(self, checked=None):
         if checked is not None:
-            self.place_on_geometry = checked
+            DMBase.place_on_geometry = checked
         else:
-            self.place_on_geometry = not self.place_on_geometry
+            DMBase.place_on_geometry = not DMBase.place_on_geometry
         if hasattr(self, "update_ui"):
             self.update_ui()
 
     def get_context_menu(self, event_dict=None):
         return [
-            ("Place on Geometry", self.toggle_place_on_geometry, getattr(self, "place_on_geometry", False))
+            ("Place on Geometry", self.toggle_place_on_geometry, DMBase.place_on_geometry)
         ]
 
     def reset_state(self):

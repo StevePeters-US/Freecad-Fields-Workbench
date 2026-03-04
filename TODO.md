@@ -299,5 +299,5 @@ draw curves to surface
 combine workplanes into surface
 ---
 
-
+middle mouse is accepting tool
 ---

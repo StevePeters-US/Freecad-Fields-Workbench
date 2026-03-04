@@ -122,7 +122,7 @@ To modify an existing curve:
 ## Code Conventions
 
 ### Style
-- **Python 3.8+** (FreeCAD 0.21+ / 1.0)
+- **Python 3.8+** (FreeCAD 0.21+ / 1.0 / 1.2)
 - **PEP 8**: 4-space indent, 100-char soft limit
 - `snake_case` functions, `PascalCase` classes, `_` prefix for private
 - **Imports**: FreeCAD → PySide → project → stdlib
@@ -165,6 +165,6 @@ Set `DEBUG_DM_CRASH=1` to also write logs to `~/.FreeCAD/DirectModeling.log` for
 
 | Package | Required | Purpose |
 |---------|----------|---------|
-| FreeCAD 0.21+ / 1.0 | ✅ | Host application |
+| FreeCAD 0.21+ / 1.0 / 1.2 | ✅ | Host application |
 | NumPy | ✅ (bundled) | Linear algebra |
 | Shapely | ✅ | Geometric operations |
