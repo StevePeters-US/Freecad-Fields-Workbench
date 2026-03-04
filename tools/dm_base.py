@@ -121,6 +121,8 @@ class DMBase:
         self.working_plane = None
         self.snap_face = None
         self.drag_start_screen_y = None
+        self.snap_enabled = False
+        self.snap_type = "Workplane Grid"
 
         # Shared UX state
         self.height = 0.0
@@ -829,6 +831,26 @@ class NURBSPrimitiveCreator(DMBase):
             FreeCADGui.Control.closeDialog()
         except Exception as e:
             dm_logger.debug(f"_do_finish: Failed to close dialog: {e}")
+
+    # ------------------------------------------------------------------
+    # Snapping
+    # ------------------------------------------------------------------
+
+    def set_snap_type(self, type_name):
+        self.snap_type = type_name
+        dm_logger.info(f"Snapping type set to {self.snap_type}")
+
+    def toggle_snapping(self):
+        self.snap_enabled = not self.snap_enabled
+        state = "enabled" if self.snap_enabled else "disabled"
+        dm_logger.info(f"Snapping is now {state} (Type: {self.snap_type})")
+
+    def get_snapping_menu(self):
+        return [
+            ("Workplane Grid", lambda: self.set_snap_type("Workplane Grid")),
+            ("Workplane Radius", lambda: self.set_snap_type("Workplane Radius")),
+            ("Vertex Snapping", lambda: self.set_snap_type("Vertex Snapping"))
+        ]
 
 
 
