@@ -17,12 +17,7 @@ class CurveCreator(NURBSPrimitiveCreator):
         self.dragged_index = -1 
         self._drag_start_pos = None 
 
-    def on_button3_down(self, event_dict):
-        if len(self.points) >= 2:
-            self.finish()
-        else:
-            self.terminate()
-        return True
+
 
     def handle_click(self, event_dict):
         try:
@@ -209,13 +204,8 @@ class CurveCreator(NURBSPrimitiveCreator):
     def on_tool_option_1(self):
         dm_logger.info("snapping curve tool")
 
-    def on_tool_menu(self):
-        try:
-            from PySide import QtGui
-        except ImportError:
-            from PySide2 import QtGui
-            
-        menu = QtGui.QMenu()
-        menu.addAction("Curve Option 1", lambda: dm_logger.info("Selected Curve Option 1"))
-        menu.addAction("Curve Option 2", lambda: dm_logger.info("Selected Curve Option 2"))
-        menu.exec_(QtGui.QCursor.pos())
+    def get_context_menu(self, event_dict=None):
+        return [
+            ("Curve Option 1", lambda: dm_logger.info("Selected Curve Option 1")),
+            ("Curve Option 2", lambda: dm_logger.info("Selected Curve Option 2"))
+        ]

@@ -93,13 +93,8 @@ class PointCreator(NURBSPrimitiveCreator):
     def on_tool_option_1(self):
         dm_logger.info("snapping point tool")
 
-    def on_tool_menu(self):
-        try:
-            from PySide import QtGui
-        except ImportError:
-            from PySide2 import QtGui
-            
-        menu = QtGui.QMenu()
-        menu.addAction("Point Option 1", lambda: dm_logger.info("Selected Point Option 1"))
-        menu.addAction("Point Option 2", lambda: dm_logger.info("Selected Point Option 2"))
-        menu.exec_(QtGui.QCursor.pos())
+    def get_context_menu(self, event_dict=None):
+        return [
+            ("Point Option 1", lambda: dm_logger.info("Selected Point Option 1")),
+            ("Point Option 2", lambda: dm_logger.info("Selected Point Option 2"))
+        ]

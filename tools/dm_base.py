@@ -379,6 +379,9 @@ class DMBase:
         if getattr(self, "_middle_mouse_down", False) or event_dict.get("ShiftDown", False):
             return False
             
+        if hasattr(self, 'on_tool_menu') and self.on_tool_menu():
+            return True
+            
         QtCore.QTimer.singleShot(0, self.finish)
         return True # Consume Press
 

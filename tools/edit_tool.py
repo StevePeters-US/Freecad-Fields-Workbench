@@ -360,23 +360,22 @@ class EditTool(DMBase):
             # Consume click to prevent default context menus/selection
             return True
 
-    def show_context_menu(self, idx):
-        menu = QtGui.QMenu()
-        
-        action_tangent = menu.addAction("Set Tangent (Smooth)")
-        action_split = menu.addAction("Set Split (Smooth but uneven)")
-        action_custom = menu.addAction("Set Custom (Sharp/Corner)")
-        menu.addSeparator()
-        
-        angle_menu = menu.addMenu("Quick Angles")
-        
+    def get_context_menu(self, event_dict=None):
+        hit = None
+        if event_dict:
+            ray_p, ray_d = self._get_ray(event_dict)
+            hit = self._hit_test(ray_p, ray_d)
+
+        if not hit and not self._selected_element:
+            return [("Finish Editing", self.finish)]
+
+        idx, _ = hit if hit else self._selected_element
+
         def set_type(val):
             p_types = list(getattr(self._target_obj, "PointTypes", []))
             while len(p_types) < len(getattr(self._target_obj, "Points", [])): p_types.append(0)
             p_types[idx] = val
             self._target_obj.PointTypes = p_types
-            
-            # Force immediate enforcement by triggering an update of handle in place
             self._update_element((idx, "HandleOut"), getattr(self._target_obj, "HandleOut")[idx])
             
         def set_angle(degrees):
@@ -384,29 +383,23 @@ class EditTool(DMBase):
             pts = list(getattr(self._target_obj, "Points", []))
             h_out = list(getattr(self._target_obj, "HandleOut", []))
             if idx >= len(pts) or idx >= len(h_out): return
-            
             p = pts[idx]
             v_out = h_out[idx] - p
             dist = v_out.Length
-            if dist < 1e-4:
-                dist = 10.0 # Default visible handle size
-                
+            if dist < 1e-4: dist = 10.0
             rad = math.radians(degrees)
-            # Apply angle in local XY space
             new_v_out = FreeCAD.Vector(dist * math.cos(rad), dist * math.sin(rad), 0)
             self._update_element((idx, "HandleOut"), p + new_v_out)
-            
-        action_tangent.triggered.connect(lambda: set_type(0))
-        action_split.triggered.connect(lambda: set_type(1))
-        action_custom.triggered.connect(lambda: set_type(2))
-        
-        # Add quick angles
-        for a in [0, 45, 90, 135, 180, 225, 270, 315]:
-            act = angle_menu.addAction(f"{a}°")
-            act.triggered.connect(lambda checked=False, val=a: set_angle(val))
-        
-        cursor_pos = QtGui.QCursor.pos()
-        menu.exec_(cursor_pos)
+
+        angles = [(f"{a}°", lambda checked=False, val=a: set_angle(val)) for a in [0, 45, 90, 135, 180, 225, 270, 315]]
+
+        return [
+            ("Set Tangent (Smooth)", lambda: set_type(0)),
+            ("Set Split (Smooth but uneven)", lambda: set_type(1)),
+            ("Set Custom (Sharp/Corner)", lambda: set_type(2)),
+            "-",
+            ("Quick Angles", angles)
+        ]
 
     def handle_keyboard(self, event_dict):
         key = str(event_dict.get("Key", "None")).upper()

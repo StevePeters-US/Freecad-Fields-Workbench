@@ -486,15 +486,6 @@ class WorkPlaneCreator(DMBase):
     def on_button1_down(self, event_dict):
         return self.handle_click(event_dict)
 
-    def on_button3_down(self, event_dict):
-        if self.state == 0:
-            # Drop and finish
-            if self.handle_click({"Button": "BUTTON1", "Position": event_dict["Position"]}):
-                self.terminate()
-                return True
-        self.terminate()
-        return True
-
     def on_button1_up(self, event_dict):
         if self.state == 2:
             self.state = 1
@@ -593,3 +584,9 @@ class WorkPlaneCreator(DMBase):
             dm_logger.error(f"[handle_move] Exception: {e}")
             import traceback
             traceback.print_exc()
+
+    def get_context_menu(self, event_dict=None):
+        return [
+            ("Apply Work Plane", self.finish),
+            ("Cancel", self.terminate)
+        ]
