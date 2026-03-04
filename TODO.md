@@ -27,6 +27,9 @@ no prior context beyond the files listed. Follow this template:
 
 > These tasks fix known issues in the current codebase before building the F-Rep pipeline.
 
+
+Curve ponts are not all being drawn in tool editor
+
 ### Viewport Plane Focus Hotkey (Minimum LLM: Gemini Low)
 - **Goal**: Add a hotkey to instantly orient the camera to face the active curve's plane (or a plane derived from 3 points for a 3D curve).
 - **Files to read**: `tools/edit_tool.py`
@@ -37,9 +40,8 @@ no prior context beyond the files listed. Follow this template:
   3. Use `view.setViewDirection()` to rotate the camera perpendicular to that plane.
 - **Acceptance**: Pressing the focal hotkey snaps the camera to a flat 2D viewing angle relative to the curve.
 
-### Curve Handle Type Context Menu (Minimum LLM: Gemini Low)
+### [COMPLETED] Curve Handle Type Context Menu (Minimum LLM: Gemini Low)
 - **Goal**: Provide a context menu on control points to toggle handle types between Tangent (Smooth), Split (V-shape), and Custom (Sharp).
-
 
 ### Angle Snapping for Curve Handles (Minimum LLM: Gemini Low)
 - **Goal**: Allow handles to snap to specific angular increments (default 15 degrees, via DM Settings) while dragging.
@@ -383,9 +385,9 @@ no prior context beyond the files listed. Follow this template:
 
 ## Phase N: Research & Future
 
-we should be able to move workplane after it's set using the workplane tool with a workplane selected.
+- [ ] **Move Existing Workplane** — Allow moving/reorienting a workplane after it has been created using the Workplane tool.
+- [ ] **Viewport Workplane Selection** — Make workplanes selectable directly in the 3D viewport by clicking their grid/handles.
 
-We should be able to select workplanes in the viewport
 
 
 

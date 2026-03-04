@@ -354,7 +354,9 @@ class EditTool(DMBase):
         hit = self._hit_test(ray_p, ray_d)
         if hit:
             idx, elem_type = hit
-            self.show_context_menu(idx)
+            from core.input_manager import DMInputManager
+            items = self.get_context_menu(event_dict)
+            DMInputManager.get_instance()._trigger_dynamic_menu(items)
             return True # Consume click
         else:
             # Consume click to prevent default context menus/selection
@@ -366,6 +368,10 @@ class EditTool(DMBase):
         if event_dict:
             ray_p, ray_d = self._get_ray(event_dict)
             hit = self._hit_test(ray_p, ray_d)
+
+        # Fallback to hovered element if available
+        if not hit and self._hovered_element:
+            hit = self._hovered_element
 
         if not hit and not self._selected_element:
             return base_menu + [
@@ -414,6 +420,13 @@ class EditTool(DMBase):
             return True
         if key in ["ENTER", "RETURN"]:
             self.finish()
+            return True
+            
+        if key == "C":
+            from core.input_manager import DMInputManager
+            items = self.get_context_menu(event_dict)
+            if items:
+                DMInputManager.get_instance()._trigger_dynamic_menu(items)
             return True
             
         if key in ["DELETE", "X", "BACKSPACE"]:

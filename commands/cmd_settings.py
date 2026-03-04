@@ -34,8 +34,10 @@ class _SettingsDialog(QtGui.QDialog):
         current_wire = get_show_wireframe()
         current_lw = get_line_width()
         current_ps = get_point_size()
-        from core.dm_object import get_picking_radius
+        from core.dm_object import get_picking_radius, get_frep_storage_type, get_max_bounds
         current_pr = get_picking_radius()
+        current_frep = get_frep_storage_type()
+        current_mb = get_max_bounds()
 
         layout = QtGui.QFormLayout(self)
 
@@ -64,6 +66,28 @@ class _SettingsDialog(QtGui.QDialog):
         self._pr_spin.setValue(current_pr)
         layout.addRow("Picking Radius (mm):", self._pr_spin)
 
+        # Point Size spinbox
+        self._ps_spin = QtGui.QDoubleSpinBox()
+        self._ps_spin.setRange(1.0, 50.0)
+        self._ps_spin.setValue(current_ps)
+        layout.addRow("Point Size:", self._ps_spin)
+
+        # Max Bounds spinbox
+        self._mb_spin = QtGui.QDoubleSpinBox()
+        self._mb_spin.setRange(100.0, 1000000.0) # 100mm to 1km
+        self._mb_spin.setValue(current_mb)
+        layout.addRow("Max Bounds (mm):", self._mb_spin)
+
+        # F-Rep Storage Type ComboBox
+        self._frep_combo = QtGui.QComboBox()
+        self._frep_combo.addItems([
+            "Marching Cubes (Standard SDF)",
+            "Adaptive Marching Cubes",
+            "NURBS based F-Rep approach"
+        ])
+        self._frep_combo.setCurrentIndex(current_frep)
+        layout.addRow("F-Rep Storage Type:", self._frep_combo)
+
         # Buttons
         btn_box = QtGui.QDialogButtonBox(
             QtGui.QDialogButtonBox.Ok | QtGui.QDialogButtonBox.Cancel
@@ -73,16 +97,22 @@ class _SettingsDialog(QtGui.QDialog):
         layout.addRow(btn_box)
 
     def _on_accept(self):
-        from core.dm_object import set_show_wireframe, set_line_width, set_point_size, set_picking_radius, refresh_all_dm_objects
+        from core.dm_object import (set_show_wireframe, set_line_width, set_point_size, 
+                                    set_picking_radius, set_frep_storage_type, 
+                                    set_max_bounds, refresh_all_dm_objects)
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()
         pr = self._pr_spin.value()
+        frep = self._frep_combo.currentIndex()
+        mb = self._mb_spin.value()
 
         set_show_wireframe(wire)
         set_line_width(lw)
         set_point_size(ps)
         set_picking_radius(pr)
+        set_frep_storage_type(frep)
+        set_max_bounds(mb)
         
         from core.dm_logger import set_enable_crash_log
         set_enable_crash_log(self._log_check.isChecked())
@@ -90,7 +120,7 @@ class _SettingsDialog(QtGui.QDialog):
         # Apply to all existing objects
         refresh_all_dm_objects()
 
-        dm_logger.info(f"DM Settings: wire={wire}, lw={lw}, ps={ps}, pr={pr}")
+        dm_logger.info(f"DM Settings: wire={wire}, lw={lw}, ps={ps}, pr={pr}, frep={frep}, mb={mb}")
         self.accept()
 
 

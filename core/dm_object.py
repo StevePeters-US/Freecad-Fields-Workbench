@@ -23,7 +23,7 @@ except ImportError:
 # DM Settings helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-_PARAM_PATH = "User parameter:FCDirectModeling"
+_PARAM_PATH = "User parameter:BaseApp/Preferences/Mod/DirectModeling"
 
 
 def get_show_wireframe():
@@ -46,6 +46,32 @@ def get_point_size():
 
 def set_point_size(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetFloat("PointSize", float(val))
+
+def get_frep_storage_type():
+    """
+    Return the F-Rep storage/meshing approach:
+    0: Marching Cubes (Standard SDF)
+    1: Adaptive Marching Cubes
+    2: NURBS based F-Rep approach
+    """
+    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("FrepStorageType", 0)
+
+def set_frep_storage_type(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetInt("FrepStorageType", int(val))
+
+def get_picking_radius():
+    """Return the picking radius in mm."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("PickingRadius", 5.0)
+
+def set_picking_radius(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("PickingRadius", float(val))
+
+def get_max_bounds():
+    """Return the maximum field bounds in mm."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("MaxBounds", 10000.0)
+
+def set_max_bounds(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("MaxBounds", float(val))
 
 
 
@@ -475,22 +501,6 @@ class DMViewProvider:
 # ─────────────────────────────────────────────────────────────────────────────
 # Factory
 # ─────────────────────────────────────────────────────────────────────────────
-
-def get_point_size():
-    params = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/DirectModeling")
-    return params.GetFloat("PointSize", 10.0)
-
-def set_point_size(val):
-    params = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/DirectModeling")
-    params.SetFloat("PointSize", float(val))
-
-def get_picking_radius():
-    params = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/DirectModeling")
-    return params.GetFloat("PickingRadius", 5.0)
-
-def set_picking_radius(val):
-    params = FreeCAD.ParamGet("User parameter:BaseApp/Preferences/Mod/DirectModeling")
-    params.SetFloat("PickingRadius", float(val))
 
 def create_dm_object(name, shape_type, params=None, placement=None):
     """
