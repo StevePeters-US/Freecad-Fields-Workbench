@@ -288,16 +288,13 @@ no prior context beyond the files listed. Follow this template:
 - **Files to read**: `core/radial_menu.py`, `tools/dm_base.py`
 - **Files to modify**: `core/radial_menu.py`, `commands/cmd_radial_menu.py`
 - **Steps**:
-  1. Add a "Select Under Cursor" action to the radial menu.
+  1. long pressing the l mouse ( > 1 sec) will bring up the menu with each intersected part.
   2. Perform a deep raycast (`view.getObjectsInfo`) at the activation coordinates.
   3. Present a popup or visual list to force specific selection.
 - **Acceptance**: Triggering the tool successfully lists and selects objects hidden behind other geometry.
 
 ---
-draw curves to surface
+draw curves segments to surface
 ---
 combine workplanes into surface
----
-
-middle mouse is accepting tool
 ---

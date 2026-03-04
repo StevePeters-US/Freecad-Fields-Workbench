@@ -231,8 +231,8 @@ class EditTool(DMBase):
         return self.handle_click(event_dict)
 
     def on_button2_down(self, event_dict):
-        # Middle Mouse mapped to context menu previously
-        return self.handle_right_click(event_dict)
+        # Allow middle mouse for view rotation
+        return False
 
     def on_button3_down(self, event_dict):
         # Right click finishes the tool normally, but user asked for overridable hook

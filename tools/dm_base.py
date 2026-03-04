@@ -224,10 +224,8 @@ class DMBase:
             infos = []
             if hasattr(self.view, "getObjectsInfo"):
                 infos = self.view.getObjectsInfo((int(pos[0]), int(pos[1])))
-                dm_logger.debug(f"_get_geometry_point: getObjectsInfo returned: {infos}")
             else:
                 single_info = self.view.getObjectInfo((int(pos[0]), int(pos[1])))
-                dm_logger.debug(f"_get_geometry_point: getObjectInfo returned: {single_info}")
                 infos = [single_info] if single_info else []
                 
             if not infos:
@@ -240,13 +238,11 @@ class DMBase:
                 obj_name = info["Object"]
                 doc = FreeCAD.ActiveDocument
                 obj = doc.getObject(obj_name) if doc else None
-                dm_logger.debug(f"_get_geometry_point: Checking object '{obj_name}'")
                 if not obj or not obj.Shape:
                     continue
                     
                 subname = info["Component"]
                 if "Face" in subname:
-                    dm_logger.debug(f"_get_geometry_point: Found Face {subname} on {obj_name}")
                     face = obj.Shape.getElement(subname)
                     import Part
                     ray_p, ray_d = _get_view_ray(self.view, pos[0], pos[1])
@@ -263,21 +259,15 @@ class DMBase:
                         if inter.Vertexes:
                             best_pt = min(inter.Vertexes, key=lambda v: (v.Point - local_near).Length).Point
                             world_pt = gpl.multVec(best_pt)
-                            dm_logger.debug(f"_get_geometry_point: SUCCESS! Hit point: {world_pt}")
                             return world_pt
-                        else:
-                            dm_logger.debug(f"_get_geometry_point: Face section returned no vertexes.")
                     else:
-                        dm_logger.debug(f"_get_geometry_point: _get_view_ray returned None. Using info coordinates.")
                         # If we can't get a ray, use the exact 3D hit point provided by FreeCAD
                         if 'x' in info and 'y' in info and 'z' in info:
                             world_pt = FreeCAD.Vector(info['x'], info['y'], info['z'])
-                            dm_logger.debug(f"_get_geometry_point: SUCCESS! Used info dict point: {world_pt}")
                             return world_pt
                             
             # Fallback
             fb = self.view.getPoint(pos[0], pos[1])
-            dm_logger.debug(f"_get_geometry_point: Falling back to getPoint: {fb}")
             return fb
         except Exception as e:
             dm_logger.debug(f"_get_geometry_point failed: {e}")
@@ -457,8 +447,17 @@ class DMBase:
         return False
 
     def on_button3_down(self, event_dict):
+        # Query global event filter since Coin3D sometimes translates Middle Mouse to BUTTON3
+        try:
+            from core.input_manager import DMInputManager
+            global_middle_down = DMInputManager.get_instance()._middle_mouse_down
+        except Exception:
+            global_middle_down = False
+            
+        is_middle_down = getattr(self, "_middle_mouse_down", False) or global_middle_down
+        
         # If Middle Mouse or Shift is held, it's likely a view rotation chord. Do not finish!
-        if getattr(self, "_middle_mouse_down", False) or event_dict.get("ShiftDown", False):
+        if is_middle_down or event_dict.get("ShiftDown", False):
             return False
             
         if hasattr(self, 'on_tool_menu') and self.on_tool_menu():

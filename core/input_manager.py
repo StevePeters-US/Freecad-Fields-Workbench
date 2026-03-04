@@ -96,8 +96,9 @@ class DMInputManager(QtCore.QObject):
                         return True
                     
             if event.type() in [QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
+                is_press = (event.type() == QtCore.QEvent.MouseButtonPress)
                 if event.button() == QtCore.Qt.MiddleButton:
-                    self._middle_mouse_down = (event.type() == QtCore.QEvent.MouseButtonPress)
+                    self._middle_mouse_down = is_press
 
             # Suppress FreeCAD context menu globally in the workbench ONLY if tool active
             if event.type() == QtCore.QEvent.ContextMenu:
@@ -205,14 +206,18 @@ class DMInputManager(QtCore.QObject):
 
     def initialize(self):
         try:
-            dm_logger.debug("DMInputManager: Installing event filter...")
-            QtGui.QApplication.instance().installEventFilter(self)
+            if not getattr(self, "_is_initialized", False):
+                dm_logger.debug("DMInputManager: Installing event filter...")
+                QtGui.QApplication.instance().installEventFilter(self)
+                self._is_initialized = True
         except Exception as e:
             dm_logger.error(f"DMInputManager initialization error: {e}")
 
     def restore(self):
         try:
-            dm_logger.debug("DMInputManager: Removing event filter...")
-            QtGui.QApplication.instance().removeEventFilter(self)
+            if getattr(self, "_is_initialized", False):
+                dm_logger.debug("DMInputManager: Removing event filter...")
+                QtGui.QApplication.instance().removeEventFilter(self)
+                self._is_initialized = False
         except Exception as e:
             dm_logger.error(f"DMInputManager restore error: {e}")

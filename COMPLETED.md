@@ -4,6 +4,16 @@ Tasks moved here from `TODO.md` after verification.
 
 ---
 
+## 🐞 Bug Fixes & UX Polish (March 2026)
+
+### ✅ Middle Mouse View Rotation Fix (Minimum LLM: Gemini Flash)
+- **Completed**: Resolved an issue where pressing the middle mouse button to rotate the viewport prematurely accepted tools. Fixed overlapping event filters in `DMInputManager` that caused duplicated inputs across the workbench.
+
+### ✅ Place Point/Curve on Surface Geometry (Minimum LLM: Gemini Low)
+- **Completed**: Added a persistent "Place on Geometry" option to the base context menu (accessed via 'D'). When checked, tools correctly perform a deep raycast against the underlying 3D geometry and snap points directly onto parts rather than the standard workplane. Added support for FreeCAD 1.2 raycast fallback parameters (`info['x']`, `info['y']`, `info['z']`).
+
+---
+
 ## 🎨 Curve Editing & Visibility (2026-03-02)
 - **Persistent Knot Visibility**: Knot points (all points on the spline) are now always visible, fixing the issue where only endpoints were shown.
 - **Edit Mode Toggling**: Large orange control squares and blue tangent handles only appear when a curve is selected and the **Edit Tool** (`T`) is active.
