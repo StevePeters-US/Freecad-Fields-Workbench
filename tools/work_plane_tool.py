@@ -176,14 +176,17 @@ class WorkPlaneCreator(DMBase):
         try:
             # 1. Pixel-based hit test
             # Try to get ALL objects under the cursor to bypass the Work Plane Preview
-            infos = []
-            if hasattr(self.view, "getObjectsInfo"):
-                infos = self.view.getObjectsInfo((int(pos[0]), int(pos[1])))
-                if infos is None:
-                    infos = []
+            if getattr(self, "place_on_geometry", False):
+                infos = []
+                if hasattr(self.view, "getObjectsInfo"):
+                    infos = self.view.getObjectsInfo((int(pos[0]), int(pos[1])))
+                    if infos is None:
+                        infos = []
+                else:
+                    single_info = self.view.getObjectInfo((int(pos[0]), int(pos[1])))
+                    infos = [single_info] if single_info else []
             else:
-                single_info = self.view.getObjectInfo((int(pos[0]), int(pos[1])))
-                infos = [single_info] if single_info else []
+                infos = []
                 
             info = None
             for i in infos:
