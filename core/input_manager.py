@@ -24,16 +24,27 @@ class DMInputManager(QtCore.QObject):
 
     def eventFilter(self, obj, event):
         try:
-            # Prevent double-triggering when menu just closed
-            if getattr(self, '_just_closed', False):
+            # Drop auto-repeat events to prevent multiple menus
+            if getattr(event, "isAutoRepeat", lambda: False)():
                 if event.type() in (QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease, QtCore.QEvent.ShortcutOverride):
                     return True
 
+            # 1. ALWAYS consume ShortcutOverride for our hotkeys so FreeCAD doesn't steal them.
+            if event.type() == QtCore.QEvent.ShortcutOverride:
+                key = event.key()
+                text = event.text().lower() if hasattr(event, "text") else ""
+                if key in (QtCore.Qt.Key_S, QtCore.Qt.Key_D) or text in ('s', 'd'):
+                    event.accept()
+                    return True
+
+            # 2. Allow active menu to be toggled closed strictly on KeyPress
             if self._is_menu_active():
-                if event.type() in (QtCore.QEvent.KeyPress, QtCore.QEvent.ShortcutOverride):
+                if event.type() == QtCore.QEvent.KeyPress:
                     key = event.key()
                     text = event.text().lower() if hasattr(event, "text") else ""
                     if key in (QtCore.Qt.Key_S, QtCore.Qt.Key_D) or text in ('s', 'd'):
+                        if getattr(self, '_ignore_hotkeys', False):
+                            return True
                         try:
                             if hasattr(self, '_active_menu') and self._active_menu:
                                 self._active_menu.close()
@@ -41,11 +52,6 @@ class DMInputManager(QtCore.QObject):
                             pass
                         return True
                 return False
-
-            # Drop auto-repeat events to prevent multiple menus
-            if getattr(event, "isAutoRepeat", lambda: False)():
-                if event.type() in (QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease, QtCore.QEvent.ShortcutOverride):
-                    return True
 
             # Track modifier keys and middle mouse for navigation visibility
             if event.type() == QtCore.QEvent.KeyPress:
@@ -59,33 +65,35 @@ class DMInputManager(QtCore.QObject):
                 if event.key() == QtCore.Qt.Key_Shift:
                     self._shift_down = False
 
-            # Handle our specific tool context keys
-            if event.type() in (QtCore.QEvent.KeyPress, QtCore.QEvent.ShortcutOverride):
+            # 3. Handle opening our menus strictly on KeyPress
+            if event.type() == QtCore.QEvent.KeyPress:
                 key = event.key()
                 text = event.text().lower() if hasattr(event, "text") else ""
                 
-                if key == QtCore.Qt.Key_S or text == 's':
-                    if DMBase.active_tool and hasattr(DMBase.active_tool, 'get_snapping_menu'):
-                        if self._trigger_dynamic_menu(DMBase.active_tool.get_snapping_menu()):
-                            return True
-                    if event.type() == QtCore.QEvent.ShortcutOverride:
-                        return True # Consume FreeCAD shortcut even if we do nothing
-                    return False
-                    
-                if key == QtCore.Qt.Key_D or text == 'd':
-                    if DMBase.active_tool:
-                        items = []
-                        if hasattr(DMBase.active_tool, 'get_context_menu'):
-                            items = DMBase.active_tool.get_context_menu()
-                        elif hasattr(DMBase.active_tool, 'on_tool_menu'):
-                            if DMBase.active_tool.on_tool_menu():
+                if key in (QtCore.Qt.Key_S, QtCore.Qt.Key_D) or text in ('s', 'd'):
+                    if getattr(self, '_ignore_hotkeys', False):
+                        return True
+                        
+                    if key == QtCore.Qt.Key_S or text == 's':
+                        if DMBase.active_tool and hasattr(DMBase.active_tool, 'get_snapping_menu'):
+                            if self._trigger_dynamic_menu(DMBase.active_tool.get_snapping_menu()):
+                                return True
+                        return False
+                        
+                    if key == QtCore.Qt.Key_D or text == 'd':
+                        if DMBase.active_tool:
+                            items = []
+                            if hasattr(DMBase.active_tool, 'get_context_menu'):
+                                items = DMBase.active_tool.get_context_menu()
+                            elif hasattr(DMBase.active_tool, 'on_tool_menu'):
+                                if DMBase.active_tool.on_tool_menu():
+                                    return True
+                            
+                            if items and self._trigger_dynamic_menu(items):
                                 return True
                         
-                        if items and self._trigger_dynamic_menu(items):
-                            return True
-                    
-                    self.show_context_menu()
-                    return True
+                        self.show_context_menu()
+                        return True
                     
             if event.type() in [QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
                 if event.button() == QtCore.Qt.MiddleButton:
@@ -134,8 +142,9 @@ class DMInputManager(QtCore.QObject):
     def _on_menu_hide(self):
         self._menu_open = False
         self._active_menu = None
-        self._just_closed = True
-        QtCore.QTimer.singleShot(150, lambda: setattr(self, '_just_closed', False))
+        
+        self._ignore_hotkeys = True
+        QtCore.QTimer.singleShot(150, lambda: setattr(self, '_ignore_hotkeys', False))
 
     def _trigger_dynamic_menu(self, items):
         if not items:
@@ -149,6 +158,10 @@ class DMInputManager(QtCore.QObject):
             self._build_dynamic_menu(self._active_menu, items)
             self._active_menu.aboutToHide.connect(self._on_menu_hide)
             self._menu_open = True
+            
+            self._ignore_hotkeys = True
+            QtCore.QTimer.singleShot(150, lambda: setattr(self, '_ignore_hotkeys', False))
+            
             QtCore.QTimer.singleShot(0, lambda: self._active_menu.exec_(QtGui.QCursor.pos()))
             return True
         except Exception as e:
