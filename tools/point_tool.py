@@ -94,7 +94,9 @@ class PointCreator(NURBSPrimitiveCreator):
         dm_logger.info("snapping point tool")
 
     def get_context_menu(self, event_dict=None):
-        return [
+        base_menu = super().get_context_menu(event_dict)
+        return base_menu + [
+            "-",
             ("Point Option 1", lambda: dm_logger.info("Selected Point Option 1")),
             ("Point Option 2", lambda: dm_logger.info("Selected Point Option 2"))
         ]

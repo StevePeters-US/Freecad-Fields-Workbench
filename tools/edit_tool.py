@@ -361,13 +361,17 @@ class EditTool(DMBase):
             return True
 
     def get_context_menu(self, event_dict=None):
+        base_menu = super().get_context_menu(event_dict)
         hit = None
         if event_dict:
             ray_p, ray_d = self._get_ray(event_dict)
             hit = self._hit_test(ray_p, ray_d)
 
         if not hit and not self._selected_element:
-            return [("Finish Editing", self.finish)]
+            return base_menu + [
+                "-",
+                ("Finish Editing", self.finish)
+            ]
 
         idx, _ = hit if hit else self._selected_element
 
@@ -393,7 +397,8 @@ class EditTool(DMBase):
 
         angles = [(f"{a}°", lambda checked=False, val=a: set_angle(val)) for a in [0, 45, 90, 135, 180, 225, 270, 315]]
 
-        return [
+        return base_menu + [
+            "-",
             ("Set Tangent (Smooth)", lambda: set_type(0)),
             ("Set Split (Smooth but uneven)", lambda: set_type(1)),
             ("Set Custom (Sharp/Corner)", lambda: set_type(2)),

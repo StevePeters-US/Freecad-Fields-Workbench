@@ -205,7 +205,9 @@ class CurveCreator(NURBSPrimitiveCreator):
         dm_logger.info("snapping curve tool")
 
     def get_context_menu(self, event_dict=None):
-        return [
+        base_menu = super().get_context_menu(event_dict)
+        return base_menu + [
+            "-",
             ("Curve Option 1", lambda: dm_logger.info("Selected Curve Option 1")),
             ("Curve Option 2", lambda: dm_logger.info("Selected Curve Option 2"))
         ]

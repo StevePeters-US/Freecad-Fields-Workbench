@@ -246,7 +246,9 @@ class TranslateTool(DMBase):
         self.terminate()
 
     def get_context_menu(self, event_dict=None):
-        return [
+        base_menu = super().get_context_menu(event_dict)
+        return base_menu + [
+            "-",
             ("Apply Translation", self.finish),
             ("Cancel Translation", self.cancel)
         ]

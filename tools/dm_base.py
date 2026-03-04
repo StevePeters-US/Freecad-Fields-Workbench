@@ -123,6 +123,8 @@ class DMBase:
         self.drag_start_screen_y = None
         self.snap_enabled = False
         self.snap_type = "Workplane Grid"
+        
+        self.place_on_geometry = False
 
         # Shared UX state
         self.height = 0.0
@@ -282,6 +284,12 @@ class DMBase:
 
     def get_mouse_plane_pt(self, event_dict):
         """Intersection of mouse ray with the closest visible working plane."""
+        # 0. Check if place on geometry is explicitly enabled
+        if getattr(self, "place_on_geometry", False):
+            pt = self.get_mouse_world_pos(event_dict)
+            if pt is not None:
+                return pt
+
         # 1. If we have a working_plane already established for this tool session, stick to it.
         # This prevents the plane from jumping mid-operation (like drawing a box)
         if hasattr(self, "working_plane") and self.working_plane:
@@ -500,6 +508,19 @@ class DMBase:
         
     def on_tool_menu(self):
         pass
+
+    def toggle_place_on_geometry(self, checked=None):
+        if checked is not None:
+            self.place_on_geometry = checked
+        else:
+            self.place_on_geometry = not self.place_on_geometry
+        if hasattr(self, "update_ui"):
+            self.update_ui()
+
+    def get_context_menu(self, event_dict=None):
+        return [
+            ("Place on Geometry", self.toggle_place_on_geometry, getattr(self, "place_on_geometry", False))
+        ]
 
     def reset_state(self):
         """Resets the tool to state 1."""

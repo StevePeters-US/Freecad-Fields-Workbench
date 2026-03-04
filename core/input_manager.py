@@ -132,12 +132,20 @@ class DMInputManager(QtCore.QObject):
             if item == "-":
                 menu.addSeparator()
             elif isinstance(item, tuple):
-                name, action = item
-                if isinstance(action, list):
-                    submenu = menu.addMenu(name)
-                    self._build_dynamic_menu(submenu, action)
-                else:
-                    menu.addAction(name, action)
+                if len(item) == 2:
+                    name, action = item
+                    if isinstance(action, list):
+                        submenu = menu.addMenu(name)
+                        self._build_dynamic_menu(submenu, action)
+                    else:
+                        menu.addAction(name, action)
+                elif len(item) == 3:
+                    name, action, is_checked = item
+                    act = menu.addAction(name)
+                    act.setCheckable(True)
+                    act.setChecked(is_checked)
+                    act.toggled.connect(action)
+
 
     def _on_menu_hide(self):
         self._menu_open = False
