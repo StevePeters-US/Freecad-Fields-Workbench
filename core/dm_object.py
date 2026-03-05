@@ -310,7 +310,10 @@ class DMViewProvider:
         elif hasattr(vobj.Object, "ShapeType") and vobj.Object.ShapeType == "frep":
             # Frep objects render via Coin3D; suppress the Part shape renderer
             try:
-                vobj.DisplayMode = "No Drawing"
+                # Add our custom display modes directly to the ViewProvider
+                # We need to manually handle property changes for these because
+                # FreeCAD's built-in "No Drawing" will hide the Coin3D node entirely.
+                pass
             except Exception:
                 pass
             vobj.PointSize = 0.0
@@ -377,6 +380,14 @@ class DMViewProvider:
             hints.creaseAngle = 0.5
             mesh_sep.addChild(hints)
 
+            self._frep_draw_style = coin.SoDrawStyle()
+            # Default to shaded solid triangles
+            try:
+                self._frep_draw_style.style = coin.SoDrawStyle.FILLED
+            except AttributeError:
+                self._frep_draw_style.style = 1 # FILLED = 1
+            mesh_sep.addChild(self._frep_draw_style)
+
             self._frep_coords = coin.SoCoordinate3()
             mesh_sep.addChild(self._frep_coords)
 
@@ -424,6 +435,7 @@ class DMViewProvider:
             from . import dm_logger
             dm_logger.debug(f"DMViewProvider._setup_frep_mesh_nodes failed: {e}")
             self._frep_sep = None
+            self._frep_draw_style = None
             self._frep_coords = None
             self._frep_faces = None
             self._frep_corner_coords = None
@@ -653,6 +665,20 @@ class DMViewProvider:
                 field = getattr(proxy, "FRepField", None)
                 if field:
                     self._update_frep_corners(field)
+        elif prop == "DisplayMode" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":
+            # Toggle between shaded and wireframe rendering
+            if hasattr(self, "_frep_draw_style") and self._frep_draw_style:
+                vobj = fp.ViewObject
+                if vobj.DisplayMode == "Wireframe":
+                    try:
+                        self._frep_draw_style.style = coin.SoDrawStyle.LINES
+                    except AttributeError:
+                        self._frep_draw_style.style = 2 # LINES = 2
+                else:
+                    try:
+                        self._frep_draw_style.style = coin.SoDrawStyle.FILLED
+                    except AttributeError:
+                        self._frep_draw_style.style = 1 # FILLED = 1
         elif not prop or prop in ["Points", "HandleIn", "HandleOut", "Closed", "EditMode"]:
             self._rebuild_control_cage(fp)
 

@@ -411,3 +411,7 @@ when placing points, the point should be placed against the first valid object. 
 - [ ] **Export to STL/3MF** — Direct mesh export from the F-Rep field without going through Part shapes.
 - [ ] **Custom Control Point Effects** — Allow control points to modulate local field parameters (e.g., blend radius, wall thickness).
 - [ ] **Radial Menu Raycast Selection** — Long-press radial menu listing all objects under the cursor for hidden topology selection.
+
+Hiding dm part does not hide the coin3d nodes
+
+The cube does not respect the workplane
