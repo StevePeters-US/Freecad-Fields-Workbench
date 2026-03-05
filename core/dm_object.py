@@ -252,25 +252,37 @@ class DMObjectProxy:
         """Called by FreeCAD to recompute the object."""
         try:
             from . import dm_logger
-            
-            # Syncing placement here causes infinite recompute loops.
-            # Handle this in the SourceCurve property's onChanged if desired.
-            pass
+            st = fp.ShapeType if hasattr(fp, "ShapeType") else "nurbs"
 
-            # Ensure the object has a shape
+            if st == "frep":
+                if hasattr(self, "FRepField") and self.FRepField is not None:
+                    from core.frep_mesher import get_active_mesher
+                    mesher = get_active_mesher()
+                    res = getattr(self, "_final_resolution", 20)
+                    result = mesher.mesh(self.FRepField, resolution=res)
+                    if result is not None:
+                        self._frep_verts, self._frep_idx = result
+                    else:
+                        self._frep_verts = self._frep_idx = None
+                else:
+                    dm_logger.debug(f"DMObjectProxy: Built NULL shape for {fp.Label} (expected if object is empty)")
+                    self._frep_verts = self._frep_idx = None
+
+                # Setting fp.Shape triggers ViewProvider.updateData(fp, "Shape")
+                # which is called on the correct ViewProvider instance.
+                fp.Shape = Part.Shape()
+                return
+
             new_shape = self.build_shape(fp)
-            
             if new_shape.isNull():
-                 dm_logger.debug(f"DMObjectProxy: Built NULL shape for {fp.Label} (expected if object is empty)")
-            else:
-                # dm_logger.debug(f"DMObjectProxy: Shape built. Faces={len(new_shape.Faces)}, BoundBox={new_shape.BoundBox}")
-                pass
-                 
+                dm_logger.debug(f"DMObjectProxy: Built NULL shape for {fp.Label} (expected if object is empty)")
             fp.Shape = new_shape
-            
+
         except Exception:
             from . import dm_logger
             dm_logger.exception(f"DMObject.execute error for {fp.Label}")
+
+
 
     def __setstate__(self, state):
         from . import dm_logger
@@ -280,9 +292,12 @@ class DMObjectProxy:
 class DMViewProvider:
     """ViewProvider for DM objects. Shows an orange part icon."""
     def __init__(self, vobj):
-        vobj.Proxy = self
+        # setup_view MUST run before vobj.Proxy = self.
+        # In FreeCAD, assigning Proxy triggers attach() synchronously,
+        # which sets _frep_coords etc. setup_view() must not overwrite them.
         self.setup_view(vobj)
-        
+        vobj.Proxy = self
+
     def setup_view(self, vobj):
         vobj.PointColor = (1.0, 0.5, 0.0)
         vobj.LineColor = (1.0, 0.5, 0.0)
@@ -292,31 +307,194 @@ class DMViewProvider:
             vobj.DisplayMode = "Shaded"
             vobj.PointSize = 0.0
             vobj.LineWidth = 0.0
+        elif hasattr(vobj.Object, "ShapeType") and vobj.Object.ShapeType == "frep":
+            # Frep objects render via Coin3D; suppress the Part shape renderer
+            try:
+                vobj.DisplayMode = "No Drawing"
+            except Exception:
+                pass
+            vobj.PointSize = 0.0
+            vobj.LineWidth = 0.0
         else:
             vobj.DisplayMode = "Flat Lines"
-            
+
         # Initialize Coin3D overlay fields
         self._ctrl_cage_sep = None
         self._ctrl_coords = None
         self._ctrl_lines = None
         self._ctrl_handle_points = None
         self._style = None
-        
+
         # Persistent knots
         self._knot_points = None
-        
+
         self._debug_sep = None
         self._debug_coords = None
+
+        # FRep Coin3D mesh nodes (set in _setup_frep_mesh_nodes)
+        self._frep_sep = None
+        self._frep_coords = None
+        self._frep_faces = None
 
     def attach(self, vobj):
         from . import dm_logger
         self.Object = vobj.Object
         dm_logger.debug(f"DMViewProvider.attach: obj={self.Object.Label}, coin_avail={coin is not None}")
-        
+
         if coin:
             # Setup curve overlay if it's a curve
             if hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "curve":
-                 self._setup_coin_overlay(vobj)
+                self._setup_coin_overlay(vobj)
+            # Setup direct mesh rendering for F-Rep objects
+            elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "frep":
+                self._setup_frep_mesh_nodes(vobj)
+
+    def _setup_frep_mesh_nodes(self, vobj):
+        """Create Coin3D nodes for direct mesh rendering of F-Rep objects."""
+        if not coin:
+            return
+        try:
+            sep = coin.SoSeparator()
+
+            # ── Mesh nodes ────────────────────────────────────────────────────
+            mesh_sep = coin.SoSeparator()
+
+            mat = coin.SoMaterial()
+            mat.diffuseColor.setValue(1.0, 0.5, 0.0)
+            mat.specularColor.setValue(0.3, 0.3, 0.3)
+            mat.shininess.setValue(0.3)
+            mesh_sep.addChild(mat)
+
+            hints = coin.SoShapeHints()
+            try:
+                hints.vertexOrdering = coin.SoShapeHints.COUNTER_CLOCKWISE
+            except AttributeError:
+                hints.vertexOrdering = 2
+            try:
+                hints.shapeType = coin.SoShapeHints.SOLID
+            except AttributeError:
+                hints.shapeType = 1
+            hints.creaseAngle = 0.5
+            mesh_sep.addChild(hints)
+
+            self._frep_coords = coin.SoCoordinate3()
+            mesh_sep.addChild(self._frep_coords)
+
+            self._frep_faces = coin.SoIndexedFaceSet()
+            mesh_sep.addChild(self._frep_faces)
+            sep.addChild(mesh_sep)
+
+            # ── Corner point + handle nodes ────────────────────────────────────
+            corner_sep = coin.SoSeparator()
+
+            # Corner points (white spheres / points)
+            c_mat = coin.SoMaterial()
+            c_mat.diffuseColor.setValue(1.0, 1.0, 1.0)
+            corner_sep.addChild(c_mat)
+
+            c_style = coin.SoDrawStyle()
+            c_style.pointSize.setValue(8)
+            corner_sep.addChild(c_style)
+
+            self._frep_corner_coords = coin.SoCoordinate3()
+            corner_sep.addChild(self._frep_corner_coords)
+            self._frep_corner_pts = coin.SoPointSet()
+            corner_sep.addChild(self._frep_corner_pts)
+
+            # Bevel handle lines (orange dashed)
+            h_mat = coin.SoMaterial()
+            h_mat.diffuseColor.setValue(1.0, 0.6, 0.2)
+            corner_sep.addChild(h_mat)
+
+            h_style = coin.SoDrawStyle()
+            h_style.lineWidth = 1
+            h_style.linePattern = 0x0F0F
+            corner_sep.addChild(h_style)
+
+            self._frep_handle_coords = coin.SoCoordinate3()
+            corner_sep.addChild(self._frep_handle_coords)
+            self._frep_handle_lines = coin.SoLineSet()
+            corner_sep.addChild(self._frep_handle_lines)
+
+            sep.addChild(corner_sep)
+
+            self._frep_sep = sep
+            vobj.RootNode.addChild(sep)
+        except Exception as e:
+            from . import dm_logger
+            dm_logger.debug(f"DMViewProvider._setup_frep_mesh_nodes failed: {e}")
+            self._frep_sep = None
+            self._frep_coords = None
+            self._frep_faces = None
+            self._frep_corner_coords = None
+            self._frep_corner_pts = None
+            self._frep_handle_coords = None
+            self._frep_handle_lines = None
+
+
+    def _update_frep_mesh(self, verts, flat_idx):
+        """Push numpy mesh arrays directly into Coin3D nodes."""
+        from . import dm_logger
+        if not coin or not hasattr(self, "_frep_coords") or self._frep_coords is None:
+            dm_logger.debug("[FREP] _update_frep_mesh: nodes not ready")
+            return
+        try:
+            if verts is None or flat_idx is None or len(verts) == 0:
+                self._frep_coords.point.setNum(0)
+                self._frep_faces.coordIndex.setNum(0)
+                return
+            self._frep_coords.point.setValues(verts)
+            self._frep_faces.coordIndex.setValues(flat_idx)
+        except Exception as e:
+            dm_logger.info(f"[FREP] _update_frep_mesh failed ({type(e).__name__}): {e}")
+
+    def _update_frep_corners(self, field):
+        """Show corner points + inward bevel handles for the FRep field."""
+        if not coin or not hasattr(self, "_frep_corner_coords") or self._frep_corner_coords is None:
+            return
+        try:
+            import numpy as np
+            # Extract axis-aligned corners from the bounding box.
+            # Works for any field that returns a sensible bounding_box().
+            min_b, max_b = field.bounding_box()
+            corners = [
+                (min_b.x, min_b.y, min_b.z), (max_b.x, min_b.y, min_b.z),
+                (max_b.x, max_b.y, min_b.z), (min_b.x, max_b.y, min_b.z),
+                (min_b.x, min_b.y, max_b.z), (max_b.x, min_b.y, max_b.z),
+                (max_b.x, max_b.y, max_b.z), (min_b.x, max_b.y, max_b.z),
+            ]
+            cx = (min_b.x + max_b.x) / 2
+            cy = (min_b.y + max_b.y) / 2
+            cz = (min_b.z + max_b.z) / 2
+            bevel_dist = min(max_b.x - min_b.x, max_b.y - min_b.y, max_b.z - min_b.z) * 0.08
+
+            # Bevel handle: each corner nudged toward centre by bevel_dist
+            # All coords: 8 corners then 8 handle pts for line drawing
+            corner_pts = [(x, y, z) for (x,y,z) in corners]
+            handle_pts = [
+                (x + (cx - x) / max(abs(cx-x), 1e-6) * bevel_dist,
+                 y + (cy - y) / max(abs(cy-y), 1e-6) * bevel_dist,
+                 z + (cz - z) / max(abs(cz-z), 1e-6) * bevel_dist)
+                for (x,y,z) in corners
+            ]
+
+            all_pts = corner_pts + handle_pts  # 16 points total
+            self._frep_corner_coords.point.setValues(corner_pts)
+            self._frep_corner_pts.numPoints.setValue(len(corner_pts))
+
+            # Lines: corner i (index i) to handle i (index 8+i)
+            self._frep_handle_coords.point.setValues(all_pts)
+            num_verts = [2] * len(corners)
+            line_idx = []
+            for i in range(len(corners)):
+                line_idx.extend([i, 8 + i])
+            self._frep_handle_lines.numVertices.setValues(num_verts)
+        except Exception as e:
+            from . import dm_logger
+            dm_logger.debug(f"[FREP] _update_frep_corners failed: {e}")
+
+
+
 
     def _setup_coin_overlay(self, vobj):
         if not coin: return
@@ -464,9 +642,20 @@ class DMViewProvider:
 
     def updateData(self, fp, prop):
         from . import dm_logger
-        # dm_logger.debug(f"DMViewProvider.updateData: obj={fp.Label}, prop={prop}")
-        if not prop or prop in ["Points", "HandleIn", "HandleOut", "Closed", "EditMode"]:
+        if prop == "Shape" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":
+            # Called after execute() sets fp.Shape — safe to update Coin3D here
+            proxy = getattr(fp, "Proxy", None)
+            if proxy:
+                self._update_frep_mesh(
+                    getattr(proxy, "_frep_verts", None),
+                    getattr(proxy, "_frep_idx", None)
+                )
+                field = getattr(proxy, "FRepField", None)
+                if field:
+                    self._update_frep_corners(field)
+        elif not prop or prop in ["Points", "HandleIn", "HandleOut", "Closed", "EditMode"]:
             self._rebuild_control_cage(fp)
+
         
 
     def getIcon(self):

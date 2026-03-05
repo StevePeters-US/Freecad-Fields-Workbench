@@ -197,43 +197,28 @@ class MarchingCubesMesher(FRepMesher):
         pts3 = edge_pts[mi, ei[:, 1]]
         tri_verts = np.stack([pts1, pts2, pts3], axis=1)   # (N_tris, 3, 3)
 
-        # ── 7. Build mesh ─────────────────────────────────────────────────────
-        # AVOID makeShapeFromMesh — its topology stitching pass is O(n²) and
-        # accounts for >99% of total time.  Instead, pass flat float64 arrays
-        # directly to Mesh.Mesh and convert with a zero-tolerance shell build.
+        # ── 7. Return raw triangle arrays for Coin3D rendering ────────────────
+        # No Part.Shape / makeShapeFromMesh needed.
+        # Returns:
+        #   verts:    (N_tris*3, 3) float32  — one vertex per triangle corner (no dedup needed for rendering)
+        #   flat_idx: (N_tris*4,) int32     — flat [0,1,2,-1, 3,4,5,-1, ...] for SoIndexedFaceSet
         mesh_timer.start("mesh_build")
 
-        # Sub-stage 7a: list conversion (numpy -> Python tuples for Mesh API)
-        mesh_timer.start("mb_list_conv")
-        tv = tri_verts  # (N, 3, 3) float64
-        triangles = [
-            (tuple(tv[i, 0]), tuple(tv[i, 1]), tuple(tv[i, 2]))
-            for i in range(len(mi))
-        ]
-        mesh_timer.stop("mb_list_conv")
+        # Flat vertex array: each of the N_tris triangles has 3 unique vertices
+        flat_verts = tri_verts.reshape(-1, 3).astype(np.float32)  # (N_tris*3, 3)
 
-        # Sub-stage 7b: Mesh.Mesh construction
-        mesh_timer.start("mb_mesh_obj")
-        fc_mesh = Mesh.Mesh(triangles)
-        mesh_timer.stop("mb_mesh_obj")
-
-        # Sub-stage 7c: Shape conversion
-        # Use tolerance=0.0 to skip edge-stitching; for preview this is fine.
-        mesh_timer.start("mb_make_shape")
-        shape = Part.Shape()
-        shape.makeShapeFromMesh(fc_mesh.Topology, 0.0)  # 0 = no stitching
-        mesh_timer.stop("mb_make_shape")
-
-        # Sub-stage 7d: Solid (only for final commit; preview skips this)
-        mesh_timer.start("mb_make_solid")
-        try:
-            result = Part.makeSolid(shape)
-        except Exception:
-            result = shape
-        mesh_timer.stop("mb_make_solid")
+        # Sequential indices: tri i uses vertices [3i, 3i+1, 3i+2]
+        n_tris = len(mi)
+        base = np.arange(n_tris, dtype=np.int32) * 3   # [0, 3, 6, ...]
+        tri_idx = np.stack([base, base+1, base+2], axis=1)  # (N_tris, 3)
+        sentinel = np.full((n_tris, 1), -1, dtype=np.int32)
+        flat_idx = np.hstack([tri_idx, sentinel]).ravel()   # (N_tris*4,)
 
         mesh_timer.stop("mesh_build")
-        return result
+        return flat_verts, flat_idx
+
+
+
 
 
 class AdaptiveMCMesher(FRepMesher):
