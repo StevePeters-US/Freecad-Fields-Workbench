@@ -271,7 +271,7 @@ core/frep/                      ← F-Rep Module
 
 > Re-implement the creation tools to produce F-Rep objects instead of Part shapes.
 
-### 5a. Box Primitive Tool (Minimum LLM: Gemini Low)
+### [COMPLETED] 5a. Box Primitive Tool (Minimum LLM: Gemini Low)
 - **Goal**: Interactive 2-click box creation on the workplane, backed by `BoxField`.
 - **Files to read**: `tools/dm_base.py`, `core/frep_field.py`, `core/dm_object.py`
 - **Files to create**: `tools/primitive_tool.py`, `commands/cmd_primitive.py`
@@ -283,7 +283,7 @@ core/frep/                      ← F-Rep Module
   4. Register `DM_CreateBox` with hotkey `B`.
 - **Acceptance**: Click-drag-click creates a box visible in the viewport. The box participates in F-Rep booleans.
 
-### 5b. Sphere Primitive Tool (Minimum LLM: Gemini Flash)
+### [COMPLETED] 5b. Sphere Primitive Tool (Minimum LLM: Gemini Flash)
 - **Goal**: Interactive sphere creation — click sets center, drag sets radius.
 - **Files to read**: Same as 5a.
 - **Files to modify**: `tools/primitive_tool.py`, `commands/cmd_primitive.py`, `InitGui.py`
@@ -293,7 +293,7 @@ core/frep/                      ← F-Rep Module
   3. Meshes and displays.
 - **Acceptance**: Click → drag → sphere appears. Participates in F-Rep booleans.
 
-### 5c. Cylinder Primitive Tool (Minimum LLM: Gemini Low)
+### [COMPLETED] 5c. Cylinder Primitive Tool (Minimum LLM: Gemini Low)
 - **Goal**: Interactive cylinder creation — click sets center, drag sets radius, 2nd drag sets height.
 - **Files to read**: Same as 5a.
 - **Files to modify**: `tools/primitive_tool.py`, `commands/cmd_primitive.py`, `InitGui.py`

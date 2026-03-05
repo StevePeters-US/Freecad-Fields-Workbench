@@ -61,6 +61,7 @@ class DirectModelingWorkbench(Workbench):
             import commands.cmd_translate
             import commands.cmd_fill_curve
             import commands.cmd_edit
+            import commands.cmd_primitive
             
             # Import core modules
             import core as FCDirectModeling
@@ -70,6 +71,9 @@ class DirectModelingWorkbench(Workbench):
                 'DM_WorkPlane',
                 'DM_CreatePoint',
                 'DM_CreateCurve',
+                'DM_CreateBox',
+                'DM_CreateSphere',
+                'DM_CreateCylinder',
                 'DM_FillCurve',
                 'DM_EditObject',
                 'DM_Translate',
@@ -83,6 +87,9 @@ class DirectModelingWorkbench(Workbench):
                 'DM_WorkPlane',
                 'DM_CreatePoint',
                 'DM_CreateCurve',
+                'DM_CreateBox',
+                'DM_CreateSphere',
+                'DM_CreateCylinder',
                 'DM_FillCurve',
                 'DM_EditObject',
                 'DM_Translate',
