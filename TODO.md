@@ -5,7 +5,35 @@
 ## Bugs
 
 
-Curve points are not all being drawn in tool editor
+
+- **Curve points are not all being drawn in tool editor**
+
+- **Find missing icons or replace with valid references** `Gemini Low`
+  - **Goal**: Resolve "Cannot find icon: Part_Box/Sphere" warnings in the log when creating FRep primitives.
+  - **Files to read**: `commands/cmd_primitive.py`
+  - **Files to modify/create**: `commands/cmd_primitive.py` (or add icon files)
+  - **Steps**:
+    1. Identify available standard FreeCAD icons for primitives or create new SVG icons in the `resources` folder.
+    2. Update `CommandDMCreation._ICONS` mapping to valid existing ones or register new icons via `FreeCADGui.addIcon`.
+  - **Acceptance**: No more "Cannot find icon" warnings in DM creation tools.
+
+- **Investigate `_get_geometry_point` null shape F-Rep face hits** `Gemini Low`
+  - **Goal**: Fully support deep geometry snapping (vertex/edge detection) on FRep meshes instead of just using the generic hit point.
+  - **Files to read**: `tools/dm_base.py`, `core/frep_mesher.py`, `core/dm_object.py`
+  - **Files to modify/create**: `tools/dm_base.py`
+  - **Steps**:
+    1. Revisit `_get_geometry_point` to handle `obj.Shape.isNull()` appropriately while still providing deep topological snapping for FRep fields.
+    2. We might need to query the `FRepField` directly by reconstructing a local raycast to discover corners/edges of the FRep body without a real BRep `Part.Shape`.
+  - **Acceptance**: Snapping logic handles FRep fields gracefully and allows precise corner snapping.
+
+- **Fix Box Tool Workplane Respect** `Gemini Low`
+  - **Goal**: Ensure the box primitive tool correctly aligns and scales relative to the active workplane rather than the global coordinate system.
+  - **Files to read**: `tools/primitive_tool.py`, `core/work_plane.py`
+  - **Files to modify/create**: `tools/primitive_tool.py`
+  - **Steps**:
+    1. Update `BoxCreator`'s event handling or placement logic to multiply the generated box dimensions and positions by the workplane's coordinate system transform.
+    2. Verify that `get_point_on_plane` correctly returns points in the workplane's local space.
+  - **Acceptance**: When drawing a box on an angled workplane, the box aligns to the workplane's surface and extrudes along the workplane's normal.
 
 ### Viewport Plane Focus Hotkey (Minimum LLM: Gemini Low)
 - **Goal**: Add a hotkey to instantly orient the camera to face the active curve's plane (or a plane derived from 3 points for a 3D curve).
@@ -36,6 +64,61 @@ Curve points are not all being drawn in tool editor
   3. Add `snap_to_radius(point, radius)` — snaps to a circle of given radius from center.
   4. Wire snapping into `get_point_on_plane()` with toggle via DM Settings.
 - **Acceptance**: Points placed near grid intersections snap to them. Snap modes are toggleable.
+
+---
+---
+
+## Refactor: AnalyticField & Code Cleanup
+
+### Implement `AnalyticField` Base Class `Gemini Low`
+- **Goal**: Replace the empty `MarchingCubesField` with a meaningful `AnalyticField` base class that represents any field defined by a closed-form SDF formula. Move MC primitives from `core/frep/marching_cubes/` to `core/frep/analytic/`.
+- **Files to read**: `core/frep/frep_field.py`, `core/frep/marching_cubes/mc_field.py`, `core/frep/marching_cubes/box.py`, `core/frep/marching_cubes/sphere.py`, `core/frep/marching_cubes/cylinder.py`, `core/frep/marching_cubes/plane.py`
+- **Files to modify/create**: `core/frep/analytic/analytic_field.py` [NEW], `core/frep/analytic/box.py` [NEW], `core/frep/analytic/sphere.py` [NEW], `core/frep/analytic/cylinder.py` [NEW], `core/frep/analytic/plane.py` [NEW]; update all imports in `tools/primitive_tool.py`, `core/frep/frep_composer.py`, `core/dm_object.py`
+- **Steps**:
+  1. Create `core/frep/analytic/analytic_field.py` with `class AnalyticField(FRepField)` that documents the formula-field contract (subclasses must override `evaluate`, `evaluate_grid`, and `bounding_box`).
+  2. Move existing MC primitives to `core/frep/analytic/`, renaming `MCBoxField` → `AnalyticBoxField`, etc.
+  3. Update all imports across the codebase.
+  4. Delete the now-unused `core/frep/marching_cubes/mc_field.py`.
+  5. Delete the empty `AdaptiveField` and `NurbsField` stubs (they can be recreated when actually needed).
+- **Acceptance**: All existing MC primitives work identically but inherit from `AnalyticField`. No import errors. Marching cubes mesher still works with the renamed fields.
+
+### Enforce `bounding_box()` Contract `Gemini Flash`
+- **Goal**: Make `FRepField.bounding_box()` raise `NotImplementedError` instead of returning a 20km³ default, preventing silent performance bugs.
+- **Files to read**: `core/frep/frep_field.py`
+- **Files to modify**: `core/frep/frep_field.py`
+- **Steps**:
+  1. Change `FRepField.bounding_box()` to raise `NotImplementedError("Subclasses must implement bounding_box()")`.
+  2. Verify all concrete field subclasses (box, sphere, cylinder, plane, composers) already override it.
+- **Acceptance**: Any new field that forgets `bounding_box()` immediately fails with a clear error instead of silently sampling a huge grid.
+
+### Consolidate `to_local()` Closures in BoxCreator `Gemini Flash`
+- **Goal**: Remove duplicate `to_local()` closure functions inside `BoxCreator._make_field()` and `BoxCreator._get_final_points()`, using the inherited `DMBase.to_local()` instead.
+- **Files to read**: `tools/dm_base.py`, `tools/primitive_tool.py`
+- **Files to modify**: `tools/primitive_tool.py`
+- **Steps**:
+  1. In `_make_field()`, replace the inline `to_local(p)` closure with `self.to_local(p)`.
+  2. In `_get_final_points()`, replace both `to_local()` and `to_global()` closures with `self.to_local()` and `self.to_global()`.
+  3. Verify box creation still works on both default and custom workplanes.
+- **Acceptance**: No inline `to_local` / `to_global` closures remain in `BoxCreator`. Box tool produces identical results.
+
+### Unify Tool Cleanup Lifecycle `Gemini Low`
+- **Goal**: Merge the parallel cleanup paths in `PrimitiveCreatorBase._do_terminate()` and `NURBSPrimitiveCreator.terminate()` to eliminate duplication and prevent missed cleanup.
+- **Files to read**: `tools/primitive_tool.py`, `tools/dm_base.py`
+- **Files to modify**: `tools/dm_base.py`, `tools/primitive_tool.py`
+- **Steps**:
+  1. Audit both cleanup methods and identify shared logic (removing active/preview objects, clearing callbacks).
+  2. Consolidate into a single `_do_terminate()` chain that both FRep and NURBS tools use.
+  3. Ensure `_finished` guard and QTimer deferral are consistent across all paths.
+- **Acceptance**: All tools (box, sphere, cylinder, curve, workplane, translate) terminate cleanly without stale objects or callbacks.
+
+### Add Bounding Box Utility Helpers `Gemini Flash`
+- **Goal**: Extract the repeated min/max bounding box merge logic from `UnionField.bounding_box()` and `IntersectionField.bounding_box()` into a shared utility.
+- **Files to read**: `core/frep/frep_composer.py`
+- **Files to modify**: `core/frep/frep_composer.py`
+- **Steps**:
+  1. Add `_merge_bb(bb_a, bb_b, mode='union')` helper that computes the spatial union (min of mins, max of maxes) or intersection (max of mins, min of maxes) of two bounding boxes.
+  2. Refactor `UnionField.bounding_box()` and `IntersectionField.bounding_box()` to use the helper.
+- **Acceptance**: Boolean field bounding boxes produce identical results. Code is DRYer.
 
 ---
 ---

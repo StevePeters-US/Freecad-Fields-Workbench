@@ -86,7 +86,7 @@ class DMBase:
     # Class-level reference to the currently active tool to allow 
     # global event filters (like right-click suppression) to reach it.
     active_tool = None
-    place_on_geometry = False
+    place_on_geometry = True
 
     def __init__(self):
         if DMBase.active_tool and hasattr(DMBase.active_tool, 'terminate'):
@@ -243,6 +243,12 @@ class DMBase:
                     
                 subname = info["Component"]
                 if "Face" in subname:
+                    if obj.Shape.isNull():
+                        if 'x' in info and 'y' in info and 'z' in info:
+                            world_pt = FreeCAD.Vector(info['x'], info['y'], info['z'])
+                            return world_pt
+                        continue
+
                     face = obj.Shape.getElement(subname)
                     import Part
                     ray_p, ray_d = _get_view_ray(self.view, pos[0], pos[1])
@@ -704,20 +710,7 @@ class DMBase:
             self.update_ui()
             
         elif self.state == 2:
-            # Standard height drag calculation
-            current_screen_y = event_dict["Position"][1]
-            if self.drag_start_screen_y is not None:
-                delta = current_screen_y - self.drag_start_screen_y
-                self.apply_height(delta / 4.0)
-            
             self.on_move_state_2(event_dict)
-            
-            # Show crosshair at the top
-            n, o = self.get_base_plane()
-            if o and hasattr(self, "height"):
-                o = o + n * self.height
-            
-            self.current_point = raw_pt
             self.update_preview()
             self.update_ui()
 

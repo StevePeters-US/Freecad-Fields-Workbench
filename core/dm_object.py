@@ -73,8 +73,12 @@ def get_max_bounds():
 def set_max_bounds(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetFloat("MaxBounds", float(val))
 
+def get_perf_profiler_enabled():
+    """Return whether the performance profiler is enabled."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("EnablePerfProfiler", False)
 
-
+def set_perf_profiler_enabled(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetBool("EnablePerfProfiler", bool(val))
 
 
 
@@ -465,42 +469,63 @@ class DMViewProvider:
         if not coin or not hasattr(self, "_frep_corner_coords") or self._frep_corner_coords is None:
             return
         try:
-            import numpy as np
-            # Extract axis-aligned corners from the bounding box.
-            # Works for any field that returns a sensible bounding_box().
-            min_b, max_b = field.bounding_box()
-            corners = [
-                (min_b.x, min_b.y, min_b.z), (max_b.x, min_b.y, min_b.z),
-                (max_b.x, max_b.y, min_b.z), (min_b.x, max_b.y, min_b.z),
-                (min_b.x, min_b.y, max_b.z), (max_b.x, min_b.y, max_b.z),
-                (max_b.x, max_b.y, max_b.z), (min_b.x, max_b.y, max_b.z),
-            ]
-            cx = (min_b.x + max_b.x) / 2
-            cy = (min_b.y + max_b.y) / 2
-            cz = (min_b.z + max_b.z) / 2
-            bevel_dist = min(max_b.x - min_b.x, max_b.y - min_b.y, max_b.z - min_b.z) * 0.08
+            import FreeCAD as _FC
+            # Use actual local-space corners transformed to world space via the field's placement.
+            # For MCBoxField this gives true oriented box corners, not AABB corners.
+            placement = getattr(field, "placement", None)
+            center = getattr(field, "center", None)
+            half_size = getattr(field, "half_size", None)
 
-            # Bevel handle: each corner nudged toward centre by bevel_dist
-            # All coords: 8 corners then 8 handle pts for line drawing
-            corner_pts = [(x, y, z) for (x,y,z) in corners]
+            if center is not None and half_size is not None:
+                # Build 8 local corners
+                c = center
+                h = half_size
+                local_corners = [
+                    _FC.Vector(c.x - h.x, c.y - h.y, c.z - h.z),
+                    _FC.Vector(c.x + h.x, c.y - h.y, c.z - h.z),
+                    _FC.Vector(c.x + h.x, c.y + h.y, c.z - h.z),
+                    _FC.Vector(c.x - h.x, c.y + h.y, c.z - h.z),
+                    _FC.Vector(c.x - h.x, c.y - h.y, c.z + h.z),
+                    _FC.Vector(c.x + h.x, c.y - h.y, c.z + h.z),
+                    _FC.Vector(c.x + h.x, c.y + h.y, c.z + h.z),
+                    _FC.Vector(c.x - h.x, c.y + h.y, c.z + h.z),
+                ]
+                if placement is not None:
+                    world_corners = [placement.multVec(lc) for lc in local_corners]
+                else:
+                    world_corners = local_corners
+                corners = [(v.x, v.y, v.z) for v in world_corners]
+                wc = sum((v.x for v in world_corners), 0.0) / 8
+                hc = sum((v.y for v in world_corners), 0.0) / 8
+                dc = sum((v.z for v in world_corners), 0.0) / 8
+                bevel_dist = min(h.x, h.y, h.z) * 0.08
+            else:
+                # Generic fallback: use AABB
+                min_b, max_b = field.bounding_box()
+                corners = [
+                    (min_b.x, min_b.y, min_b.z), (max_b.x, min_b.y, min_b.z),
+                    (max_b.x, max_b.y, min_b.z), (min_b.x, max_b.y, min_b.z),
+                    (min_b.x, min_b.y, max_b.z), (max_b.x, min_b.y, max_b.z),
+                    (max_b.x, max_b.y, max_b.z), (min_b.x, max_b.y, max_b.z),
+                ]
+                wc = (min_b.x + max_b.x) / 2
+                hc = (min_b.y + max_b.y) / 2
+                dc = (min_b.z + max_b.z) / 2
+                bevel_dist = min(max_b.x - min_b.x, max_b.y - min_b.y, max_b.z - min_b.z) * 0.08
+
+            corner_pts = list(corners)
             handle_pts = [
-                (x + (cx - x) / max(abs(cx-x), 1e-6) * bevel_dist,
-                 y + (cy - y) / max(abs(cy-y), 1e-6) * bevel_dist,
-                 z + (cz - z) / max(abs(cz-z), 1e-6) * bevel_dist)
+                (x + (wc - x) / max(abs(wc-x), 1e-6) * bevel_dist,
+                 y + (hc - y) / max(abs(hc-y), 1e-6) * bevel_dist,
+                 z + (dc - z) / max(abs(dc-z), 1e-6) * bevel_dist)
                 for (x,y,z) in corners
             ]
 
-            all_pts = corner_pts + handle_pts  # 16 points total
+            all_pts = corner_pts + handle_pts
             self._frep_corner_coords.point.setValues(corner_pts)
             self._frep_corner_pts.numPoints.setValue(len(corner_pts))
-
-            # Lines: corner i (index i) to handle i (index 8+i)
             self._frep_handle_coords.point.setValues(all_pts)
-            num_verts = [2] * len(corners)
-            line_idx = []
-            for i in range(len(corners)):
-                line_idx.extend([i, 8 + i])
-            self._frep_handle_lines.numVertices.setValues(num_verts)
+            self._frep_handle_lines.numVertices.setValues([2] * len(corners))
         except Exception as e:
             from . import dm_logger
             dm_logger.debug(f"[FREP] _update_frep_corners failed: {e}")

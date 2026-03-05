@@ -54,6 +54,13 @@ class _SettingsDialog(QtGui.QDialog):
         self._log_check.setToolTip("Enable persistent crash logging to DirectModeling.log")
         layout.addRow("Enable Crash Logs:", self._log_check)
 
+        # Performance Profiler
+        from core.dm_object import get_perf_profiler_enabled
+        self._perf_check = QtGui.QCheckBox()
+        self._perf_check.setChecked(get_perf_profiler_enabled())
+        self._perf_check.setToolTip("Enable detailed mesh generation performance logging")
+        layout.addRow("Enable Performance Profiler:", self._perf_check)
+
         # Line Width spinbox
         self._lw_spin = QtGui.QDoubleSpinBox()
         self._lw_spin.setRange(0.5, 20.0)
@@ -99,7 +106,7 @@ class _SettingsDialog(QtGui.QDialog):
     def _on_accept(self):
         from core.dm_object import (set_show_wireframe, set_line_width, set_point_size, 
                                     set_picking_radius, set_frep_storage_type, 
-                                    set_max_bounds, refresh_all_dm_objects)
+                                    set_max_bounds, set_perf_profiler_enabled, refresh_all_dm_objects)
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()
@@ -113,6 +120,7 @@ class _SettingsDialog(QtGui.QDialog):
         set_picking_radius(pr)
         set_frep_storage_type(frep)
         set_max_bounds(mb)
+        set_perf_profiler_enabled(self._perf_check.isChecked())
         
         from core.dm_logger import set_enable_crash_log
         set_enable_crash_log(self._log_check.isChecked())

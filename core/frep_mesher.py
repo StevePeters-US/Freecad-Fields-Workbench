@@ -58,6 +58,11 @@ class MeshTimer:
 
     def summary(self, label: str = "FRep Mesh"):
         """Emit one INFO log with totals and per-call averages, then reset."""
+        from core.dm_object import get_perf_profiler_enabled
+        if not get_perf_profiler_enabled():
+            self.reset()
+            return
+            
         if self._calls == 0:
             return
         n = self._calls

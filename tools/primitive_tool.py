@@ -25,6 +25,9 @@ class PrimitiveCreatorBase(DMBase):
         self._update_pending = False  # Throttle rapid updates
         # Reset the shared timer so preview calls for this tool session are isolated
         mesh_timer.reset()
+        # Primitive creation must snap to workplane, not arbitrary geometry surfaces.
+        # Individual instances shadow the class variable to avoid changing global state.
+        self.place_on_geometry = False
 
     def _get_preview_field(self):
         """Subclasses return the current field based on click state + current_point."""
@@ -140,39 +143,89 @@ class BoxCreator(PrimitiveCreatorBase):
         super().__init__()
         self.points = []
         self.current_point = None
+        self._height_drag_screen_y = None
+        self._height_drag_base = None
+        # Pre-load the active workplane so preview is correct before the 1st click
+        visible_wps = self.get_visible_workplanes()
+        if visible_wps:
+            self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
         dm_logger.info("Box Tool: Click 1st corner")
 
     def on_button1_down(self, event_dict):
-        pos = self.get_mouse_world_pos(event_dict)
+        pos = self.get_mouse_plane_pt(event_dict)
         if pos is None:
             return True
 
         if len(self.points) == 0:
             self.points.append(pos)
+            # Lock working_plane from the active workplane for consistent transforms
+            if not getattr(self, "working_plane", None):
+                visible_wps = self.get_visible_workplanes()
+                if visible_wps:
+                    self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
+            wp = getattr(self, "working_plane", None)
+            loc = wp.inverse().multVec(pos) if wp else pos
+            dm_logger.info(f"Box P0 (1st corner): world=({pos.x:.2f},{pos.y:.2f},{pos.z:.2f})  local=({loc.x:.2f},{loc.y:.2f},{loc.z:.2f})")
+            if wp:
+                dm_logger.debug(f"  Working plane Base=({wp.Base.x:.2f},{wp.Base.y:.2f},{wp.Base.z:.2f})  Normal={wp.Rotation.multVec(FreeCAD.Vector(0,0,1))}")
             dm_logger.info("Box Tool: Click 2nd corner")
         elif len(self.points) == 1:
             self.points.append(pos)
+            self.state = 2  # Switch to height-drag mode
+            # Record screen Y for height drag
+            self._height_drag_screen_y = event_dict["Position"][1]
+            self._height_drag_base = pos  # world point where height drag starts
+            wp = getattr(self, "working_plane", None)
+            loc = wp.inverse().multVec(pos) if wp else pos
+            loc0 = wp.inverse().multVec(self.points[0]) if wp else self.points[0]
+            dm_logger.info(f"Box P1 (2nd corner): world=({pos.x:.2f},{pos.y:.2f},{pos.z:.2f})  local=({loc.x:.2f},{loc.y:.2f},{loc.z:.2f})")
+            dm_logger.info(f"  Footprint local size: dx={abs(loc.x-loc0.x):.2f}  dy={abs(loc.y-loc0.y):.2f}")
             dm_logger.info("Box Tool: Click height")
         elif len(self.points) == 2:
-            self.points.append(pos)
-            self.current_point = pos
+            self.points.append(self.current_point)
+            wp = getattr(self, "working_plane", None)
+            hp = self.current_point
+            hp_loc = wp.inverse().multVec(hp) if wp else hp
+            p0_loc = wp.inverse().multVec(self.points[0]) if wp else self.points[0]
+            dm_logger.info(f"Box P2 (height): world=({hp.x:.2f},{hp.y:.2f},{hp.z:.2f})  local=({hp_loc.x:.2f},{hp_loc.y:.2f},{hp_loc.z:.2f})")
+            dm_logger.info(f"  Height (local Z delta from P0): {abs(hp_loc.z - p0_loc.z):.2f}")
             self._finalize_object("Box")
 
         return True
 
     def on_move_state_1(self, event_dict):
-        self.current_point = self.get_mouse_world_pos(event_dict)
+        self.current_point = self.get_mouse_plane_pt(event_dict)
 
     def on_move_state_2(self, event_dict):
-        self.current_point = self.get_mouse_world_pos(event_dict)
+        """Height drag: move current_point along workplane normal proportional to screen Y delta."""
+        if not hasattr(self, "_height_drag_screen_y") or self._height_drag_base is None:
+            return
+        screen_y = event_dict["Position"][1]
+        delta_px = screen_y - self._height_drag_screen_y
+        # Scale: how many mm of height per pixel (rough, view-distance based)
+        # Positive screen Y goes down → negative normal direction → invert
+        height_mm = -delta_px / 4.0
+        
+        wp = getattr(self, "working_plane", None)
+        if wp is not None:
+            normal = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
+        else:
+            normal = FreeCAD.Vector(0, 0, 1)
+        
+        # current_point = base point of height drag + normal * height
+        self.current_point = self._height_drag_base + normal * height_mm
 
     def _get_preview_field(self):
         if not self.points or self.current_point is None:
             return None
         if len(self.points) == 1:
-            p1 = self.points[0]
-            p2 = FreeCAD.Vector(self.current_point.x, self.current_point.y, p1.z)
-            return self._make_field(p1, p2, p1)
+            # Footprint preview: hold local Z constant at first point
+            loc_p1 = self.to_local(self.points[0])
+            loc_cur = self.to_local(self.current_point)
+            # clamp local Z so footprint stays flat on the workplane
+            loc_p2 = FreeCAD.Vector(loc_cur.x, loc_cur.y, loc_p1.z)
+            p2 = self.to_global(loc_p2)
+            return self._make_field(self.points[0], p2, self.points[0])
         elif len(self.points) == 2:
             return self._make_field(self.points[0], self.points[1], self.current_point)
         return None
@@ -183,27 +236,51 @@ class BoxCreator(PrimitiveCreatorBase):
         return None
 
     def _make_field(self, p1, p2, p3):
-        size_x = abs(p2.x - p1.x)
-        size_y = abs(p2.y - p1.y)
-        size_z = abs(p3.z - p2.z)
+        wp = getattr(self, "working_plane", None)
+        
+        def to_local(p):
+            if wp is not None:
+                return wp.inverse().multVec(p)
+            return p
+        
+        loc_p1 = to_local(p1)
+        loc_p2 = to_local(p2)
+        loc_p3 = to_local(p3)
+        
+        size_x = abs(loc_p2.x - loc_p1.x)
+        size_y = abs(loc_p2.y - loc_p1.y)
+        # Height = distance of 3rd point along local Z from the base plane (local Z midpoint of p1 and p3)
+        size_z = abs(loc_p3.z - loc_p1.z)
         if size_x < 0.01 or size_y < 0.01:
             return None
-        cx = (p1.x + p2.x) / 2.0
-        cy = (p1.y + p2.y) / 2.0
-        cz = (p2.z + p3.z) / 2.0
-        return MCBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(size_x, size_y, max(size_z, 0.01)))
+            
+        cx = (loc_p1.x + loc_p2.x) / 2.0
+        cy = (loc_p1.y + loc_p2.y) / 2.0
+        cz = (loc_p1.z + loc_p3.z) / 2.0
+        
+        return MCBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(size_x, size_y, max(size_z, 0.01)), placement=wp)
 
     def _get_final_points(self):
         if len(self.points) < 3:
             return None
-        p1, p2, p3 = self.points
-        size_x = abs(p2.x - p1.x)
-        size_y = abs(p2.y - p1.y)
-        size_z = abs(p3.z - p2.z)
-        cx = (p1.x + p2.x) / 2.0
-        cy = (p1.y + p2.y) / 2.0
-        cz = (p2.z + p3.z) / 2.0
-        return [
+        wp = getattr(self, "working_plane", None)
+        def to_local(p):
+            return wp.inverse().multVec(p) if wp is not None else p
+        def to_global(p):
+            return wp.multVec(p) if wp is not None else p
+
+        loc_p1 = to_local(self.points[0])
+        loc_p2 = to_local(self.points[1])
+        loc_p3 = to_local(self.points[2])
+        
+        size_x = abs(loc_p2.x - loc_p1.x)
+        size_y = abs(loc_p2.y - loc_p1.y)
+        size_z = abs(loc_p3.z - loc_p1.z)
+        cx = (loc_p1.x + loc_p2.x) / 2.0
+        cy = (loc_p1.y + loc_p2.y) / 2.0
+        cz = (loc_p1.z + loc_p3.z) / 2.0
+        
+        pts_local = [
             FreeCAD.Vector(cx - size_x/2, cy - size_y/2, cz - size_z/2),
             FreeCAD.Vector(cx + size_x/2, cy - size_y/2, cz - size_z/2),
             FreeCAD.Vector(cx + size_x/2, cy + size_y/2, cz - size_z/2),
@@ -213,6 +290,7 @@ class BoxCreator(PrimitiveCreatorBase):
             FreeCAD.Vector(cx + size_x/2, cy + size_y/2, cz + size_z/2),
             FreeCAD.Vector(cx - size_x/2, cy + size_y/2, cz + size_z/2),
         ]
+        return [to_global(pt) for pt in pts_local]
 
 
 class SphereCreator(PrimitiveCreatorBase):
