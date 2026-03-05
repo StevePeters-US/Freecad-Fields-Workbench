@@ -1,3 +1,4 @@
+import numpy as np
 import FreeCAD
 import math
 from core.frep.marching_cubes.mc_field import MarchingCubesField
@@ -12,22 +13,34 @@ class MCCylinderField(MarchingCubesField):
         self.height = height
 
     def evaluate(self, point: FreeCAD.Vector) -> float:
-        # Vector from base to point
         pa = point - self.base_center
-        # Distance along axis
         h = pa.dot(self.axis)
-        
-        # Radial vector relative to axis
         radial_vec = pa - self.axis * h
         d_radial = radial_vec.Length - self.radius
-        
-        # Caps SDF (distance from the [0, height] interval)
         h_center = h - (self.height / 2.0)
         d_axial = abs(h_center) - (self.height / 2.0)
-        
         out_dist = FreeCAD.Vector(max(d_radial, 0.0), max(d_axial, 0.0), 0).Length
         in_dist = min(max(d_radial, d_axial), 0.0)
         return out_dist + in_dist
+
+    def evaluate_grid(self, points: np.ndarray) -> np.ndarray:
+        """Vectorized cylinder SDF over (N, 3) points."""
+        c = np.array([self.base_center.x, self.base_center.y, self.base_center.z])
+        ax = np.array([self.axis.x, self.axis.y, self.axis.z])
+
+        pa = points - c                             # (N, 3) vectors from base center
+        h = pa @ ax                                 # (N,) projection along axis
+        radial = pa - np.outer(h, ax)              # (N, 3) radial component
+        d_radial = np.linalg.norm(radial, axis=1) - self.radius  # (N,)
+
+        h_center = h - self.height / 2.0
+        d_axial = np.abs(h_center) - self.height / 2.0            # (N,)
+
+        d_r_pos = np.maximum(d_radial, 0.0)
+        d_a_pos = np.maximum(d_axial, 0.0)
+        out_dist = np.sqrt(d_r_pos**2 + d_a_pos**2)
+        in_dist = np.minimum(np.maximum(d_radial, d_axial), 0.0)
+        return (out_dist + in_dist).astype(np.float32)
 
     def bounding_box(self):
         center = self.base_center + self.axis * (self.height / 2.0)

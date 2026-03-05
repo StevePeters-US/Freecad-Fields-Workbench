@@ -3,6 +3,7 @@ import FreeCADGui
 from PySide import QtCore
 from core import dm_logger
 from core.dm_object import create_dm_object, get_frep_storage_type
+from core.frep_mesher import mesh_timer
 from tools.dm_base import DMBase
 
 # Ensure we import the right storage classes. For now, defaulting to MarchingCubes
@@ -22,6 +23,8 @@ class PrimitiveCreatorBase(DMBase):
         super().__init__()
         self._preview_obj = None     # Live FreeCAD object for preview
         self._update_pending = False  # Throttle rapid updates
+        # Reset the shared timer so preview calls for this tool session are isolated
+        mesh_timer.reset()
 
     def _get_preview_field(self):
         """Subclasses return the current field based on click state + current_point."""
@@ -97,13 +100,15 @@ class PrimitiveCreatorBase(DMBase):
             except Exception:
                 pass
 
-        # Upgrade resolution for final mesh by temporarily override the mesher resolution
-        # We do this by storing desired resolution on the field itself as a hint
+        # Upgrade resolution for final mesh
+        primitive_name = type(self).__name__.replace("Creator", "")
         proxy = obj.Proxy
         proxy.FRepField = field
         proxy._final_resolution = _FINAL_RES
         obj.touch()
         obj.Document.recompute([obj])
+        # Print accumulated timer summary now that the tool is accepted
+        mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_RES} res) + final ({_FINAL_RES} res)")
         self._preview_obj = None  # Severed; the object is now the user's
 
     def _do_terminate(self):
