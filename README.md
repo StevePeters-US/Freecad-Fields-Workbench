@@ -78,47 +78,52 @@ Freecad-Direct-Modeling/
 ├── TODO.md                        # Task breakdown (self-contained, LLM-friendly)
 ├── COMPLETED.md                   # Archive of completed tasks
 │
+├── AntiGravity_Skills/            # [NEW] Agent Skills
+│   ├── readme_folder_structure_updater.md # Skill to update this listing
+│   ├── readme_generator.md        # Skill to generate this README
+│   ├── todo_generator.md          # Skill to generate task outlines
+│   └── todo_task_completed.md     # Skill to move completed tasks
+│
 ├── core/                          # Core logic
 │   ├── __init__.py
 │   ├── dm_logger.py               # Centralized logging (FreeCAD Console + file)
 │   ├── dm_object.py               # DMObjectProxy, DMViewProvider, factory
 │   ├── dm_part.py                 # DM_Part FeaturePython wrapper
+│   ├── dm_workplane.py            # DMWorkPlane FeaturePython object
+│   ├── frep_mesher.py             # Isosurface extraction (marching cubes / DC)
+│   ├── input_manager.py           # Global input event routing
 │   ├── nurbs_geometry.py          # DMPoint, DMCurve — NURBS primitives
 │   ├── work_plane.py              # WorkPlaneManager — Coin3D grid & snapping
-│   ├── dm_workplane.py            # DMWorkPlane FeaturePython object
-│   ├── input_manager.py           # Global input event routing
-│   ├── frep/                      # [NEW] F-Rep Engine
-│   │   ├── frep_field.py          # Abstract base FRepField
-│   │   ├── frep_composer.py       # Boolean composition tree (min/max/blend)
-│   │   ├── marching_cubes/        # Storage Type 0 primitives
-│   │   ├── adaptive/              # Storage Type 1 primitives
-│   │   └── nurbs/                 # Storage Type 2 primitives
-│   └── frep_mesher.py             # [NEW] Isosurface extraction (marching cubes / DC)
+│   └── frep/                      # F-Rep Engine
+│       ├── frep_field.py          # Abstract base FRepField
+│       ├── frep_composer.py       # Boolean composition tree (min/max/blend)
+│       ├── marching_cubes/        # Storage Type 0 primitives
+│       ├── adaptive/              # Storage Type 1 primitives
+│       └── nurbs/                 # Storage Type 2 primitives
 │
 ├── tools/                         # Interactive creation tools
 │   ├── __init__.py
-│   ├── dm_base.py                 # Base class for all interactive tools
-│   ├── point_tool.py              # Point placement
 │   ├── curve_tool.py              # BSpline curve drawing
+│   ├── dm_base.py                 # Base class for all interactive tools
 │   ├── edit_tool.py               # Control point editing
+│   ├── point_tool.py              # Point placement
+│   ├── primitive_tool.py          # Parametric primitives (box, sphere, etc.)
 │   ├── translate_tool.py          # Move/translate
-│   ├── work_plane_tool.py         # Workplane creation & scaling
-│   ├── surface_tool.py            # [NEW] NURBS surface from curves
-│   └── primitive_tool.py          # [NEW] Parametric primitives (box, sphere, etc.)
+│   └── work_plane_tool.py         # Workplane creation & scaling
 │
 ├── commands/                      # FreeCADGui command definitions
 │   ├── __init__.py
-│   ├── cmd_point.py               # DM_CreatePoint
-│   ├── cmd_curve.py               # DM_CreateCurve
-│   ├── cmd_fill_curve.py          # DM_FillCurve
-│   ├── cmd_edit.py                # DM_EditObject
 │   ├── cmd_boolean.py             # DM_Fuse / DM_Cut / DM_Common
-│   ├── cmd_workplane.py           # DM_WorkPlane
-│   ├── cmd_sketcher.py            # DM_OpenSketcher
+│   ├── cmd_curve.py               # DM_CreateCurve
+│   ├── cmd_edit.py                # DM_EditObject
+│   ├── cmd_fill_curve.py          # DM_FillCurve
+│   ├── cmd_install_deps.py        # Dependency installation script
+│   ├── cmd_point.py               # DM_CreatePoint
+│   ├── cmd_primitive.py           # DM_CreateBox / Sphere / Cylinder
 │   ├── cmd_settings.py            # DM_Settings dialog
+│   ├── cmd_sketcher.py            # DM_OpenSketcher
 │   ├── cmd_translate.py           # DM_Translate
-│   ├── cmd_surface.py             # [NEW] DM_CreateSurface
-│   └── cmd_primitive.py           # [NEW] DM_CreateBox / Sphere / Cylinder
+│   └── cmd_workplane.py           # DM_WorkPlane
 │
 └── resources/
     ├── resources.qrc

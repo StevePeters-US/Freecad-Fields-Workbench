@@ -1,33 +1,11 @@
 # FreeCAD Direct Modeling — TODO
 
-## How to Write a Task
-
-Each task must be **self-contained** so an LLM or developer can complete it with
-no prior context beyond the files listed. Follow this template:
-
-```markdown
-- **Task Title** (Minimum LLM: Gemini Flash/Low/High)
-  - **Goal**: One sentence describing the desired outcome.
-  - **Files to read**: List every file the implementer must read first.
-  - **Files to modify/create**: List files that will change.
-  - **Steps**:
-    1. First concrete step…
-    2. Second step…
-  - **Acceptance**: How to verify the task is done.
-```
-
-- Move completed tasks to `COMPLETED.md` when a milestone is reached.
-- Sort by required LLM within each section (Flash first, High last).
-- We have as options Gemini Flash, Low, and High. Only use Claude for very difficult programming issues.
-
----
 ---
 
-## Phase 0: Stabilize Existing Tools
+## Bugs
 
-> These tasks fix known issues in the current codebase before building the F-Rep pipeline.
 
-- [x] Curve points are not all being drawn in tool editor
+Curve points are not all being drawn in tool editor
 
 ### Viewport Plane Focus Hotkey (Minimum LLM: Gemini Low)
 - **Goal**: Add a hotkey to instantly orient the camera to face the active curve's plane (or a plane derived from 3 points for a 3D curve).
@@ -47,14 +25,6 @@ no prior context beyond the files listed. Follow this template:
   2. Calculate the handle angle, round to the nearest increment, and enforce the output vector.
 - **Acceptance**: Holding the modifier tightly snaps the handle angle.
 
-### [COMPLETED] Fix Workplane 'Place on Geometry' Toggle (Minimum LLM: Gemini Flash)
-- **Goal**: Ensure the workplane tool respects the "Place on Geometry" toggle in the context menu.
-- **Files to read**: `tools/work_plane_tool.py`, `tools/dm_base.py`
-- **Files to modify**: `tools/work_plane_tool.py`
-- **Steps**:
-  1. Update `get_snapped_placement` to check `self.place_on_geometry` before performing hit tests.
-  2. If False, return `None` to bypass face snapping.
-- **Acceptance**: With the toggle OFF, the workplane preview does not snap to geometry faces.
 
 ### Workplane Snapping Improvements (Minimum LLM: Gemini Low)
 - **Goal**: Add snap-to-grid, snap-to-center, and snap-to-radius for the workplane.
@@ -271,37 +241,7 @@ core/frep/                      ← F-Rep Module
 
 > Re-implement the creation tools to produce F-Rep objects instead of Part shapes.
 
-### [COMPLETED] 5a. Box Primitive Tool (Minimum LLM: Gemini Low)
-- **Goal**: Interactive 2-click box creation on the workplane, backed by `BoxField`.
-- **Files to read**: `tools/dm_base.py`, `core/frep_field.py`, `core/dm_object.py`
-- **Files to create**: `tools/primitive_tool.py`, `commands/cmd_primitive.py`
-- **Files to modify**: `core/dm_object.py`, `InitGui.py`
-- **Steps**:
-  1. `BoxCreator` extends `DMBase` — 1st click sets corner, drag sets footprint, 2nd click sets height.
-  2. On accept, create a `BoxField` with the specified dimensions, positioned at the workplane.
-  3. Wire through the mesher for display.
-  4. Register `DM_CreateBox` with hotkey `B`.
-- **Acceptance**: Click-drag-click creates a box visible in the viewport. The box participates in F-Rep booleans.
 
-### [COMPLETED] 5b. Sphere Primitive Tool (Minimum LLM: Gemini Flash)
-- **Goal**: Interactive sphere creation — click sets center, drag sets radius.
-- **Files to read**: Same as 5a.
-- **Files to modify**: `tools/primitive_tool.py`, `commands/cmd_primitive.py`, `InitGui.py`
-- **Steps**:
-  1. `SphereCreator` — click sets center, drag sets radius.
-  2. Creates a `SphereField`.
-  3. Meshes and displays.
-- **Acceptance**: Click → drag → sphere appears. Participates in F-Rep booleans.
-
-### [COMPLETED] 5c. Cylinder Primitive Tool (Minimum LLM: Gemini Low)
-- **Goal**: Interactive cylinder creation — click sets center, drag sets radius, 2nd drag sets height.
-- **Files to read**: Same as 5a.
-- **Files to modify**: `tools/primitive_tool.py`, `commands/cmd_primitive.py`, `InitGui.py`
-- **Steps**:
-  1. `CylinderCreator` — click sets center, drag sets radius, 2nd drag sets height.
-  2. Creates a `CylinderField` (inherently finite via capping planes).
-  3. Meshes and displays.
-- **Acceptance**: Interactive cylinder creation produces a renderable field object.
 
 ---
 ---

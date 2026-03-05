@@ -4,7 +4,21 @@ Tasks moved here from `TODO.md` after verification.
 
 ---
 
+## 🪄 Interactive Primitive Tools (F-Rep Backed)
+
+### ✅ Box Primitive Tool
+- **Completed**: Implemented interactive 2-click box creation on the workplane, backed by `BoxField`.
+
+### ✅ Sphere Primitive Tool
+- **Completed**: Implemented interactive sphere creation — click sets center, drag sets radius.
+
+### ✅ Cylinder Primitive Tool
+- **Completed**: Implemented interactive cylinder creation — click sets center, drag sets radius, 2nd drag sets height.
+
 ## 🐞 Bug Fixes & UX Polish (March 2026)
+
+### ✅ Fix Workplane 'Place on Geometry' Toggle (Minimum LLM: Gemini Flash)
+- **Completed**: Ensured the workplane tool respects the "Place on Geometry" toggle in the context menu.
 
 ### ✅ Middle Mouse View Rotation Fix (Minimum LLM: Gemini Flash)
 - **Completed**: Resolved an issue where pressing the middle mouse button to rotate the viewport prematurely accepted tools. Fixed overlapping event filters in `DMInputManager` that caused duplicated inputs across the workbench.
