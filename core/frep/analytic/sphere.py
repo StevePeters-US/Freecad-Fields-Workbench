@@ -1,8 +1,8 @@
 import numpy as np
 import FreeCAD
-from core.frep.marching_cubes.mc_field import MarchingCubesField
+from core.frep.analytic.analytic_field import AnalyticField
 
-class MCSphereField(MarchingCubesField):
+class AnalyticSphereField(AnalyticField):
     """An exact analytical sphere SDF."""
     def __init__(self, center: FreeCAD.Vector, radius: float):
         self.center = center

@@ -19,9 +19,7 @@ class FRepField:
 
     def bounding_box(self):
         """Returns (min_corner: Vector, max_corner: Vector)."""
-        from core.dm_object import get_max_bounds
-        mb = get_max_bounds()
-        return (FreeCAD.Vector(-mb, -mb, -mb), FreeCAD.Vector(mb, mb, mb))
+        raise NotImplementedError("Subclasses must implement bounding_box()")
 
     def sign_at(self, point: FreeCAD.Vector, tol: float = 1e-5) -> int:
         """Returns -1 (inside), 0 (surface), or +1 (outside)."""

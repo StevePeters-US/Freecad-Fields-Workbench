@@ -1,7 +1,7 @@
 import FreeCAD
-from core.frep.marching_cubes.mc_field import MarchingCubesField
+from core.frep.analytic.analytic_field import AnalyticField
 
-class MCPlaneField(MarchingCubesField):
+class AnalyticPlaneField(AnalyticField):
     """A half-space field divided by an infinite plane."""
     def __init__(self, normal: FreeCAD.Vector, origin: FreeCAD.Vector):
         self.normal = normal
@@ -13,3 +13,8 @@ class MCPlaneField(MarchingCubesField):
 
     def gradient(self, point: FreeCAD.Vector, h: float = 1e-4) -> FreeCAD.Vector:
         return self.normal
+
+    def bounding_box(self):
+        from core.dm_object import get_max_bounds
+        mb = get_max_bounds()
+        return (FreeCAD.Vector(-mb, -mb, -mb), FreeCAD.Vector(mb, mb, mb))

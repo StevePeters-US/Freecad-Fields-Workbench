@@ -8,7 +8,7 @@
 
 - **Curve points are not all being drawn in tool editor**
 
-- **Find missing icons or replace with valid references** `Gemini Low`
+- **[COMPLETED] Find missing icons or replace with valid references** `Gemini Low`
   - **Goal**: Resolve "Cannot find icon: Part_Box/Sphere" warnings in the log when creating FRep primitives.
   - **Files to read**: `commands/cmd_primitive.py`
   - **Files to modify/create**: `commands/cmd_primitive.py` (or add icon files)
@@ -70,7 +70,7 @@
 
 ## Refactor: AnalyticField & Code Cleanup
 
-### Implement `AnalyticField` Base Class `Gemini Low`
+### [COMPLETED] Implement `AnalyticField` Base Class `Gemini Low`
 - **Goal**: Replace the empty `MarchingCubesField` with a meaningful `AnalyticField` base class that represents any field defined by a closed-form SDF formula. Move MC primitives from `core/frep/marching_cubes/` to `core/frep/analytic/`.
 - **Files to read**: `core/frep/frep_field.py`, `core/frep/marching_cubes/mc_field.py`, `core/frep/marching_cubes/box.py`, `core/frep/marching_cubes/sphere.py`, `core/frep/marching_cubes/cylinder.py`, `core/frep/marching_cubes/plane.py`
 - **Files to modify/create**: `core/frep/analytic/analytic_field.py` [NEW], `core/frep/analytic/box.py` [NEW], `core/frep/analytic/sphere.py` [NEW], `core/frep/analytic/cylinder.py` [NEW], `core/frep/analytic/plane.py` [NEW]; update all imports in `tools/primitive_tool.py`, `core/frep/frep_composer.py`, `core/dm_object.py`

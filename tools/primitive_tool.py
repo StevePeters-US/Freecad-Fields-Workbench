@@ -7,9 +7,9 @@ from core.frep_mesher import mesh_timer
 from tools.dm_base import DMBase
 
 # Ensure we import the right storage classes. For now, defaulting to MarchingCubes
-from core.frep.marching_cubes.box import MCBoxField
-from core.frep.marching_cubes.sphere import MCSphereField
-from core.frep.marching_cubes.cylinder import MCCylinderField
+from core.frep.analytic.box import AnalyticBoxField
+from core.frep.analytic.sphere import AnalyticSphereField
+from core.frep.analytic.cylinder import AnalyticCylinderField
 
 # Resolution for interactive preview (lower = faster updates)
 _PREVIEW_RES = 10
@@ -258,7 +258,7 @@ class BoxCreator(PrimitiveCreatorBase):
         cy = (loc_p1.y + loc_p2.y) / 2.0
         cz = (loc_p1.z + loc_p3.z) / 2.0
         
-        return MCBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(size_x, size_y, max(size_z, 0.01)), placement=wp)
+        return AnalyticBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(size_x, size_y, max(size_z, 0.01)), placement=wp)
 
     def _get_final_points(self):
         if len(self.points) < 3:
@@ -323,7 +323,7 @@ class SphereCreator(PrimitiveCreatorBase):
         radius = (self.current_point - self.center).Length
         if radius < 0.01:
             return None
-        return MCSphereField(self.center, radius)
+        return AnalyticSphereField(self.center, radius)
 
     def _get_final_field(self):
         return self._get_preview_field()
@@ -380,7 +380,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         if radius < 0.01:
             return None
         center = c_base + n * (height / 2.0)
-        return MCCylinderField(center, n, radius, max(abs(height), 0.01))
+        return AnalyticCylinderField(center, n, radius, max(abs(height), 0.01))
 
     def _get_final_field(self):
         if len(self.points) < 3:
@@ -390,7 +390,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         radius = (p_rad - c_base).Length
         height = (p_height - c_base).dot(n)
         center = c_base + n * (height / 2.0)
-        return MCCylinderField(center, n, radius, abs(height))
+        return AnalyticCylinderField(center, n, radius, abs(height))
 
     def _get_final_points(self):
         if len(self.points) < 3:

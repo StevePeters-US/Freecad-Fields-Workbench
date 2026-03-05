@@ -1,8 +1,8 @@
 import numpy as np
 import FreeCAD
-from core.frep.marching_cubes.mc_field import MarchingCubesField
+from core.frep.analytic.analytic_field import AnalyticField
 
-class MCBoxField(MarchingCubesField):
+class AnalyticBoxField(AnalyticField):
     """An axis-aligned box SDF, optionally placed arbitrarily in space."""
     def __init__(self, center: FreeCAD.Vector, size: FreeCAD.Vector, placement: FreeCAD.Placement = None):
         self.center = center
