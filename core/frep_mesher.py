@@ -81,7 +81,7 @@ class MarchingCubesMesher(FRepMesher):
                             
                     t_edges = triTable[cube_index]
                     idx = 0
-                    while t_edges[idx] != -1:
+                    while idx < len(t_edges) and t_edges[idx] != -1:
                         p1 = edge_pts[t_edges[idx]]
                         # Reverse winding order for correct outward-facing normals because 
                         # negative inside means standard isosurface gradients point outward.
@@ -99,9 +99,15 @@ class MarchingCubesMesher(FRepMesher):
         if not triangles:
             return Part.Shape()
             
-        mesh = Mesh.Mesh()
-        mesh.addFacets(triangles)
-        return Part.Shape(mesh)
+        mesh = Mesh.Mesh(triangles)
+        # Convert Mesh to a shell of Part faces, then try to make a solid
+        shape = Part.Shape()
+        shape.makeShapeFromMesh(mesh.Topology, 0.1)
+        try:
+            solid = Part.makeSolid(shape)
+            return solid
+        except Exception:
+            return shape
 
 
 class AdaptiveMCMesher(FRepMesher):

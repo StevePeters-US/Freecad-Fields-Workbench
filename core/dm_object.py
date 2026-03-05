@@ -238,11 +238,12 @@ class DMObjectProxy:
             surf = DMSurface(grid)
             return surf.to_shape()
         elif st == "frep":
-            if hasattr(fp, "FRepField") and fp.FRepField is not None:
+            if hasattr(self, "FRepField") and self.FRepField is not None:
                 from core.frep_mesher import get_active_mesher
                 mesher = get_active_mesher()
-                # A default resolution of 30, can be made a property later
-                return mesher.mesh(fp.FRepField, resolution=30)
+                # Use resolution hint if set (by primitive_tool on finalize), else default
+                res = getattr(self, "_final_resolution", 20)
+                return mesher.mesh(self.FRepField, resolution=res)
             return Part.Shape()
             
         return Part.Shape()
@@ -555,6 +556,12 @@ def create_dm_object(name, shape_type, params=None, placement=None):
             obj.ViewObject.ShapeColor = (1.0, 0.5, 0.0)
             obj.ViewObject.LineWidth = get_line_width()
             obj.ViewObject.PointSize = get_point_size()
+            # Disable wireframe for F-Rep mesh objects - reduces render overhead
+            if shape_type == "frep":
+                try:
+                    obj.ViewObject.DisplayMode = "Shaded"
+                except Exception:
+                    pass
         
         return obj
         
