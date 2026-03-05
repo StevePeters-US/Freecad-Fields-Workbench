@@ -237,6 +237,13 @@ class DMObjectProxy:
             
             surf = DMSurface(grid)
             return surf.to_shape()
+        elif st == "frep":
+            if hasattr(fp, "FRepField") and fp.FRepField is not None:
+                from core.frep_mesher import get_active_mesher
+                mesher = get_active_mesher()
+                # A default resolution of 30, can be made a property later
+                return mesher.mesh(fp.FRepField, resolution=30)
+            return Part.Shape()
             
         return Part.Shape()
 

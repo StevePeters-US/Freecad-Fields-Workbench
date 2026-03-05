@@ -169,7 +169,7 @@ core/frep/                      ← F-Rep Module
 
 > Three mesher classes behind a common protocol, selected by the `FrepStorageType` setting.
 
-### 3a. `FRepMesher` — Base Mesher Protocol (Minimum LLM: Gemini Flash)
+### [COMPLETED] 3a. `FRepMesher` — Base Mesher Protocol (Minimum LLM: Gemini Flash)
 - **Goal**: Define the abstract mesher interface. All meshers produce a `Part.Shape` from an `FRepField`.
 - **Files to create**: `core/frep_mesher.py`
 - **Steps**:
@@ -177,7 +177,7 @@ core/frep/                      ← F-Rep Module
   2. `get_active_mesher() -> FRepMesher` — reads `get_frep_storage_type()` and returns the correct mesher instance.
 - **Acceptance**: `get_active_mesher()` returns the right subclass for each setting value.
 
-### 3b. `MarchingCubesMesher` — Standard Marching Cubes ★ PRIORITY (Minimum LLM: Gemini High)
+### [COMPLETED] 3b. `MarchingCubesMesher` — Standard Marching Cubes ★ PRIORITY (Minimum LLM: Gemini High)
 - **Goal**: Uniform-grid marching cubes producing a triangle mesh at the f=0 isosurface.
 - **Files to modify**: `core/frep_mesher.py`
 - **Class**: `MarchingCubesMesher(FRepMesher)`
