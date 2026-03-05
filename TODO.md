@@ -27,8 +27,7 @@ no prior context beyond the files listed. Follow this template:
 
 > These tasks fix known issues in the current codebase before building the F-Rep pipeline.
 
-
-Curve ponts are not all being drawn in tool editor
+- [x] Curve points are not all being drawn in tool editor
 
 ### Viewport Plane Focus Hotkey (Minimum LLM: Gemini Low)
 - **Goal**: Add a hotkey to instantly orient the camera to face the active curve's plane (or a plane derived from 3 points for a 3D curve).
@@ -40,9 +39,6 @@ Curve ponts are not all being drawn in tool editor
   3. Use `view.setViewDirection()` to rotate the camera perpendicular to that plane.
 - **Acceptance**: Pressing the focal hotkey snaps the camera to a flat 2D viewing angle relative to the curve.
 
-### [COMPLETED] Curve Handle Type Context Menu (Minimum LLM: Gemini Low)
-- **Goal**: Provide a context menu on control points to toggle handle types between Tangent (Smooth), Split (V-shape), and Custom (Sharp).
-
 ### Angle Snapping for Curve Handles (Minimum LLM: Gemini Low)
 - **Goal**: Allow handles to snap to specific angular increments (default 15 degrees, via DM Settings) while dragging.
 - **Files to read**: `tools/edit_tool.py`, `core/dm_object.py` (for settings)
@@ -51,7 +47,7 @@ Curve ponts are not all being drawn in tool editor
   2. Calculate the handle angle, round to the nearest increment, and enforce the output vector.
 - **Acceptance**: Holding the modifier tightly snaps the handle angle.
 
-### Fix Workplane 'Place on Geometry' Toggle (Minimum LLM: Gemini Flash)
+### [COMPLETED] Fix Workplane 'Place on Geometry' Toggle (Minimum LLM: Gemini Flash)
 - **Goal**: Ensure the workplane tool respects the "Place on Geometry" toggle in the context menu.
 - **Files to read**: `tools/work_plane_tool.py`, `tools/dm_base.py`
 - **Files to modify**: `tools/work_plane_tool.py`
@@ -74,142 +70,164 @@ Curve ponts are not all being drawn in tool editor
 ---
 ---
 
-## Phase 1: F-Rep Field Engine (Plane-Based Primitives)
+## Phase 1: F-Rep Field Engine — Class Architecture
 
-### 1a. Create `frep_field.py` — Base Field Protocol (Minimum LLM: Gemini Low)
-- **Goal**: Define the abstract field interface that all F-Rep primitives will implement.
-- **Files to read**: `core/dm_object.py` (to understand the existing object model)
+> All field and meshing classes. The `FrepStorageType` DM setting (0=Marching Cubes, 1=Adaptive MC, 2=NURBS F-Rep) selects which mesher is used; the field definitions are shared across all three.
+
+### Class Map
+
+```
+core/frep_field.py          ← field definitions (shared by all storage types)
+  FRepField (ABC)           ← base protocol
+  PlaneField                ← half-space
+  BoxField                  ← 6-plane intersection
+  SphereField               ← analytical SDF
+  CylinderField             ← capped cylinder SDF
+  NurbsSurfaceField         ← closest-point projection SDF (Phase 4)
+
+core/frep_composer.py       ← boolean composition tree
+  UnionField                ← min(a, b)
+  IntersectionField         ← max(a, b)
+  SubtractionField          ← max(a, −b)
+  SmoothUnionField          ← smooth-min blend
+
+core/frep_mesher.py         ← meshing / isosurface extraction
+  FRepMesher (ABC)          ← base mesher protocol
+  MarchingCubesMesher       ← uniform grid (storage type 0)  ★ PRIORITY
+  AdaptiveMCMesher          ← octree + MC (storage type 1)
+  NurbsFRepMesher           ← NURBS fitting (storage type 2)
+  get_active_mesher()       ← factory that reads FrepStorageType setting
+```
+
+---
+
+### 1a. `FRepField` — Base Field Protocol (Minimum LLM: Gemini Low)
+- **Goal**: Abstract base class for all signed distance fields.
 - **Files to create**: `core/frep_field.py`
 - **Steps**:
-  1. Define an abstract base class `FRepField` with method `evaluate(point: FreeCAD.Vector) -> float`.
-  2. Add `gradient(point) -> FreeCAD.Vector` (numerical gradient via finite differences, can be overridden analytically).
-  3. Add `bounding_box() -> (FreeCAD.Vector, FreeCAD.Vector)` returning `(min_corner, max_corner)` for spatial queries.
-  4. Provide a helper `sign_at(point) -> int` returning -1, 0, or +1 based on a tolerance threshold.
-- **Acceptance**: `FRepField` can be imported and subclassed. A trivial test field (e.g., `f(P) = P.z`) returns correct signs.
+  1. `evaluate(point: Vector) -> float` — returns signed distance (negative=inside).
+  2. `gradient(point: Vector) -> Vector` — numerical gradient via finite differences; subclasses may override analytically.
+  3. `bounding_box() -> (Vector, Vector)` — `(min_corner, max_corner)`. For unbounded fields, clamp to `get_max_bounds()`.
+  4. `sign_at(point) -> int` — returns -1/0/+1 with a tolerance.
+  5. `evaluate_grid(points: np.ndarray) -> np.ndarray` — vectorized batch evaluation (default loops; subclasses override for speed).
+- **Acceptance**: Import and subclass. A trivial test field `f(P) = P.z` returns correct signs.
 
-### 1b. Plane Half-Space Field (Minimum LLM: Gemini Flash)
-- **Goal**: Implement the simplest non-trivial field — a plane that divides space into positive and negative half-spaces.
-- **Files to read**: `core/frep_field.py`
-- **Files to create/modify**: `core/frep_field.py` (add `PlaneField` class)
-- **Steps**:
-  1. `PlaneField(normal: Vector, point: Vector)` — stores a plane definition.
-  2. `evaluate(P)` returns `dot(P − point, normal)` — positive on the normal side, negative on the other.
-  3. `gradient(P)` returns the constant normal vector.
-  4. `bounding_box()` returns an infinite box (or a very large finite one for practical purposes).
-- **Acceptance**: `PlaneField(Vector(0,0,1), Vector(0,0,0)).evaluate(Vector(0,0,5))` returns `5.0`. Points below z=0 return negative values.
+### 1b. `PlaneField` (Minimum LLM: Gemini Flash)
+- **Goal**: Half-space field dividing space by a plane.
+- **Files to modify**: `core/frep_field.py`
+- **Class**: `PlaneField(normal, origin)` — `evaluate(P) = dot(P − origin, normal)`.
+- **Acceptance**: `PlaneField(Z, O).evaluate(Vector(0,0,5))` → `5.0`.
 
-### 1c. Box Field via Plane Intersection (Minimum LLM: Gemini Low)
-- **Goal**: Construct a box-shaped field by intersecting 6 half-space planes.
-- **Files to read**: `core/frep_field.py`
-- **Files to create/modify**: `core/frep_field.py` (add `BoxField` class)
-- **Steps**:
-  1. `BoxField(center, size)` — creates 6 `PlaneField` instances (±X, ±Y, ±Z).
-  2. `evaluate(P)` returns `max(f1, f2, …, f6)` — the standard F-Rep intersection.
-  3. `bounding_box()` returns the exact box extents.
-- **Acceptance**: `BoxField(Vector(0,0,0), Vector(10,10,10)).evaluate(Vector(0,0,0))` returns `-5.0` (inside). Points outside return positive values.
+### 1c. `BoxField` (Minimum LLM: Gemini Low)
+- **Goal**: Axis-aligned box via 6 `PlaneField` intersections.
+- **Files to modify**: `core/frep_field.py`
+- **Class**: `BoxField(center, size)` — `evaluate(P) = max(f1…f6)`.
+- **Acceptance**: Center point returns `−half_size`. Points outside return positive.
 
-### 1d. Sphere Field (Minimum LLM: Gemini Flash)
-- **Goal**: Implement a sphere as an analytical signed distance field.
-- **Files to read**: `core/frep_field.py`
-- **Files to modify**: `core/frep_field.py` (add `SphereField` class)
-- **Steps**:
-  1. `SphereField(center, radius)`.
-  2. `evaluate(P)` returns `|P − center| − radius`. Negative inside, positive outside.
-  3. `gradient(P)` returns the normalized direction `(P − center) / |P − center|`.
-- **Acceptance**: `SphereField(Vector(0,0,0), 5).evaluate(Vector(3,0,0))` returns `-2.0`. Points at distance > 5 return positive.
+### 1d. `SphereField` (Minimum LLM: Gemini Flash)
+- **Goal**: Sphere as an analytical SDF.
+- **Files to modify**: `core/frep_field.py`
+- **Class**: `SphereField(center, radius)` — `evaluate(P) = |P − center| − radius`.
+- **Acceptance**: Inside point returns negative. Outside returns positive.
 
-### 1e. Cylinder Field (Minimum LLM: Gemini Low)
-- **Goal**: Implement an infinite cylinder SDF, then cap it with plane intersections to make it finite.
-- **Files to read**: `core/frep_field.py`
-- **Files to modify**: `core/frep_field.py` (add `CylinderField` class)
-- **Steps**:
-  1. `CylinderField(base_center, axis, radius, height)`.
-  2. Infinite cylinder: project point onto the axis, compute radial distance − radius.
-  3. Cap with two `PlaneField` intersections at base and top.
-  4. `evaluate(P)` returns `max(radial_sdf, cap_top, cap_bottom)`.
-- **Acceptance**: Points inside the finite cylinder return negative values. Points outside the caps or beyond the radius return positive.
+### 1e. `CylinderField` (Minimum LLM: Gemini Low)
+- **Goal**: Finite cylinder SDF using radial distance + two capping planes.
+- **Files to modify**: `core/frep_field.py`
+- **Class**: `CylinderField(base_center, axis, radius, height)` — `evaluate(P) = max(radial, cap_top, cap_bottom)`.
+- **Acceptance**: Interior points negative. Exterior (beyond radius or caps) positive.
 
 ---
 ---
 
 ## Phase 2: Field Composition & Booleans
 
-> Build the composition tree that combines multiple fields using min/max/blend operators.
+> Composition tree that combines fields using min/max/blend.
 
-### 2a. Create `frep_composer.py` — Composition Tree (Minimum LLM: Gemini Low)
-- **Goal**: Implement a tree structure for combining F-Rep fields using boolean operators.
-- **Files to read**: `core/frep_field.py`
+### 2a. `frep_composer.py` — Composition Nodes (Minimum LLM: Gemini Low)
+- **Goal**: Boolean combination of fields.
 - **Files to create**: `core/frep_composer.py`
-- **Steps**:
-  1. Define `UnionField(field_a, field_b)` — `evaluate(P)` returns `min(a(P), b(P))`.
-  2. Define `IntersectionField(field_a, field_b)` — `evaluate(P)` returns `max(a(P), b(P))`.
-  3. Define `SubtractionField(field_a, field_b)` — `evaluate(P)` returns `max(a(P), −b(P))`.
-  4. All composition nodes implement the `FRepField` interface (evaluate, gradient, bounding_box).
-  5. `bounding_box()` for union = hull of both boxes; for intersection = overlap of both; for subtraction = box of A.
-- **Acceptance**: Combining a `SphereField` and a `BoxField` with `SubtractionField` produces expected sign patterns at test points.
+- **Classes**:
+  - `UnionField(a, b)` — `evaluate = min(a, b)`
+  - `IntersectionField(a, b)` — `evaluate = max(a, b)`
+  - `SubtractionField(a, b)` — `evaluate = max(a, −b)`
+  - All implement `FRepField`. Bounding boxes: union=hull, intersection=overlap, subtraction=box(A).
+- **Acceptance**: `SubtractionField(SphereField, BoxField)` returns expected signs.
 
-### 2b. Smooth Blend (R-Union) Operator (Minimum LLM: Gemini High)
-- **Goal**: Implement smooth blending between two fields, producing a fillet-like transition instead of a sharp seam.
-- **Files to read**: `core/frep_field.py`, `core/frep_composer.py`
-- **Files to modify**: `core/frep_composer.py` (add `SmoothUnionField`)
-- **Steps**:
-  1. Implement the standard smooth-min function: `f = min(a, b) − k² * max(k − |a − b|, 0)² / (4k)` where `k` controls fillet radius.
-  2. `SmoothUnionField(field_a, field_b, blend_radius)`.
-  3. Ensure gradient is smooth across the transition region (no discontinuity).
-- **Acceptance**: Two overlapping spheres with `SmoothUnionField` produce a smoothly blended region at the intersection. The isosurface at f=0 shows a fillet, not a sharp crease.
+### 2b. `SmoothUnionField` — Smooth Blend (Minimum LLM: Gemini High)
+- **Goal**: Fillet-like smooth boolean.
+- **Files to modify**: `core/frep_composer.py`
+- **Class**: `SmoothUnionField(a, b, blend_radius)` using smooth-min: `f = min(a,b) − k²·max(k−|a−b|, 0)²/(4k)`.
+- **Acceptance**: Two overlapping spheres produce a filleted isosurface.
 
-### 2c. Wire Boolean Commands to F-Rep Composer (Minimum LLM: Gemini Low)
-- **Goal**: Update the existing `cmd_boolean.py` commands to use the F-Rep composition tree instead of OCCT boolean operations.
-- **Files to read**: `commands/cmd_boolean.py`, `core/dm_object.py`, `core/frep_composer.py`
+### 2c. Wire Boolean Commands to F-Rep (Minimum LLM: Gemini Low)
+- **Goal**: `DM_Fuse/Cut/Common` create composition fields instead of OCCT booleans.
 - **Files to modify**: `commands/cmd_boolean.py`, `core/dm_object.py`
 - **Steps**:
-  1. When a DM object has an associated `FRepField`, store it as a property on the `DMObjectProxy`.
-  2. `DM_Fuse` creates a `UnionField` from the two selected objects' fields.
-  3. `DM_Cut` creates a `SubtractionField`.
-  4. `DM_Common` creates an `IntersectionField`.
-  5. The resulting object re-meshes from the composed field.
-- **Acceptance**: Selecting two F-Rep objects and clicking Fuse produces a single object whose shape is the union of both fields.
+  1. Store `FRepField` reference on `DMObjectProxy`.
+  2. `DM_Fuse` → `UnionField`, `DM_Cut` → `SubtractionField`, `DM_Common` → `IntersectionField`.
+  3. Result object re-meshes from composed field.
+- **Acceptance**: Boolean of two F-Rep objects produces correct merged shape.
 
 ---
 ---
 
 ## Phase 3: Isosurface Extraction & Display
 
-> Convert the evaluated field back into something FreeCAD can display.
+> Three mesher classes behind a common protocol, selected by the `FrepStorageType` setting.
 
-### 3a. Create `frep_mesher.py` — Marching Cubes (Minimum LLM: Gemini High)
-- **Goal**: Implement or integrate a marching cubes algorithm that extracts a triangle mesh from an F-Rep field at the f=0 isosurface.
-- **Files to read**: `core/frep_field.py`, `core/frep_composer.py`
+### 3a. `FRepMesher` — Base Mesher Protocol (Minimum LLM: Gemini Flash)
+- **Goal**: Define the abstract mesher interface. All meshers produce a `Part.Shape` from an `FRepField`.
 - **Files to create**: `core/frep_mesher.py`
 - **Steps**:
-  1. Implement a grid-based marching cubes: define a 3D grid over the field's bounding box, evaluate `f(P)` at each grid vertex, and extract triangles where the sign changes.
-  2. Use NumPy for vectorized grid evaluation.
-  3. Output a `Part.Shape` from the mesh using `Part.Shape(Part.__sortEdges__(...))` or `Mesh.Mesh(triangles)` converted to `Part.Shape`.
-  4. Support configurable resolution (grid cell size).
-  5. Optionally use `scipy.spatial` for acceleration if available.
-- **Acceptance**: Given a `SphereField(Vector(0,0,0), 10)`, marching cubes produces a closed mesh that approximates a sphere. The mesh is valid and renderable in FreeCAD's viewport.
+  1. `FRepMesher` (ABC) with method `mesh(field: FRepField, resolution: int) -> Part.Shape`.
+  2. `get_active_mesher() -> FRepMesher` — reads `get_frep_storage_type()` and returns the correct mesher instance.
+- **Acceptance**: `get_active_mesher()` returns the right subclass for each setting value.
 
-### 3b. Adaptive Resolution / Octree Meshing (Minimum LLM: Claude)
-- **Goal**: Replace uniform grid sampling with an octree-based approach that allocates finer resolution near the isosurface and coarser resolution in empty space.
-- **Files to read**: `core/frep_mesher.py`, `core/frep_field.py`
+### 3b. `MarchingCubesMesher` — Standard Marching Cubes ★ PRIORITY (Minimum LLM: Gemini High)
+- **Goal**: Uniform-grid marching cubes producing a triangle mesh at the f=0 isosurface.
 - **Files to modify**: `core/frep_mesher.py`
+- **Class**: `MarchingCubesMesher(FRepMesher)`
 - **Steps**:
-  1. Build an octree over the field's bounding box.
-  2. Subdivide cells where the field changes sign (surface-crossing cells).
-  3. Apply marching cubes only to leaf cells near the isosurface.
-  4. Stitch the resulting mesh to avoid T-junctions.
-- **Acceptance**: Complex fields mesh 3–5× faster than uniform grids at equivalent surface quality. No visual cracks between regions of different subdivision depth.
+  1. Build a 3D grid over `field.bounding_box()`, clamped to `get_max_bounds()`.
+  2. Evaluate `field.evaluate_grid()` at every grid vertex (NumPy vectorized).
+  3. For each cube with a sign change, look up the edge table and interpolate vertex positions.
+  4. Emit triangles. Use the standard 256-entry MC lookup table.
+  5. Convert triangles to `Mesh.Mesh` → `Part.Shape`.
+  6. `resolution` parameter controls grid divisions per axis (default from DM Settings).
+- **Acceptance**: `MarchingCubesMesher().mesh(SphereField(O, 10), 32)` produces a recognizable sphere mesh.
 
-### 3c. Connect Mesher to DM Object Pipeline (Minimum LLM: Gemini Low)
-- **Goal**: Wire the mesher into the `DMObjectProxy.build_shape()` pipeline so that F-Rep objects automatically render.
-- **Files to read**: `core/dm_object.py`, `core/frep_mesher.py`
+### 3c. `AdaptiveMCMesher` — Octree Marching Cubes (Minimum LLM: Claude)
+- **Goal**: Octree-accelerated adaptive MC for better quality/performance tradeoff.
+- **Files to modify**: `core/frep_mesher.py`
+- **Class**: `AdaptiveMCMesher(FRepMesher)`
+- **Steps**:
+  1. Build an octree over the bounding box.
+  2. Subdivide only cells where field changes sign (surface-crossing).
+  3. Apply MC to leaf cells.
+  4. Stitch mesh to avoid T-junctions at level boundaries.
+- **Acceptance**: 3–5× faster than uniform MC at equivalent surface quality. No cracks.
+
+### 3d. `NurbsFRepMesher` — NURBS Surface Fitting (Minimum LLM: Claude)
+- **Goal**: Instead of triangle mesh, fit NURBS surfaces to the isosurface for native BRep output.
+- **Files to modify**: `core/frep_mesher.py`
+- **Class**: `NurbsFRepMesher(FRepMesher)`
+- **Steps**:
+  1. Sample the isosurface using marching cubes at moderate resolution.
+  2. Cluster triangles into patch regions by normal similarity.
+  3. Fit `Part.BSplineSurface` patches to each region.
+  4. Stitch patches into a `Part.Shell` → `Part.Solid`.
+  5. Return native BRep `Part.Shape`.
+- **Acceptance**: A sphere field produces a smooth BRep solid (not faceted). Editable as NURBS.
+
+### 3e. Connect Mesher to DM Object Pipeline (Minimum LLM: Gemini Low)
+- **Goal**: Wire the mesher into `DMObjectProxy.build_shape()` so F-Rep objects render automatically.
 - **Files to modify**: `core/dm_object.py`
 - **Steps**:
-  1. Add a `"frep"` shape type to `DMObjectProxy.__init__()`.
-  2. In `build_shape()`, when `ShapeType == "frep"`, call the mesher on the object's `FRepField`.
-  3. Store the mesh result as the object's `Shape`.
-  4. Trigger re-meshing when the field composition tree changes.
-- **Acceptance**: Creating an F-Rep object in the document produces a visible shape in the viewport that updates when field parameters change.
+  1. Add `"frep"` shape type to `DMObjectProxy.__init__()`.
+  2. In `build_shape()`, when `ShapeType == "frep"`, call `get_active_mesher().mesh(field, resolution)`.
+  3. Store `FRepField` on the proxy. Store mesh as `Shape`.
+  4. Re-mesh when field tree or `FrepStorageType` setting changes.
+- **Acceptance**: Creating an F-Rep object renders in the viewport. Changing the storage type re-meshes.
 
 ---
 ---
@@ -387,7 +405,7 @@ Curve ponts are not all being drawn in tool editor
 
 - [ ] **Move Existing Workplane** — Allow moving/reorienting a workplane after it has been created using the Workplane tool.
 - [ ] **Viewport Workplane Selection** — Make workplanes selectable directly in the 3D viewport by clicking their grid/handles.
-
+add bevel/chamfer to curve points
 
 
 

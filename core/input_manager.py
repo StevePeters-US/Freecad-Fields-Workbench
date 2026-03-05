@@ -207,7 +207,6 @@ class DMInputManager(QtCore.QObject):
     def initialize(self):
         try:
             if not getattr(self, "_is_initialized", False):
-                dm_logger.debug("DMInputManager: Installing event filter...")
                 QtGui.QApplication.instance().installEventFilter(self)
                 self._is_initialized = True
         except Exception as e:
@@ -216,7 +215,6 @@ class DMInputManager(QtCore.QObject):
     def restore(self):
         try:
             if getattr(self, "_is_initialized", False):
-                dm_logger.debug("DMInputManager: Removing event filter...")
                 QtGui.QApplication.instance().removeEventFilter(self)
                 self._is_initialized = False
         except Exception as e:

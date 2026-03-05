@@ -457,7 +457,7 @@ class DMViewProvider:
     def updateData(self, fp, prop):
         from . import dm_logger
         # dm_logger.debug(f"DMViewProvider.updateData: obj={fp.Label}, prop={prop}")
-        if not prop or prop in ["Points", "HandleIn", "HandleOut", "Closed"]:
+        if not prop or prop in ["Points", "HandleIn", "HandleOut", "Closed", "EditMode"]:
             self._rebuild_control_cage(fp)
         
 

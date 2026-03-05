@@ -367,8 +367,6 @@ class EditTool(DMBase):
         hit = None
         if event_dict:
             ray_p, ray_d = self._get_ray(event_dict)
-            hit = self._hit_test(ray_p, ray_d)
-
         # Fallback to hovered element if available
         if not hit and self._hovered_element:
             hit = self._hovered_element
@@ -379,7 +377,7 @@ class EditTool(DMBase):
                 ("Finish Editing", self.finish)
             ]
 
-        idx, _ = hit if hit else self._selected_element
+        idx, elem_type = hit if hit else self._selected_element
 
         def set_type(val):
             p_types = list(getattr(self._target_obj, "PointTypes", []))
@@ -421,14 +419,7 @@ class EditTool(DMBase):
         if key in ["ENTER", "RETURN"]:
             self.finish()
             return True
-            
-        if key == "C":
-            from core.input_manager import DMInputManager
-            items = self.get_context_menu(event_dict)
-            if items:
-                DMInputManager.get_instance()._trigger_dynamic_menu(items)
-            return True
-            
+        
         if key in ["DELETE", "X", "BACKSPACE"]:
             if self.state == 1 or self._selected_element:
                 self._delete_selected_point()

@@ -15,9 +15,9 @@ class CommandDMBoolean:
         "Common": "intersect",
     }
     _ICONS = {
-        "Fuse":   "Part_Fuse",
-        "Cut":    "Part_Cut",
-        "Common": "Part_Common",
+        "Fuse":   "Part_Booleans",
+        "Cut":    "Part_Booleans",
+        "Common": "Part_Booleans",
     }
 
     def __init__(self, operation="Fuse"):
