@@ -77,64 +77,58 @@ no prior context beyond the files listed. Follow this template:
 ### Class Map
 
 ```
-core/frep_field.py          ← field definitions (shared by all storage types)
-  FRepField (ABC)           ← base protocol
-  PlaneField                ← half-space
-  BoxField                  ← 6-plane intersection
-  SphereField               ← analytical SDF
-  CylinderField             ← capped cylinder SDF
-  NurbsSurfaceField         ← closest-point projection SDF (Phase 4)
-
-core/frep_composer.py       ← boolean composition tree
-  UnionField                ← min(a, b)
-  IntersectionField         ← max(a, b)
-  SubtractionField          ← max(a, −b)
-  SmoothUnionField          ← smooth-min blend
-
-core/frep_mesher.py         ← meshing / isosurface extraction
-  FRepMesher (ABC)          ← base mesher protocol
-  MarchingCubesMesher       ← uniform grid (storage type 0)  ★ PRIORITY
-  AdaptiveMCMesher          ← octree + MC (storage type 1)
-  NurbsFRepMesher           ← NURBS fitting (storage type 2)
-  get_active_mesher()       ← factory that reads FrepStorageType setting
+core/frep/                      ← F-Rep Module
+  frep_field.py                 ← FRepField (ABC base protocol)
+  marching_cubes/               ← Storage Type 0
+    mc_field.py                 ← MarchingCubesField(FRepField)
+    plane.py                    ← MCPlaneField(MarchingCubesField)
+    box.py                      ← MCBoxField(MarchingCubesField)
+    sphere.py                   ← MCSphereField(MarchingCubesField)
+    cylinder.py                 ← MCCylinderField(MarchingCubesField)
+  adaptive/                     ← Storage Type 1
+    adaptive_field.py           ← AdaptiveField(FRepField)
+    plane.py, box.py, ...       ← (Child implementations)
+  nurbs/                        ← Storage Type 2
+    nurbs_field.py              ← NurbsField(FRepField)
+    plane.py, box.py, ...       ← (Child implementations)
+  frep_composer.py              ← Boolean composition nodes
+  frep_mesher.py                ← Isosurface extraction protocols
 ```
 
 ---
 
-### 1a. `FRepField` — Base Field Protocol (Minimum LLM: Gemini Low)
-- **Goal**: Abstract base class for all signed distance fields.
-- **Files to create**: `core/frep_field.py`
+### 1a. `FRepField` — Base Field Protocol
+- **Goal**: Form the overall parent class for all F-Rep implementations.
+- **Files to create**: `core/frep/frep_field.py`
 - **Steps**:
-  1. `evaluate(point: Vector) -> float` — returns signed distance (negative=inside).
-  2. `gradient(point: Vector) -> Vector` — numerical gradient via finite differences; subclasses may override analytically.
-  3. `bounding_box() -> (Vector, Vector)` — `(min_corner, max_corner)`. For unbounded fields, clamp to `get_max_bounds()`.
-  4. `sign_at(point) -> int` — returns -1/0/+1 with a tolerance.
-  5. `evaluate_grid(points: np.ndarray) -> np.ndarray` — vectorized batch evaluation (default loops; subclasses override for speed).
-- **Acceptance**: Import and subclass. A trivial test field `f(P) = P.z` returns correct signs.
+  1. Define `FRepField` ABC with `evaluate(point)`, `gradient(point)`, `bounding_box()`, `sign_at(point)`.
 
-### 1b. `PlaneField` (Minimum LLM: Gemini Flash)
-- **Goal**: Half-space field dividing space by a plane.
-- **Files to modify**: `core/frep_field.py`
-- **Class**: `PlaneField(normal, origin)` — `evaluate(P) = dot(P − origin, normal)`.
-- **Acceptance**: `PlaneField(Z, O).evaluate(Vector(0,0,5))` → `5.0`.
+### 1b. `MarchingCubesField` — Storage Type 0 Parent
+- **Goal**: Intermediate base class for all Marching Cubes primitives.
+- **Files to create**: `core/frep/marching_cubes/mc_field.py`
+- **Steps**:
+  1. `class MarchingCubesField(FRepField):`
+  2. Implement `evaluate_grid(points)` optimization.
 
-### 1c. `BoxField` (Minimum LLM: Gemini Low)
-- **Goal**: Axis-aligned box via 6 `PlaneField` intersections.
-- **Files to modify**: `core/frep_field.py`
-- **Class**: `BoxField(center, size)` — `evaluate(P) = max(f1…f6)`.
-- **Acceptance**: Center point returns `−half_size`. Points outside return positive.
+### 1c. `MCPlaneField` — Marching Cubes Plane
+- **Goal**: Half-space divided by a plane for the MC backend.
+- **Files to create**: `core/frep/marching_cubes/plane.py`
+- **Steps**:
+  1. `class MCPlaneField(MarchingCubesField):` implementing `evaluate` mapped to the plane SDF.
 
-### 1d. `SphereField` (Minimum LLM: Gemini Flash)
-- **Goal**: Sphere as an analytical SDF.
-- **Files to modify**: `core/frep_field.py`
-- **Class**: `SphereField(center, radius)` — `evaluate(P) = |P − center| − radius`.
-- **Acceptance**: Inside point returns negative. Outside returns positive.
+### 1d. `MCBoxField` — Marching Cubes Box
+- **Goal**: Axis-aligned box SDF for the MC backend.
+- **Files to create**: `core/frep/marching_cubes/box.py`
+- **Steps**:
+  1. `class MCBoxField(MarchingCubesField):`
 
-### 1e. `CylinderField` (Minimum LLM: Gemini Low)
-- **Goal**: Finite cylinder SDF using radial distance + two capping planes.
-- **Files to modify**: `core/frep_field.py`
-- **Class**: `CylinderField(base_center, axis, radius, height)` — `evaluate(P) = max(radial, cap_top, cap_bottom)`.
-- **Acceptance**: Interior points negative. Exterior (beyond radius or caps) positive.
+### 1e. `MCSphereField` & `MCCylinderField` — Marching Cubes analytical primitives
+- **Goal**: Analytical shapes for the MC backend.
+- **Files to create**: `core/frep/marching_cubes/sphere.py`, `core/frep/marching_cubes/cylinder.py`
+
+### 1f. `AdaptiveField` and `NurbsField` architecture
+- **Goal**: Skeleton out the parent classes and their files for the other storage types.
+- **Files to create**: `core/frep/adaptive/adaptive_field.py`, `core/frep/nurbs/nurbs_field.py` and empty primitive files.
 
 ---
 ---
@@ -145,7 +139,7 @@ core/frep_mesher.py         ← meshing / isosurface extraction
 
 ### 2a. `frep_composer.py` — Composition Nodes (Minimum LLM: Gemini Low)
 - **Goal**: Boolean combination of fields.
-- **Files to create**: `core/frep_composer.py`
+- **Files to create**: `core/frep/frep_composer.py`
 - **Classes**:
   - `UnionField(a, b)` — `evaluate = min(a, b)`
   - `IntersectionField(a, b)` — `evaluate = max(a, b)`
@@ -406,6 +400,8 @@ core/frep_mesher.py         ← meshing / isosurface extraction
 - [ ] **Move Existing Workplane** — Allow moving/reorienting a workplane after it has been created using the Workplane tool.
 - [ ] **Viewport Workplane Selection** — Make workplanes selectable directly in the 3D viewport by clicking their grid/handles.
 add bevel/chamfer to curve points
+
+when placing points, the point should be placed against the first valid object. Now it seems to prioritize geometry over workplanes
 
 
 

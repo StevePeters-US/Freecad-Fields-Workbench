@@ -87,8 +87,12 @@ Freecad-Direct-Modeling/
 │   ├── work_plane.py              # WorkPlaneManager — Coin3D grid & snapping
 │   ├── dm_workplane.py            # DMWorkPlane FeaturePython object
 │   ├── input_manager.py           # Global input event routing
-│   ├── frep_field.py              # [NEW] F-Rep field functions & CPP engine
-│   ├── frep_composer.py           # [NEW] Boolean composition tree (min/max/blend)
+│   ├── frep/                      # [NEW] F-Rep Engine
+│   │   ├── frep_field.py          # Abstract base FRepField
+│   │   ├── frep_composer.py       # Boolean composition tree (min/max/blend)
+│   │   ├── marching_cubes/        # Storage Type 0 primitives
+│   │   ├── adaptive/              # Storage Type 1 primitives
+│   │   └── nurbs/                 # Storage Type 2 primitives
 │   └── frep_mesher.py             # [NEW] Isosurface extraction (marching cubes / DC)
 │
 ├── tools/                         # Interactive creation tools
