@@ -137,7 +137,7 @@ core/frep/                      ← F-Rep Module
 
 > Composition tree that combines fields using min/max/blend.
 
-### 2a. `frep_composer.py` — Composition Nodes (Minimum LLM: Gemini Low)
+### [COMPLETED] 2a. `frep_composer.py` — Composition Nodes (Minimum LLM: Gemini Low)
 - **Goal**: Boolean combination of fields.
 - **Files to create**: `core/frep/frep_composer.py`
 - **Classes**:
