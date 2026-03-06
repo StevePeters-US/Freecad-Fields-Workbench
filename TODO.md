@@ -2,9 +2,21 @@
 
 ---
 
-## Bugs
+## Refactoring
 ---
-Hiding dm part does not hide the coin3d nodes
+- **Extract Render Logic from DMObject** `Gemini High`
+  - **Goal**: Move Coin3D scene graph and visual rendering (meshes, curves, points) from `DMViewProvider` in `dm_object.py` to a dedicated `DMRenderer` class.
+  - **Files to read**: `core/dm_object.py`
+  - **Files to create/modify**: `core/dm_renderer.py`, `core/dm_object.py`
+  - **Acceptance**: `DMViewProvider` instantiates `DMRenderer` and calls its methods to draw points/meshes. Tools can also call `renderer.draw_handles(points)` when editing.
+
+- **Evaluate and Rename `DMObject`/`DMViewProvider`** `Gemini Low`
+  - **Goal**: Evaluate if `DMObject` is the best name for the class generating FreeCAD BRep proxies, and rename it if a better fit (e.g., `DMFeature` or `DMNode`) is found across the codebase.
+  - **Acceptance**: Chosen name makes more sense for a FreeCAD proxy object and is consistently used.
+
+---
+
+## Bugs
 ---
 The cube does not respect the workplane
 ---

@@ -152,60 +152,39 @@ class BoxCreator(PrimitiveCreatorBase):
         if pos is None:
             return True
 
-        try:
-            pos2d = event_dict.get("Position", (0, 0))
-            ray_p, ray_d = self.projector._get_view_ray(pos2d[0], pos2d[1])
-        except Exception:
-            pos2d = (0, 0)
-            ray_p, ray_d = None, None
-
-        if len(self.points) == 0:
+        if self.state == 0:
+            # 1st click - anchor the tool
             self.points.append(pos)
-            if ray_p and ray_d:
-                dm_logger.info(f"Debug [Point 1]: Mouse 2D=({pos2d[0]}, {pos2d[1]}), View Dir=({ray_d.x:.2f}, {ray_d.y:.2f}, {ray_d.z:.2f}), Ray Origin=({ray_p.x:.2f}, {ray_p.y:.2f}, {ray_p.z:.2f})")
-            dm_logger.info(f"Debug [Corners]: P0=({self.points[0].x:.2f}, {self.points[0].y:.2f}, {self.points[0].z:.2f})")
+            self.state = 1
             
             # Lock working_plane from the active workplane for consistent transforms
             if not getattr(self, "working_plane", None):
                 visible_wps = self.get_visible_workplanes()
                 if visible_wps:
                     self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
-            wp = getattr(self, "working_plane", None)
-            loc = wp.inverse().multVec(pos) if wp else pos
-            dm_logger.info(f"Box P0 (1st corner): world=({pos.x:.2f},{pos.y:.2f},{pos.z:.2f})  local=({loc.x:.2f},{loc.y:.2f},{loc.z:.2f})")
-            if wp:
-                dm_logger.debug(f"  Working plane Base=({wp.Base.x:.2f},{wp.Base.y:.2f},{wp.Base.z:.2f})  Normal={wp.Rotation.multVec(FreeCAD.Vector(0,0,1))}")
+            
             dm_logger.info("Box Tool: Click 2nd corner")
-        elif len(self.points) == 1:
+            
+        elif self.state == 1:
+            # 2nd click - determines base size (x/y)
             self.points.append(pos)
-            if ray_p and ray_d:
-                dm_logger.info(f"Debug [Point 2]: Mouse 2D=({pos2d[0]}, {pos2d[1]}), View Dir=({ray_d.x:.2f}, {ray_d.y:.2f}, {ray_d.z:.2f}), Ray Origin=({ray_p.x:.2f}, {ray_p.y:.2f}, {ray_p.z:.2f})")
-            dm_logger.info(f"Debug [Corners]: P0=({self.points[0].x:.2f}, {self.points[0].y:.2f}, {self.points[0].z:.2f}), P1=({self.points[1].x:.2f}, {self.points[1].y:.2f}, {self.points[1].z:.2f})")
+            self.state = 2
             
-            self.state = 2  # Switch to height-drag mode
-            # Record screen coordinates for height drag
+            # Record screen position for height drag
+            pos2d = event_dict.get("Position", (0, 0))
             self._height_drag_start_pos = (pos2d[0], pos2d[1])
-            self._height_drag_base = pos  # world point where height drag starts
-            wp = getattr(self, "working_plane", None)
-            loc = wp.inverse().multVec(pos) if wp else pos
-            loc0 = wp.inverse().multVec(self.points[0]) if wp else self.points[0]
-            dm_logger.info(f"Box P1 (2nd corner): world=({pos.x:.2f},{pos.y:.2f},{pos.z:.2f})  local=({loc.x:.2f},{loc.y:.2f},{loc.z:.2f})")
-            dm_logger.info(f"  Footprint local size: dx={abs(loc.x-loc0.x):.2f}  dy={abs(loc.y-loc0.y):.2f}")
+            self._height_drag_base = pos
+            
             dm_logger.info("Box Tool: Click height")
-        elif len(self.points) == 2:
+            
+        elif self.state == 2:
+            # 3rd click - determines height (z). Finalize shape.
             self.points.append(self.current_point)
-            if ray_p and ray_d:
-                dm_logger.info(f"Debug [Point 3]: Mouse 2D=({pos2d[0]}, {pos2d[1]}), View Dir=({ray_d.x:.2f}, {ray_d.y:.2f}, {ray_d.z:.2f}), Ray Origin=({ray_p.x:.2f}, {ray_p.y:.2f}, {ray_p.z:.2f})")
-            dm_logger.info(f"Debug [Corners]: P0=({self.points[0].x:.2f}, {self.points[0].y:.2f}, {self.points[0].z:.2f}), P1=({self.points[1].x:.2f}, {self.points[1].y:.2f}, {self.points[1].z:.2f}), P2=({self.points[2].x:.2f}, {self.points[2].y:.2f}, {self.points[2].z:.2f})")
             
-            wp = getattr(self, "working_plane", None)
-            hp = self.current_point
-            hp_loc = wp.inverse().multVec(hp) if wp else hp
-            p0_loc = wp.inverse().multVec(self.points[0]) if wp else self.points[0]
-            
-            dm_logger.info(f"Box P2 (height): world=({hp.x:.2f},{hp.y:.2f},{hp.z:.2f})  local=({hp_loc.x:.2f},{hp_loc.y:.2f},{hp_loc.z:.2f})")
-            dm_logger.info(f"  Height (local Z delta from P0): {abs(hp_loc.z - p0_loc.z):.2f}")
+            # Transition to a finalized state or finish tool
+            self.state = 3 
             self._finalize_object("Box")
+            # Note: Right click implicitly finishes the tool as handled by DMBase
 
         return True
 
@@ -389,11 +368,13 @@ class SphereCreator(PrimitiveCreatorBase):
         if pos is None:
             return True
 
-        if self.center is None:
+        if self.state == 0:
             self.center = pos
+            self.state = 1
             dm_logger.info("Sphere Tool: Click radius")
-        else:
+        elif self.state == 1:
             self.current_point = pos
+            self.state = 2
             self._finalize_object("Sphere")
 
         return True
@@ -431,15 +412,18 @@ class CylinderCreator(PrimitiveCreatorBase):
         if pos is None:
             return True
 
-        if len(self.points) == 0:
+        if self.state == 0:
             self.points.append(pos)
+            self.state = 1
             dm_logger.info("Cylinder Tool: Click radius")
-        elif len(self.points) == 1:
+        elif self.state == 1:
             self.points.append(pos)
+            self.state = 2
             dm_logger.info("Cylinder Tool: Click height")
-        elif len(self.points) == 2:
+        elif self.state == 2:
             self.points.append(pos)
             self.current_point = pos
+            self.state = 3
             self._finalize_object("Cylinder")
 
         return True
@@ -455,7 +439,7 @@ class CylinderCreator(PrimitiveCreatorBase):
             return None
         c_base = self.points[0]
         n, _ = self.get_base_plane()
-        if len(self.points) == 1:
+        if self.state == 1:
             radius = (self.current_point - c_base).Length
             height = 1.0  # minimal placeholder
         else:
