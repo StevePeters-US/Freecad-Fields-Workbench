@@ -445,9 +445,14 @@ class DMBase:
 
     def handle_move(self, event_dict):
         if getattr(self, "state", 0) == 0:
-            self.state = 1
+            n, o = self.get_base_plane()
+            pt = self.get_mouse_world_pos(event_dict, n, o)
+            self.current_point = pt
+            self.on_move_state_0(event_dict)
+            self.update_preview()
+            self.update_ui()
             
-        if self.state == 1:
+        elif self.state == 1:
             n, o = self.get_base_plane()
             pt = self.get_mouse_world_pos(event_dict, n, o)
             self.current_point = pt
@@ -459,6 +464,10 @@ class DMBase:
             self.on_move_state_2(event_dict)
             self.update_preview()
             self.update_ui()
+
+    def on_move_state_0(self, event_dict):
+        """Hook for subclasses to update internal parameters in state 0."""
+        pass
 
     def on_move_state_1(self, event_dict):
         """Hook for subclasses to update internal parameters in state 1."""
