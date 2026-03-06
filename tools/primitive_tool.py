@@ -197,8 +197,14 @@ class BoxCreator(PrimitiveCreatorBase):
         wp = getattr(self, "working_plane", None)
         normal = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
 
+        # Augment the event_dict with the 2D screen position where the drag started.
+        # get_projected_point uses this as the anchor for its screen-space projection.
+        drag_event = dict(event_dict) if event_dict else {}
+        if hasattr(self, "_height_drag_start_pos") and self._height_drag_start_pos:
+            drag_event["DragStart2D"] = self._height_drag_start_pos
+
         self.current_point = DMInputManager.get_instance().get_projected_point(
-            self.view, self._height_drag_base, normal, event_dict
+            self.view, self._height_drag_base, normal, drag_event
         )
 
     def _get_preview_field(self):

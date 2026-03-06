@@ -113,6 +113,7 @@ class DMInputManager(QtCore.QObject):
             return self._last_qt_pos
 
         if "QtPosition" in event_dict:
+            # Already Qt-space (Y=0 at top). Store directly.
             self._last_qt_pos = event_dict["QtPosition"]
             return self._last_qt_pos
             
@@ -120,8 +121,27 @@ class DMInputManager(QtCore.QObject):
         if not pos:
             return self._last_qt_pos
             
-        # Use the position as-is
-        self._last_qt_pos = pos
+        # SoEvent/Coin3D "Position" has Y=0 at the BOTTOM of the viewport.
+        # FreeCAD's view.getPoint() / view.getRay() expect Qt-style coords
+        # where Y=0 is at the TOP.  Flip Y before storing.
+        x, y = pos[0], pos[1]
+        try:
+            view = FreeCADGui.activeView()
+            if view:
+                viewer = view.getViewer()
+                if hasattr(viewer, "getGlxSize"):
+                    sz = viewer.getGlxSize()
+                    h = float(sz[1])
+                elif hasattr(viewer, "getSize"):
+                    sz = viewer.getSize()
+                    h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
+                else:
+                    h = None
+                if h:
+                    y = h - y
+        except Exception:
+            pass  # best-effort; leave y unflipped if we can't determine height
+        self._last_qt_pos = (x, y)
         return self._last_qt_pos
 
     def get_drag_delta(self, start_pos, current_event_dict):
@@ -208,37 +228,109 @@ class DMInputManager(QtCore.QObject):
 
     def get_projected_point(self, view, base_point_3d, normal_3d, event_dict):
         """
-        Calculates the 3D point on a line (Base + Normal) closest to the current mouse ray.
-        Used for height dragging (e.g., Box tool).
+        Calculates the 3D point along (base_point_3d + t*normal_3d) that corresponds
+        to the current mouse position.  Uses a screen-space projection so it is 1:1
+        with mouse movement in both perspective and orthographic views.
+
+        Algorithm:
+          1. Derive camera right/up vectors from the camera's orientation quaternion.
+          2. Project the 3D normal into screen-space (right, up) components.
+          3. Compute pixels-per-world-unit scale from camera FOV/height.
+          4. Measure mouse delta since drag start along the projected normal direction.
+          5. Convert pixel delta → world-space offset along normal → return new point.
         """
         if not view: return base_point_3d
-        
-        ray_p, ray_d = self.get_ray(view, event_dict)
-        if ray_p is None or ray_d is None: return base_point_3d
 
         try:
-            # 1. Standard Line-Line Closest Point Math (Ray & Normal Line)
-            # Ray: L1 = P1 + s*D1 
-            # Normal Line: L2 = P2 + t*D2
-            p1, d1 = ray_p, ray_d
-            p2, d2 = base_point_3d, normal_3d.normalize()
-            
-            v = p1 - p2
-            # Dot products
-            b = d1.dot(d2)
-            d = d1.dot(v)
-            e = d2.dot(v)
-            
-            # The parameter t along the Normal Line (L2) for the closest point to Ray (L1)
-            denom = b*b - 1.0 # (d1.dot(d1) * d2.dot(d2) - b*b) since d1, d2 are unit vectors
-            if abs(denom) > 1e-6:
-                t = (d*b - e) / denom
-                return p2 + d2 * t
-                
+            normal_3d_copy = FreeCAD.Vector(normal_3d)
+            n_len = normal_3d_copy.Length
+            if n_len < 1e-10:
+                return base_point_3d
+            normal_3d_copy.normalize()
+
+            # --- Step 1: Camera basis vectors from orientation quaternion ---
+            cam = view.getCameraNode()
+            if not cam:
+                return base_point_3d
+
+            rot = cam.orientation.getValue()
+            qx, qy, qz, qw = rot.getValue()
+            # Right (X screen axis) and Up (Y screen axis) in world space
+            ux = 2*(qx*qy - qw*qz); uy = 1 - 2*(qx*qx + qz*qz); uz = 2*(qy*qz + qw*qx)
+            rx = 1 - 2*(qy*qy + qz*qz); ry = 2*(qx*qy + qw*qz); rz = 2*(qx*qz - qw*qy)
+            cam_right = FreeCAD.Vector(rx, ry, rz)
+            cam_up    = FreeCAD.Vector(ux, uy, uz)
+
+            # --- Step 2: Project the world normal into screen-space ---
+            # scr_nx = how much the normal points in the screen-right direction
+            # scr_ny = how much it points in the screen-up direction (positive = up)
+            scr_nx = normal_3d_copy.dot(cam_right)
+            scr_ny = normal_3d_copy.dot(cam_up)
+            # Qt Y is positive-DOWN, so negate the up component for pixel space
+            scr_ny_px = -scr_ny   # screen-up world → screen-top Qt pixel direction
+
+            scr_len_ndc = math.sqrt(scr_nx*scr_nx + scr_ny*scr_ny)
+            if scr_len_ndc < 1e-6:
+                return base_point_3d  # Normal points straight at camera – degenerate
+
+            # --- Step 3: Pixels-per-world-unit scale ---
+            # Get viewport size
+            viewer = view.getViewer()
+            vp_w, vp_h = 1000.0, 1000.0
+            try:
+                if hasattr(viewer, "getGlxSize"):
+                    sz = viewer.getGlxSize(); vp_w, vp_h = float(sz[0]), float(sz[1])
+                elif hasattr(viewer, "getSize"):
+                    sz = viewer.getSize()
+                    vp_w = float(sz[0] if isinstance(sz, (list,tuple)) else sz.width())
+                    vp_h = float(sz[1] if isinstance(sz, (list,tuple)) else sz.height())
+            except Exception:
+                pass
+
+            # World units that span half the viewport height
+            if hasattr(cam, "height"):           # Orthographic
+                half_world_h = cam.height.getValue() / 2.0
+            elif hasattr(cam, "heightAngle"):     # Perspective
+                # Distance from camera to base point
+                cam_p_vals = cam.position.getValue()
+                cam_pos = FreeCAD.Vector(cam_p_vals[0], cam_p_vals[1], cam_p_vals[2])
+                depth = (base_point_3d - cam_pos).Length
+                fov = cam.heightAngle.getValue()
+                half_world_h = depth * math.tan(fov / 2.0)
+            else:
+                half_world_h = 100.0
+
+            # pixels per world unit: viewport_half_height_px / half_world_height_world
+            px_per_world = (vp_h / 2.0) / max(half_world_h, 1e-6)
+
+            # scr_len in pixels for 1 world unit along normal
+            scr_len_px = scr_len_ndc * px_per_world
+
+            # --- Step 4: Mouse pixel delta since drag start ---
+            curr_pos = self.get_mouse_pos(event_dict)
+            drag_start = event_dict.get("DragStart2D") if event_dict else None
+            if drag_start is None:
+                drag_start = curr_pos   # No anchor → zero delta (safe fallback)
+
+            dx = curr_pos[0] - drag_start[0]          # positive = mouse moved right
+            dy = curr_pos[1] - drag_start[1]          # positive = mouse moved down (Qt)
+
+            # Project pixel delta onto screen-space normal direction
+            # (scr_nx in right direction, scr_ny_px in down direction)
+            scr_len_unit = math.sqrt(scr_nx*scr_nx + scr_ny_px*scr_ny_px)
+            if scr_len_unit < 1e-9:
+                return base_point_3d
+            pixel_delta = (dx * scr_nx + dy * scr_ny_px) / scr_len_unit
+
+            # --- Step 5: Convert to world offset ---
+            world_delta = pixel_delta / max(scr_len_px, 1e-6)
+
+            return base_point_3d + normal_3d_copy * world_delta
+
         except Exception as e:
-            dm_logger.debug(f"get_projected_point ray-line math failed: {e}")
-            
+            dm_logger.debug(f"get_projected_point failed: {e}")
         return base_point_3d
+
 
     def get_view_transform(self, view, target_pt):
         """
