@@ -4,6 +4,9 @@ Tasks moved here from `TODO.md` after verification.
 
 ---
 
+### ✅ Add Bounding Box Utility Helpers
+- **Completed**: Extracted repeated bounding box logic into `_bbox_union` and `_bbox_intersection` helper functions in `core/frep/frep_composer.py`.
+
 ### ✅ Unify Tool Cleanup Lifecycle
 - **Completed**: Consolidated cleanup paths in `PrimitiveCreatorBase._do_terminate()` and `NURBSPrimitiveCreator.terminate()` into a unified `DMBase._do_terminate()` function.
 

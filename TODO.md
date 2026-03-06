@@ -78,14 +78,7 @@
 
 
 
-### Add Bounding Box Utility Helpers `Gemini Flash`
-- **Goal**: Extract the repeated min/max bounding box merge logic from `UnionField.bounding_box()` and `IntersectionField.bounding_box()` into a shared utility.
-- **Files to read**: `core/frep/frep_composer.py`
-- **Files to modify**: `core/frep/frep_composer.py`
-- **Steps**:
-  1. Add `_merge_bb(bb_a, bb_b, mode='union')` helper that computes the spatial union (min of mins, max of maxes) or intersection (max of mins, min of maxes) of two bounding boxes.
-  2. Refactor `UnionField.bounding_box()` and `IntersectionField.bounding_box()` to use the helper.
-- **Acceptance**: Boolean field bounding boxes produce identical results. Code is DRYer.
+
 
 ---
 ---
