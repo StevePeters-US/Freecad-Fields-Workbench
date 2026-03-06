@@ -238,14 +238,9 @@ class BoxCreator(PrimitiveCreatorBase):
     def _make_field(self, p1, p2, p3):
         wp = getattr(self, "working_plane", None)
         
-        def to_local(p):
-            if wp is not None:
-                return wp.inverse().multVec(p)
-            return p
-        
-        loc_p1 = to_local(p1)
-        loc_p2 = to_local(p2)
-        loc_p3 = to_local(p3)
+        loc_p1 = self.to_local(p1)
+        loc_p2 = self.to_local(p2)
+        loc_p3 = self.to_local(p3)
         
         size_x = abs(loc_p2.x - loc_p1.x)
         size_y = abs(loc_p2.y - loc_p1.y)
@@ -264,14 +259,10 @@ class BoxCreator(PrimitiveCreatorBase):
         if len(self.points) < 3:
             return None
         wp = getattr(self, "working_plane", None)
-        def to_local(p):
-            return wp.inverse().multVec(p) if wp is not None else p
-        def to_global(p):
-            return wp.multVec(p) if wp is not None else p
 
-        loc_p1 = to_local(self.points[0])
-        loc_p2 = to_local(self.points[1])
-        loc_p3 = to_local(self.points[2])
+        loc_p1 = self.to_local(self.points[0])
+        loc_p2 = self.to_local(self.points[1])
+        loc_p3 = self.to_local(self.points[2])
         
         size_x = abs(loc_p2.x - loc_p1.x)
         size_y = abs(loc_p2.y - loc_p1.y)
@@ -290,7 +281,7 @@ class BoxCreator(PrimitiveCreatorBase):
             FreeCAD.Vector(cx + size_x/2, cy + size_y/2, cz + size_z/2),
             FreeCAD.Vector(cx - size_x/2, cy + size_y/2, cz + size_z/2),
         ]
-        return [to_global(pt) for pt in pts_local]
+        return [self.to_global(pt) for pt in pts_local]
 
 
 class SphereCreator(PrimitiveCreatorBase):

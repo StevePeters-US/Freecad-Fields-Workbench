@@ -70,36 +70,11 @@
 
 ## Refactor: AnalyticField & Code Cleanup
 
-### [COMPLETED] Implement `AnalyticField` Base Class `Gemini Low`
-- **Goal**: Replace the empty `MarchingCubesField` with a meaningful `AnalyticField` base class that represents any field defined by a closed-form SDF formula. Move MC primitives from `core/frep/marching_cubes/` to `core/frep/analytic/`.
-- **Files to read**: `core/frep/frep_field.py`, `core/frep/marching_cubes/mc_field.py`, `core/frep/marching_cubes/box.py`, `core/frep/marching_cubes/sphere.py`, `core/frep/marching_cubes/cylinder.py`, `core/frep/marching_cubes/plane.py`
-- **Files to modify/create**: `core/frep/analytic/analytic_field.py` [NEW], `core/frep/analytic/box.py` [NEW], `core/frep/analytic/sphere.py` [NEW], `core/frep/analytic/cylinder.py` [NEW], `core/frep/analytic/plane.py` [NEW]; update all imports in `tools/primitive_tool.py`, `core/frep/frep_composer.py`, `core/dm_object.py`
-- **Steps**:
-  1. Create `core/frep/analytic/analytic_field.py` with `class AnalyticField(FRepField)` that documents the formula-field contract (subclasses must override `evaluate`, `evaluate_grid`, and `bounding_box`).
-  2. Move existing MC primitives to `core/frep/analytic/`, renaming `MCBoxField` → `AnalyticBoxField`, etc.
-  3. Update all imports across the codebase.
-  4. Delete the now-unused `core/frep/marching_cubes/mc_field.py`.
-  5. Delete the empty `AdaptiveField` and `NurbsField` stubs (they can be recreated when actually needed).
-- **Acceptance**: All existing MC primitives work identically but inherit from `AnalyticField`. No import errors. Marching cubes mesher still works with the renamed fields.
 
-### Enforce `bounding_box()` Contract `Gemini Flash`
-- **Goal**: Make `FRepField.bounding_box()` raise `NotImplementedError` instead of returning a 20km³ default, preventing silent performance bugs.
-- **Files to read**: `core/frep/frep_field.py`
-- **Files to modify**: `core/frep/frep_field.py`
-- **Steps**:
-  1. Change `FRepField.bounding_box()` to raise `NotImplementedError("Subclasses must implement bounding_box()")`.
-  2. Verify all concrete field subclasses (box, sphere, cylinder, plane, composers) already override it.
-- **Acceptance**: Any new field that forgets `bounding_box()` immediately fails with a clear error instead of silently sampling a huge grid.
 
-### Consolidate `to_local()` Closures in BoxCreator `Gemini Flash`
-- **Goal**: Remove duplicate `to_local()` closure functions inside `BoxCreator._make_field()` and `BoxCreator._get_final_points()`, using the inherited `DMBase.to_local()` instead.
-- **Files to read**: `tools/dm_base.py`, `tools/primitive_tool.py`
-- **Files to modify**: `tools/primitive_tool.py`
-- **Steps**:
-  1. In `_make_field()`, replace the inline `to_local(p)` closure with `self.to_local(p)`.
-  2. In `_get_final_points()`, replace both `to_local()` and `to_global()` closures with `self.to_local()` and `self.to_global()`.
-  3. Verify box creation still works on both default and custom workplanes.
-- **Acceptance**: No inline `to_local` / `to_global` closures remain in `BoxCreator`. Box tool produces identical results.
+
+
+
 
 ### Unify Tool Cleanup Lifecycle `Gemini Low`
 - **Goal**: Merge the parallel cleanup paths in `PrimitiveCreatorBase._do_terminate()` and `NURBSPrimitiveCreator.terminate()` to eliminate duplication and prevent missed cleanup.
