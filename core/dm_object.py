@@ -59,12 +59,12 @@ def get_meshing_type():
 def set_meshing_type(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetInt("MeshingType", int(val))
 
-def get_meshing_resolution():
-    """Return the global meshing resolution (defaults to 20)."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("MeshingResolution", 20.0)
+def get_meshing_cell_size():
+    """Return the global meshing cell size in mm (defaults to 10.0)."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("MeshingCellSize", 10.0)
 
-def set_meshing_resolution(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("MeshingResolution", float(val))
+def set_meshing_cell_size(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("MeshingCellSize", float(val))
 
 def get_frep_storage_type(): # Deprecated alias
     return get_meshing_type()
@@ -182,9 +182,9 @@ class DMObjectProxy:
                 obj.ControlGrid = flat_list
 
         if shape_type == "frep":
-            if not hasattr(obj, "MeshingResolution"):
-                obj.addProperty("App::PropertyFloat", "MeshingResolution", "FRep", "Meshing resolution (higher = more detail)")
-                obj.MeshingResolution = get_meshing_resolution()
+            if not hasattr(obj, "MeshingCellSize"):
+                obj.addProperty("App::PropertyFloat", "MeshingCellSize", "FRep", "Meshing cell size in mm (smaller = more detail)")
+                obj.MeshingCellSize = get_meshing_cell_size()
             if not hasattr(obj, "ShowWireframe"):
                 obj.addProperty("App::PropertyBool", "ShowWireframe", "FRep", "Show triangle wireframe")
                 obj.ShowWireframe = get_show_wireframe()
@@ -274,12 +274,12 @@ class DMObjectProxy:
             return surf.to_shape()
         elif st == "frep":
             if hasattr(self, "FRepField") and self.FRepField is not None:
-                from core.frep_mesher import get_active_mesher
+                from core.dm_mesher import get_active_mesher
                 m_type = getattr(fp, "MeshingType", None)
                 mesher = get_active_mesher(type_override=m_type)
                 # Favor object property over internal resolution override
-                res = int(getattr(fp, "MeshingResolution", getattr(self, "_final_resolution", get_meshing_resolution())))
-                return mesher.mesh(self.FRepField, resolution=res)
+                res = float(getattr(fp, "MeshingCellSize", getattr(self, "_final_resolution", get_meshing_cell_size())))
+                return mesher.mesh(self.FRepField, cell_size=res)
             return Part.Shape()
             
         return Part.Shape()
@@ -292,11 +292,11 @@ class DMObjectProxy:
 
             if st == "frep":
                 if hasattr(self, "FRepField") and self.FRepField is not None:
-                    from core.frep_mesher import get_active_mesher
+                    from core.dm_mesher import get_active_mesher
                     m_type = getattr(fp, "MeshingType", None)
                     mesher = get_active_mesher(type_override=m_type)
-                    res = int(getattr(fp, "MeshingResolution", getattr(self, "_final_resolution", get_meshing_resolution())))
-                    result = mesher.mesh(self.FRepField, resolution=res)
+                    res = float(getattr(fp, "MeshingCellSize", getattr(self, "_final_resolution", get_meshing_cell_size())))
+                    result = mesher.mesh(self.FRepField, cell_size=res)
                     if result is not None:
                         self._frep_verts, self._frep_idx = result
                     else:
@@ -396,6 +396,7 @@ class DMViewProvider:
         # Generic FreeCAD ViewObject properties
         try:
             vobj = self.Object.ViewObject
+            lw = get_line_width() # Get current line width
             vobj.LineWidth = lw
             vobj.PointSize = get_point_size()
         except:
@@ -404,7 +405,7 @@ class DMViewProvider:
     def updateData(self, fp, prop):
         from . import dm_logger
         
-        if prop in ["ShowWireframe", "MeshingResolution"]:
+        if prop in ["ShowWireframe", "MeshingCellSize"]:
             self.on_prefs_changed()
             
         if prop == "Shape" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":
@@ -551,7 +552,7 @@ def refresh_all_dm_objects():
     
     lw = get_line_width()
     ps = get_point_size()
-    res = get_meshing_resolution()
+    res = get_meshing_cell_size()
     show_wire = get_show_wireframe()
     m_type = get_meshing_type()
     
@@ -560,8 +561,8 @@ def refresh_all_dm_objects():
             # Native FreeCAD properties
             obj.ViewObject.LineWidth = lw
             # DM Proxy properties
-            if hasattr(obj, "MeshingResolution"):
-                obj.MeshingResolution = float(res)
+            if hasattr(obj, "MeshingCellSize"):
+                obj.MeshingCellSize = float(res)
             if hasattr(obj, "ShowWireframe"):
                 obj.ShowWireframe = bool(show_wire)
             if hasattr(obj, "MeshingType"):

@@ -183,12 +183,15 @@ class DMRenderer:
         if not coin or not self._frep_coords:
             return
         try:
+            # Always clear first to prevent stale geometry accumulating on redraw
+            self._frep_coords.point.setNum(0)
+            self._frep_faces.coordIndex.setNum(0)
+            if self._frep_wire_faces:
+                self._frep_wire_faces.coordIndex.setNum(0)
+
             if verts is None or flat_idx is None or len(verts) == 0:
-                self._frep_coords.point.setNum(0)
-                self._frep_faces.coordIndex.setNum(0)
-                if self._frep_wire_faces:
-                    self._frep_wire_faces.coordIndex.setNum(0)
                 return
+
             self._frep_coords.point.setValues(verts)
             self._frep_faces.coordIndex.setValues(flat_idx)
             if self._frep_wire_faces:

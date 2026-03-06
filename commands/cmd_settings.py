@@ -96,12 +96,14 @@ class _SettingsDialog(QtGui.QDialog):
         self._meshing_combo.setCurrentIndex(current_meshing)
         layout.addRow("Meshing Type:", self._meshing_combo)
 
-        # Meshing Resolution spinbox
+        # Meshing Cell Size spinbox
         self._res_spin = QtGui.QDoubleSpinBox()
-        self._res_spin.setRange(1.0, 200.0)
-        self._res_spin.setValue(current_res)
-        self._res_spin.setToolTip("Global resolution for SDF meshing (higher = more detail)")
-        layout.addRow("Meshing Resolution:", self._res_spin)
+        self._res_spin.setRange(0.1, 100.0)
+        self._res_spin.setSingleStep(1.0)
+        self._res_spin.setDecimals(2)
+        self._res_spin.setValue(get_meshing_cell_size())
+        self._res_spin.setToolTip("Global cell size for SDF meshing in millimeters (smaller = more detail)")
+        layout.addRow("Meshing Cell Size (mm):", self._res_spin)
 
         # Buttons
         btn_box = QtGui.QDialogButtonBox(
@@ -128,7 +130,7 @@ class _SettingsDialog(QtGui.QDialog):
         set_point_size(ps)
         set_picking_radius(pr)
         set_meshing_type(meshing)
-        set_meshing_resolution(res)
+        set_meshing_cell_size(self._res_spin.value())
         set_max_bounds(mb)
         set_perf_profiler_enabled(self._perf_check.isChecked())
         

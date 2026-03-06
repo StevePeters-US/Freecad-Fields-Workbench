@@ -1,6 +1,4 @@
 import time
-import FreeCAD
-import Mesh
 import Part
 import numpy as np
 
@@ -56,7 +54,7 @@ class MeshTimer:
         """Call once per mesh() invocation so we can compute averages."""
         self._calls += 1
 
-    def summary(self, label: str = "FRep Mesh"):
+    def summary(self, label: str = "DM Mesh"):
         """Emit one INFO log with totals and per-call averages, then reset."""
         from core.dm_object import get_perf_profiler_enabled
         if not get_perf_profiler_enabled():
@@ -80,15 +78,18 @@ class MeshTimer:
 mesh_timer = MeshTimer()
 
 
-class FRepMesher:
-    """Abstract base class for all F-Rep meshing protocols."""
-    def mesh(self, field: FRepField, cell_size: float) -> Part.Shape:
+class DMMesher:
+    """Abstract base class for all Direct Modeling SDF meshers."""
+    def mesh(self, field: FRepField, cell_size: float) -> tuple:
         raise NotImplementedError("mesher must implement mesh()")
 
 
-class MarchingCubesMesher(FRepMesher):
+class MarchingCubesMesher(DMMesher):
     """
     Uniform-grid Marching Cubes.
+
+    Uses an absolute cell_size (in mm) to ensure consistent triangle density
+    regardless of the object's overall dimensions.
 
     Vectorization levels:
       1. Field evaluation      — NumPy batch (per-field override)
@@ -97,9 +98,9 @@ class MarchingCubesMesher(FRepMesher):
       4. Corner extraction     — (M,8) broadcast, no loop
       5. Edge interpolation    — (M,12,3) batch, no loop
       6. Triangle extraction   — (M,5,3) reshape + np.where, no loop
-      7. Mesh build            — flat (N,3,3) ndarray -> Mesh.Mesh
+      7. Mesh build            — flat (N,3,3) ndarray -> Coin3D arrays
     """
-    def mesh(self, field: FRepField, cell_size: float) -> Part.Shape:
+    def mesh(self, field: FRepField, cell_size: float) -> tuple:
         min_b, max_b = field.bounding_box()
 
         def _pad(lo, hi):
@@ -112,19 +113,16 @@ class MarchingCubesMesher(FRepMesher):
         y0, y1 = _pad(min_b.y, max_b.y)
         z0, z1 = _pad(min_b.z, max_b.z)
 
-        # Higher resolution setting was R, but we now use absolute cell_size
-        # cell_size: distance between samples in any direction
         mesh_timer.tick()
 
         # ── 1. Dimension-Independent Grid Sampling ──────────────────────────
-        # Calculate number of voxel steps per axis based on actual dimensions
+        # cell_size is the physical distance between samples in any direction.
+        # This ensures uniform, non-stretched triangles regardless of model shape.
         dx, dy, dz = (x1 - x0), (y1 - y0), (z1 - z0)
         nx = max(1, int(np.ceil(dx / cell_size)))
         ny = max(1, int(np.ceil(dy / cell_size)))
         nz = max(1, int(np.ceil(dz / cell_size)))
-        
-        # Adjust boundaries slightly to ensure they fit integer number of cells
-        # while maintaining the uniform cell size.
+
         x = np.linspace(x0, x0 + nx * cell_size, nx + 1)
         y = np.linspace(y0, y0 + ny * cell_size, ny + 1)
         z = np.linspace(z0, z0 + nz * cell_size, nz + 1)
@@ -158,7 +156,7 @@ class MarchingCubesMesher(FRepMesher):
         mesh_timer.stop("active_filter")
 
         if active.size == 0:
-            return Part.Shape()
+            return None
         ai, aj, ak = active[:, 0], active[:, 1], active[:, 2]
         ci = cube_idx[ai, aj, ak]
         M  = len(ai)
@@ -202,7 +200,7 @@ class MarchingCubesMesher(FRepMesher):
         mesh_timer.stop("tri_extract")
 
         if mi.size == 0:
-            return Part.Shape()
+            return None
 
         ei   = tri5[mi, ti]                  # (N_tris, 3) edge indices
         # Reversed winding [0,2,1] for correct outward normals with SDF negative-inside
@@ -212,45 +210,40 @@ class MarchingCubesMesher(FRepMesher):
         tri_verts = np.stack([pts1, pts2, pts3], axis=1)   # (N_tris, 3, 3)
 
         # ── 7. Return raw triangle arrays for Coin3D rendering ────────────────
-        # No Part.Shape / makeShapeFromMesh needed.
         # Returns:
-        #   verts:    (N_tris*3, 3) float32  — one vertex per triangle corner (no dedup needed for rendering)
-        #   flat_idx: (N_tris*4,) int32     — flat [0,1,2,-1, 3,4,5,-1, ...] for SoIndexedFaceSet
+        #   verts:    (N_tris*3, 3) float32  — one vertex per triangle corner
+        #   flat_idx: (N_tris*4,) int32     — flat [0,1,2,-1, ...] for SoIndexedFaceSet
         mesh_timer.start("mesh_build")
 
-        # Flat vertex array: each of the N_tris triangles has 3 unique vertices
-        flat_verts = tri_verts.reshape(-1, 3).astype(np.float32)  # (N_tris*3, 3)
+        flat_verts = tri_verts.reshape(-1, 3).astype(np.float32)
 
-        # Sequential indices: tri i uses vertices [3i, 3i+1, 3i+2]
         n_tris = len(mi)
-        base = np.arange(n_tris, dtype=np.int32) * 3   # [0, 3, 6, ...]
-        tri_idx = np.stack([base, base+1, base+2], axis=1)  # (N_tris, 3)
+        base = np.arange(n_tris, dtype=np.int32) * 3
+        tri_idx = np.stack([base, base+1, base+2], axis=1)
         sentinel = np.full((n_tris, 1), -1, dtype=np.int32)
-        flat_idx = np.hstack([tri_idx, sentinel]).ravel()   # (N_tris*4,)
+        flat_idx = np.hstack([tri_idx, sentinel]).ravel()
 
         mesh_timer.stop("mesh_build")
         return flat_verts, flat_idx
 
 
-
-
-
-class AdaptiveMCMesher(FRepMesher):
-    def mesh(self, field: FRepField, cell_size: float) -> Part.Shape:
-        dm_logger.warn("AdaptiveMCMesher not fully implemented. Falling back.")
+class AdaptiveMCMesher(DMMesher):
+    """Adaptive Marching Cubes placeholder — falls back to MarchingCubesMesher."""
+    def mesh(self, field: FRepField, cell_size: float) -> tuple:
+        dm_logger.warn("AdaptiveMCMesher not yet implemented. Falling back to Marching Cubes.")
         return MarchingCubesMesher().mesh(field, cell_size)
 
 
-class NurbsFRepMesher(FRepMesher):
-    def mesh(self, field: FRepField, cell_size: float) -> Part.Shape:
-        dm_logger.warn("NurbsFRepMesher not fully implemented. Falling back.")
+class SurfaceNetsMesher(DMMesher):
+    """Surface Nets placeholder — falls back to MarchingCubesMesher."""
+    def mesh(self, field: FRepField, cell_size: float) -> tuple:
+        dm_logger.warn("SurfaceNetsMesher not yet implemented. Falling back to Marching Cubes.")
         return MarchingCubesMesher().mesh(field, cell_size)
 
 
-def get_active_mesher(type_override=None) -> FRepMesher:
+def get_active_mesher(type_override=None) -> DMMesher:
     """Return the active mesher based on global settings or a specific type override."""
-    from core.dm_object import get_meshing_cell_size
     st = type_override if type_override is not None else get_meshing_type()
     if st == 1:   return AdaptiveMCMesher()
-    elif st == 2: return NurbsFRepMesher()
+    elif st == 2: return SurfaceNetsMesher()
     else:         return MarchingCubesMesher()

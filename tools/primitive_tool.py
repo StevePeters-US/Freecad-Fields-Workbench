@@ -4,8 +4,8 @@ import math
 from PySide import QtCore
 from core import dm_logger
 from core.input_manager import DMInputManager
-from core.dm_object import create_dm_object, get_meshing_type, get_meshing_resolution
-from core.frep_mesher import mesh_timer
+from core.dm_object import create_dm_object, get_meshing_type, get_meshing_cell_size
+from core.dm_mesher import mesh_timer
 from tools.dm_base import DMBase
 
 # Ensure we import the right storage classes. For now, defaulting to MarchingCubes
@@ -13,11 +13,11 @@ from core.frep.sdf.box import SdfBoxField
 from core.frep.sdf.sphere import SdfSphereField
 from core.frep.sdf.cylinder import SdfCylinderField
 
-# Resolution for interactive preview (lower = faster updates)
-_PREVIEW_RES = 10
-# Resolution for final committed mesh (higher = more detail)
-def _get_final_res():
-    return int(get_meshing_resolution())
+# Cell size for interactive preview in mm (larger = faster updates)
+_PREVIEW_CELL_SIZE = 20.0
+# Cell size for final committed mesh (smaller = more detail)
+def _get_final_cell_size():
+    return get_meshing_cell_size()
 
 
 class PrimitiveCreatorBase(DMBase):
@@ -110,13 +110,13 @@ class PrimitiveCreatorBase(DMBase):
         proxy.FRepField = field
         
         # Set per-object properties
-        if hasattr(obj, "MeshingResolution"):
-            obj.MeshingResolution = float(_get_final_res())
+        if hasattr(obj, "MeshingCellSize"):
+            obj.MeshingCellSize = float(_get_final_cell_size())
         
         obj.touch()
         obj.Document.recompute([obj])
         # Print accumulated timer summary now that the tool is accepted
-        mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_RES} res) + final ({int(getattr(obj, 'MeshingResolution', _get_final_res()))} res)")
+        mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_CELL_SIZE}mm) + final ({getattr(obj, 'MeshingCellSize', _get_final_cell_size()):.1f}mm)")
         self._preview_obj = None  # Severed; the object is now the user's
 
 
