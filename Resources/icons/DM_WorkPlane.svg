@@ -1,5 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
-  <g transform="translate(32, 16) scale(1, 0.5) rotate(45)">
+  <!-- Translate to exactly center (32,32) instead of (32,16) -->
+  <g transform="translate(32, 32) scale(1, 0.5) rotate(45)">
     <!-- Base Plane -->
     <rect x="-24" y="-24" width="48" height="48" fill="#e0f2fe" stroke="#0ea5e9" stroke-width="2" />
     <!-- Grid Lines -->

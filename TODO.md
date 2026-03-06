@@ -3,19 +3,15 @@
 ---
 
 ## Bugs
-
-
+---
+Hiding dm part does not hide the coin3d nodes
+---
+The cube does not respect the workplane
+---
 
 - **Curve points are not all being drawn in tool editor**
 
-- **[COMPLETED] Find missing icons or replace with valid references** `Gemini Low`
-  - **Goal**: Resolve "Cannot find icon: Part_Box/Sphere" warnings in the log when creating FRep primitives.
-  - **Files to read**: `commands/cmd_primitive.py`
-  - **Files to modify/create**: `commands/cmd_primitive.py` (or add icon files)
-  - **Steps**:
-    1. Identify available standard FreeCAD icons for primitives or create new SVG icons in the `resources` folder.
-    2. Update `CommandDMCreation._ICONS` mapping to valid existing ones or register new icons via `FreeCADGui.addIcon`.
-  - **Acceptance**: No more "Cannot find icon" warnings in DM creation tools.
+
 
 - **Investigate `_get_geometry_point` null shape F-Rep face hits** `Gemini Low`
   - **Goal**: Fully support deep geometry snapping (vertex/edge detection) on FRep meshes instead of just using the generic hit point.
@@ -66,117 +62,6 @@
 - **Acceptance**: Points placed near grid intersections snap to them. Snap modes are toggleable.
 
 ---
----
-
-## Refactor: AnalyticField & Code Cleanup
-
-
-
-
-
-
-
-
-
-
-
----
----
-
-## Phase 1: F-Rep Field Engine — Class Architecture
-
-> All field and meshing classes. The `FrepStorageType` DM setting (0=Marching Cubes, 1=Adaptive MC, 2=NURBS F-Rep) selects which mesher is used; the field definitions are shared across all three.
-
-### Class Map
-
-```
-core/frep/                      ← F-Rep Module
-  frep_field.py                 ← FRepField (ABC base protocol)
-  marching_cubes/               ← Storage Type 0
-    mc_field.py                 ← MarchingCubesField(FRepField)
-    plane.py                    ← MCPlaneField(MarchingCubesField)
-    box.py                      ← MCBoxField(MarchingCubesField)
-    sphere.py                   ← MCSphereField(MarchingCubesField)
-    cylinder.py                 ← MCCylinderField(MarchingCubesField)
-  adaptive/                     ← Storage Type 1
-    adaptive_field.py           ← AdaptiveField(FRepField)
-    plane.py, box.py, ...       ← (Child implementations)
-  nurbs/                        ← Storage Type 2
-    nurbs_field.py              ← NurbsField(FRepField)
-    plane.py, box.py, ...       ← (Child implementations)
-  frep_composer.py              ← Boolean composition nodes
-  frep_mesher.py                ← Isosurface extraction protocols
-```
-
----
-
-### 1a. `FRepField` — Base Field Protocol
-- **Goal**: Form the overall parent class for all F-Rep implementations.
-- **Files to create**: `core/frep/frep_field.py`
-- **Steps**:
-  1. Define `FRepField` ABC with `evaluate(point)`, `gradient(point)`, `bounding_box()`, `sign_at(point)`.
-
-### 1b. `MarchingCubesField` — Storage Type 0 Parent
-- **Goal**: Intermediate base class for all Marching Cubes primitives.
-- **Files to create**: `core/frep/marching_cubes/mc_field.py`
-- **Steps**:
-  1. `class MarchingCubesField(FRepField):`
-  2. Implement `evaluate_grid(points)` optimization.
-
-### 1c. `MCPlaneField` — Marching Cubes Plane
-- **Goal**: Half-space divided by a plane for the MC backend.
-- **Files to create**: `core/frep/marching_cubes/plane.py`
-- **Steps**:
-  1. `class MCPlaneField(MarchingCubesField):` implementing `evaluate` mapped to the plane SDF.
-
-### 1d. `MCBoxField` — Marching Cubes Box
-- **Goal**: Axis-aligned box SDF for the MC backend.
-- **Files to create**: `core/frep/marching_cubes/box.py`
-- **Steps**:
-  1. `class MCBoxField(MarchingCubesField):`
-
-### 1e. `MCSphereField` & `MCCylinderField` — Marching Cubes analytical primitives
-- **Goal**: Analytical shapes for the MC backend.
-- **Files to create**: `core/frep/marching_cubes/sphere.py`, `core/frep/marching_cubes/cylinder.py`
-
-### 1f. `AdaptiveField` and `NurbsField` architecture
-- **Goal**: Skeleton out the parent classes and their files for the other storage types.
-- **Files to create**: `core/frep/adaptive/adaptive_field.py`, `core/frep/nurbs/nurbs_field.py` and empty primitive files.
-
----
----
-
-## Phase 2: Field Composition & Booleans
-
-> Composition tree that combines fields using min/max/blend.
-
-### [COMPLETED] 2a. `frep_composer.py` — Composition Nodes (Minimum LLM: Gemini Low)
-- **Goal**: Boolean combination of fields.
-- **Files to create**: `core/frep/frep_composer.py`
-- **Classes**:
-  - `UnionField(a, b)` — `evaluate = min(a, b)`
-  - `IntersectionField(a, b)` — `evaluate = max(a, b)`
-  - `SubtractionField(a, b)` — `evaluate = max(a, −b)`
-  - All implement `FRepField`. Bounding boxes: union=hull, intersection=overlap, subtraction=box(A).
-- **Acceptance**: `SubtractionField(SphereField, BoxField)` returns expected signs.
-
-### 2b. `SmoothUnionField` — Smooth Blend (Minimum LLM: Gemini High)
-- **Goal**: Fillet-like smooth boolean.
-- **Files to modify**: `core/frep_composer.py`
-- **Class**: `SmoothUnionField(a, b, blend_radius)` using smooth-min: `f = min(a,b) − k²·max(k−|a−b|, 0)²/(4k)`.
-- **Acceptance**: Two overlapping spheres produce a filleted isosurface.
-
-### 2c. Wire Boolean Commands to F-Rep (Minimum LLM: Gemini Low)
-- **Goal**: `DM_Fuse/Cut/Common` create composition fields instead of OCCT booleans.
-- **Files to modify**: `commands/cmd_boolean.py`, `core/dm_object.py`
-- **Steps**:
-  1. Store `FRepField` reference on `DMObjectProxy`.
-  2. `DM_Fuse` → `UnionField`, `DM_Cut` → `SubtractionField`, `DM_Common` → `IntersectionField`.
-  3. Result object re-meshes from composed field.
-- **Acceptance**: Boolean of two F-Rep objects produces correct merged shape.
-
----
----
 
 ## Phase 3: Isosurface Extraction & Display
 
@@ -226,17 +111,7 @@ core/frep/                      ← F-Rep Module
   5. Return native BRep `Part.Shape`.
 - **Acceptance**: A sphere field produces a smooth BRep solid (not faceted). Editable as NURBS.
 
-### 3e. Connect Mesher to DM Object Pipeline (Minimum LLM: Gemini Low)
-- **Goal**: Wire the mesher into `DMObjectProxy.build_shape()` so F-Rep objects render automatically.
-- **Files to modify**: `core/dm_object.py`
-- **Steps**:
-  1. Add `"frep"` shape type to `DMObjectProxy.__init__()`.
-  2. In `build_shape()`, when `ShapeType == "frep"`, call `get_active_mesher().mesh(field, resolution)`.
-  3. Store `FRepField` on the proxy. Store mesh as `Shape`.
-  4. Re-mesh when field tree or `FrepStorageType` setting changes.
-- **Acceptance**: Creating an F-Rep object renders in the viewport. Changing the storage type re-meshes.
 
----
 ---
 
 ## Phase 4: NURBS Surface → F-Rep Field
@@ -277,36 +152,10 @@ core/frep/                      ← F-Rep Module
   4. Register `DM_CreateSurface` command with hotkey `S`.
 - **Acceptance**: Select two curves → invoke surface tool → a lofted surface appears and is usable in F-Rep boolean operations.
 
----
----
 
-## Phase 5: Interactive Primitive Tools (F-Rep Backed)
-
-> Re-implement the creation tools to produce F-Rep objects instead of Part shapes.
-
-
-
----
 ---
 
 ## Phase 6: Polish & UX
-
-### 6a. F-Rep Mesh Resolution in DM Settings (Minimum LLM: Gemini Flash)
-- **Goal**: Add a "Mesh Resolution" slider to the DM Settings dialog controlling the marching cubes grid density.
-- **Files to read**: `commands/cmd_settings.py`, `core/frep_mesher.py`
-- **Files to modify**: `commands/cmd_settings.py`
-- **Steps**:
-  1. Add a `MeshResolution` parameter (integer, default 64, range 16–256) to the settings dialog.
-  2. Wire it into the mesher so re-meshing uses the new resolution.
-- **Acceptance**: Changing the slider live-updates the mesh quality of F-Rep objects.
-
-### 6b. Register Hotkeys for All Commands (Minimum LLM: Gemini Flash)
-- **Goal**: Add `'Accel'` entries to all command `GetResources()` methods.
-- **Files to modify**: All `cmd_*.py` files in `commands/`
-- **Steps**:
-  1. Add `'Accel': '<key>'` to each command's `GetResources()`.
-  2. Point: `P`, Curve: `C`, Surface: `S`, Box: `B`, Extrude: `E`, Fuse: `Ctrl+F`, Cut: `Ctrl+X`, Common: `Ctrl+I`.
-- **Acceptance**: Each hotkey activates the correct command.
 
 ### 6c. Radial Menu System (Minimum LLM: Gemini High)
 - **Goal**: Right-click radial menu at cursor position for quick tool access.
@@ -395,6 +244,3 @@ when placing points, the point should be placed against the first valid object. 
 - [ ] **Custom Control Point Effects** — Allow control points to modulate local field parameters (e.g., blend radius, wall thickness).
 - [ ] **Radial Menu Raycast Selection** — Long-press radial menu listing all objects under the cursor for hidden topology selection.
 
-Hiding dm part does not hide the coin3d nodes
-
-The cube does not respect the workplane

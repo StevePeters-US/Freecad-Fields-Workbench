@@ -8,7 +8,7 @@ class DM_FillCurve:
     
     def GetResources(self):
         return {
-            'Pixmap': 'Part_MakeFace', # Use standard icon
+            'Pixmap': 'MakeFace', # Use custom icon
             'MenuText': 'Fill Curve',
             'ToolTip': 'Create a NURBS surface from a closed curve',
             'Accel': 'Ctrl+F'

@@ -10,17 +10,17 @@ from core import dm_logger
 
 class CommandDMBoolean:
     _OP_MAP = {
-        "Fuse":   "union",
-        "Cut":    "cut",
-        "Common": "intersect",
+        "Add":   "union",
+        "Subtract":    "cut",
+        "Intersection": "intersect",
     }
     _ICONS = {
-        "Fuse":   "Part_MakeUnion",
-        "Cut":    "Part_MakeDifference",
-        "Common": "Part_MakeIntersection",
+        "Add":   "MakeAdd",
+        "Subtract":    "MakeSubtract",
+        "Intersection": "MakeIntersection",
     }
 
-    def __init__(self, operation="Fuse"):
+    def __init__(self, operation="Add"):
         self.operation = operation
 
     def GetResources(self):
@@ -54,11 +54,11 @@ class CommandDMBoolean:
             shape_a = sel[0].Shape
             for i in range(1, len(sel)):
                 shape_b = sel[i].Shape
-                if self.operation == "Fuse":
+                if self.operation == "Add":
                     shape_a = shape_a.fuse(shape_b)
-                elif self.operation == "Cut":
+                elif self.operation == "Subtract":
                     shape_a = shape_a.cut(shape_b)
-                elif self.operation == "Common":
+                elif self.operation == "Intersection":
                     shape_a = shape_a.common(shape_b)
             
             new_name = f"{self.operation}"
@@ -81,6 +81,6 @@ class CommandDMBoolean:
             dm_logger.error(f"DM_{self.operation} failed: {e}")
 
 
-FreeCADGui.addCommand('DM_Fuse',   CommandDMBoolean("Fuse"))
-FreeCADGui.addCommand('DM_Cut',    CommandDMBoolean("Cut"))
-FreeCADGui.addCommand('DM_Common', CommandDMBoolean("Common"))
+FreeCADGui.addCommand('DM_Add',         CommandDMBoolean("Add"))
+FreeCADGui.addCommand('DM_Subtract',    CommandDMBoolean("Subtract"))
+FreeCADGui.addCommand('DM_Intersection', CommandDMBoolean("Intersection"))

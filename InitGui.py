@@ -67,23 +67,11 @@ class DirectModelingWorkbench(Workbench):
             import core as FCDirectModeling
             import tools
             
-            self.appendToolbar("Direct Modeling", [
-                'DM_WorkPlane',
-                'DM_CreatePoint',
-                'DM_CreateCurve',
-                'DM_CreateBox',
-                'DM_CreateSphere',
-                'DM_CreateCylinder',
-                'DM_FillCurve',
+            self.appendToolbar("DM - Edit", [
                 'DM_EditObject',
-                'DM_Translate',
-                'DM_OpenSketcher',
-                'DM_Fuse',
-                'DM_Cut',
-                'DM_Common',
                 'DM_Settings',
             ])
-            self.appendMenu("Direct Modeling", [
+            self.appendToolbar("DM - Constructive", [
                 'DM_WorkPlane',
                 'DM_CreatePoint',
                 'DM_CreateCurve',
@@ -91,13 +79,31 @@ class DirectModelingWorkbench(Workbench):
                 'DM_CreateSphere',
                 'DM_CreateCylinder',
                 'DM_FillCurve',
-                'DM_EditObject',
+            ])
+            self.appendToolbar("DM - Operations", [
                 'DM_Translate',
+                'DM_Add',
+                'DM_Subtract',
+                'DM_Intersection',
                 'DM_OpenSketcher',
-                'DM_Fuse',
-                'DM_Cut',
-                'DM_Common',
+            ])
+            self.appendMenu("Direct Modeling", [
+                'DM_EditObject',
                 'DM_Settings',
+                'Separator',
+                'DM_WorkPlane',
+                'DM_CreatePoint',
+                'DM_CreateCurve',
+                'DM_CreateBox',
+                'DM_CreateSphere',
+                'DM_CreateCylinder',
+                'DM_FillCurve',
+                'Separator',
+                'DM_Translate',
+                'DM_Add',
+                'DM_Subtract',
+                'DM_Intersection',
+                'DM_OpenSketcher',
             ])
         except Exception as e:
             from core import dm_logger

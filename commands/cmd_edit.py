@@ -7,9 +7,9 @@ class EditDMObjectCommand:
     
     def GetResources(self):
         return {
-            'Pixmap': 'Draft_Edit', # standard FC icon for node editing
-            'MenuText': 'Edit Points',
-            'ToolTip': 'Edit control points and handles of the selected Direct Modeling shape.'
+            'Pixmap': 'EditTool', # custom DM icon
+            'MenuText': 'Edit Tool',
+            'ToolTip': 'General tool editor for the selected Direct Modeling shape.'
         }
         
     def IsActive(self):

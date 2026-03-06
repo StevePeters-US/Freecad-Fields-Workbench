@@ -5,9 +5,9 @@ from core.dm_object import get_frep_storage_type
 
 class CommandDMCreation:
     _ICONS = {
-        "Box": "Part_Box",
-        "Sphere": "Part_Sphere",
-        "Cylinder": "Part_Cylinder"
+        "Box": "CreateBox",
+        "Sphere": "CreateSphere",
+        "Cylinder": "CreateCylinder"
     }
 
     def __init__(self, c_type="Box"):

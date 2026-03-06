@@ -4,6 +4,9 @@ Tasks moved here from `TODO.md` after verification.
 
 ---
 
+### ✅ Find missing icons or replace with valid references
+- **Completed**: Replaced the standard FreeCAD icon references in `cmd_primitive.py` with custom DM icons (`CreateBox`, `CreateSphere`, `CreateCylinder`) and created the missing SVG files in the `Resources/icons` directory.
+
 ### ✅ Add Bounding Box Utility Helpers
 - **Completed**: Extracted repeated bounding box logic into `_bbox_union` and `_bbox_intersection` helper functions in `core/frep/frep_composer.py`.
 
