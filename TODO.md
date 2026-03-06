@@ -18,6 +18,8 @@
 
 ## Bugs
 ---
+the agents seem to have trouble finding freecad (module not found error). write a skill to make that easier
+---
 The cube does not respect the workplane
 ---
 WE NEED A show dm wireframe option, as well as a show dm points option

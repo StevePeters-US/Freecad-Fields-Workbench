@@ -3,6 +3,7 @@ import FreeCADGui
 from PySide import QtCore, QtGui
 from tools.dm_base import DMBase
 from core import dm_logger
+from core.input_manager import DMInputManager
 
 class EditTool(DMBase):
     """
@@ -51,43 +52,8 @@ class EditTool(DMBase):
             self._target_obj.Document.recompute()
 
     def _get_ray(self, event_dict):
-        pos = event_dict.get("Position", (0, 0))
-        x, y = pos[0], pos[1]
-
-        if not self.view:
-            return None, None
-
-        scene_pt = None
-        try:
-            scene_pt = self.view.getPoint(x, y)
-        except Exception as e:
-            dm_logger.debug(f"EditTool._get_ray: getPoint failed: {e}")
-
-        if scene_pt is None:
-            # Fallback point generated randomly ahead
-            vd = self.view.getViewDirection()
-            focus = self.view.getFocus() if hasattr(self.view, "getFocus") else FreeCAD.Vector(0,0,0)
-            scene_pt = focus
-
-        try:
-            cam = self.view.getCameraNode()
-            if not cam or not hasattr(cam, "position"):
-                return None, None
-                
-            cam_vec = cam.position.getValue()
-            if hasattr(cam_vec, "getValue"):
-                cam_pos_tuple = cam_vec.getValue()
-            else:
-                cam_pos_tuple = (cam_vec[0], cam_vec[1], cam_vec[2])
-            
-            ray_p = FreeCAD.Vector(*cam_pos_tuple)
-            ray_d = scene_pt - ray_p
-            ray_d.normalize()
-            
-            return ray_p, ray_d
-        except Exception as e:
-            dm_logger.debug(f"EditTool get ray failed: {e}")
-            return None, None
+        """Delegate ray acquisition to DMInputManager."""
+        return DMInputManager.get_instance().get_ray(self.view, event_dict)
 
     def _hit_test(self, ray_p, ray_d):
         if not self._target_obj or not ray_p or not ray_d: return None
@@ -147,7 +113,7 @@ class EditTool(DMBase):
         n = FreeCAD.Vector(-vd.x, -vd.y, -vd.z)
         o = self._target_obj.Placement.Base
         
-        pos_global = self.get_mouse_world_pos({"Position": self.view.getCursorPos()}, n, o)
+        pos_global = self.get_mouse_world_pos(event_dict, n, o)
         if not pos_global: return None
         
         dist, detail = shape.distToShape(Part.Point(pos_global).toShape())
@@ -354,7 +320,6 @@ class EditTool(DMBase):
         hit = self._hit_test(ray_p, ray_d)
         if hit:
             idx, elem_type = hit
-            from core.input_manager import DMInputManager
             items = self.get_context_menu(event_dict)
             DMInputManager.get_instance()._trigger_dynamic_menu(items)
             return True # Consume click

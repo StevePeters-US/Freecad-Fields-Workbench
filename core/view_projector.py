@@ -1,13 +1,17 @@
 import FreeCAD
 import FreeCADGui
+import Part
 import math
 from core import dm_logger
+from core.input_manager import DMInputManager
 
 class ViewProjector:
     """Handles projection of 2D screen coordinates to 3D world space."""
 
     def __init__(self, view):
         self.view = view
+
+
 
     def _is_orthographic(self):
         """True if the active camera is orthographic (not perspective)."""
@@ -29,123 +33,11 @@ class ViewProjector:
             return FreeCAD.Vector(0,0,100)
 
     def _get_view_ray(self, x, y):
-        """Acquire a (Base, Direction) ray from the view/viewer."""
-        try:
-            # Direct getRay (FC 0.20+)
-            if hasattr(self.view, "getRay"):
-                ray = self.view.getRay(x, y)
-                if ray:
-                    if isinstance(ray, dict) and "base" in ray and "dir" in ray:
-                        return (FreeCAD.Vector(ray["base"]), FreeCAD.Vector(ray["dir"]))
-                    elif isinstance(ray, tuple) and len(ray) >= 2:
-                        return (FreeCAD.Vector(ray[0]), FreeCAD.Vector(ray[1]))
-
-            # Coin3D viewer fallback
-            viewer = self.view.getViewer()
-            h = 1000
-            if hasattr(viewer, "getGlxSize"):
-                h = viewer.getGlxSize()[1]
-            elif hasattr(viewer, "getSize"):
-                sz = viewer.getSize()
-                h = sz.height() if hasattr(sz, "height") else sz[1]
-
-            def try_ray(cur_y):
-                if hasattr(viewer, "getRay"):
-                    r = viewer.getRay(int(x), int(cur_y))
-                    if r:
-                        if isinstance(r, dict) and "base" in r and "dir" in r:
-                            return (FreeCAD.Vector(r["base"]), FreeCAD.Vector(r["dir"]))
-                        elif isinstance(r, tuple) and len(r) >= 2:
-                            return (FreeCAD.Vector(r[0]), FreeCAD.Vector(r[1]))
-                return None
-
-            res = try_ray(y) or try_ray(h - y)
-            if res:
-                return res
-        except Exception as e:
-            dm_logger.debug(f"Ray acquisition failed: {e}")
-            
-        # Synthesize fallback using pure camera math
-        try:
-            cam = self.view.getCameraNode()
-            if not cam:
-                return None, None
-                
-            pos = cam.position.getValue()
-            rot = cam.orientation.getValue()
-            
-            # FreeCAD's getViewer().getGlxSize() returns the pure viewport dimensions
-            viewer = self.view.getViewer()
-            w = 1000.0
-            h = 1000.0
-            if hasattr(viewer, "getGlxSize"):
-                sz = viewer.getGlxSize()
-                w = float(sz[0])
-                h = float(sz[1])
-            elif hasattr(viewer, "getSize"):
-                sz = viewer.getSize()
-                w = float(sz.width() if hasattr(sz, "width") else sz[0])
-                h = float(sz.height() if hasattr(sz, "height") else sz[1])
-                
-            # Get aspect ratio
-            aspect = w / h
-            
-            # Get camera orientation as vectors
-            # rotation matrix derived from quaternion
-            quat_tuple = rot.getValue()
-            qx, qy, qz, qw = quat_tuple[0], quat_tuple[1], quat_tuple[2], quat_tuple[3]
-            
-            # Forward vector (Z-axis in freecad camera space usually points backwards, so we invert)
-            fx = 2.0 * (qx*qz + qw*qy)
-            fy = 2.0 * (qy*qz - qw*qx)
-            fz = 1.0 - 2.0 * (qx*qx + qy*qy)
-            forward = FreeCAD.Vector(-fx, -fy, -fz)
-            
-            # Up vector (Y-axis)
-            ux = 2.0 * (qx*qy - qw*qz)
-            uy = 1.0 - 2.0 * (qx*qx + qz*qz)
-            uz = 2.0 * (qy*qz + qw*qx)
-            up = FreeCAD.Vector(ux, uy, uz)
-            
-            # Right vector (X-axis)
-            rx = 1.0 - 2.0 * (qy*qy + qz*qz)
-            ry = 2.0 * (qx*qy + qw*qz)
-            rz = 2.0 * (qx*qz - qw*qy)
-            right = FreeCAD.Vector(rx, ry, rz)
-            
-            if hasattr(cam, "heightAngle"):
-                # Perspective
-                ha = cam.heightAngle.getValue()
-                ndc_x = (x / w) * 2.0 - 1.0
-                ndc_y = 1.0 - (y / h) * 2.0
-                
-                # View plane dimensions
-                plane_h = math.tan(ha / 2.0)
-                plane_w = plane_h * aspect
-                
-                ray_d = forward + right * (ndc_x * plane_w) + up * (ndc_y * plane_h)
-                ray_d.normalize()
-                
-                ray_p = FreeCAD.Vector(*pos)
-                return ray_p, ray_d
-                
-            elif hasattr(cam, "height"):
-                # Orthographic
-                height = cam.height.getValue()
-                width = height * aspect
-                
-                ndc_x = (x / w) * 2.0 - 1.0
-                ndc_y = 1.0 - (y / h) * 2.0
-                
-                ray_p = FreeCAD.Vector(*pos) + right * (ndc_x * width / 2.0) + up * (ndc_y * height / 2.0)
-                ray_d = forward
-                ray_d.normalize()
-                return ray_p, ray_d
-                
-        except Exception as e:
-            dm_logger.debug(f"Pure math fallback ray synthesis failed: {e}")
-
-        return None, None
+        """Delegate ray acquisition to DMInputManager."""
+        # Note: x,y are ignored here because DMInputManager.get_ray uses event_dict or last_qt_pos.
+        # We pass a synthetic event_dict to use the specific x,y if needed, but usually 
+        # it's better to just let the manager handle it.
+        return DMInputManager.get_instance().get_ray(self.view, {"QtPosition": (x, y)})
 
     def _intersect_ray_plane(self, ray_p, ray_d, plane_normal, plane_point):
         """Standard Ray-Plane intersection. Returns Vector or None."""
@@ -159,9 +51,7 @@ class ViewProjector:
         return None
 
     def _get_geometry_point(self, event_dict):
-        pos = event_dict.get("Position")
-        if not pos: 
-            return None
+        pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
         try:
             infos = []
             if hasattr(self.view, "getObjectsInfo"):
@@ -196,43 +86,31 @@ class ViewProjector:
                     ray_p, ray_d = self._get_view_ray(pos[0], pos[1])
                     if ray_p and ray_d:
                         ray_d.normalize()
-                        gpl = obj.getGlobalPlacement() if hasattr(obj, "getGlobalPlacement") else obj.Placement
-                        gpl_inv = gpl.inverse()
                         
-                        local_near = gpl_inv.multVec(ray_p + ray_d * 1)
-                        local_far  = gpl_inv.multVec(ray_p + ray_d * 100000)
+                        global_near = ray_p + ray_d * 1
+                        global_far  = ray_p + ray_d * 100000
                         
-                        ray_wire = Part.makeLine(tuple(local_near), tuple(local_far))
+                        ray_wire = Part.makeLine(tuple(global_near), tuple(global_far))
                         inter = face.section(ray_wire)
                         if inter.Vertexes:
-                            best_pt = min(inter.Vertexes, key=lambda v: (v.Point - local_near).Length).Point
-                            world_pt = gpl.multVec(best_pt)
-                            return world_pt
+                            best_pt = min(inter.Vertexes, key=lambda v: (v.Point - global_near).Length).Point
+                            return best_pt
                     else:
                         # If we can't get a ray, use the exact 3D hit point provided by FreeCAD
                         if 'x' in info and 'y' in info and 'z' in info:
                             world_pt = FreeCAD.Vector(info['x'], info['y'], info['z'])
                             return world_pt
                             
-            # Fallback
-            fb = self.view.getPoint(pos[0], pos[1])
-            return fb
+            return None
         except Exception as e:
             dm_logger.debug(f"_get_geometry_point failed: {e}")
-            return self.view.getPoint(pos[0], pos[1])
+            return None
 
     def get_mouse_world_pos(self, event_dict, plane_normal=None, plane_point=None, place_on_geometry=False):
-        """
-        Unified mouse-to-world position. 
-        If plane_normal and plane_point are provided, intersects with that plane.
-        Otherwise, returns the depth-buffered point on geometry.
-        """
         if not self.view:
             return None
 
-        pos = event_dict.get("Position")
-        if pos is None:
-            pos = (0, 0)
+        pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
         x, y = pos[0], pos[1]
         
         # 0. Intercept if place on geometry is active, bypassing plane intersection
@@ -249,12 +127,7 @@ class ViewProjector:
                 if pt:
                     return pt
 
-        # 2. Fallback: Depth-buffered point on surface
-        try:
-            return self.view.getPoint(x, y)
-        except Exception as e:
-            dm_logger.error(f"getPoint failed: {e}")
-            return None
+        return None
 
     def get_visible_workplanes(self):
         """Returns a list of all visible DMWorkPlane objects in the document."""
@@ -296,7 +169,7 @@ class ViewProjector:
         """Intersection of mouse ray with the closest visible working plane."""
         # 0. Check if place on geometry is explicitly enabled
         if place_on_geometry:
-            pt = self.get_mouse_world_pos(event_dict, place_on_geometry=True)
+            pt = self._get_geometry_point(event_dict)
             if pt is not None:
                 return pt
 
@@ -308,7 +181,7 @@ class ViewProjector:
             return self.get_mouse_world_pos(event_dict, n, o, place_on_geometry=False)
 
         # 2. Get the actual 3D point the mouse is hovering over in the scene
-        pos = event_dict.get("Position", (0, 0))
+        pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
         x, y = pos[0], pos[1]
         
         if not self.view:
@@ -326,20 +199,10 @@ class ViewProjector:
             n, o = self.get_base_plane(None)
             return self.get_mouse_world_pos(event_dict, n, o)
 
-        # 4. Synthesize the ray from camera through scene_pt
+        # 4. Synthesize the ray
         try:
-            cam = self.view.getCameraNode()
-            if not cam or not hasattr(cam, "position"):
-                raise ValueError("No camera")
-            cam_vec = cam.position.getValue()
-            if hasattr(cam_vec, "getValue"):
-                cam_pos_tuple = cam_vec.getValue()
-            else:
-                cam_pos_tuple = (cam_vec[0], cam_vec[1], cam_vec[2])
-            
-            ray_p = FreeCAD.Vector(*cam_pos_tuple)
-            ray_d = scene_pt - ray_p
-            ray_d.normalize()
+            ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
+            if not ray_p: return self.get_mouse_world_pos(event_dict, *self.get_base_plane()), None
             
             # 5. Intersect ray with ALL visible workplanes, pick the closest one
             visible_wps = self.get_visible_workplanes()
@@ -382,3 +245,74 @@ class ViewProjector:
         # 6. Fallback: just return the getPoint directly, or intersect default plane
         n, o = self.get_base_plane(None)
         return self.get_mouse_world_pos(event_dict, n, o), None
+
+    def get_geometry_info(self, event_dict, skip_objects=None):
+        """
+        Robustly returns (point, normal, obj, subname) for the surface under mouse.
+        Uses Part.section for accurate hits and distToShape for normals.
+        """
+        if not self.view: return None
+        pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
+        skip_names = [obj.Name for obj in skip_objects] if skip_objects else []
+
+        try:
+            # 1. Get objects under pixel
+            if hasattr(self.view, "getObjectsInfo"):
+                infos = self.view.getObjectsInfo((int(pos[0]), int(pos[1]))) or []
+            else:
+                s_info = self.view.getObjectInfo((int(pos[0]), int(pos[1])))
+                infos = [s_info] if s_info else []
+
+            for info in infos:
+                if not info or "Object" not in info or "Component" not in info: continue
+                obj_name = info["Object"]
+                if obj_name in skip_names: continue
+                
+                doc = FreeCAD.ActiveDocument
+                obj = doc.getObject(obj_name) if doc else None
+                if not obj or not hasattr(obj, "Shape") or obj.Shape.isNull(): continue
+                
+                subname = info["Component"]
+                if "Face" not in subname: continue
+                face = obj.Shape.getElement(subname)
+                
+                # 2. Raycast for exact 3D point
+                ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
+                if not ray_p: continue
+                
+                gpl = obj.getGlobalPlacement() if hasattr(obj, "getGlobalPlacement") else obj.Placement
+                gpl_inv = gpl.inverse()
+                local_near = gpl_inv.multVec(ray_p + ray_d * 1.0)
+                local_far  = gpl_inv.multVec(ray_p + ray_d * 100000.0)
+                
+                ray_wire = Part.makeLine(tuple(local_near), tuple(local_far))
+                inter = face.section(ray_wire)
+                if not inter.Vertexes: continue
+                
+                best_v = min(inter.Vertexes, key=lambda v: (v.Point - local_near).Length)
+                local_hit = best_v.Point
+                world_hit = gpl.multVec(local_hit)
+                
+                # 3. Calculate Normal
+                dists = face.distToShape(Part.Vertex(local_hit))
+                local_n = None
+                if dists and len(dists) >= 3 and len(dists[2]) > 0:
+                    info_tuple = dists[2][0]
+                    if len(info_tuple) >= 3 and isinstance(info_tuple[2], (tuple, list)) and len(info_tuple[2]) == 2:
+                        u, v = info_tuple[2]
+                        local_n = face.Surface.normal(u, v)
+                
+                if not local_n: # Fallback parameter pick
+                    try:
+                        u, v = face.Surface.parameter(local_hit); local_n = face.Surface.normal(u, v)
+                    except: pass
+                
+                if local_n:
+                    if face.Orientation == "Reversed": local_n.multiply(-1.0)
+                    world_n = gpl.Rotation.multVec(local_n); world_n.normalize()
+                    return world_hit, world_n, obj, subname
+                    
+            return None
+        except Exception as e:
+            dm_logger.debug(f"get_geometry_info failed: {e}")
+            return None

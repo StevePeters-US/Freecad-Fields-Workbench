@@ -9,6 +9,7 @@ import math
 from core import dm_logger
 from core.work_plane import WorkPlaneManager
 from core.view_projector import ViewProjector
+from core.input_manager import DMInputManager
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PrimitiveCreatorBase
@@ -46,6 +47,9 @@ class DMBase:
         DMBase.active_tool = self
         self.projector = ViewProjector(self.view)
         self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
+        
+        # Connect to global input manager for broadcasting
+        DMInputManager.get_instance().input_event.connect(self._on_input_event)
 
         self.start_point   = None
         self.current_point = None
@@ -54,7 +58,6 @@ class DMBase:
         
         self.working_plane = None
         self.snap_face = None
-        self.drag_start_screen_y = None
         self.snap_enabled = False
         self.snap_type = "Workplane Grid"
 
@@ -120,6 +123,12 @@ class DMBase:
                 self.view.removeEventCallback("SoEvent", self.callback)
                 self.callback = None
             
+            # Disconnect from global input manager
+            try:
+                DMInputManager.get_instance().input_event.disconnect(self._on_input_event)
+            except Exception:
+                pass
+            
             # Close task panel if open
             import FreeCADGui
             FreeCADGui.Control.closeDialog()
@@ -163,6 +172,7 @@ class DMBase:
     # ------------------------------------------------------------------
 
     def get_mouse_world_pos(self, event_dict, plane_normal=None, plane_point=None):
+        """Delegated to ViewProjector (which uses DMInputManager for rays)."""
         return self.projector.get_mouse_world_pos(
             event_dict, plane_normal, plane_point, 
             place_on_geometry=getattr(self, "place_on_geometry", False)
@@ -175,6 +185,7 @@ class DMBase:
         return self.projector.get_base_plane(wp_obj)
 
     def get_mouse_plane_pt(self, event_dict):
+        """Delegated to ViewProjector (which uses DMInputManager for rays)."""
         result = self.projector.get_mouse_plane_pt(
             event_dict, 
             place_on_geometry=getattr(self, "place_on_geometry", False),
@@ -188,9 +199,72 @@ class DMBase:
             return pt
         return result
 
+
+
     # ------------------------------------------------------------------
     # Event loop & Overridable Input Hooks
     # ------------------------------------------------------------------
+
+    def _on_input_event(self, event_wrapper):
+        """Standard input event handler for all DM tools."""
+        if self._terminated:
+            return
+
+        etype = event_wrapper.type
+        
+        # 1. Handle Key Strokes
+        if etype == "KeyPress":
+            key = event_wrapper.key
+            
+            # Control key for snapping toggle
+            if "Control" in event_wrapper.modifiers:
+                if hasattr(self, 'toggle_snapping'):
+                    self.toggle_snapping()
+                    event_wrapper.handled = True
+                    return
+
+        # 2. Handle Shortcut Overrides (CLAIM hotkeys)
+        elif etype == "ShortcutOverride":
+            key = event_wrapper.key
+            # Claim 'S' and 'D' if we have menus for them
+            if key == QtCore.Qt.Key_S:
+                if hasattr(self, 'get_snapping_menu'):
+                    event_wrapper.handled = True
+            elif key == QtCore.Qt.Key_D:
+                if hasattr(self, 'get_context_menu') or hasattr(self, 'on_tool_menu'):
+                    event_wrapper.handled = True
+
+        # 3. Handle Right Click
+        elif etype == "MousePress" and event_wrapper.key == "Right":
+            # Right click finishes the tool
+            dm_logger.debug(f"{self.__class__.__name__}: Right-click finish tool")
+            self.finish()
+            event_wrapper.handled = True
+
+        # 4. Late-bind hotkey execution (if claimed above)
+        if event_wrapper.handled:
+            return
+
+        if etype == "KeyPress":
+            key = event_wrapper.key
+            if key == QtCore.Qt.Key_S:
+                if hasattr(self, 'get_snapping_menu'):
+                    from core.dm_menu import DMMenuManager
+                    DMMenuManager.get_instance().trigger_dynamic_menu(self.get_snapping_menu())
+                    event_wrapper.handled = True
+            elif key == QtCore.Qt.Key_D:
+                items = None
+                if hasattr(self, 'get_context_menu'):
+                    items = self.get_context_menu()
+                elif hasattr(self, 'on_tool_menu'):
+                    if self.on_tool_menu():
+                        event_wrapper.handled = True
+                        return
+                        
+                if items:
+                    from core.dm_menu import DMMenuManager
+                    DMMenuManager.get_instance().trigger_dynamic_menu(items)
+                    event_wrapper.handled = True
 
     def on_button1_down(self, event_dict):
         return self.handle_click(event_dict)
@@ -200,11 +274,7 @@ class DMBase:
 
     def on_button3_down(self, event_dict):
         # Query global event filter since Coin3D sometimes translates Middle Mouse to BUTTON3
-        try:
-            from core.input_manager import DMInputManager
-            global_middle_down = DMInputManager.get_instance()._middle_mouse_down
-        except Exception:
-            global_middle_down = False
+        global_middle_down = DMInputManager.get_instance()._middle_mouse_down
             
         is_middle_down = getattr(self, "_middle_mouse_down", False) or global_middle_down
         
@@ -264,8 +334,8 @@ class DMBase:
                     # and we want to refresh the orientation/position
                     try:
                         # Synthetic event dict for handle_move
-                        mouse_pos = self.view.getCursorPos()
-                        self.handle_move({"Position": mouse_pos})
+                        mouse_pos = DMInputManager.get_instance().get_mouse_pos(None)
+                        self.handle_move({"QtPosition": mouse_pos})
                     except Exception as e:
                         dm_logger.debug(f"event_cb: Synthetic handle_move failed: {e}")
             return False
@@ -427,7 +497,6 @@ class DMBase:
                 self.working_plane = FreeCAD.Placement(pt, rot)
                 
                 self.state = 2
-                self.drag_start_screen_y = event_dict["Position"][1]
                 dm_logger.debug(f"DEBUG: handle_click: Moving to State 2. Start point: {self.start_point}")
                 self.on_state_change(self.state)
                 self.update_preview()
@@ -509,13 +578,11 @@ class DMBase:
         return self.working_plane.toMatrix().multVec(p)
 
     def get_face_under_mouse(self, event_dict):
-        pos = event_dict["Position"]
-        try:
-            info = self.view.getObjectInfo((pos[0], pos[1]))
-            if info and "Object" in info and "Component" in info:
-                 return info["Object"], info["Component"]
-        except Exception as e:
-            dm_logger.debug(f"get_face_under_mouse failed: {e}")
+        """Delegated to ViewProjector."""
+        geo = self.projector.get_geometry_info(event_dict)
+        if geo:
+            world_hit, world_n, obj, subname = geo
+            return obj.Name, subname
         return None, None
 
 # ─────────────────────────────────────────────────────────────────────────────
