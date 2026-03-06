@@ -1,0 +1,7 @@
+import FreeCADGui
+view = FreeCADGui.ActiveDocument.ActiveView
+try:
+    ray = view.getRay(100, 100)
+    print("RAY:", ray)
+except Exception as e:
+    print(e)

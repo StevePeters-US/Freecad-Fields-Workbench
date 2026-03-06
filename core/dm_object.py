@@ -47,17 +47,30 @@ def get_point_size():
 def set_point_size(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetFloat("PointSize", float(val))
 
-def get_frep_storage_type():
+def get_meshing_type():
     """
-    Return the F-Rep storage/meshing approach:
+    Return the meshing approach:
     0: Marching Cubes (Standard SDF)
     1: Adaptive Marching Cubes
     2: NURBS based F-Rep approach
     """
-    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("FrepStorageType", 0)
+    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("MeshingType", 0)
 
-def set_frep_storage_type(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetInt("FrepStorageType", int(val))
+def set_meshing_type(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetInt("MeshingType", int(val))
+
+def get_meshing_resolution():
+    """Return the global meshing resolution (defaults to 20)."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("MeshingResolution", 20.0)
+
+def set_meshing_resolution(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("MeshingResolution", float(val))
+
+def get_frep_storage_type(): # Deprecated alias
+    return get_meshing_type()
+
+def set_frep_storage_type(val): # Deprecated alias
+    set_meshing_type(val)
 
 def get_picking_radius():
     """Return the picking radius in mm."""
@@ -245,8 +258,8 @@ class DMObjectProxy:
             if hasattr(self, "FRepField") and self.FRepField is not None:
                 from core.frep_mesher import get_active_mesher
                 mesher = get_active_mesher()
-                # Use resolution hint if set (by primitive_tool on finalize), else default
-                res = getattr(self, "_final_resolution", 20)
+                # Use resolution hint if set (by primitive_tool on finalize), else default from settings
+                res = int(getattr(self, "_final_resolution", get_meshing_resolution()))
                 return mesher.mesh(self.FRepField, resolution=res)
             return Part.Shape()
             
@@ -262,7 +275,7 @@ class DMObjectProxy:
                 if hasattr(self, "FRepField") and self.FRepField is not None:
                     from core.frep_mesher import get_active_mesher
                     mesher = get_active_mesher()
-                    res = getattr(self, "_final_resolution", 20)
+                    res = int(getattr(self, "_final_resolution", get_meshing_resolution()))
                     result = mesher.mesh(self.FRepField, resolution=res)
                     if result is not None:
                         self._frep_verts, self._frep_idx = result
@@ -514,18 +527,23 @@ class DMViewProvider:
                 bevel_dist = min(max_b.x - min_b.x, max_b.y - min_b.y, max_b.z - min_b.z) * 0.08
 
             corner_pts = list(corners)
-            handle_pts = [
-                (x + (wc - x) / max(abs(wc-x), 1e-6) * bevel_dist,
-                 y + (hc - y) / max(abs(hc-y), 1e-6) * bevel_dist,
-                 z + (dc - z) / max(abs(dc-z), 1e-6) * bevel_dist)
-                for (x,y,z) in corners
+            all_pts = []
+            
+            # The 8 corners of the box:
+            # Bottom face: 0, 1, 2, 3
+            # Top face: 4, 5, 6, 7
+            lines = [
+                (0,1), (1,2), (2,3), (3,0), # Bottom
+                (4,5), (5,6), (6,7), (7,4), # Top
+                (0,4), (1,5), (2,6), (3,7)  # Vertical edges
             ]
+            for i, j in lines:
+                all_pts.extend([corners[i], corners[j]])
 
-            all_pts = corner_pts + handle_pts
             self._frep_corner_coords.point.setValues(corner_pts)
             self._frep_corner_pts.numPoints.setValue(len(corner_pts))
             self._frep_handle_coords.point.setValues(all_pts)
-            self._frep_handle_lines.numVertices.setValues([2] * len(corners))
+            self._frep_handle_lines.numVertices.setValues([2] * len(lines))
         except Exception as e:
             from . import dm_logger
             dm_logger.debug(f"[FREP] _update_frep_corners failed: {e}")

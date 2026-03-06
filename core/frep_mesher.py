@@ -7,7 +7,7 @@ import numpy as np
 from core import dm_logger
 from core.frep.frep_field import FRepField
 from core.frep.marching_cubes.mc_tables import edgeTable, triTable
-from core.dm_object import get_frep_storage_type
+from core.dm_object import get_meshing_type
 
 # Pre-convert lookup tables to numpy arrays for fast indexing
 _EDGE_TABLE = np.array(edgeTable, dtype=np.int32)
@@ -112,7 +112,7 @@ class MarchingCubesMesher(FRepMesher):
         y0, y1 = _pad(min_b.y, max_b.y)
         z0, z1 = _pad(min_b.z, max_b.z)
 
-        R = resolution
+        R = int(resolution)
         mesh_timer.tick()
 
         # ── 1. Sample the scalar field on a regular grid ──────────────────────
@@ -239,7 +239,7 @@ class NurbsFRepMesher(FRepMesher):
 
 
 def get_active_mesher() -> FRepMesher:
-    st = get_frep_storage_type()
+    st = get_meshing_type()
     if st == 1:   return AdaptiveMCMesher()
     elif st == 2: return NurbsFRepMesher()
     else:         return MarchingCubesMesher()

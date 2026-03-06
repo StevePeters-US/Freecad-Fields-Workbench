@@ -226,9 +226,14 @@ class WorkPlaneCreator(DMBase):
                                 try:
                                     r = self.view.getRay(pos[0], pos[1])
                                     if r:
-                                        ray_p = FreeCAD.Vector(r[0])
-                                        ray_d = FreeCAD.Vector(r[1])
-                                        ray_d.normalize()
+                                        if isinstance(r, dict) and "base" in r and "dir" in r:
+                                            ray_p = FreeCAD.Vector(r["base"])
+                                            ray_d = FreeCAD.Vector(r["dir"])
+                                            ray_d.normalize()
+                                        elif isinstance(r, tuple) and len(r) >= 2:
+                                            ray_p = FreeCAD.Vector(r[0])
+                                            ray_d = FreeCAD.Vector(r[1])
+                                            ray_d.normalize()
                                 except Exception as call_e:
                                     dm_logger.debug(f"WP DBG: getRay failed: {call_e}")
                             
@@ -421,11 +426,17 @@ class WorkPlaneCreator(DMBase):
                     dm_logger.debug(f"WorkPlaneCreator._get_ray: Call to getRay threw: {call_e}")
                     r = None
             
-            if r and len(r) == 2:
-                ray_p = FreeCAD.Vector(r[0])
-                ray_d = FreeCAD.Vector(r[1])
-                ray_d.normalize()
-                return ray_p, ray_d
+            if r:
+                if isinstance(r, dict) and "base" in r and "dir" in r:
+                    ray_p = FreeCAD.Vector(r["base"])
+                    ray_d = FreeCAD.Vector(r["dir"])
+                    ray_d.normalize()
+                    return ray_p, ray_d
+                elif isinstance(r, tuple) and len(r) >= 2:
+                    ray_p = FreeCAD.Vector(r[0])
+                    ray_d = FreeCAD.Vector(r[1])
+                    ray_d.normalize()
+                    return ray_p, ray_d
         except Exception as e:
             dm_logger.debug(f"WorkPlaneCreator._get_ray: getRay failed: {e}")
             

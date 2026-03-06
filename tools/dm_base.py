@@ -41,7 +41,10 @@ def _get_view_ray(view, x, y):
         if hasattr(view, "getRay"):
             ray = view.getRay(x, y)
             if ray:
-                return (FreeCAD.Vector(ray[0]), FreeCAD.Vector(ray[1]))
+                if isinstance(ray, dict) and "base" in ray and "dir" in ray:
+                    return (FreeCAD.Vector(ray["base"]), FreeCAD.Vector(ray["dir"]))
+                elif isinstance(ray, tuple) and len(ray) >= 2:
+                    return (FreeCAD.Vector(ray[0]), FreeCAD.Vector(ray[1]))
 
         # Coin3D viewer fallback
         viewer = view.getViewer()
@@ -56,7 +59,10 @@ def _get_view_ray(view, x, y):
             if hasattr(viewer, "getRay"):
                 r = viewer.getRay(int(x), int(cur_y))
                 if r:
-                    return (FreeCAD.Vector(r[0]), FreeCAD.Vector(r[1]))
+                    if isinstance(r, dict) and "base" in r and "dir" in r:
+                        return (FreeCAD.Vector(r["base"]), FreeCAD.Vector(r["dir"]))
+                    elif isinstance(r, tuple) and len(r) >= 2:
+                        return (FreeCAD.Vector(r[0]), FreeCAD.Vector(r[1]))
             return None
 
         res = try_ray(y) or try_ray(h - y)
@@ -64,6 +70,95 @@ def _get_view_ray(view, x, y):
             return res
     except Exception as e:
         dm_logger.debug(f"Ray acquisition failed: {e}")
+        
+    # Synthesize fallback using pure camera math
+    try:
+        cam = view.getCameraNode()
+        if not cam:
+            return None, None
+            
+        pos = cam.position.getValue()
+        rot = cam.orientation.getValue()
+        
+        # FreeCAD's getViewer().getGlxSize() returns the pure viewport dimensions
+        viewer = view.getViewer()
+        w = 1000.0
+        h = 1000.0
+        if hasattr(viewer, "getGlxSize"):
+            sz = viewer.getGlxSize()
+            w = float(sz[0])
+            h = float(sz[1])
+        elif hasattr(viewer, "getSize"):
+            sz = viewer.getSize()
+            w = float(sz.width() if hasattr(sz, "width") else sz[0])
+            h = float(sz.height() if hasattr(sz, "height") else sz[1])
+            
+        # Get aspect ratio
+        aspect = w / h
+        
+        # Get camera orientation as vectors
+        # rotation matrix derived from quaternion
+        import math
+        
+        # cam.orientation.getValue() gives an SbRotation
+        # Calling .getValue() on SbRotation gives the (x, y, z, w) tuple
+        quat_tuple = rot.getValue()
+        qx, qy, qz, qw = quat_tuple[0], quat_tuple[1], quat_tuple[2], quat_tuple[3]
+        
+        # Forward vector (Z-axis in freecad camera space usually points backwards, so we invert)
+        fx = 2.0 * (qx*qz + qw*qy)
+        fy = 2.0 * (qy*qz - qw*qx)
+        fz = 1.0 - 2.0 * (qx*qx + qy*qy)
+        forward = FreeCAD.Vector(-fx, -fy, -fz)
+        
+        # Up vector (Y-axis)
+        ux = 2.0 * (qx*qy - qw*qz)
+        uy = 1.0 - 2.0 * (qx*qx + qz*qz)
+        uz = 2.0 * (qy*qz + qw*qx)
+        up = FreeCAD.Vector(ux, uy, uz)
+        
+        # Right vector (X-axis)
+        rx = 1.0 - 2.0 * (qy*qy + qz*qz)
+        ry = 2.0 * (qx*qy + qw*qz)
+        rz = 2.0 * (qx*qz - qw*qy)
+        right = FreeCAD.Vector(rx, ry, rz)
+        
+        if hasattr(cam, "heightAngle"):
+            # Perspective
+            ha = cam.heightAngle.getValue()
+            # Convert screen coordinates to normalized device coordinates (-1 to 1)
+            # FreeCAD cursor Y is 0 at top, so flip it
+            ndc_x = (x / w) * 2.0 - 1.0
+            ndc_y = 1.0 - (y / h) * 2.0
+            
+            # View plane dimensions
+            plane_h = math.tan(ha / 2.0)
+            plane_w = plane_h * aspect
+            
+            ray_d = forward + right * (ndc_x * plane_w) + up * (ndc_y * plane_h)
+            ray_d.normalize()
+            
+            ray_p = FreeCAD.Vector(*pos)
+            return ray_p, ray_d
+            
+        elif hasattr(cam, "height"):
+            # Orthographic
+            # In orthographic, the ray origin moves across the view plane, 
+            # and the direction is always exactly forward
+            height = cam.height.getValue()
+            width = height * aspect
+            
+            ndc_x = (x / w) * 2.0 - 1.0
+            ndc_y = 1.0 - (y / h) * 2.0
+            
+            ray_p = FreeCAD.Vector(*pos) + right * (ndc_x * width / 2.0) + up * (ndc_y * height / 2.0)
+            ray_d = forward
+            ray_d.normalize()
+            return ray_p, ray_d
+            
+    except Exception as e:
+        dm_logger.debug(f"Pure math fallback ray synthesis failed: {e}")
+
     return None, None
 
 def _intersect_ray_plane(ray_p, ray_d, plane_normal, plane_point):

@@ -1,8 +1,9 @@
 import FreeCAD
 import FreeCADGui
+import math
 from PySide import QtCore
 from core import dm_logger
-from core.dm_object import create_dm_object, get_frep_storage_type
+from core.dm_object import create_dm_object, get_meshing_type, get_meshing_resolution
 from core.frep_mesher import mesh_timer
 from tools.dm_base import DMBase
 
@@ -14,7 +15,8 @@ from core.frep.analytic.cylinder import AnalyticCylinderField
 # Resolution for interactive preview (lower = faster updates)
 _PREVIEW_RES = 10
 # Resolution for final committed mesh (higher = more detail)
-_FINAL_RES = 20
+def _get_final_res():
+    return int(get_meshing_resolution())
 
 
 class PrimitiveCreatorBase(DMBase):
@@ -107,11 +109,12 @@ class PrimitiveCreatorBase(DMBase):
         primitive_name = type(self).__name__.replace("Creator", "")
         proxy = obj.Proxy
         proxy.FRepField = field
-        proxy._final_resolution = _FINAL_RES
+        final_res = _get_final_res()
+        proxy._final_resolution = final_res
         obj.touch()
         obj.Document.recompute([obj])
         # Print accumulated timer summary now that the tool is accepted
-        mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_RES} res) + final ({_FINAL_RES} res)")
+        mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_RES} res) + final ({final_res} res)")
         self._preview_obj = None  # Severed; the object is now the user's
 
 
@@ -146,8 +149,20 @@ class BoxCreator(PrimitiveCreatorBase):
         if pos is None:
             return True
 
+        from tools.dm_base import _get_view_ray
+        try:
+            pos2d = event_dict.get("Position", (0, 0))
+            ray_p, ray_d = _get_view_ray(self.view, pos2d[0], pos2d[1])
+        except Exception:
+            pos2d = (0, 0)
+            ray_p, ray_d = None, None
+
         if len(self.points) == 0:
             self.points.append(pos)
+            if ray_p and ray_d:
+                dm_logger.info(f"Debug [Point 1]: Mouse 2D=({pos2d[0]}, {pos2d[1]}), View Dir=({ray_d.x:.2f}, {ray_d.y:.2f}, {ray_d.z:.2f}), Ray Origin=({ray_p.x:.2f}, {ray_p.y:.2f}, {ray_p.z:.2f})")
+            dm_logger.info(f"Debug [Corners]: P0=({self.points[0].x:.2f}, {self.points[0].y:.2f}, {self.points[0].z:.2f})")
+            
             # Lock working_plane from the active workplane for consistent transforms
             if not getattr(self, "working_plane", None):
                 visible_wps = self.get_visible_workplanes()
@@ -161,9 +176,13 @@ class BoxCreator(PrimitiveCreatorBase):
             dm_logger.info("Box Tool: Click 2nd corner")
         elif len(self.points) == 1:
             self.points.append(pos)
+            if ray_p and ray_d:
+                dm_logger.info(f"Debug [Point 2]: Mouse 2D=({pos2d[0]}, {pos2d[1]}), View Dir=({ray_d.x:.2f}, {ray_d.y:.2f}, {ray_d.z:.2f}), Ray Origin=({ray_p.x:.2f}, {ray_p.y:.2f}, {ray_p.z:.2f})")
+            dm_logger.info(f"Debug [Corners]: P0=({self.points[0].x:.2f}, {self.points[0].y:.2f}, {self.points[0].z:.2f}), P1=({self.points[1].x:.2f}, {self.points[1].y:.2f}, {self.points[1].z:.2f})")
+            
             self.state = 2  # Switch to height-drag mode
-            # Record screen Y for height drag
-            self._height_drag_screen_y = event_dict["Position"][1]
+            # Record screen coordinates for height drag
+            self._height_drag_start_pos = (pos2d[0], pos2d[1])
             self._height_drag_base = pos  # world point where height drag starts
             wp = getattr(self, "working_plane", None)
             loc = wp.inverse().multVec(pos) if wp else pos
@@ -173,10 +192,15 @@ class BoxCreator(PrimitiveCreatorBase):
             dm_logger.info("Box Tool: Click height")
         elif len(self.points) == 2:
             self.points.append(self.current_point)
+            if ray_p and ray_d:
+                dm_logger.info(f"Debug [Point 3]: Mouse 2D=({pos2d[0]}, {pos2d[1]}), View Dir=({ray_d.x:.2f}, {ray_d.y:.2f}, {ray_d.z:.2f}), Ray Origin=({ray_p.x:.2f}, {ray_p.y:.2f}, {ray_p.z:.2f})")
+            dm_logger.info(f"Debug [Corners]: P0=({self.points[0].x:.2f}, {self.points[0].y:.2f}, {self.points[0].z:.2f}), P1=({self.points[1].x:.2f}, {self.points[1].y:.2f}, {self.points[1].z:.2f}), P2=({self.points[2].x:.2f}, {self.points[2].y:.2f}, {self.points[2].z:.2f})")
+            
             wp = getattr(self, "working_plane", None)
             hp = self.current_point
             hp_loc = wp.inverse().multVec(hp) if wp else hp
             p0_loc = wp.inverse().multVec(self.points[0]) if wp else self.points[0]
+            
             dm_logger.info(f"Box P2 (height): world=({hp.x:.2f},{hp.y:.2f},{hp.z:.2f})  local=({hp_loc.x:.2f},{hp_loc.y:.2f},{hp_loc.z:.2f})")
             dm_logger.info(f"  Height (local Z delta from P0): {abs(hp_loc.z - p0_loc.z):.2f}")
             self._finalize_object("Box")
@@ -187,22 +211,100 @@ class BoxCreator(PrimitiveCreatorBase):
         self.current_point = self.get_mouse_plane_pt(event_dict)
 
     def on_move_state_2(self, event_dict):
-        """Height drag: move current_point along workplane normal proportional to screen Y delta."""
+        """Height drag: move current_point along workplane normal."""
         if not hasattr(self, "_height_drag_screen_y") or self._height_drag_base is None:
             return
-        screen_y = event_dict["Position"][1]
-        delta_px = screen_y - self._height_drag_screen_y
-        # Scale: how many mm of height per pixel (rough, view-distance based)
-        # Positive screen Y goes down → negative normal direction → invert
-        height_mm = -delta_px / 4.0
-        
+            
         wp = getattr(self, "working_plane", None)
         if wp is not None:
             normal = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
         else:
             normal = FreeCAD.Vector(0, 0, 1)
-        
-        # current_point = base point of height drag + normal * height
+
+        pos = event_dict.get("Position")
+        if pos:
+            try:
+                from tools.dm_base import _get_view_ray
+                # Provide x,y coordinates to get the view ray
+                ray_p, ray_d = _get_view_ray(self.view, pos[0], pos[1])
+                if ray_p and ray_d:
+                    # UX-friendly 2D Pixel Projection Math:
+                    p2 = self._height_drag_base
+                    # 1. Get 3D camera vectors to define screen space
+                    vd = self.view.getViewDirection()
+                    # ViewDirection points INTO the screen
+                    forward = FreeCAD.Vector(vd[0], vd[1], vd[2])
+                    forward.normalize()
+                    
+                    ud = self.view.getUpDirection()
+                    v_up = FreeCAD.Vector(ud[0], ud[1], ud[2])
+                    v_up.normalize()
+                    
+                    v_right = v_up.cross(forward)
+                    v_right.normalize()
+                    # Re-derive up to ensure orthogonality
+                    v_up = forward.cross(v_right)
+                    v_up.normalize()
+                    
+                    # 2. Project 3D Normal into 2D screen coordinates (Right, Up)
+                    # Note: We want to know how the Normal looks on screen
+                    nx = normal.dot(v_right)
+                    ny = normal.dot(v_up)
+                    normal_2d = QtCore.QPointF(nx, ny)
+                    n2d_len = math.sqrt(nx*nx + ny*ny)
+                    
+                    if n2d_len > 1e-4:
+                        # 3. Calculate 2D mouse movement in screen space
+                        # Initial mouse position was recorded in on_button1_down
+                        curr_x, curr_y = pos[0], pos[1]
+                        # Use cached initial position if available or event_dict if first time
+                        if not hasattr(self, "_height_drag_start_pos"):
+                            self._height_drag_start_pos = (curr_x, curr_y)
+                            
+                        dx = curr_x - self._height_drag_start_pos[0]
+                        dy = self._height_drag_start_pos[1] - curr_y # Flip Y so + is UP
+                        
+                        # 4. Project mouse movement onto the 2D Normal axis
+                        # Dot product gives pixels moved along the normal
+                        proj_pixels = (dx * nx + dy * ny) / n2d_len
+                        
+                        # 5. Convert pixels to mm using the view's perspective/scale
+                        # A simple way: find the 3D distance between two points 100px apart on the view plane at depth p2
+                        try:
+                            cam = self.view.getCameraNode()
+                            dist_to_cam = (p2 - ray_p).Length
+                            if hasattr(cam, "heightAngle"): # Perspective
+                                fov = cam.heightAngle.getValue()
+                                # viewport height in mm at this depth
+                                vw_h_mm = 2.0 * dist_to_cam * math.tan(fov / 2.0)
+                            else: # Ortho
+                                vw_h_mm = cam.height.getValue()
+                                
+                            # Convert viewport height to px
+                            viewer = self.view.getViewer()
+                            vw_h_px = 1000.0
+                            if hasattr(viewer, "getSize"):
+                                sz = viewer.getSize()
+                                vw_h_px = float(sz.height() if hasattr(sz, "height") else sz[1])
+                                
+                            mm_per_px = vw_h_mm / vw_h_px
+                        except:
+                            mm_per_px = 0.5 # fallback
+                            
+                        # Height is the pixel movement component scaled by mm/px, 
+                        # boosted by 1/n2d_len to account for foreshortening (visual projection)
+                        t2 = (proj_pixels * mm_per_px) / max(n2d_len, 0.1)
+                        
+                        self.current_point = p2 + normal * t2
+                        return
+            except Exception as e:
+                dm_logger.debug(f"Height drag 2D projection failed: {e}")
+
+        # Final Fallback to simple screen-Y delta if pixel projection completely fails
+        curr_y = event_dict["Position"][1]
+        start_y = getattr(self, "_height_drag_start_pos", (0, curr_y))[1]
+        delta_px = curr_y - start_y
+        height_mm = -delta_px / 4.0
         self.current_point = self._height_drag_base + normal * height_mm
 
     def _get_preview_field(self):

@@ -34,9 +34,10 @@ class _SettingsDialog(QtGui.QDialog):
         current_wire = get_show_wireframe()
         current_lw = get_line_width()
         current_ps = get_point_size()
-        from core.dm_object import get_picking_radius, get_frep_storage_type, get_max_bounds
+        from core.dm_object import get_picking_radius, get_meshing_type, get_max_bounds, get_meshing_resolution
         current_pr = get_picking_radius()
-        current_frep = get_frep_storage_type()
+        current_meshing = get_meshing_type()
+        current_res = get_meshing_resolution()
         current_mb = get_max_bounds()
 
         layout = QtGui.QFormLayout(self)
@@ -85,15 +86,22 @@ class _SettingsDialog(QtGui.QDialog):
         self._mb_spin.setValue(current_mb)
         layout.addRow("Max Bounds (mm):", self._mb_spin)
 
-        # F-Rep Storage Type ComboBox
-        self._frep_combo = QtGui.QComboBox()
-        self._frep_combo.addItems([
+        # Meshing Type ComboBox
+        self._meshing_combo = QtGui.QComboBox()
+        self._meshing_combo.addItems([
             "Marching Cubes (Standard SDF)",
             "Adaptive Marching Cubes",
             "NURBS based F-Rep approach"
         ])
-        self._frep_combo.setCurrentIndex(current_frep)
-        layout.addRow("F-Rep Storage Type:", self._frep_combo)
+        self._meshing_combo.setCurrentIndex(current_meshing)
+        layout.addRow("Meshing Type:", self._meshing_combo)
+
+        # Meshing Resolution spinbox
+        self._res_spin = QtGui.QDoubleSpinBox()
+        self._res_spin.setRange(1.0, 200.0)
+        self._res_spin.setValue(current_res)
+        self._res_spin.setToolTip("Global resolution for SDF meshing (higher = more detail)")
+        layout.addRow("Meshing Resolution:", self._res_spin)
 
         # Buttons
         btn_box = QtGui.QDialogButtonBox(
@@ -105,20 +113,22 @@ class _SettingsDialog(QtGui.QDialog):
 
     def _on_accept(self):
         from core.dm_object import (set_show_wireframe, set_line_width, set_point_size, 
-                                    set_picking_radius, set_frep_storage_type, 
+                                    set_picking_radius, set_meshing_type, set_meshing_resolution,
                                     set_max_bounds, set_perf_profiler_enabled, refresh_all_dm_objects)
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()
         pr = self._pr_spin.value()
-        frep = self._frep_combo.currentIndex()
+        meshing = self._meshing_combo.currentIndex()
+        res = self._res_spin.value()
         mb = self._mb_spin.value()
 
         set_show_wireframe(wire)
         set_line_width(lw)
         set_point_size(ps)
         set_picking_radius(pr)
-        set_frep_storage_type(frep)
+        set_meshing_type(meshing)
+        set_meshing_resolution(res)
         set_max_bounds(mb)
         set_perf_profiler_enabled(self._perf_check.isChecked())
         
@@ -128,7 +138,7 @@ class _SettingsDialog(QtGui.QDialog):
         # Apply to all existing objects
         refresh_all_dm_objects()
 
-        dm_logger.info(f"DM Settings: wire={wire}, lw={lw}, ps={ps}, pr={pr}, frep={frep}, mb={mb}")
+        dm_logger.info(f"DM Settings: wire={wire}, lw={lw}, ps={ps}, pr={pr}, meshing={meshing}, res={res}, mb={mb}")
         self.accept()
 
 
