@@ -114,17 +114,7 @@ class PrimitiveCreatorBase(DMBase):
         mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_RES} res) + final ({_FINAL_RES} res)")
         self._preview_obj = None  # Severed; the object is now the user's
 
-    def _do_terminate(self):
-        # If tool exits without committing, clean up the preview object
-        if self._preview_obj:
-            try:
-                doc = self._preview_obj.Document
-                if doc:
-                    doc.removeObject(self._preview_obj.Name)
-            except Exception:
-                pass
-            self._preview_obj = None
-        super()._do_terminate()
+
 
     def _create_frep_object(self, name, field, points=None):
         """Helper to create the FreeCAD object and assign the field (for 1-shot creation)."""

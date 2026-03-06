@@ -4,6 +4,9 @@ Tasks moved here from `TODO.md` after verification.
 
 ---
 
+### ✅ Unify Tool Cleanup Lifecycle
+- **Completed**: Consolidated cleanup paths in `PrimitiveCreatorBase._do_terminate()` and `NURBSPrimitiveCreator.terminate()` into a unified `DMBase._do_terminate()` function.
+
 ### ✅ Consolidate `to_local()` Closures in BoxCreator
 - **Completed**: Removed redundant inline `to_local()` and `to_global()` closures in `BoxCreator` and shifted to using inherited `DMBase` methods.
 

@@ -76,15 +76,7 @@
 
 
 
-### Unify Tool Cleanup Lifecycle `Gemini Low`
-- **Goal**: Merge the parallel cleanup paths in `PrimitiveCreatorBase._do_terminate()` and `NURBSPrimitiveCreator.terminate()` to eliminate duplication and prevent missed cleanup.
-- **Files to read**: `tools/primitive_tool.py`, `tools/dm_base.py`
-- **Files to modify**: `tools/dm_base.py`, `tools/primitive_tool.py`
-- **Steps**:
-  1. Audit both cleanup methods and identify shared logic (removing active/preview objects, clearing callbacks).
-  2. Consolidate into a single `_do_terminate()` chain that both FRep and NURBS tools use.
-  3. Ensure `_finished` guard and QTimer deferral are consistent across all paths.
-- **Acceptance**: All tools (box, sphere, cylinder, curve, workplane, translate) terminate cleanly without stale objects or callbacks.
+
 
 ### Add Bounding Box Utility Helpers `Gemini Flash`
 - **Goal**: Extract the repeated min/max bounding box merge logic from `UnionField.bounding_box()` and `IntersectionField.bounding_box()` into a shared utility.

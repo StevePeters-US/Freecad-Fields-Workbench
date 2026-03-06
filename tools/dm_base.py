@@ -190,8 +190,21 @@ class DMBase:
             # Close task panel if open
             import FreeCADGui
             FreeCADGui.Control.closeDialog()
+            
+            # Clean up active/preview objects if not finished
+            if not getattr(self, "_finished", False):
+                obj_to_remove = getattr(self, "_active_obj", None) or getattr(self, "_preview_obj", None)
+                if obj_to_remove:
+                    doc = obj_to_remove.Document or self.doc or FreeCAD.ActiveDocument
+                    if doc and doc.getObject(obj_to_remove.Name):
+                        dm_logger.debug(f"DMBase._do_terminate: Removing unfinished object {obj_to_remove.Name}")
+                        doc.removeObject(obj_to_remove.Name)
+                        doc.recompute()
+                    if hasattr(self, "_preview_obj"): self._preview_obj = None
+                    if hasattr(self, "_active_obj"): self._active_obj = None
+
         except Exception as e:
-            dm_logger.debug(f"DMBase.terminate: Cleanup failed: {e}")
+            dm_logger.debug(f"DMBase._do_terminate: Cleanup failed: {e}")
 
 
     def finish(self):
@@ -855,32 +868,10 @@ class NURBSPrimitiveCreator(DMBase):
         pass
 
     def terminate(self):
-        """Clean up: delete active object if not finished."""
+        """Clean up: defer to DMBase._do_terminate."""
         if self._terminated:
             return
-        
         super().terminate()
-        
-        # Legacy cursor cleanup removed
-        pass
-
-        if not self._finished and self._active_obj:
-            try:
-                # Use FreeCAD.ActiveDocument if self.doc is stale or None
-                doc = self.doc or FreeCAD.ActiveDocument
-                dm_logger.debug(f"DEBUG terminate: Attempting to remove {self._active_obj.Name}")
-                if doc and doc.getObject(self._active_obj.Name):
-                    doc.removeObject(self._active_obj.Name)
-                    doc.recompute()
-                    dm_logger.debug(f"DEBUG terminate: Removed successfully.")
-                else:
-                    dm_logger.debug(f"DEBUG terminate: Object {self._active_obj.Name} not found in doc.")
-            except Exception as e:
-                dm_logger.error(f"DEBUG terminate Error: {e}")
-                import traceback
-                traceback.print_exc()
-        
-        self._active_obj = None
 
     # ------------------------------------------------------------------
     # Lifecycle
