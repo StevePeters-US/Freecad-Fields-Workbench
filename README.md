@@ -1,22 +1,22 @@
 # FreeCAD Direct Modeling Workbench
 
-A Python workbench for FreeCAD that provides fast, interactive direct modeling using **F-Rep (Function Representation)** with NURBS-derived signed distance fields. Users draw curves and surfaces on a dynamic workplane, convert them into implicit fields, and combine them with field-based boolean operations — all without leaving the 3D viewport.
+A Python workbench for FreeCAD that provides fast, interactive direct modeling using **Analytic Fields (Implicit Geometry)**. Users draw curves and surfaces on a dynamic workplane, convert them into analytic functions, and combine them with field-based boolean operations — all without leaving the 3D viewport.
 
 ---
 
-## Core Concept: F-Rep from NURBS
+## Core Concept: Analytic Fields from NURBS
 
-Traditional CAD uses B-Rep (boundary representation): shells of faces, edges, and vertices that must form watertight manifolds. This workbench takes a different approach — **each NURBS surface becomes a spatial discriminator**: a function `f(P)` that returns a signed scalar for any point in space.
+Traditional CAD uses B-Rep (boundary representation): shells of faces, edges, and vertices that must form watertight manifolds. This workbench takes a different approach — **each NURBS surface is evaluated as a spatial discriminator**: a function `f(P)` that returns a signed scalar for any point in space, denoting inside/outside.
 
 ```
                     NURBS Surface
                          │
               ┌──────────┴──────────┐
-              │  Closest-Point      │
-              │  Projection (CPP)   │
+              │  Analytic Field     │
+              │  Evaluation         │
               └──────────┬──────────┘
                          │
-               sign = dot(P − Q, n̂)
+               sign = analytic_eval(P)
               ┌──────────┴──────────┐
               │  f(P) > 0  outside  │
               │  f(P) = 0  on surf  │
@@ -26,16 +26,16 @@ Traditional CAD uses B-Rep (boundary representation): shells of faces, edges, an
 
 **How it works:**
 
-1. **Projection** — For any query point `P`, find the closest point `Q` on the NURBS surface.
-2. **Signing** — Compute `dot(P − Q, n̂)` where `n̂` is the surface normal at `Q`. Positive = outside (aligned with normal), negative = inside, zero = on the surface.
-3. **Bounding** — A single surface defines a field extending to infinity. Clip it with bounding planes via `max(f_nurbs, f_bound)` to create a finite influence region.
+1. **Evaluation** — For any query point `P`, the analytic field assesses its position relative to the root geometry.
+2. **Signing** — Returns a scalar. Positive = outside, negative = inside, zero = on the surface boundaries.
+3. **Bounding** — A single surface defines a field extending to infinity. Clip it with bounding planes via `max(f_field, f_bound)` to create a finite influence region.
 4. **Composition** — Combine multiple bounded fields using min/max trees:
    - **Union**: `min(f_A, f_B)`
    - **Intersection**: `max(f_A, f_B)`
    - **Subtraction**: `max(f_A, −f_B)`
    - **Smooth blend (R-Union)**: parametric blending function for fillets and transitions
 
-This gives you **NURBS-quality surface control** with **F-Rep operational flexibility** — enabling lattice infills, smooth blends, and hollowing operations that are mathematically impossible or crash-prone in standard B-Rep CAD.
+This gives you **NURBS-quality surface control** with **Analytic operational flexibility** — enabling lattice infills, smooth blends, and hollowing operations that are mathematically impossible or crash-prone in standard B-Rep CAD.
 
 ---
 
@@ -48,7 +48,7 @@ Point / Curve tools (draw geometry on the workplane)
     ↓
 NURBS Surfaces (patches from curves, primitives, lofts)
     ↓
-F-Rep Field Engine (NURBS → signed distance field per surface)
+Analytic Field Engine (NURBS → analytic function per surface)
     ↓
 Field Composition (boolean union/cut/intersect via min/max)
     ↓
@@ -94,12 +94,10 @@ Freecad-Direct-Modeling/
 │   ├── input_manager.py           # Global input event routing
 │   ├── nurbs_geometry.py          # DMPoint, DMCurve — NURBS primitives
 │   ├── work_plane.py              # WorkPlaneManager — Coin3D grid & snapping
-│   └── frep/                      # F-Rep Engine
-│       ├── frep_field.py          # Abstract base FRepField
-│       ├── frep_composer.py       # Boolean composition tree (min/max/blend)
-│       ├── marching_cubes/        # Storage Type 0 primitives
-│       ├── adaptive/              # Storage Type 1 primitives
-│       └── nurbs/                 # Storage Type 2 primitives
+│   └── analytic/                  # Analytic Field Engine
+│       ├── analytic_field.py      # Abstract base AnalyticField
+│       ├── field_composer.py      # Boolean composition tree (min/max/blend)
+│       └── primitives/            # Specialized primitive fields (sphere, box, etc.)
 │
 ├── tools/                         # Interactive creation tools
 │   ├── __init__.py
@@ -148,9 +146,9 @@ Freecad-Direct-Modeling/
 ### Operations
 | Command | ID | Hotkey | Status |
 |---------|----|--------|--------|
-| Field Union | `DM_Fuse` | `Ctrl+F` | Planned (F-Rep) |
-| Field Cut | `DM_Cut` | `Ctrl+X` | Planned (F-Rep) |
-| Field Intersect | `DM_Common` | `Ctrl+I` | Planned (F-Rep) |
+| Field Union | `DM_Add` | `Ctrl+F` | Planned (Analytic) |
+| Field Cut | `DM_Subtract` | `Ctrl+X` | Planned (Analytic) |
+| Field Intersect | `DM_Intersection` | `Ctrl+I` | Planned (Analytic) |
 | Smooth Blend | `DM_Blend` | `Ctrl+B` | Planned |
 | Translate | `DM_Translate` | `T` | ✅ |
 
