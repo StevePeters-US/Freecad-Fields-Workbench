@@ -8,8 +8,6 @@ Hiding dm part does not hide the coin3d nodes
 ---
 The cube does not respect the workplane
 ---
-in dm settings, frep storage type should be replaced with meshing type. we also need a resolution setting for the meshing type.
----
 show wireframe should show preview mesh wireframe
 ---
 WE NEED A show dm wireframe option, as well as a show dm points option

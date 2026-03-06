@@ -109,12 +109,15 @@ class PrimitiveCreatorBase(DMBase):
         primitive_name = type(self).__name__.replace("Creator", "")
         proxy = obj.Proxy
         proxy.FRepField = field
-        final_res = _get_final_res()
-        proxy._final_resolution = final_res
+        
+        # Set per-object properties
+        if hasattr(obj, "MeshingResolution"):
+            obj.MeshingResolution = float(_get_final_res())
+        
         obj.touch()
         obj.Document.recompute([obj])
         # Print accumulated timer summary now that the tool is accepted
-        mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_RES} res) + final ({final_res} res)")
+        mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_RES} res) + final ({int(getattr(obj, 'MeshingResolution', _get_final_res()))} res)")
         self._preview_obj = None  # Severed; the object is now the user's
 
 

@@ -181,6 +181,22 @@ class DMObjectProxy:
                 flat_list = [p for row in grid for p in row]
                 obj.ControlGrid = flat_list
 
+        if shape_type == "frep":
+            if not hasattr(obj, "MeshingResolution"):
+                obj.addProperty("App::PropertyFloat", "MeshingResolution", "FRep", "Meshing resolution (higher = more detail)")
+                obj.MeshingResolution = get_meshing_resolution()
+            if not hasattr(obj, "ShowWireframe"):
+                obj.addProperty("App::PropertyBool", "ShowWireframe", "FRep", "Show triangle wireframe")
+                obj.ShowWireframe = get_show_wireframe()
+            if not hasattr(obj, "MeshingType"):
+                obj.addProperty("App::PropertyEnumeration", "MeshingType", "FRep", "Meshing algorithm")
+                obj.MeshingType = [
+                    "Marching Cubes (Standard SDF)",
+                    "Adaptive Marching Cubes",
+                    "NURBS based F-Rep approach"
+                ]
+                obj.MeshingType = get_meshing_type()
+
     def build_shape(self, fp):
         """Return a Part.Shape based on the object's properties."""
 
@@ -257,9 +273,10 @@ class DMObjectProxy:
         elif st == "frep":
             if hasattr(self, "FRepField") and self.FRepField is not None:
                 from core.frep_mesher import get_active_mesher
-                mesher = get_active_mesher()
-                # Use resolution hint if set (by primitive_tool on finalize), else default from settings
-                res = int(getattr(self, "_final_resolution", get_meshing_resolution()))
+                m_type = getattr(fp, "MeshingType", None)
+                mesher = get_active_mesher(type_override=m_type)
+                # Favor object property over internal resolution override
+                res = int(getattr(fp, "MeshingResolution", getattr(self, "_final_resolution", get_meshing_resolution())))
                 return mesher.mesh(self.FRepField, resolution=res)
             return Part.Shape()
             
@@ -274,8 +291,9 @@ class DMObjectProxy:
             if st == "frep":
                 if hasattr(self, "FRepField") and self.FRepField is not None:
                     from core.frep_mesher import get_active_mesher
-                    mesher = get_active_mesher()
-                    res = int(getattr(self, "_final_resolution", get_meshing_resolution()))
+                    m_type = getattr(fp, "MeshingType", None)
+                    mesher = get_active_mesher(type_override=m_type)
+                    res = int(getattr(fp, "MeshingResolution", getattr(self, "_final_resolution", get_meshing_resolution())))
                     result = mesher.mesh(self.FRepField, resolution=res)
                     if result is not None:
                         self._frep_verts, self._frep_idx = result
@@ -412,6 +430,29 @@ class DMViewProvider:
             mesh_sep.addChild(self._frep_faces)
             sep.addChild(mesh_sep)
 
+            # ── Wireframe overlay nodes ────────────────────────────────────────
+            self._frep_wide_switch = coin.SoSwitch()
+            self._frep_wire_sep = coin.SoSeparator()
+            self._frep_wide_switch.addChild(self._frep_wire_sep)
+
+            wire_mat = coin.SoMaterial()
+            wire_mat.diffuseColor.setValue(0.0, 0.0, 0.0) # Black wireframe
+            self._frep_wire_sep.addChild(wire_mat)
+
+            self._frep_wire_style = coin.SoDrawStyle()
+            self._frep_wire_style.style = coin.SoDrawStyle.LINES
+            self._frep_wire_style.lineWidth = get_line_width()
+            self._frep_wire_sep.addChild(self._frep_wire_style)
+
+            # Use the same coordinates as the mesh
+            self._frep_wire_sep.addChild(self._frep_coords)
+
+            self._frep_wire_faces = coin.SoIndexedFaceSet()
+            self._frep_wire_sep.addChild(self._frep_wire_faces)
+            
+            sep.addChild(self._frep_wide_switch)
+            self._frep_wide_switch.whichChild = 0 if get_show_wireframe() else -1
+
             # ── Corner point + handle nodes ────────────────────────────────────
             corner_sep = coin.SoSeparator()
 
@@ -471,9 +512,13 @@ class DMViewProvider:
             if verts is None or flat_idx is None or len(verts) == 0:
                 self._frep_coords.point.setNum(0)
                 self._frep_faces.coordIndex.setNum(0)
+                if hasattr(self, "_frep_wire_faces") and self._frep_wire_faces:
+                    self._frep_wire_faces.coordIndex.setNum(0)
                 return
             self._frep_coords.point.setValues(verts)
             self._frep_faces.coordIndex.setValues(flat_idx)
+            if hasattr(self, "_frep_wire_faces") and self._frep_wire_faces:
+                self._frep_wire_faces.coordIndex.setValues(flat_idx)
         except Exception as e:
             dm_logger.info(f"[FREP] _update_frep_mesh failed ({type(e).__name__}): {e}")
 
@@ -695,8 +740,37 @@ class DMViewProvider:
         self._ctrl_lines.numVertices.setValues(0, num_vertices)
         self._ctrl_lines.startIndex.setValue(len(knot_coords) + len(marker_coords) + len(handle_marker_coords))
 
+    def on_prefs_changed(self):
+        """Update Coin3D styles and visibility based on global preferences."""
+        if not coin:
+            return
+            
+        # Per-object property takes precedence over global default
+        show_wire = getattr(self.Object, "ShowWireframe", get_show_wireframe())
+        lw = get_line_width()
+        
+        if hasattr(self, "_frep_wide_switch") and self._frep_wide_switch:
+            self._frep_wide_switch.whichChild = 0 if show_wire else -1
+        if hasattr(self, "_frep_wire_style") and self._frep_wire_style:
+            self._frep_wire_style.lineWidth = lw
+            
+        if hasattr(self, "_style") and self._style:
+            self._style.lineWidth = lw
+            
+        # Generic FreeCAD ViewObject properties
+        try:
+            vobj = self.Object.ViewObject
+            vobj.LineWidth = lw
+            vobj.PointSize = get_point_size()
+        except:
+            pass
+
     def updateData(self, fp, prop):
         from . import dm_logger
+        
+        if prop in ["ShowWireframe", "MeshingResolution"]:
+            self.on_prefs_changed()
+            
         if prop == "Shape" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":
             # Called after execute() sets fp.Shape — safe to update Coin3D here
             proxy = getattr(fp, "Proxy", None)
@@ -724,6 +798,9 @@ class DMViewProvider:
                         self._frep_draw_style.style = 1 # FILLED = 1
         elif not prop or prop in ["Points", "HandleIn", "HandleOut", "Closed", "EditMode"]:
             self._rebuild_control_cage(fp)
+        
+        if not prop:
+            self.on_prefs_changed()
 
         
 
@@ -837,10 +914,25 @@ def refresh_all_dm_objects():
     
     lw = get_line_width()
     ps = get_point_size()
+    res = get_meshing_resolution()
+    show_wire = get_show_wireframe()
+    m_type = get_meshing_type()
     
     for obj in doc.Objects:
         if hasattr(obj, "ShapeType") and obj.ViewObject:
+            # Native FreeCAD properties
             obj.ViewObject.LineWidth = lw
+            # DM Proxy properties
+            if hasattr(obj, "MeshingResolution"):
+                obj.MeshingResolution = float(res)
+            if hasattr(obj, "ShowWireframe"):
+                obj.ShowWireframe = bool(show_wire)
+            if hasattr(obj, "MeshingType"):
+                obj.MeshingType = int(m_type)
+                
+            proxy = getattr(obj.ViewObject, "Proxy", None)
+            if proxy and hasattr(proxy, "on_prefs_changed"):
+                proxy.on_prefs_changed()
             obj.ViewObject.PointSize = ps
     
     import FreeCADGui

@@ -238,8 +238,9 @@ class NurbsFRepMesher(FRepMesher):
         return MarchingCubesMesher().mesh(field, resolution)
 
 
-def get_active_mesher() -> FRepMesher:
-    st = get_meshing_type()
+def get_active_mesher(type_override=None) -> FRepMesher:
+    """Return the active mesher based on global settings or a specific type override."""
+    st = type_override if type_override is not None else get_meshing_type()
     if st == 1:   return AdaptiveMCMesher()
     elif st == 2: return NurbsFRepMesher()
     else:         return MarchingCubesMesher()
