@@ -374,12 +374,21 @@ class DMViewProvider:
         self._frep_coords = None
         self._frep_faces = None
 
+        # Visibility switch (root for all custom DM nodes)
+        self._vis_switch = None
+
     def attach(self, vobj):
         from . import dm_logger
         self.Object = vobj.Object
         dm_logger.debug(f"DMViewProvider.attach: obj={self.Object.Label}, coin_avail={coin is not None}")
 
         if coin:
+            # Create our visibility switch as the ONLY node added directly to RootNode
+            self._vis_switch = coin.SoSwitch()
+            # Initial sync
+            self._vis_switch.whichChild = 0 if vobj.Visibility else -1
+            vobj.RootNode.addChild(self._vis_switch)
+
             # Setup curve overlay if it's a curve
             if hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "curve":
                 self._setup_coin_overlay(vobj)
@@ -488,7 +497,10 @@ class DMViewProvider:
             sep.addChild(corner_sep)
 
             self._frep_sep = sep
-            vobj.RootNode.addChild(sep)
+            if self._vis_switch:
+                self._vis_switch.addChild(sep)
+            else:
+                vobj.RootNode.addChild(sep)
         except Exception as e:
             from . import dm_logger
             dm_logger.debug(f"DMViewProvider._setup_frep_mesh_nodes failed: {e}")
@@ -602,7 +614,10 @@ class DMViewProvider:
         dm_logger.debug(f"DMViewProvider._setup_coin_overlay: {vobj.Object.Label}")
         
         self._ctrl_cage_sep = coin.SoSeparator()
-        
+        if self._vis_switch:
+            self._vis_switch.addChild(self._ctrl_cage_sep)
+        else:
+            vobj.RootNode.addChild(self._ctrl_cage_sep)
         # Style for dashed handle lines
         self._style = coin.SoDrawStyle()
         self._style.linePattern = 0x0F0F # Dashed
@@ -801,6 +816,15 @@ class DMViewProvider:
         
         if not prop:
             self.on_prefs_changed()
+            # Also ensure visibility is correct
+            if self._vis_switch:
+                vobj = fp.ViewObject
+                self._vis_switch.whichChild = 0 if vobj.Visibility else -1
+
+    def onChanged(self, vobj, prop):
+        """Called when a property of the ViewObject changes (e.g. Visibility)."""
+        if prop == "Visibility" and self._vis_switch:
+            self._vis_switch.whichChild = 0 if vobj.Visibility else -1
 
         
 
