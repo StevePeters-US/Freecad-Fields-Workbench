@@ -2,7 +2,7 @@ import FreeCAD
 import numpy as np
 from core.frep.frep_field import FRepField
 
-class AnalyticField(FRepField):
+class SdfField(FRepField):
     """
     Base class for F-Rep fields defined by closed-form SDF formulas.
     Subclasses must implement:

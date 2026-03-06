@@ -8,9 +8,9 @@ from core.frep_mesher import mesh_timer
 from tools.dm_base import DMBase
 
 # Ensure we import the right storage classes. For now, defaulting to MarchingCubes
-from core.frep.analytic.box import AnalyticBoxField
-from core.frep.analytic.sphere import AnalyticSphereField
-from core.frep.analytic.cylinder import AnalyticCylinderField
+from core.frep.sdf.box import SdfBoxField
+from core.frep.sdf.sphere import SdfSphereField
+from core.frep.sdf.cylinder import SdfCylinderField
 
 # Resolution for interactive preview (lower = faster updates)
 _PREVIEW_RES = 10
@@ -152,10 +152,9 @@ class BoxCreator(PrimitiveCreatorBase):
         if pos is None:
             return True
 
-        from tools.dm_base import _get_view_ray
         try:
             pos2d = event_dict.get("Position", (0, 0))
-            ray_p, ray_d = _get_view_ray(self.view, pos2d[0], pos2d[1])
+            ray_p, ray_d = self.projector._get_view_ray(pos2d[0], pos2d[1])
         except Exception:
             pos2d = (0, 0)
             ray_p, ray_d = None, None
@@ -227,9 +226,8 @@ class BoxCreator(PrimitiveCreatorBase):
         pos = event_dict.get("Position")
         if pos:
             try:
-                from tools.dm_base import _get_view_ray
                 # Provide x,y coordinates to get the view ray
-                ray_p, ray_d = _get_view_ray(self.view, pos[0], pos[1])
+                ray_p, ray_d = self.projector._get_view_ray(pos[0], pos[1])
                 if ray_p and ray_d:
                     # UX-friendly 2D Pixel Projection Math:
                     p2 = self._height_drag_base
@@ -348,7 +346,7 @@ class BoxCreator(PrimitiveCreatorBase):
         cy = (loc_p1.y + loc_p2.y) / 2.0
         cz = (loc_p1.z + loc_p3.z) / 2.0
         
-        return AnalyticBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(size_x, size_y, max(size_z, 0.01)), placement=wp)
+        return SdfBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(size_x, size_y, max(size_z, 0.01)), placement=wp)
 
     def _get_final_points(self):
         if len(self.points) < 3:
@@ -409,7 +407,7 @@ class SphereCreator(PrimitiveCreatorBase):
         radius = (self.current_point - self.center).Length
         if radius < 0.01:
             return None
-        return AnalyticSphereField(self.center, radius)
+        return SdfSphereField(self.center, radius)
 
     def _get_final_field(self):
         return self._get_preview_field()
@@ -466,7 +464,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         if radius < 0.01:
             return None
         center = c_base + n * (height / 2.0)
-        return AnalyticCylinderField(center, n, radius, max(abs(height), 0.01))
+        return SdfCylinderField(center, n, radius, max(abs(height), 0.01))
 
     def _get_final_field(self):
         if len(self.points) < 3:
@@ -476,7 +474,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         radius = (p_rad - c_base).Length
         height = (p_height - c_base).dot(n)
         center = c_base + n * (height / 2.0)
-        return AnalyticCylinderField(center, n, radius, abs(height))
+        return SdfCylinderField(center, n, radius, abs(height))
 
     def _get_final_points(self):
         if len(self.points) < 3:

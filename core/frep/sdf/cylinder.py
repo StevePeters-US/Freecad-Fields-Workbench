@@ -1,9 +1,9 @@
 import numpy as np
 import FreeCAD
 import math
-from core.frep.analytic.analytic_field import AnalyticField
+from core.frep.sdf.sdf_field import SdfField
 
-class AnalyticCylinderField(AnalyticField):
+class SdfCylinderField(SdfField):
     """A finite cylinder exact SDF."""
     def __init__(self, base_center: FreeCAD.Vector, axis: FreeCAD.Vector, radius: float, height: float):
         self.base_center = base_center

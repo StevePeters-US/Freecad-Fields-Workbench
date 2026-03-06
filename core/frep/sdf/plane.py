@@ -1,7 +1,7 @@
 import FreeCAD
-from core.frep.analytic.analytic_field import AnalyticField
+from core.frep.sdf.sdf_field import SdfField
 
-class AnalyticPlaneField(AnalyticField):
+class SdfPlaneField(SdfField):
     """A half-space field divided by an infinite plane."""
     def __init__(self, normal: FreeCAD.Vector, origin: FreeCAD.Vector):
         self.normal = normal

@@ -20,7 +20,7 @@ User Input → Tool (DMBase subclass) → FRepField → Mesher → Coin3D Nodes 
 | Area | Key Files | Purpose |
 |------|-----------|---------|
 | **Fields** | `core/frep/frep_field.py` | Abstract base for all SDF fields |
-| | `core/frep/marching_cubes/*.py` | Concrete analytic SDF primitives |
+| | `core/frep/marching_cubes/*.py` | Concrete SDF SDF primitives |
 | | `core/frep/frep_composer.py` | Boolean field composition (union/intersection/subtraction) |
 | **Meshing** | `core/frep_mesher.py` | Marching cubes mesher + mesher factory |
 | **Document** | `core/dm_object.py` | `DMObjectProxy` (data), `DMViewProvider` (rendering), factory |

@@ -541,7 +541,7 @@ class DMViewProvider:
         try:
             import FreeCAD as _FC
             # Use actual local-space corners transformed to world space via the field's placement.
-            # For AnalyticBoxField this gives true oriented box corners, not AABB corners.
+            # For SdfBoxField this gives true oriented box corners, not AABB corners.
             placement = getattr(field, "placement", None)
             center = getattr(field, "center", None)
             half_size = getattr(field, "half_size", None)

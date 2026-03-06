@@ -1,10 +1,10 @@
 # FreeCAD Direct Modeling Workbench
 
-A Python workbench for FreeCAD that provides fast, interactive direct modeling using **Analytic Fields (Implicit Geometry)**. Users draw curves and surfaces on a dynamic workplane, convert them into analytic functions, and combine them with field-based boolean operations — all without leaving the 3D viewport.
+A Python workbench for FreeCAD that provides fast, interactive direct modeling using **Signed Distance Fields (Implicit Geometry)**. Users draw curves and surfaces on a dynamic workplane, convert them into SDF functions, and combine them with field-based boolean operations — all without leaving the 3D viewport.
 
 ---
 
-## Core Concept: Analytic Fields from NURBS
+## Core Concept: Signed Distance Fields from NURBS
 
 Traditional CAD uses B-Rep (boundary representation): shells of faces, edges, and vertices that must form watertight manifolds. This workbench takes a different approach — **each NURBS surface is evaluated as a spatial discriminator**: a function `f(P)` that returns a signed scalar for any point in space, denoting inside/outside.
 
@@ -12,7 +12,7 @@ Traditional CAD uses B-Rep (boundary representation): shells of faces, edges, an
                     NURBS Surface
                          │
               ┌──────────┴──────────┐
-              │  Analytic Field     │
+              │  Signed Distance Field     │
               │  Evaluation         │
               └──────────┬──────────┘
                          │
@@ -26,7 +26,7 @@ Traditional CAD uses B-Rep (boundary representation): shells of faces, edges, an
 
 **How it works:**
 
-1. **Evaluation** — For any query point `P`, the analytic field assesses its position relative to the root geometry.
+1. **Evaluation** — For any query point `P`, the signed distance field assesses its position relative to the root geometry.
 2. **Signing** — Returns a scalar. Positive = outside, negative = inside, zero = on the surface boundaries.
 3. **Bounding** — A single surface defines a field extending to infinity. Clip it with bounding planes via `max(f_field, f_bound)` to create a finite influence region.
 4. **Composition** — Combine multiple bounded fields using min/max trees:
@@ -35,7 +35,7 @@ Traditional CAD uses B-Rep (boundary representation): shells of faces, edges, an
    - **Subtraction**: `max(f_A, −f_B)`
    - **Smooth blend (R-Union)**: parametric blending function for fillets and transitions
 
-This gives you **NURBS-quality surface control** with **Analytic operational flexibility** — enabling lattice infills, smooth blends, and hollowing operations that are mathematically impossible or crash-prone in standard B-Rep CAD.
+This gives you **NURBS-quality surface control** with **SDF operational flexibility** — enabling lattice infills, smooth blends, and hollowing operations that are mathematically impossible or crash-prone in standard B-Rep CAD.
 
 ---
 
@@ -48,7 +48,7 @@ Point / Curve tools (draw geometry on the workplane)
     ↓
 NURBS Surfaces (patches from curves, primitives, lofts)
     ↓
-Analytic Field Engine (NURBS → analytic function per surface)
+Signed Distance Field Engine (NURBS → SDF function per surface)
     ↓
 Field Composition (boolean union/cut/intersect via min/max)
     ↓
@@ -94,8 +94,8 @@ Freecad-Direct-Modeling/
 │   ├── input_manager.py           # Global input event routing
 │   ├── nurbs_geometry.py          # DMPoint, DMCurve — NURBS primitives
 │   ├── work_plane.py              # WorkPlaneManager — Coin3D grid & snapping
-│   └── analytic/                  # Analytic Field Engine
-│       ├── analytic_field.py      # Abstract base AnalyticField
+│   └── sdf/                  # Signed Distance Field Engine
+│       ├── sdf_field.py      # Abstract base SdfField
 │       ├── field_composer.py      # Boolean composition tree (min/max/blend)
 │       └── primitives/            # Specialized primitive fields (sphere, box, etc.)
 │
@@ -146,9 +146,9 @@ Freecad-Direct-Modeling/
 ### Operations
 | Command | ID | Hotkey | Status |
 |---------|----|--------|--------|
-| Field Union | `DM_Add` | `Ctrl+F` | Planned (Analytic) |
-| Field Cut | `DM_Subtract` | `Ctrl+X` | Planned (Analytic) |
-| Field Intersect | `DM_Intersection` | `Ctrl+I` | Planned (Analytic) |
+| Field Union | `DM_Add` | `Ctrl+F` | Planned (SDF) |
+| Field Cut | `DM_Subtract` | `Ctrl+X` | Planned (SDF) |
+| Field Intersect | `DM_Intersection` | `Ctrl+I` | Planned (SDF) |
 | Smooth Blend | `DM_Blend` | `Ctrl+B` | Planned |
 | Translate | `DM_Translate` | `T` | ✅ |
 

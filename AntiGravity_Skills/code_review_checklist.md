@@ -60,11 +60,11 @@ DMBase
 └── (future tools)
 
 FRepField
-├── AnalyticField (formula-based SDFs)
-│   ├── AnalyticBoxField
-│   ├── AnalyticSphereField
-│   ├── AnalyticCylinderField
-│   └── AnalyticPlaneField
+├── SdfField (formula-based SDFs)
+│   ├── SdfBoxField
+│   ├── SdfSphereField
+│   ├── SdfCylinderField
+│   └── SdfPlaneField
 ├── ComposerField
 │   ├── UnionField
 │   ├── IntersectionField

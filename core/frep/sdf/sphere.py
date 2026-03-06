@@ -1,8 +1,8 @@
 import numpy as np
 import FreeCAD
-from core.frep.analytic.analytic_field import AnalyticField
+from core.frep.sdf.sdf_field import SdfField
 
-class AnalyticSphereField(AnalyticField):
+class SdfSphereField(SdfField):
     """An exact analytical sphere SDF."""
     def __init__(self, center: FreeCAD.Vector, radius: float):
         self.center = center

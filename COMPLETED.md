@@ -17,10 +17,10 @@ Tasks moved here from `TODO.md` after verification.
 - **Completed**: Removed redundant inline `to_local()` and `to_global()` closures in `BoxCreator` and shifted to using inherited `DMBase` methods.
 
 ### ✅ Enforce `bounding_box()` Contract
-- **Completed**: Modified `FRepField.bounding_box()` to raise `NotImplementedError`, forcing subclasses to provide valid bounds. Implemented `bounding_box()` for `AnalyticPlaneField`.
+- **Completed**: Modified `FRepField.bounding_box()` to raise `NotImplementedError`, forcing subclasses to provide valid bounds. Implemented `bounding_box()` for `SdfPlaneField`.
 
-### ✅ Implement `AnalyticField` Base Class
-- **Completed**: Replaced the empty `MarchingCubesField` with an `AnalyticField` base class. Moved and renamed MC primitives (box, sphere, cylinder, plane) to `core/frep/analytic/`.
+### ✅ Implement `SdfField` Base Class
+- **Completed**: Replaced the empty `MarchingCubesField` with an `SdfField` base class. Moved and renamed MC primitives (box, sphere, cylinder, plane) to `core/frep/sdf/`.
 
 ## 🪄 Interactive Primitive Tools (F-Rep Backed)
 

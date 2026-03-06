@@ -1,6 +1,6 @@
 ---
 name: FRep Field Implementation Guide
-description: How to implement a new FRep field (analytic primitive) for the Direct Modeling workbench.
+description: How to implement a new FRep field (SDF primitive) for the Direct Modeling workbench.
 ---
 
 # FRep Field Implementation Guide
@@ -9,7 +9,7 @@ When implementing a new F-Rep field (SDF primitive) for the Direct Modeling work
 
 ## Required Methods
 
-Every field must inherit from `FRepField` (or `AnalyticField` once the refactor is complete) and implement:
+Every field must inherit from `FRepField` (or `SdfField` once the refactor is complete) and implement:
 
 1. **`evaluate(self, point: FreeCAD.Vector) -> float`** — Returns the signed distance at a single point. Negative = inside, positive = outside, zero = on surface.
 
@@ -23,9 +23,9 @@ Every field must inherit from `FRepField` (or `AnalyticField` once the refactor 
 
 ## File Location
 
-- Place the file in `core/frep/analytic/` (e.g., `core/frep/analytic/torus.py`)
+- Place the file in `core/frep/sdf/` (e.g., `core/frep/sdf/torus.py`)
 - Import from the base: `from core.frep.frep_field import FRepField`
-- Use the class name pattern: `Analytic<Shape>Field` (e.g., `AnalyticTorusField`)
+- Use the class name pattern: `SDF<Shape>Field` (e.g., `SdfTorusField`)
 
 ## Integration Checklist
 
@@ -42,7 +42,7 @@ import numpy as np
 import FreeCAD
 from core.frep.frep_field import FRepField
 
-class AnalyticNewField(FRepField):
+class SdfNewField(FRepField):
     """Exact analytical SDF for <shape>."""
     def __init__(self, center: FreeCAD.Vector, param: float):
         self.center = center
