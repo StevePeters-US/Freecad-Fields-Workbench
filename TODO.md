@@ -2,63 +2,82 @@
 
 ---
 
-## Critical Bugs (will crash / broken code path)
----
+## Refactor
 
-- **Fix `get_projected_point()` return value** `Claude Low`
-  - **Goal**: The function returns undefined variable `result` — any caller gets a `NameError`.
-  - **File**: `core/input_manager.py` — find `get_projected_point()`, compute and return the correct projected point instead of `result`.
-  - **Skills**: `dm_event_pipeline`
-  - **Acceptance**: Function returns a valid `FreeCAD.Vector` representing the projected position.
-
-- **Fix `get_geometry_info()` undefined method** `Claude Low`
-  - **Goal**: `work_plane_tool.py:148` calls `self.projector.get_geometry_info()` which does not exist on `ViewProjector`. The correct private method is `_get_geometry_point()` with different arguments.
-  - **Files**: `core/view_projector.py` (read), `tools/work_plane_tool.py:148` (fix call site or add method).
-  - **Skills**: `dm_event_pipeline`
-  - **Acceptance**: WorkPlane tool face-snapping does not crash.
-
----
-
-## Refactoring
----
-- **Extract Render Logic from DMObject** `Gemini High`
-  - **Goal**: Move Coin3D scene graph and visual rendering (meshes, curves, points) from `DMViewProvider` in `dm_object.py` to a dedicated `DMRenderer` class.
-  - **Files to read**: `core/dm_object.py`
-  - **Files to create/modify**: `core/dm_renderer.py`, `core/dm_object.py`
-  - **Acceptance**: `DMViewProvider` instantiates `DMRenderer` and calls its methods to draw points/meshes. Tools can also call `renderer.draw_handles(points)` when editing.
-
-- **Evaluate and Rename `DMObject`/`DMViewProvider`** `Gemini Low`
-  - **Goal**: Evaluate if `DMObject` is the best name for the class generating FreeCAD BRep proxies, and rename it if a better fit (e.g., `DMFeature` or `DMNode`) is found across the codebase.
-  - **Acceptance**: Chosen name makes more sense for a FreeCAD proxy object and is consistently used.
-
-- **Unify Event Pipeline** `Claude High`
-  - **Goal**: Eliminate the dual Qt + Coin3D event routing. Choose one primary channel; demote or remove the other. All hotkeys handled in one consistent place.
-  - **Files**: `core/input_manager.py`, `tools/dm_base.py`
-  - **Skills**: `dm_event_pipeline`
-  - **Steps**:
-    1. Audit every hotkey: which channel claims it, which executes it.
-    2. Decide: Coin3D `event_cb` is the primary (since it lives in the viewport); Qt filter handles only app-level events (menus, shortcuts FreeCAD would steal).
-    3. Remove duplicate handling from the channel that loses.
-    4. Document the remaining single flow in `dm_event_pipeline` skill.
-  - **Acceptance**: A keypress fires exactly one handler. No hotkey silently fires twice.
-
-- **Standardize Tool Lifecycle** `Claude Medium`
-  - **Goal**: All tools follow the same finish/terminate sequence. No dialog closed twice, no cleanup bypassed.
-  - **Files**: `tools/dm_base.py`, `tools/point_tool.py`, `tools/work_plane_tool.py`
-  - **Skills**: `dm_event_pipeline`
-  - **Steps**:
-    1. Define the canonical chain: `finish()` → `_do_finish()` → `terminate()` → `_do_terminate()`.
-    2. `PointCreator._do_finish()` must call `super()._do_finish()` for object renaming.
-    3. Remove the redundant dialog-close call in `NURBSPrimitiveCreator._do_finish()` (already done by parent's `_do_terminate()`).
-    4. `WorkPlaneCreator._do_terminate()` already calls `super()` — verify it does so at the correct point.
-  - **Acceptance**: Create and cancel each tool type; no Coin3D nodes leak, no signals stay connected, no double dialog-close errors in the console.
-
-- **Remove Unused MeshingType Options** `Claude Low`
-  - **Goal**: MeshingType 1 ("Adaptive Marching Cubes") and 2 ("NURBS F-Rep") are not implemented but selectable. Either implement or remove them.
-  - **Files**: `core/dm_object.py` (property definition), `commands/cmd_primitive.py` (warning), `core/dm_mesher.py`
-  - **Acceptance**: Users cannot select unimplemented meshing types, or a placeholder is shown with a clear "not yet implemented" error in the console.
+### [x] Refactor 1: Unify Tool Registry (Minimum LLM: Gemini Low)
+> Skill: `.agents/skills/freecad_env/SKILL.md`
+- **Goal**: Remove the duplicate `DMBase.active_tool` class variable and route all tool tracking exclusively through `DMToolManager` singleton.
+- **Files to read**: `tools/dm_base.py`, `core/dm_tool_manager.py`, `core/input_manager.py`
+- **Files to modify**: `tools/dm_base.py`, `core/input_manager.py`
+- **Steps**:
+  1. In `DMBase.__init__()`, remove `DMBase.active_tool = self`; rely solely on `DMToolManager.get_instance().set_active_tool(self)`.
+  2. In `DMBase._do_terminate()`, remove `DMBase.active_tool = None`; rely solely on `DMToolManager.get_instance().set_active_tool(None)`.
+  3. Grep for all reads of `DMBase.active_tool` across the codebase (`input_manager.py`, commands, tools) and replace each with `DMToolManager.get_instance().get_active_tool()`.
+  4. Remove the `active_tool = None` class variable declaration from `DMBase`.
+- **Acceptance**: No code references `DMBase.active_tool`. Tools start and stop correctly. Running a tool twice in a row terminates the first cleanly.
 
 ---
+
+### Refactor 2: Fix Dialog Double-Close (Minimum LLM: Gemini Low)
+> Skill: `.agents/skills/freecad_env/SKILL.md`
+- **Goal**: Ensure `FreeCADGui.Control.closeDialog()` is called exactly once per tool session regardless of which termination path fires.
+- **Files to read**: `tools/dm_base.py`, `tools/primitive_tool.py`, `tools/curve_tool.py`, `tools/point_tool.py`
+- **Files to modify**: `tools/dm_base.py`
+- **Steps**:
+  1. Add `self._dialog_open = False` to `DMBase.__init__()`.
+  2. Set `self._dialog_open = True` wherever a task panel is opened (search for `FreeCADGui.Control.showTaskView` / `showDialog` calls in all tool subclasses).
+  3. In `DMBase._do_terminate()`, guard the `closeDialog()` call: `if self._dialog_open: FreeCADGui.Control.closeDialog(); self._dialog_open = False`.
+  4. Audit `NURBSPrimitiveCreator._do_finish()` and all subclass overrides — remove any direct `closeDialog()` calls that are now redundant.
+- **Acceptance**: Opening and canceling a tool 10 times produces no console errors. Dialog closes exactly once per tool session.
+
+---
+
+### Refactor 3: Harden the Event Pipeline (Minimum LLM: Gemini Low)
+> Skill: `.agents/skills/dm_event_pipeline/SKILL.md`
+- **Goal**: Confirm and document which layer owns right-click handling; prevent the tool `finish()` from firing more than once per right-click.
+- **Files to read**: `core/input_manager.py`, `tools/dm_base.py`
+- **Files to modify**: `core/input_manager.py`, `tools/dm_base.py`
+- **Steps**:
+  1. Add temporary debug logging to `eventFilter` right-click path and `DMBase.on_button3_down()` to confirm whether both fire for a single right-click.
+  2. If both fire, add a `_finish_scheduled` flag to `DMBase`: set it in whichever handler fires first, check-and-bail in the second.
+  3. Add inline comments to `eventFilter` documenting ownership for each intercepted event type (ShortcutOverride, KeyPress, ContextMenu, right-click).
+  4. Remove debug logging from step 1.
+- **Acceptance**: Right-clicking during an active tool calls `finish()` exactly once. No duplicate Coin3D events after Qt suppression. Pipeline ownership is documented in comments.
+
+---
+
+### Refactor 4: Unify WorkPlane Architecture (Minimum LLM: Claude)
+> Skill: `.agents/skills/dm_workplane_architecture/SKILL.md`
+- **Goal**: Replace the three parallel workplane concepts (transient `WorkPlaneManager`, persistent `DMWorkPlane`, per-tool `Placement`) with a single `ActiveWorkPlane` abstraction that all tools and the projector use.
+- **Files to read**: `core/work_plane.py`, `core/dm_workplane.py`, `tools/dm_base.py`, `tools/work_plane_tool.py`, `core/view_projector.py`
+- **Files to modify/create**: `core/work_plane.py`, `tools/dm_base.py`, `core/view_projector.py`
+- **Steps**:
+  1. Define `ActiveWorkPlane` in `core/work_plane.py` with `placement: FreeCAD.Placement` and methods: `to_local(pt)`, `to_global(pt)`, `project_ray(origin, dir)`, `normal()`.
+  2. Update `WorkPlaneManager` to expose `get_active_workplane() -> ActiveWorkPlane` instead of `get_placement()`.
+  3. Replace `DMBase.working_plane` (raw `Placement`) with `DMBase.active_workplane` (`ActiveWorkPlane`). Update `_detect_selected_workplane()` to produce one.
+  4. Update `ViewProjector.get_mouse_plane_pt()` to accept an `ActiveWorkPlane` parameter rather than querying the document globally.
+  5. Update all call sites in tools.
+- **Acceptance**: All tools use `self.active_workplane.project_ray(...)` for point placement. No raw `Placement` math is duplicated across files.
+
+---
+
+### Refactor 5: Render Strategy Abstraction (Minimum LLM: Claude)
+> Skill: `.agents/skills/dm_renderer_architecture/SKILL.md`
+- **Goal**: Replace manual `ShapeType` string branching in `DMViewProvider` with a `DMRendererStrategy` class hierarchy so that adding a new geometry type requires no edits to `DMViewProvider`.
+- **Files to read**: `core/dm_object.py`, `core/dm_renderer.py`, `core/dm_workplane.py`
+- **Files to modify/create**: `core/dm_object.py`, `core/dm_renderer.py`
+- **Steps**:
+  1. Define abstract base `DMRendererStrategy` (in `dm_renderer.py` or a new `dm_render_strategy.py`) with: `setup(renderer, vobj)`, `update(renderer, fp, prop)`, `set_display_mode(renderer, mode)`.
+  2. Implement `NURBSRendererStrategy` — move the `ShapeType == "curve"` branch logic from `attach()` and `updateData()` into it.
+  3. Implement `FRepRendererStrategy` — move the `ShapeType == "frep"` branch logic into it.
+  4. In `DMViewProvider.attach()`, select strategy: `self._strategy = FRepRendererStrategy() if ShapeType == "frep" else NURBSRendererStrategy()`.
+  5. In `DMViewProvider.updateData()` and `setDisplayMode()`, delegate: `self._strategy.update(self.renderer, fp, prop)`.
+- **Acceptance**: `DMViewProvider` contains no `if ShapeType == ...` branches. Both geometry types render identically to before. A minimal `TestRendererStrategy` stub can be plugged in for unit tests without Coin3D.
+
+---
+
+---
+
 
 ## Bugs
 > Agent note: To run or test any Python that imports FreeCAD, use the skill at `.agents/skills/freecad_env/SKILL.md`.
@@ -129,43 +148,12 @@ second time attemting to drag a workplane corner quits the tool
 
 ## Phase 3: Isosurface Extraction & Display
 
-### 3a. `FRepMesher` — Base Mesher Protocol (Minimum LLM: Gemini Flash)
-- **Goal**: Define the abstract mesher interface. Produces a `Part.Shape` from an `SdfField`.
-- **Files to create**: `core/frep_mesher.py`
-- **Steps**:
-  1. `FRepMesher` (ABC) with method `mesh(field: SdfField, resolution: int) -> Part.Shape`.
-
-### [COMPLETED] 3b. `MarchingCubesMesher` — Standard Marching Cubes ★ PRIORITY (Minimum LLM: Gemini High)
-- **Goal**: Uniform-grid marching cubes producing a triangle mesh at the f=0 isosurface.
-- **Files to modify**: `core/frep_mesher.py`
-- **Class**: `MarchingCubesMesher(FRepMesher)`
-- **Steps**:
-  1. Build a 3D grid over `field.bounding_box()`, clamped to `get_max_bounds()`.
-  2. Evaluate `field.evaluate_grid()` at every grid vertex (NumPy vectorized).
-  3. For each cube with a sign change, look up the edge table and interpolate vertex positions.
-  4. Emit triangles. Use the standard 256-entry MC lookup table.
-  5. Convert triangles to `Mesh.Mesh` → `Part.Shape`.
-  6. `resolution` parameter controls grid divisions per axis (default from DM Settings).
-- **Acceptance**: `MarchingCubesMesher().mesh(SphereField(O, 10), 32)` produces a recognizable sphere mesh.
 
 
 ---
 
-## Phase 4: NURBS Surface → Signed Distance Field
 
-> The key innovation — converting NURBS surfaces into signed distance fields using mathematical evaluation.
 
-### 4a. Closest-Point-on-NURBS Projection (Minimum LLM: Gemini High)
-- **Goal**: Implement a function that, given a query point `P` and a NURBS surface, returns the closest point `Q` on the surface, the surface normal `n̂` at `Q`, and the distance `|P − Q|`.
-- **Files to read**: `core/nurbs_geometry.py`, FreeCAD `Part.BSplineSurface` API docs
-- **Files to create/modify**: `core/sdf_field.py` (add `NurbsSurfaceField`)
-- **Steps**:
-  1. Use `surface.parameter(P)` → `(u, v)` to get the parameter-space projection (FreeCAD's OCCT binding provides this).
-  2. Evaluate `Q = surface.value(u, v)` for the closest point.
-  3. Evaluate `n̂ = surface.normal(u, v)` for the surface normal.
-  4. Compute `sign = dot(P − Q, n̂)` and `distance = |P − Q|`. Return `sign * distance` as the field value.
-  5. Handle edge cases: points projected outside the surface parameter domain (clamp to boundary), degenerate normals.
-- **Acceptance**: Given a flat NURBS plane, the field behaves identically to `SdfPlaneField`. Given a curved NURBS surface, the field correctly reports inside/outside relative to the normal direction.
 
 ### 4b. Bounded NURBS Field with Clipping Planes (Minimum LLM: Gemini Low)
 - **Goal**: Restrict a `NurbsSurfaceField`'s influence to a finite region using bounding planes.

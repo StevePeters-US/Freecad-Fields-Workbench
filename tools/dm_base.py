@@ -17,14 +17,15 @@ from core.input_manager import DMInputManager
 
 class DMBase:
     # Class-level reference to the currently active tool to allow 
-    # global event filters (like right-click suppression) to reach it.
-    active_tool = None
     place_on_geometry = True
 
     def __init__(self):
-        if DMBase.active_tool and hasattr(DMBase.active_tool, 'terminate'):
+        from core.dm_tool_manager import DMToolManager
+        tool_mgr = DMToolManager.get_instance()
+        active_tool = tool_mgr.get_active_tool()
+        if active_tool and hasattr(active_tool, 'terminate'):
             try:
-                DMBase.active_tool.terminate()
+                active_tool.terminate()
             except Exception as e:
                 dm_logger.debug(f"DMBase.__init__: Failed to terminate previous tool: {e}")
                 
@@ -44,9 +45,7 @@ class DMBase:
 
 
         dm_logger.debug(f"{self.__class__.__name__} initialized")
-        DMBase.active_tool = self
-        from core.dm_tool_manager import DMToolManager
-        DMToolManager.get_instance().set_active_tool(self)
+        tool_mgr.set_active_tool(self)
         self.projector = ViewProjector(self.view)
         self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
 
@@ -114,10 +113,10 @@ class DMBase:
         QtCore.QTimer.singleShot(0, self._do_terminate)
 
     def _do_terminate(self):
-        if DMBase.active_tool is self:
-            DMBase.active_tool = None
         from core.dm_tool_manager import DMToolManager
-        DMToolManager.get_instance().set_active_tool(None)
+        tool_mgr = DMToolManager.get_instance()
+        if tool_mgr.get_active_tool() is self:
+            tool_mgr.set_active_tool(None)
         self._terminated = True
         try:
             if self.callback:
