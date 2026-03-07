@@ -18,7 +18,7 @@
 
 ---
 
-### Refactor 2: Fix Dialog Double-Close (Minimum LLM: Gemini Low)
+### [x] Refactor 2: Fix Dialog Double-Close (Minimum LLM: Gemini Low)
 > Skill: `.agents/skills/freecad_env/SKILL.md`
 - **Goal**: Ensure `FreeCADGui.Control.closeDialog()` is called exactly once per tool session regardless of which termination path fires.
 - **Files to read**: `tools/dm_base.py`, `tools/primitive_tool.py`, `tools/curve_tool.py`, `tools/point_tool.py`

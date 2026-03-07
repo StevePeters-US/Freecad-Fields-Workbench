@@ -83,6 +83,7 @@ class WorkPlaneCreator(DMBase):
         # Show Task Panel to manage lifecycle
         self.task_panel = WorkPlaneTaskPanel(self)
         FreeCADGui.Control.showDialog(self.task_panel)
+        self._dialog_open = True
 
         self.update_handles()
 

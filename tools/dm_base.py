@@ -64,6 +64,7 @@ class DMBase:
         self.is_cutter = False
         self.manual_mode_override = False
         self.panel = None
+        self._dialog_open = False
 
         # Shared constraint state
         self.active_axis = None
@@ -124,8 +125,10 @@ class DMBase:
                 self.callback = None
             
             # Close task panel if open
-            import FreeCADGui
-            FreeCADGui.Control.closeDialog()
+            if getattr(self, "_dialog_open", False):
+                import FreeCADGui
+                FreeCADGui.Control.closeDialog()
+                self._dialog_open = False
             
             # Clean up active/preview objects if not finished
             if not getattr(self, "_finished", False):
@@ -657,12 +660,7 @@ class NURBSPrimitiveCreator(DMBase):
         self._finished = True
         self.terminate()
 
-        # Close task panel if open
-        try:
-            import FreeCADGui
-            FreeCADGui.Control.closeDialog()
-        except Exception as e:
-            dm_logger.debug(f"_do_finish: Failed to close dialog: {e}")
+
 
     # ------------------------------------------------------------------
     # Snapping
