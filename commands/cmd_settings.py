@@ -34,10 +34,11 @@ class _SettingsDialog(QtGui.QDialog):
         current_wire = get_show_wireframe()
         current_lw = get_line_width()
         current_ps = get_point_size()
-        from core.dm_object import get_picking_radius, get_meshing_type, get_max_bounds, get_meshing_resolution
+        from core.dm_object import (get_picking_radius, get_meshing_type, get_max_bounds, 
+                                    get_meshing_cell_size)
         current_pr = get_picking_radius()
         current_meshing = get_meshing_type()
-        current_res = get_meshing_resolution()
+        current_res = get_meshing_cell_size()
         current_mb = get_max_bounds()
 
         layout = QtGui.QFormLayout(self)
@@ -115,8 +116,9 @@ class _SettingsDialog(QtGui.QDialog):
 
     def _on_accept(self):
         from core.dm_object import (set_show_wireframe, set_line_width, set_point_size, 
-                                    set_picking_radius, set_meshing_type, set_meshing_resolution,
-                                    set_max_bounds, set_perf_profiler_enabled, refresh_all_dm_objects)
+                                    set_picking_radius, set_meshing_type, set_meshing_cell_size,
+                                    set_max_bounds, set_perf_profiler_enabled, refresh_all_dm_objects,
+                                    get_developer_mode, set_developer_mode)
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()

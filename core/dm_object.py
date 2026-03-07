@@ -91,7 +91,10 @@ def get_perf_profiler_enabled():
     return FreeCAD.ParamGet(_PARAM_PATH).GetBool("EnablePerfProfiler", False)
 
 def set_perf_profiler_enabled(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetBool("EnablePerfProfiler", bool(val))
+    try: # ParamGet might fail in some contexts
+        FreeCAD.ParamGet(_PARAM_PATH).SetBool("EnablePerfProfiler", bool(val))
+    except:
+        pass
 
 
 

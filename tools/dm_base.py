@@ -47,9 +47,6 @@ class DMBase:
         DMBase.active_tool = self
         self.projector = ViewProjector(self.view)
         self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
-        
-        # Connect to global input manager for broadcasting
-        DMInputManager.get_instance().input_event.connect(self._on_input_event)
 
         self.start_point   = None
         self.current_point = None
@@ -122,12 +119,6 @@ class DMBase:
             if self.callback:
                 self.view.removeEventCallback("SoEvent", self.callback)
                 self.callback = None
-            
-            # Disconnect from global input manager
-            try:
-                DMInputManager.get_instance().input_event.disconnect(self._on_input_event)
-            except Exception:
-                pass
             
             # Close task panel if open
             import FreeCADGui
@@ -204,67 +195,6 @@ class DMBase:
     # ------------------------------------------------------------------
     # Event loop & Overridable Input Hooks
     # ------------------------------------------------------------------
-
-    def _on_input_event(self, event_wrapper):
-        """Standard input event handler for all DM tools."""
-        if self._terminated:
-            return
-
-        etype = event_wrapper.type
-        
-        # 1. Handle Key Strokes
-        if etype == "KeyPress":
-            key = event_wrapper.key
-            
-            # Control key for snapping toggle
-            if "Control" in event_wrapper.modifiers:
-                if hasattr(self, 'toggle_snapping'):
-                    self.toggle_snapping()
-                    event_wrapper.handled = True
-                    return
-
-        # 2. Handle Shortcut Overrides (CLAIM hotkeys)
-        elif etype == "ShortcutOverride":
-            key = event_wrapper.key
-            # Claim 'S' and 'D' if we have menus for them
-            if key == QtCore.Qt.Key_S:
-                if hasattr(self, 'get_snapping_menu'):
-                    event_wrapper.handled = True
-            elif key == QtCore.Qt.Key_D:
-                if hasattr(self, 'get_context_menu') or hasattr(self, 'on_tool_menu'):
-                    event_wrapper.handled = True
-
-        # 3. Handle Right Click
-        elif etype == "MousePress" and event_wrapper.key == "Right":
-            # Right click finishes the tool
-            dm_logger.debug(f"{self.__class__.__name__}: Right-click finish tool")
-            self.finish()
-            event_wrapper.handled = True
-
-        # 4. Late-bind hotkey execution (if claimed above)
-        if event_wrapper.handled:
-            return
-
-        if etype == "KeyPress":
-            key = event_wrapper.key
-            if key == QtCore.Qt.Key_S:
-                if hasattr(self, 'get_snapping_menu'):
-                    from core.dm_menu import DMMenuManager
-                    DMMenuManager.get_instance().trigger_dynamic_menu(self.get_snapping_menu())
-                    event_wrapper.handled = True
-            elif key == QtCore.Qt.Key_D:
-                items = None
-                if hasattr(self, 'get_context_menu'):
-                    items = self.get_context_menu()
-                elif hasattr(self, 'on_tool_menu'):
-                    if self.on_tool_menu():
-                        event_wrapper.handled = True
-                        return
-                        
-                if items:
-                    from core.dm_menu import DMMenuManager
-                    DMMenuManager.get_instance().trigger_dynamic_menu(items)
-                    event_wrapper.handled = True
 
     def on_button1_down(self, event_dict):
         return self.handle_click(event_dict)
@@ -386,8 +316,22 @@ class DMBase:
             self.on_tool_option_1()
             return True
             
+        # Snapping Menu (S)
+        if key == "S":
+            if hasattr(self, 'get_snapping_menu'):
+                from core.dm_menu import DMMenuManager
+                DMMenuManager.get_instance().trigger_dynamic_menu(self.get_snapping_menu())
+                return True
+
         # Tool Menu (D)
         if key == "D":
+            items = None
+            if hasattr(self, 'get_context_menu'):
+                items = self.get_context_menu()
+            if items:
+                from core.dm_menu import DMMenuManager
+                DMMenuManager.get_instance().trigger_dynamic_menu(items)
+                return True
             self.on_tool_menu()
             return True
             
@@ -720,6 +664,10 @@ class NURBSPrimitiveCreator(DMBase):
     # ------------------------------------------------------------------
     # Snapping
     # ------------------------------------------------------------------
+
+    def on_tool_option_1(self):
+        """Ctrl key → cycle snapping type."""
+        self.toggle_snapping()
 
     def set_snap_type(self, type_name):
         self.snap_type = type_name

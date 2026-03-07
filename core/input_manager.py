@@ -4,19 +4,8 @@ from PySide import QtCore, QtGui
 import math
 from core import dm_logger
 
-class DMInputEvent:
-    """Wrapper for input events to allow broadcasting and consumption."""
-    def __init__(self, event_type, key=None, mouse_pos=None, modifiers=None, qt_event=None):
-        self.type = event_type
-        self.key = key
-        self.pos = mouse_pos # (x, y) Top-Left
-        self.modifiers = modifiers or []
-        self.qt_event = qt_event
-        self.handled = False
-
 class DMInputManager(QtCore.QObject):
     _instance = None
-    input_event = QtCore.Signal(object)
 
     @classmethod
     def get_instance(cls):
@@ -57,14 +46,21 @@ class DMInputManager(QtCore.QObject):
                 if event.button() == QtCore.Qt.MiddleButton:
                     self._middle_mouse_down = (event.type() == QtCore.QEvent.MouseButtonPress)
 
-            # 2. Broadcast the event
-            wrapper = self._wrap_event(event)
-            if wrapper:
-                self.input_event.emit(wrapper)
-                if wrapper.handled:
-                    return True
+            # 2. ShortcutOverride: claim 'S' and 'D' for the active tool so FreeCAD
+            #    menus don't consume them before Coin3D gets the KeyPress.
+            if event.type() == QtCore.QEvent.ShortcutOverride:
+                text = event.text().lower() if hasattr(event, "text") else ""
+                from tools.dm_base import DMBase  # lazy import — avoids circular dep
+                tool = DMBase.active_tool
+                if tool:
+                    if text == 's' and hasattr(tool, 'get_snapping_menu'):
+                        event.accept()
+                        return True
+                    if text == 'd' and (hasattr(tool, 'get_context_menu') or hasattr(tool, 'on_tool_menu')):
+                        event.accept()
+                        return True
 
-            # 3. Handle default context menu ('D' key) if not handled by a tool
+            # 3. Handle default context menu ('D' key) if no tool is active
             if event.type() == QtCore.QEvent.KeyPress:
                 key = event.key()
                 text = event.text().lower() if hasattr(event, "text") else ""
@@ -74,38 +70,18 @@ class DMInputManager(QtCore.QObject):
                         DMMenuManager.get_instance().show_context_menu()
                         return True
 
-            # Suppress FreeCAD context menu if a menu is already open or specifically requested
+            # Suppress FreeCAD context menu when a DM tool is active or a menu is open
             if event.type() == QtCore.QEvent.ContextMenu:
                 if self._is_menu_active():
+                    return True
+                from tools.dm_base import DMBase
+                if DMBase.active_tool:
                     return True
 
         except Exception as e:
             dm_logger.error(f"DMInputManager eventFilter error: {e}")
 
         return False
-
-    def _wrap_event(self, event):
-        """Wraps a Qt event into a DMInputEvent."""
-        etype = event.type()
-        if etype == QtCore.QEvent.KeyPress:
-            modifiers = []
-            if self._shift_down: modifiers.append("Shift")
-            if self._control_down: modifiers.append("Control")
-            return DMInputEvent("KeyPress", key=event.key(), mouse_pos=self._last_qt_pos, modifiers=modifiers, qt_event=event)
-        
-        elif etype in [QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
-            btn = "Left" if event.button() == QtCore.Qt.LeftButton else ("Right" if event.button() == QtCore.Qt.RightButton else "Middle")
-            state = "Press" if etype == QtCore.QEvent.MouseButtonPress else "Release"
-            return DMInputEvent(f"Mouse{state}", key=btn, mouse_pos=(event.pos().x(), event.pos().y()), qt_event=event)
-
-        elif etype == QtCore.QEvent.ShortcutOverride:
-            # We always broadcast ShortcutOverride for 'S' and 'D' so tools can claim them
-            key = event.key()
-            text = event.text().lower() if hasattr(event, "text") else ""
-            if key in (QtCore.Qt.Key_S, QtCore.Qt.Key_D) or text in ('s', 'd'):
-                return DMInputEvent("ShortcutOverride", key=key, mouse_pos=self._last_qt_pos, qt_event=event)
-                
-        return None
 
     def get_mouse_pos(self, event_dict=None):
         """Standardized Top-Left coordinate retrieval for all tools."""
@@ -164,6 +140,12 @@ class DMInputManager(QtCore.QObject):
             if hasattr(view, "getRay"):
                 ray = view.getRay(x, y)
                 if ray:
+                    r_base, r_dir = None, None
+                    if isinstance(ray, dict):
+                        r_base, r_dir = FreeCAD.Vector(ray["base"]), FreeCAD.Vector(ray["dir"])
+                    elif isinstance(ray, tuple):
+                        r_base, r_dir = FreeCAD.Vector(ray[0]), FreeCAD.Vector(ray[1])
+                    
                     if isinstance(ray, dict):
                         return (FreeCAD.Vector(ray["base"]), FreeCAD.Vector(ray["dir"]))
                     elif isinstance(ray, tuple):
@@ -182,9 +164,19 @@ class DMInputManager(QtCore.QObject):
             ray_p = FreeCAD.Vector(p[0], p[1], p[2])
             
             if scene_pt:
-                ray_d = scene_pt - ray_p
-                ray_d.normalize()
-                return ray_p, ray_d
+                if hasattr(cam, "height"):
+                    # Orthographic: all rays are parallel to the view direction.
+                    # scene_pt is already the correct lateral position; use it as
+                    # the ray origin so the plane intersection is exact.
+                    vd = view.getViewDirection()
+                    ray_d = FreeCAD.Vector(vd[0], vd[1], vd[2])
+                    ray_d.normalize()
+                    return scene_pt, ray_d
+                else:
+                    # Perspective: ray goes from camera through scene_pt.
+                    ray_d = scene_pt - ray_p
+                    ray_d.normalize()
+                    return ray_p, ray_d
 
             # 3. Pure Math Fallback (Directly from Camera)
             rot = cam.orientation.getValue()
@@ -220,7 +212,8 @@ class DMInputManager(QtCore.QObject):
                 height = cam.height.getValue(); width = height * aspect
                 ndc_x, ndc_y = (x/w)*2.0 - 1.0, 1.0 - (y/h)*2.0
                 ray_p_ortho = ray_p + right*(ndc_x*width/2.0) + up*(ndc_y*height/2.0)
-                return ray_p_ortho, forward.normalize()
+                forward.normalize()  # modifies in-place; returns None — do not use return value
+                return ray_p_ortho, forward
 
         except Exception as e:
             dm_logger.debug(f"DMInputManager.get_ray failed: {e}")

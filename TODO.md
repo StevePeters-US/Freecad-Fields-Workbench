@@ -2,6 +2,23 @@
 
 ---
 
+## Critical Bugs (will crash / broken code path)
+---
+
+- **Fix `get_projected_point()` return value** `Claude Low`
+  - **Goal**: The function returns undefined variable `result` — any caller gets a `NameError`.
+  - **File**: `core/input_manager.py` — find `get_projected_point()`, compute and return the correct projected point instead of `result`.
+  - **Skills**: `dm_event_pipeline`
+  - **Acceptance**: Function returns a valid `FreeCAD.Vector` representing the projected position.
+
+- **Fix `get_geometry_info()` undefined method** `Claude Low`
+  - **Goal**: `work_plane_tool.py:148` calls `self.projector.get_geometry_info()` which does not exist on `ViewProjector`. The correct private method is `_get_geometry_point()` with different arguments.
+  - **Files**: `core/view_projector.py` (read), `tools/work_plane_tool.py:148` (fix call site or add method).
+  - **Skills**: `dm_event_pipeline`
+  - **Acceptance**: WorkPlane tool face-snapping does not crash.
+
+---
+
 ## Refactoring
 ---
 - **Extract Render Logic from DMObject** `Gemini High`
@@ -14,11 +31,37 @@
   - **Goal**: Evaluate if `DMObject` is the best name for the class generating FreeCAD BRep proxies, and rename it if a better fit (e.g., `DMFeature` or `DMNode`) is found across the codebase.
   - **Acceptance**: Chosen name makes more sense for a FreeCAD proxy object and is consistently used.
 
+- **Unify Event Pipeline** `Claude High`
+  - **Goal**: Eliminate the dual Qt + Coin3D event routing. Choose one primary channel; demote or remove the other. All hotkeys handled in one consistent place.
+  - **Files**: `core/input_manager.py`, `tools/dm_base.py`
+  - **Skills**: `dm_event_pipeline`
+  - **Steps**:
+    1. Audit every hotkey: which channel claims it, which executes it.
+    2. Decide: Coin3D `event_cb` is the primary (since it lives in the viewport); Qt filter handles only app-level events (menus, shortcuts FreeCAD would steal).
+    3. Remove duplicate handling from the channel that loses.
+    4. Document the remaining single flow in `dm_event_pipeline` skill.
+  - **Acceptance**: A keypress fires exactly one handler. No hotkey silently fires twice.
+
+- **Standardize Tool Lifecycle** `Claude Medium`
+  - **Goal**: All tools follow the same finish/terminate sequence. No dialog closed twice, no cleanup bypassed.
+  - **Files**: `tools/dm_base.py`, `tools/point_tool.py`, `tools/work_plane_tool.py`
+  - **Skills**: `dm_event_pipeline`
+  - **Steps**:
+    1. Define the canonical chain: `finish()` → `_do_finish()` → `terminate()` → `_do_terminate()`.
+    2. `PointCreator._do_finish()` must call `super()._do_finish()` for object renaming.
+    3. Remove the redundant dialog-close call in `NURBSPrimitiveCreator._do_finish()` (already done by parent's `_do_terminate()`).
+    4. `WorkPlaneCreator._do_terminate()` already calls `super()` — verify it does so at the correct point.
+  - **Acceptance**: Create and cancel each tool type; no Coin3D nodes leak, no signals stay connected, no double dialog-close errors in the console.
+
+- **Remove Unused MeshingType Options** `Claude Low`
+  - **Goal**: MeshingType 1 ("Adaptive Marching Cubes") and 2 ("NURBS F-Rep") are not implemented but selectable. Either implement or remove them.
+  - **Files**: `core/dm_object.py` (property definition), `commands/cmd_primitive.py` (warning), `core/dm_mesher.py`
+  - **Acceptance**: Users cannot select unimplemented meshing types, or a placeholder is shown with a clear "not yet implemented" error in the console.
+
 ---
 
 ## Bugs
----
-the agents seem to have trouble finding freecad (module not found error). write a skill to make that easier
+> Agent note: To run or test any Python that imports FreeCAD, use the skill at `.agents/skills/freecad_env/SKILL.md`.
 ---
 The cube does not respect the workplane
 ---
@@ -26,6 +69,9 @@ WE NEED A show dm wireframe option, as well as a show dm points option
 ---
 fix r click context menu over report view
 --- 
+
+second time attemting to drag a workplane corner quits the tool
+---
 
 - **Curve points are not all being drawn in tool editor**
 
