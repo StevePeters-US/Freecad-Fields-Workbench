@@ -137,8 +137,13 @@ class ViewProjector:
         planes = []
         for obj in doc.Objects:
             if hasattr(obj, "Proxy") and obj.Proxy.__class__.__name__ == "DMWorkPlane":
-                if hasattr(obj, "Visibility") and obj.Visibility:
+                try:
+                    visible = obj.ViewObject.Visibility if hasattr(obj, "ViewObject") else obj.Visibility
+                except Exception:
+                    visible = True  # assume visible if we can't check
+                if visible:
                     planes.append(obj)
+        dm_logger.debug_throttled("gvwp", f"get_visible_workplanes: returning {len(planes)} planes")
         return planes
 
     def get_base_plane(self, wp_obj=None):
@@ -165,83 +170,79 @@ class ViewProjector:
         return n, FreeCAD.Vector(0,0,0)
 
     def get_mouse_plane_pt(self, event_dict, place_on_geometry=False, working_plane=None):
-        """Intersection of mouse ray with the closest visible working plane."""
-        # 0. Check if place on geometry is explicitly enabled
-        if place_on_geometry:
-            pt = self._get_geometry_point(event_dict)
-            if pt is not None:
-                return pt
-
-        # 1. If we have a working_plane already established for this tool session, stick to it.
-        # This prevents the plane from jumping mid-operation (like drawing a box)
+        """Returns the closest hit to the camera: locked plane > workplane/geometry > camera plane."""
+        # 1. Locked working plane — never leave it mid-operation.
         if working_plane:
             n = working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
             o = working_plane.Base
             return self.get_mouse_world_pos(event_dict, n, o, place_on_geometry=False)
 
-        # 2. Get the actual 3D point the mouse is hovering over in the scene
-        pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
-        x, y = pos[0], pos[1]
-        
         if not self.view:
             return FreeCAD.Vector(0,0,0)
-            
-        scene_pt = None
-        try:
-            scene_pt = self.view.getPoint(x, y)
-        except Exception as e:
-            dm_logger.debug(f"get_mouse_plane_pt: getPoint failed: {e}")
 
-        # 3. If we don't have a valid scene point, we can't reliably synthesize a ray. 
-        # Fall back to default plane.
-        if scene_pt is None:
-            n, o = self.get_base_plane(None)
-            return self.get_mouse_world_pos(event_dict, n, o)
-
-        # 4. Synthesize the ray
         try:
             ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
-            if not ray_p: return self.get_mouse_world_pos(event_dict, *self.get_base_plane()), None
-            
-            # 5. Intersect ray with ALL visible workplanes, pick the closest one
-            visible_wps = self.get_visible_workplanes()
-            closest_t = float('inf')
-            closest_pt = None
-            closest_wp = None
-            
-            for wp in visible_wps:
+            if not ray_p:
+                raise ValueError("no ray")
+
+            # 2. Find the closest workplane hit (within its visual bounds).
+            # Use camera-relative depth for "in front of camera" check — ray_p may be
+            # the focal-plane point for orthographic cameras, not the camera itself.
+            try:
+                cam_vals = self.view.getCameraNode().position.getValue()
+                cam_pos = FreeCAD.Vector(cam_vals[0], cam_vals[1], cam_vals[2])
+            except Exception:
+                cam_pos = ray_p
+
+            wp_t = float('inf')
+            wp_pt = None
+            wp_hit = None
+            for wp in self.get_visible_workplanes():
                 n, o = self.get_base_plane(wp)
                 denom = ray_d.dot(n)
-                if abs(denom) > 1e-6:
-                    t = (o - ray_p).dot(n) / denom
-                    if t > 0 and t < closest_t:
-                        # Check if intersection point is within the bounds of the workplane visual
-                        pt_candidate = ray_p + ray_d * t
-                        
-                        # Calculate bounds check (basic rectangle check)
-                        # We bring the point into the workplane's local coordinate system
-                        if hasattr(wp, "Placement"):
-                            wp_inv_plac = wp.Placement.inverse()
-                            local_pt = wp_inv_plac.multVec(pt_candidate)
-                            
-                            w = wp.Width if hasattr(wp, "Width") else 100.0
-                            l = wp.Length if hasattr(wp, "Length") else 100.0
-                            
-                            if abs(local_pt.x) <= l/2.0 and abs(local_pt.y) <= w/2.0:
-                                closest_t = t
-                                closest_pt = pt_candidate
-                                closest_wp = wp
-            
-            if closest_pt is not None:
-                # If we hit a workplane and we don't already have one locked, set it
-                # The tool handles this by updating its local working_plane
-                # For now, just Select it if not selected (Optional UX logic)
-                return closest_pt, closest_wp
-                
-        except Exception as e:
-            dm_logger.debug(f"Auto-workplane raycast failed: {e}")
+                if abs(denom) < 1e-6:
+                    continue
+                t = (o - ray_p).dot(n) / denom
+                pt_candidate = ray_p + ray_d * t
+                # "in front of camera" check in camera space (handles both ortho and perspective)
+                if (pt_candidate - cam_pos).dot(ray_d) <= 0:
+                    continue
+                wp_inv = wp.Placement.inverse()
+                local_pt = wp_inv.multVec(pt_candidate)
+                try:
+                    l = float(wp.Length)
+                    w = float(wp.Width)
+                except Exception:
+                    l, w = 100.0, 100.0
+                if abs(local_pt.x) > l / 2.0 or abs(local_pt.y) > w / 2.0:
+                    continue
+                cam_t = (pt_candidate - cam_pos).dot(ray_d)
+                if cam_t < wp_t:
+                    wp_t = cam_t
+                    wp_pt = pt_candidate
+                    wp_hit = wp
+            dm_logger.debug_throttled("wp_hit", f"  wp_hit={wp_hit.Name if wp_hit else None} cam_t={wp_t:.2f}")
 
-        # 6. Fallback: just return the getPoint directly, or intersect default plane
+            # 3. Find geometry hit depth (if enabled). Use camera-relative depth.
+            geom_pt = None
+            geom_t = float('inf')
+            if place_on_geometry:
+                geom_pt = self._get_geometry_point(event_dict)
+                if geom_pt is not None:
+                    geom_t = (geom_pt - cam_pos).dot(ray_d)
+
+            dm_logger.debug_throttled("gmpp", f"get_mouse_plane_pt: wp_t={wp_t:.2f} geom_t={geom_t:.2f} wp_hit={wp_hit is not None} geom_pt={geom_pt is not None}")
+
+            # 4. Return whichever is closer to the camera.
+            if wp_pt is not None and wp_t <= geom_t:
+                return wp_pt, wp_hit
+            if geom_pt is not None:
+                return geom_pt
+
+        except Exception as e:
+            dm_logger.debug(f"get_mouse_plane_pt failed: {e}")
+
+        # 5. Fallback: camera-facing plane.
         n, o = self.get_base_plane(None)
         return self.get_mouse_world_pos(event_dict, n, o), None
 

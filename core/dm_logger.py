@@ -1,6 +1,9 @@
 import os
+import time
 import FreeCAD
 import traceback
+
+_throttle_times = {}  # key -> last_emit_time
 
 _PARAM_PATH = "User parameter:FCDirectModeling"
 
@@ -79,3 +82,10 @@ def exception(msg_header=""):
     """Logs the current exception traceback as an ERROR."""
     full_msg = f"{msg_header}\n{traceback.format_exc()}"
     _log("ERROR", full_msg)
+
+def debug_throttled(key, msg, interval=0.5):
+    """Like debug(), but only emits once per `interval` seconds for a given key."""
+    now = time.monotonic()
+    if now - _throttle_times.get(key, 0) >= interval:
+        _throttle_times[key] = now
+        _log("DEBUG", msg)
