@@ -45,6 +45,8 @@ class DMBase:
 
         dm_logger.debug(f"{self.__class__.__name__} initialized")
         DMBase.active_tool = self
+        from core.dm_tool_manager import DMToolManager
+        DMToolManager.get_instance().set_active_tool(self)
         self.projector = ViewProjector(self.view)
         self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
 
@@ -114,6 +116,8 @@ class DMBase:
     def _do_terminate(self):
         if DMBase.active_tool is self:
             DMBase.active_tool = None
+        from core.dm_tool_manager import DMToolManager
+        DMToolManager.get_instance().set_active_tool(None)
         self._terminated = True
         try:
             if self.callback:

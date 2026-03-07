@@ -75,31 +75,30 @@ class ViewProjector:
                     
                 subname = info["Component"]
                 if "Face" in subname:
+                    # Prefer FreeCAD's own pick coordinates (already in world space,
+                    # always on the visible front surface). Only fall back to manual
+                    # ray-section when they are absent.
+                    if 'x' in info and 'y' in info and 'z' in info:
+                        return FreeCAD.Vector(info['x'], info['y'], info['z'])
+
                     if obj.Shape.isNull():
-                        if 'x' in info and 'y' in info and 'z' in info:
-                            world_pt = FreeCAD.Vector(info['x'], info['y'], info['z'])
-                            return world_pt
                         continue
 
+                    # Fallback: ray-section in LOCAL object space (handles any Placement)
                     face = obj.Shape.getElement(subname)
                     import Part
                     ray_p, ray_d = self._get_view_ray(pos[0], pos[1])
                     if ray_p and ray_d:
                         ray_d.normalize()
-                        
-                        global_near = ray_p + ray_d * 1
-                        global_far  = ray_p + ray_d * 100000
-                        
-                        ray_wire = Part.makeLine(tuple(global_near), tuple(global_far))
+                        gpl = obj.getGlobalPlacement() if hasattr(obj, "getGlobalPlacement") else obj.Placement
+                        gpl_inv = gpl.inverse()
+                        local_near = gpl_inv.multVec(ray_p + ray_d * 1.0)
+                        local_far  = gpl_inv.multVec(ray_p + ray_d * 100000.0)
+                        ray_wire = Part.makeLine(tuple(local_near), tuple(local_far))
                         inter = face.section(ray_wire)
                         if inter.Vertexes:
-                            best_pt = min(inter.Vertexes, key=lambda v: (v.Point - global_near).Length).Point
-                            return best_pt
-                    else:
-                        # If we can't get a ray, use the exact 3D hit point provided by FreeCAD
-                        if 'x' in info and 'y' in info and 'z' in info:
-                            world_pt = FreeCAD.Vector(info['x'], info['y'], info['z'])
-                            return world_pt
+                            best_local = min(inter.Vertexes, key=lambda v: (v.Point - local_near).Length).Point
+                            return gpl.multVec(best_local)
                             
             return None
         except Exception as e:
