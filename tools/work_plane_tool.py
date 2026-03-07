@@ -148,6 +148,11 @@ class WorkPlaneCreator(DMBase):
         geo = self.projector.get_geometry_info(event_dict, skip_objects=[self.preview_obj] if self.preview_obj else None)
         if geo:
             world_hit, world_n, obj, subname = geo
+            # Ensure the normal faces toward the viewer (not into the surface)
+            vd = self.view.getViewDirection()
+            view_dir = FreeCAD.Vector(vd[0], vd[1], vd[2])
+            if world_n.dot(view_dir) > 0:
+                world_n = world_n.negative()
             # Basis vectors from normal
             z_axis = world_n
             global_z = FreeCAD.Vector(0, 0, 1)
