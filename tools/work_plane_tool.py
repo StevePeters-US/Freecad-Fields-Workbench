@@ -370,16 +370,11 @@ class WorkPlaneCreator(DMBase):
                 return True
                 
             elif self.state == 1:
-                # Check if clicking on a corner
-                pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
-                dm_logger.debug(f"[handle_click] State 1 - Generating ray for pos: {pos}")
                 ray_p, ray_d = self._get_ray(event_dict)
                 if ray_p is None or ray_d is None:
-                    dm_logger.debug("[handle_click] State 1 - Ray acquisition failed")
                     return False
-                
+
                 hit_idx, hit_dist = self._hit_test(ray_p, ray_d)
-                # dm_logger.debug(f"[handle_click] Hit idx: {hit_idx}")
                 if hit_idx != -1:
                     self.active_corner_idx = hit_idx
                     self.state = 2 # dragging

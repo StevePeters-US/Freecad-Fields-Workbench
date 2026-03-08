@@ -50,7 +50,7 @@ class ViewProjector:
             dm_logger.debug(f"Ray-plane intersection failed: {e}")
         return None
 
-    def _get_geometry_point(self, event_dict):
+    def _get_geometry_point(self, event_dict, skip_names=None):
         pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
         try:
             infos = []
@@ -59,15 +59,16 @@ class ViewProjector:
             else:
                 single_info = self.view.getObjectInfo((int(pos[0]), int(pos[1])))
                 infos = [single_info] if single_info else []
-                
+
             if not infos:
                 infos = []
-                
+
             for info in infos:
                 if not info or "Object" not in info or "Component" not in info:
                     continue
-                # Skip preview objects by name or proxy type
                 obj_name = info["Object"]
+                if skip_names and obj_name in skip_names:
+                    continue
                 doc = FreeCAD.ActiveDocument
                 obj = doc.getObject(obj_name) if doc else None
                 if not obj or not obj.Shape:
@@ -169,42 +170,50 @@ class ViewProjector:
             return n, self.view.getFocus()
         return n, FreeCAD.Vector(0,0,0)
 
-    def get_mouse_plane_pt(self, event_dict, place_on_geometry=False, working_plane=None):
-        """Returns the closest hit to the camera: locked plane > workplane/geometry > camera plane."""
-        # 1. Locked working plane — never leave it mid-operation.
-        if working_plane:
-            n = working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
-            o = working_plane.Base
-            return self.get_mouse_world_pos(event_dict, n, o, place_on_geometry=False)
+    def get_mouse_plane_pt(self, event_dict, place_on_geometry=False, working_plane=None, skip_objects=None):
+        """
+        Returns the closest hit to the camera.
 
+        Priority order:
+          1. Bounds-checked visible workplane (closest to camera, within its grid)
+          2. Geometry surface (if place_on_geometry=True)
+          3. working_plane as infinite fallback (keeps the tool on its plane when the
+             cursor moves outside all workplane bounds — e.g. mid-curve draw)
+          4. Camera-facing plane
+
+        skip_objects: optional list of FreeCAD objects to exclude from both
+                      workplane and geometry hit tests.
+        """
         if not self.view:
             return FreeCAD.Vector(0,0,0)
+
+        skip_names = {obj.Name for obj in skip_objects} if skip_objects else set()
 
         try:
             ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
             if not ray_p:
                 raise ValueError("no ray")
 
-            # 2. Find the closest workplane hit (within its visual bounds).
-            # Use camera-relative depth for "in front of camera" check — ray_p may be
-            # the focal-plane point for orthographic cameras, not the camera itself.
+            # Camera position for depth comparison (handles orthographic too).
             try:
                 cam_vals = self.view.getCameraNode().position.getValue()
                 cam_pos = FreeCAD.Vector(cam_vals[0], cam_vals[1], cam_vals[2])
             except Exception:
                 cam_pos = ray_p
 
+            # 1. Bounds-checked workplane hit.
             wp_t = float('inf')
             wp_pt = None
             wp_hit = None
             for wp in self.get_visible_workplanes():
+                if wp.Name in skip_names:
+                    continue
                 n, o = self.get_base_plane(wp)
                 denom = ray_d.dot(n)
                 if abs(denom) < 1e-6:
                     continue
                 t = (o - ray_p).dot(n) / denom
                 pt_candidate = ray_p + ray_d * t
-                # "in front of camera" check in camera space (handles both ortho and perspective)
                 if (pt_candidate - cam_pos).dot(ray_d) <= 0:
                     continue
                 wp_inv = wp.Placement.inverse()
@@ -221,36 +230,33 @@ class ViewProjector:
                     wp_t = cam_t
                     wp_pt = pt_candidate
                     wp_hit = wp
-            dm_logger.debug_throttled("wp_hit", f"  wp_hit={wp_hit.Name if wp_hit else None} cam_t={wp_t:.2f}")
 
-            # 3. Find geometry hit depth (if enabled). Use camera-relative depth.
+            # 2. Geometry hit (if enabled).
             geom_pt = None
             geom_t = float('inf')
             if place_on_geometry:
-                geom_pt = self._get_geometry_point(event_dict)
+                geom_pt = self._get_geometry_point(event_dict, skip_names=skip_names)
                 if geom_pt is not None:
                     geom_t = (geom_pt - cam_pos).dot(ray_d)
 
-            dm_logger.debug_throttled("gmpp", f"get_mouse_plane_pt: wp_t={wp_t:.2f} geom_t={geom_t:.2f} wp_hit={wp_hit is not None} geom_pt={geom_pt is not None}")
-
-            is_click = event_dict.get("Type") == "SoMouseButtonEvent" and event_dict.get("State") == "DOWN"
-            if is_click:
-                dm_logger.debug(f"CLICK DEBUG: wp_t={wp_t:.2f} geom_t={geom_t:.2f} wp_hit={wp_hit.Name if wp_hit else None} geom_hit_pt={geom_pt}")
-
-            # 4. Return whichever is closer to the camera.
+            # 3. Return closest of bounded wp and geometry.
             if wp_pt is not None and wp_t <= geom_t:
-                if is_click:
-                    dm_logger.debug(f"CLICK DEBUG: Priority -> WORKPLANE (wp_t <= geom_t)")
                 return wp_pt, wp_hit
             if geom_pt is not None:
-                if is_click:
-                    dm_logger.debug(f"CLICK DEBUG: Priority -> GEOMETRY (geom_t < wp_t)")
                 return geom_pt
+
+            # 4. working_plane as infinite fallback (cursor outside all workplane bounds).
+            if working_plane:
+                n = working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
+                o = working_plane.Base
+                pt = self.get_mouse_world_pos(event_dict, n, o, place_on_geometry=False)
+                if pt:
+                    return pt, None
 
         except Exception as e:
             dm_logger.debug(f"get_mouse_plane_pt failed: {e}")
 
-        # 5. Fallback: camera-facing plane.
+        # 5. Camera-facing plane.
         n, o = self.get_base_plane(None)
         return self.get_mouse_world_pos(event_dict, n, o), None
 
