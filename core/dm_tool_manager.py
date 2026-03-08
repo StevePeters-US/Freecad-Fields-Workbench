@@ -1,6 +1,23 @@
 from core import dm_logger
 
 
+class DMSelectionObserver:
+    """Blocks FreeCAD object selection while a DM tool is active."""
+
+    def addSelection(self, docName, objName, subName, pnt):
+        if not DMToolManager.get_instance().has_active_tool():
+            return
+        try:
+            import FreeCAD, FreeCADGui
+            doc = FreeCAD.getDocument(docName)
+            if doc:
+                obj = doc.getObject(objName)
+                if obj:
+                    FreeCADGui.Selection.removeSelection(obj)
+        except Exception:
+            pass
+
+
 class DMToolManager:
     """Singleton tracking the currently active DM tool.
 

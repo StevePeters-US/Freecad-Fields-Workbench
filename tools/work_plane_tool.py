@@ -64,19 +64,33 @@ class WorkPlaneCreator(DMBase):
             except Exception as e:
                 dm_logger.error(f"WorkPlaneCreator preview creation error: {e}")
 
-        # Setup handles visual
+        # Setup handles visual — one sphere per corner
         self.sg = self.view.getSceneGraph()
         self.handles_root = coin.SoSeparator()
-        self.handles_coords = coin.SoCoordinate3()
-        self.handles_nodes = coin.SoMarkerSet()
-        self.handles_nodes.markerIndex = coin.SoMarkerSet.CIRCLE_FILLED_9_9
-        self.handles_mat = coin.SoMaterial()
-        self.handles_mat.diffuseColor.setValue(1, 0.5, 0)
-        
-        self.handles_root.addChild(self.handles_mat)
-        self.handles_root.addChild(self.handles_coords)
-        self.handles_root.addChild(self.handles_nodes)
-        
+        self.handle_seps = []
+        self.handle_mats = []
+        self.handle_transforms = []
+        self.handle_spheres = []
+        for _ in range(4):
+            sep = coin.SoSeparator()
+            mat = coin.SoMaterial()
+            mat.diffuseColor.setValue(1, 0.5, 0)   # orange at rest
+            mat.specularColor.setValue(0.8, 0.8, 0.8)
+            mat.shininess.setValue(0.7)
+            xf = coin.SoTransform()
+            sphere = coin.SoSphere()
+            sphere.radius = 5.0  # updated in update_handles
+            sep.addChild(mat)
+            sep.addChild(xf)
+            sep.addChild(sphere)
+            self.handles_root.addChild(sep)
+            self.handle_seps.append(sep)
+            self.handle_mats.append(mat)
+            self.handle_transforms.append(xf)
+            self.handle_spheres.append(sphere)
+
+        self._hovered_idx = -1
+
         if self.sg:
             self.sg.addChild(self.handles_root)
 
@@ -209,70 +223,101 @@ class WorkPlaneCreator(DMBase):
             dm_logger.debug(f"WorkPlaneCreator: _get_initial_size failed: {e}")
             return 100.0
 
+    def _compute_handle_radius(self):
+        """Sphere radius in world units — sized to look ~8 px on screen."""
+        try:
+            cam = self.view.getCameraNode()
+            viewer = self.view.getViewer()
+            vp_h = 800.0
+            try:
+                if hasattr(viewer, "getGlxSize"):
+                    sz = viewer.getGlxSize(); vp_h = float(sz[1])
+                elif hasattr(viewer, "getSize"):
+                    sz = viewer.getSize()
+                    vp_h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
+            except Exception:
+                pass
+            obj = self.target_wp or self.preview_obj
+            if hasattr(cam, "height"):
+                half_world_h = cam.height.getValue() / 2.0
+            elif hasattr(cam, "heightAngle"):
+                cam_vals = cam.position.getValue()
+                cam_pos_v = FreeCAD.Vector(cam_vals[0], cam_vals[1], cam_vals[2])
+                ref = obj.Placement.Base if obj else FreeCAD.Vector(0, 0, 0)
+                depth = (ref - cam_pos_v).Length
+                fov = cam.heightAngle.getValue()
+                half_world_h = depth * math.tan(fov / 2.0)
+            else:
+                half_world_h = 100.0
+            px_per_world = (vp_h / 2.0) / max(half_world_h, 1e-6)
+            return max(2.0, 8.0 / px_per_world)
+        except Exception:
+            return 5.0
+
     def update_handles(self):
         obj = self.target_wp if self.target_wp else self.preview_obj
         if not obj or not hasattr(obj, "Length"):
-            self.handles_coords.point.setNum(0)
+            # Hide spheres by zeroing scale
+            for xf in self.handle_transforms:
+                xf.scaleFactor.setValue(0, 0, 0)
             return
-            
+
         l_val = obj.Length.Value if hasattr(obj.Length, "Value") else float(obj.Length)
         w_val = obj.Width.Value if hasattr(obj.Width, "Value") else float(obj.Width)
         l = l_val / 2.0
         w = w_val / 2.0
-        
         corners_local = [
             FreeCAD.Vector(-l, -w, 0),
-            FreeCAD.Vector(l, -w, 0),
-            FreeCAD.Vector(l, w, 0),
-            FreeCAD.Vector(-l, w, 0)
+            FreeCAD.Vector( l, -w, 0),
+            FreeCAD.Vector( l,  w, 0),
+            FreeCAD.Vector(-l,  w, 0),
         ]
-        
         plc = obj.Placement
         corners_global = [plc.multVec(c) for c in corners_local]
-        
-        self.handles_coords.point.setValues(0, 4, [(c.x, c.y, c.z) for c in corners_global])
+        radius = self._compute_handle_radius()
+        for corner, xf, sphere in zip(corners_global, self.handle_transforms, self.handle_spheres):
+            xf.translation.setValue(corner.x, corner.y, corner.z)
+            xf.scaleFactor.setValue(1, 1, 1)
+            sphere.radius = radius
 
     def _get_ray(self, event_dict):
         """Delegated to DMInputManager."""
         return DMInputManager.get_instance().get_ray(self.view, event_dict)
 
     def _hit_test(self, ray_p, ray_d):
+        """
+        Hit-test the four corner spheres against a view ray.
+
+        Uses perpendicular distance from the ray to each sphere centre (world
+        space).  This works for both perspective and orthographic cameras: for
+        orthographic, get_ray() returns (scene_pt_on_focal_plane, view_dir),
+        so the ray origin may be at a different depth than the sphere — a
+        pure ray-sphere intersection (requiring positive t) would miss.
+        Perpendicular distance is depth-independent and always correct.
+        """
         obj = self.target_wp if self.target_wp else self.preview_obj
-        if not obj or ray_p is None or ray_d is None: 
+        if not obj or ray_p is None or ray_d is None:
             return -1, float('inf')
-        
+
         l_val = obj.Length.Value if hasattr(obj.Length, "Value") else float(obj.Length)
         w_val = obj.Width.Value if hasattr(obj.Width, "Value") else float(obj.Width)
         l = l_val / 2.0
         w = w_val / 2.0
-        corners_local = [
-            FreeCAD.Vector(-l, -w, 0),
-            FreeCAD.Vector(l, -w, 0),
-            FreeCAD.Vector(l, w, 0),
-            FreeCAD.Vector(-l, w, 0)
-        ]
-        
-        plc = obj.Placement
-        inv_plac = plc.inverse()
-        local_ray_p = inv_plac.multVec(ray_p)
-        local_ray_d = inv_plac.Rotation.multVec(ray_d)
-        
+        corners_world = [obj.Placement.multVec(c) for c in [
+            FreeCAD.Vector(-l, -w, 0), FreeCAD.Vector(l, -w, 0),
+            FreeCAD.Vector(l,  w, 0),  FreeCAD.Vector(-l, w, 0),
+        ]]
+        radius = self._compute_handle_radius()
+
         best_dist = float('inf')
         best_idx = -1
-        
-        for i, pos in enumerate(corners_local):
-            v = pos - local_ray_p
-            dist = v.cross(local_ray_d).Length
-            cam_dist = v.dot(local_ray_d)
-            if cam_dist < 0: continue
-            
-            # Use configurable picking radius
-            from core.dm_object import get_picking_radius
-            tolerance = max(get_picking_radius(), 0.08 * cam_dist) 
-            if dist < tolerance and dist < best_dist:
-                best_dist = dist
+        for i, center in enumerate(corners_world):
+            v = center - ray_p
+            proj = v.dot(ray_d)
+            perp = (ray_p + ray_d * proj - center).Length
+            if perp < radius and perp < best_dist:
+                best_dist = perp
                 best_idx = i
-                
         return best_idx, best_dist
 
     def on_button1_down(self, event_dict):
@@ -282,6 +327,10 @@ class WorkPlaneCreator(DMBase):
         if self.state == 2:
             self.state = 1
             self.active_corner_idx = -1
+            # Reset all handle colours; next mouse-move will re-evaluate hover
+            for mat in self.handle_mats:
+                mat.diffuseColor.setValue(1, 0.5, 0)
+            self._hovered_idx = -1
             return True
         return False
 
@@ -339,14 +388,32 @@ class WorkPlaneCreator(DMBase):
                     self.drag_plane_n = plc.Rotation.multVec(FreeCAD.Vector(0,0,1))
                     self.drag_plane_o = plc.Base
                     return True
-                else:
-                    self.terminate()
-                    return True
+                # Missed all handles — consume the click but do nothing
+                return True
                     
         except Exception:
             dm_logger.exception("WorkPlaneCreator.handle_click error")
             return False
         return False
+
+    def _set_hover(self, idx):
+        """Recolour handle spheres and update OS cursor for handle idx (-1 = none)."""
+        from PySide import QtCore, QtGui
+        if idx == self._hovered_idx:
+            return
+        # Restore previous handle to orange
+        if self._hovered_idx != -1:
+            self.handle_mats[self._hovered_idx].diffuseColor.setValue(1, 0.5, 0)
+        self._hovered_idx = idx
+        if idx == -1:
+            if self._cursor_active:
+                QtGui.QApplication.restoreOverrideCursor()
+                self._cursor_active = False
+        else:
+            self.handle_mats[idx].diffuseColor.setValue(0.3, 1.0, 0.3)  # green on hover
+            if not self._cursor_active:
+                QtGui.QApplication.setOverrideCursor(QtCore.Qt.CrossCursor)
+                self._cursor_active = True
 
     def handle_move(self, event_dict):
         try:
@@ -360,10 +427,18 @@ class WorkPlaneCreator(DMBase):
                     if self.doc:
                         self.doc.recompute()
                     self.update_handles()
+
             elif self.state == 1:
-                pass
+                ray_p, ray_d = self._get_ray(event_dict)
+                hit_idx, _ = self._hit_test(ray_p, ray_d)
+                self._set_hover(hit_idx)
+
             elif self.state == 2 and self.target_wp:
-                pt_global = self.get_mouse_world_pos(event_dict, self.drag_plane_n, self.drag_plane_o)
+                # Bypass place_on_geometry — always intersect the workplane drag plane
+                pt_global = self.projector.get_mouse_world_pos(
+                    event_dict, self.drag_plane_n, self.drag_plane_o,
+                    place_on_geometry=False
+                )
                 if pt_global:
                     pt_local = self.target_wp.Placement.inverse().multVec(pt_global)
                     new_l = abs(pt_local.x) * 2.0

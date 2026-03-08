@@ -233,10 +233,18 @@ class ViewProjector:
 
             dm_logger.debug_throttled("gmpp", f"get_mouse_plane_pt: wp_t={wp_t:.2f} geom_t={geom_t:.2f} wp_hit={wp_hit is not None} geom_pt={geom_pt is not None}")
 
+            is_click = event_dict.get("Type") == "SoMouseButtonEvent" and event_dict.get("State") == "DOWN"
+            if is_click:
+                dm_logger.debug(f"CLICK DEBUG: wp_t={wp_t:.2f} geom_t={geom_t:.2f} wp_hit={wp_hit.Name if wp_hit else None} geom_hit_pt={geom_pt}")
+
             # 4. Return whichever is closer to the camera.
             if wp_pt is not None and wp_t <= geom_t:
+                if is_click:
+                    dm_logger.debug(f"CLICK DEBUG: Priority -> WORKPLANE (wp_t <= geom_t)")
                 return wp_pt, wp_hit
             if geom_pt is not None:
+                if is_click:
+                    dm_logger.debug(f"CLICK DEBUG: Priority -> GEOMETRY (geom_t < wp_t)")
                 return geom_pt
 
         except Exception as e:

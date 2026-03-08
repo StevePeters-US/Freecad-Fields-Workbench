@@ -190,9 +190,6 @@ class DMBase:
         )
         if isinstance(result, tuple):
             pt, wp = result
-            if wp is not None and not getattr(self, "working_plane", None):
-                FreeCADGui.Selection.clearSelection()
-                FreeCADGui.Selection.addSelection(wp)
             return pt
         return result
 

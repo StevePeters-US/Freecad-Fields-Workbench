@@ -28,7 +28,17 @@ class DMWorkPlane:
             obj.GridSpacing = 10.0
             
     def execute(self, obj):
-        pass
+        try:
+            l = obj.Length.Value if hasattr(obj.Length, "Value") else float(obj.Length)
+            w = obj.Width.Value if hasattr(obj.Width, "Value") else float(obj.Width)
+            hl, hw = l / 2.0, w / 2.0
+            v1 = FreeCAD.Vector(-hl, -hw, 0)
+            v2 = FreeCAD.Vector( hl, -hw, 0)
+            v3 = FreeCAD.Vector( hl,  hw, 0)
+            v4 = FreeCAD.Vector(-hl,  hw, 0)
+            obj.Shape = Part.makePolygon([v1, v2, v3, v4, v1])
+        except Exception:
+            pass
 
     def __getstate__(self):
         return None
@@ -46,9 +56,9 @@ class ViewProviderDMWorkPlane:
         self.root_node = coin.SoSeparator()
         self.root_node.setName("DM_WorkPlane_Feature_Root")
         
-        # Make visuals strictly unpickable
+        # Make visuals pickable so the user can select the workplane in the 3D view
         pick_style = coin.SoPickStyle()
-        pick_style.style.setValue(coin.SoPickStyle.UNPICKABLE)
+        pick_style.style.setValue(coin.SoPickStyle.SHAPE)
         self.root_node.addChild(pick_style)
         
         # Grid visual

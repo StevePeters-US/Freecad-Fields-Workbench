@@ -86,7 +86,29 @@ class EditTool(DMBase):
             
             # Approximate visual clicking tolerance
             from core.dm_object import get_picking_radius
-            tolerance = get_picking_radius()
+            base_tolerance = get_picking_radius()
+            
+            try:
+                import math
+                cam = self.view.getCameraNode()
+                viewer = self.view.getViewer()
+                vp_h = float(viewer.getGlxSize()[1]) if hasattr(viewer, "getGlxSize") else 1000.0
+                
+                if hasattr(cam, "heightAngle"):
+                    global_pos = self._target_obj.Placement.multVec(pos)
+                    cam_pos = FreeCAD.Vector(*cam.position.getValue().getValue())
+                    depth = (global_pos - cam_pos).Length
+                    half_h = depth * math.tan(cam.heightAngle.getValue() / 2.0)
+                else:
+                    half_h = cam.height.getValue() / 2.0
+                    
+                px_to_world = (half_h * 2.0) / vp_h
+                # Guarantee at least a 15 pixel selection radius
+                dynamic_tol = 15.0 * px_to_world
+                tolerance = max(base_tolerance, dynamic_tol)
+            except Exception as e:
+                dm_logger.debug(f"Dynamic tolerance failed: {e}")
+                tolerance = base_tolerance
             
             # Hit test against the line (dist)
             if dist < tolerance and dist < best_dist:

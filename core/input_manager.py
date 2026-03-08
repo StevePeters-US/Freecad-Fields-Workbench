@@ -20,6 +20,7 @@ class DMInputManager(QtCore.QObject):
         self._control_down = False
         self._last_qt_pos = (0, 0)
         self._is_initialized = False
+        self._sel_observer = None
 
     def _is_menu_active(self):
         from core.dm_menu import DMMenuManager
@@ -386,6 +387,9 @@ class DMInputManager(QtCore.QObject):
         try:
             if not getattr(self, "_is_initialized", False):
                 QtGui.QApplication.instance().installEventFilter(self)
+                from core.dm_tool_manager import DMSelectionObserver
+                self._sel_observer = DMSelectionObserver()
+                FreeCADGui.Selection.addObserver(self._sel_observer)
                 self._is_initialized = True
         except Exception as e:
             dm_logger.error(f"DMInputManager initialization error: {e}")
@@ -394,6 +398,9 @@ class DMInputManager(QtCore.QObject):
         try:
             if getattr(self, "_is_initialized", False):
                 QtGui.QApplication.instance().removeEventFilter(self)
+                if self._sel_observer is not None:
+                    FreeCADGui.Selection.removeObserver(self._sel_observer)
+                    self._sel_observer = None
                 self._is_initialized = False
         except Exception as e:
             dm_logger.error(f"DMInputManager restore error: {e}")
