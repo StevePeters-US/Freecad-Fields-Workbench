@@ -46,7 +46,7 @@ class DMInputManager(QtCore.QObject):
                 if event.button() == QtCore.Qt.MiddleButton:
                     self._middle_mouse_down = (event.type() == QtCore.QEvent.MouseButtonPress)
 
-            # Right-click suppression: when a tool is active, consume the right
+            # [Event Owner: Qt Event Filter] Right-click suppression: when a tool is active, consume the right
             # mouse button press so FreeCAD's NavigationStyle never sees it (and
             # therefore never opens its context menu).  We replicate the finish
             # logic from on_button3_down here because Coin3D won't fire that
@@ -59,11 +59,14 @@ class DMInputManager(QtCore.QObject):
                         shift = bool(event.modifiers() & QtCore.Qt.ShiftModifier)
                         if not shift:
                             if not (hasattr(tool, 'on_tool_menu') and tool.on_tool_menu()):
-                                QtCore.QTimer.singleShot(0, tool.finish)
+                                if not getattr(tool, '_finish_scheduled', False):
+                                    tool._finish_scheduled = True
+                                    QtCore.QTimer.singleShot(0, tool.finish)
                         return True  # always consume right-click when tool active
 
             # 2. ShortcutOverride: claim 'S' and 'D' for the active tool so FreeCAD
             #    menus don't consume them before Coin3D gets the KeyPress.
+            #    [Event Owner: Qt Event Filter] (to prevent FreeCAD from stealing hotkeys like S and D)
             if event.type() == QtCore.QEvent.ShortcutOverride:
                 text = event.text().lower() if hasattr(event, "text") else ""
                 from core.dm_tool_manager import DMToolManager
@@ -78,6 +81,7 @@ class DMInputManager(QtCore.QObject):
 
             # 3. Handle default context menu ('D' key) only when no tool is active.
             #    When a tool is active, Coin3D handle_keyboard handles 'D' instead.
+            #    [Event Owner: Coin3D handle_keyboard (for tools), Qt Event Filter (for global menus)]
             if event.type() == QtCore.QEvent.KeyPress:
                 key = event.key()
                 text = event.text().lower() if hasattr(event, "text") else ""
@@ -89,7 +93,7 @@ class DMInputManager(QtCore.QObject):
                             DMMenuManager.get_instance().show_context_menu()
                             return True
 
-            # Suppress FreeCAD context menu when a DM tool is active or a menu is open
+            # [Event Owner: Qt Event Filter] Suppress FreeCAD context menu when a DM tool is active or a menu is open
             if event.type() == QtCore.QEvent.ContextMenu:
                 if self._is_menu_active():
                     return True

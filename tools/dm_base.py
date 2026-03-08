@@ -62,9 +62,9 @@ class DMBase:
         # Shared UX state
         self.height = 0.0
         self.is_cutter = False
-        self.manual_mode_override = False
         self.panel = None
         self._dialog_open = False
+        self._finish_scheduled = False
 
         # Shared constraint state
         self.active_axis = None
@@ -221,7 +221,9 @@ class DMBase:
         if hasattr(self, 'on_tool_menu') and self.on_tool_menu():
             return True
             
-        QtCore.QTimer.singleShot(0, self.finish)
+        if not getattr(self, '_finish_scheduled', False):
+            self._finish_scheduled = True
+            QtCore.QTimer.singleShot(0, self.finish)
         return True # Consume Press
 
     def on_button1_up(self, event_dict):

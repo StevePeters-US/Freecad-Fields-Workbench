@@ -32,7 +32,7 @@
 
 ---
 
-### Refactor 3: Harden the Event Pipeline (Minimum LLM: Gemini Low)
+### [x] Refactor 3: Harden the Event Pipeline (Minimum LLM: Gemini Low)
 > Skill: `.agents/skills/dm_event_pipeline/SKILL.md`
 - **Goal**: Confirm and document which layer owns right-click handling; prevent the tool `finish()` from firing more than once per right-click.
 - **Files to read**: `core/input_manager.py`, `tools/dm_base.py`
