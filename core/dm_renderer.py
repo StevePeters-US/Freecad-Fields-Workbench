@@ -34,15 +34,16 @@ class DMRenderer:
         
         self._frep_handle_coords = None
         self._frep_handle_lines = None
+        self._frep_corner_xfs = []      # 8 SoTransform nodes for corner sphere positions
+        self._frep_corner_spheres = []  # 8 SoSphere nodes
 
         # Curve/Control cage specific nodes
         self._ctrl_cage_sep = None
         self._style = None
         self._ctrl_coords = None
         self._ctrl_lines = None
-        self._ctrl_points = None
-        self._ctrl_handle_points = None
-        self._knot_points = None
+        self._spheres_sep = None
+        self._dm_point_spheres = []  # DMPoint instances for control points and handles
 
     def update_visibility(self, is_visible):
         if self.vis_switch:
@@ -134,6 +135,28 @@ class DMRenderer:
             sep.addChild(self._frep_wide_switch)
             self._frep_wide_switch.whichChild = 0 if get_show_wireframe() else -1
 
+            # ── Corner sphere handles (8 corners) ──
+            sphere_root = coin.SoSeparator()
+            s_mat = coin.SoMaterial()
+            s_mat.diffuseColor.setValue(1.0, 0.5, 0.0)
+            s_mat.specularColor.setValue(0.8, 0.8, 0.8)
+            s_mat.shininess.setValue(0.7)
+            sphere_root.addChild(s_mat)
+
+            self._frep_corner_xfs = []
+            self._frep_corner_spheres = []
+            for _ in range(8):
+                s_sep = coin.SoSeparator()
+                xf = coin.SoTransform()
+                sphere = coin.SoSphere()
+                sphere.radius = 5.0
+                s_sep.addChild(xf)
+                s_sep.addChild(sphere)
+                sphere_root.addChild(s_sep)
+                self._frep_corner_xfs.append(xf)
+                self._frep_corner_spheres.append(sphere)
+            sep.addChild(sphere_root)
+
             # ── Bounding-box edge lines ──
             corner_sep = coin.SoSeparator()
 
@@ -184,6 +207,28 @@ class DMRenderer:
         except Exception as e:
             dm_logger.info(f"DMRenderer.update_frep_mesh failed ({type(e).__name__}): {e}")
 
+    def _corner_sphere_radius(self):
+        """Compute sphere radius to appear ~8px on screen, matching DMBase._compute_handle_radius."""
+        try:
+            import FreeCADGui
+            view = FreeCADGui.ActiveDocument.ActiveView
+            cam = view.getCameraNode()
+            viewer = view.getViewer()
+            vp_h = 800.0
+            try:
+                if hasattr(viewer, "getGlxSize"):
+                    vp_h = float(viewer.getGlxSize()[1])
+                elif hasattr(viewer, "getSize"):
+                    sz = viewer.getSize()
+                    vp_h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
+            except Exception:
+                pass
+            half_world_h = cam.height.getValue() / 2.0 if hasattr(cam, "height") else 100.0
+            px_per_world = (vp_h / 2.0) / max(half_world_h, 1e-6)
+            return max(2.0, 8.0 / px_per_world)
+        except Exception:
+            return 5.0
+
     def update_frep_corners(self, field):
         if not coin or not self._frep_handle_coords:
             return
@@ -230,6 +275,13 @@ class DMRenderer:
 
             self._frep_handle_coords.point.setValues(all_pts)
             self._frep_handle_lines.numVertices.setValues([2] * len(lines))
+
+            # Update corner sphere positions and radius
+            if self._frep_corner_xfs:
+                r = self._corner_sphere_radius()
+                for i, (x, y, z) in enumerate(corners):
+                    self._frep_corner_xfs[i].translation.setValue(x, y, z)
+                    self._frep_corner_spheres[i].radius = r
         except Exception as e:
             from core import dm_logger
             dm_logger.debug(f"DMRenderer.update_frep_corners failed: {e}")
@@ -253,124 +305,93 @@ class DMRenderer:
 
     def setup_coin_overlay(self):
         if not coin: return
-        
+
         self._ctrl_cage_sep = coin.SoSeparator()
         if self.vis_switch:
             self.vis_switch.addChild(self._ctrl_cage_sep)
         else:
             self.vobj.RootNode.addChild(self._ctrl_cage_sep)
 
+        # Dashed lines for handle arms
         self._style = coin.SoDrawStyle()
         self._style.linePattern = 0x0F0F
         self._style.lineWidth = 1
         self._ctrl_cage_sep.addChild(self._style)
-        
+
         self._ctrl_coords = coin.SoCoordinate3()
         self._ctrl_cage_sep.addChild(self._ctrl_coords)
-        
+
         self._ctrl_lines = coin.SoLineSet()
         self._ctrl_cage_sep.addChild(self._ctrl_lines)
-        
-        pts_sep = coin.SoSeparator()
-        self._ctrl_cage_sep.addChild(pts_sep)
 
-        pts_mat = coin.SoMaterial()
-        pts_mat.diffuseColor = coin.SbColor(1.0, 0.5, 0.0)
-        pts_sep.addChild(pts_mat)
-        
-        pt_style = coin.SoDrawStyle()
-        pt_style.pointSize.setValue(8) 
-        pts_sep.addChild(pt_style)
-        
-        self._ctrl_points = coin.SoPointSet()
-        pts_sep.addChild(self._ctrl_points)
+        # SoSphere nodes for control points and handles (via DMPoint)
+        self._spheres_sep = coin.SoSeparator()
+        self._ctrl_cage_sep.addChild(self._spheres_sep)
 
-        h_pts_sep = coin.SoSeparator()
-        self._ctrl_cage_sep.addChild(h_pts_sep)
-        
-        h_pts_mat = coin.SoMaterial()
-        h_pts_mat.diffuseColor = coin.SbColor(0.2, 0.7, 1.0)
-        h_pts_sep.addChild(h_pts_mat)
-        
-        h_pt_style = coin.SoDrawStyle()
-        h_pt_style.pointSize.setValue(5)
-        h_pts_sep.addChild(h_pt_style)
-        
-        self._ctrl_handle_points = coin.SoPointSet()
-        h_pts_sep.addChild(self._ctrl_handle_points)
-        
-        k_pts_sep = coin.SoSeparator()
-        self._ctrl_cage_sep.addChild(k_pts_sep)
-        
-        k_pts_mat = coin.SoMaterial()
-        k_pts_mat.diffuseColor = coin.SbColor(1.0, 1.0, 1.0)
-        k_pts_sep.addChild(k_pts_mat)
-        
-        k_pt_style = coin.SoDrawStyle()
-        k_pt_style.pointSize.setValue(3)
-        k_pts_sep.addChild(k_pt_style)
-        
-        self._knot_points = coin.SoPointSet()
-        k_pts_sep.addChild(self._knot_points)
-        
         self.vobj.addDisplayMode(self._ctrl_cage_sep, "ControlCage")
 
     def rebuild_control_cage(self, fp):
         if not coin: return
-        
+
         if not self._ctrl_coords:
             if hasattr(fp, "ShapeType") and fp.ShapeType == "curve":
                 self.setup_coin_overlay()
-        
         if not self._ctrl_coords:
             return
 
+        # Clear previous DMPoint spheres
+        from core.dm_point import DMPoint
+        for dm_pt in self._dm_point_spheres:
+            dm_pt.undraw()
+        self._dm_point_spheres.clear()
+
         if not hasattr(fp, "Points") or not fp.Points:
             self._ctrl_coords.point.setNum(0)
+            self._ctrl_lines.numVertices.setNum(0)
             return
 
         pts = list(fp.Points)
         h_in = list(fp.HandleIn) if hasattr(fp, "HandleIn") else []
         h_out = list(fp.HandleOut) if hasattr(fp, "HandleOut") else []
         edit_mode = getattr(fp, "EditMode", False)
-        
+
+        # Sphere radius: scale with bounding box span so spheres look consistent
+        xs = [p.x for p in pts]; ys = [p.y for p in pts]; zs = [p.z for p in pts]
+        span = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs), 1.0)
+        r_knot = max(3.0, span * 0.02)
+        r_handle = max(2.0, span * 0.015)
+
         line_coords = []
-        marker_coords = []
-        handle_marker_coords = []
         num_vertices = []
-        knot_coords = []
-        
+
         for i, p in enumerate(pts):
-            knot_coords.append(coin.SbVec3f(p.x, p.y, p.z))
-            
+            # Control point sphere — always visible
+            dm_pt = DMPoint(p)
+            dm_pt.draw_point(self._spheres_sep, radius=r_knot, color=(1.0, 0.5, 0.0))
+            self._dm_point_spheres.append(dm_pt)
+
             if edit_mode:
-                marker_coords.append(coin.SbVec3f(p.x, p.y, p.z))
-                
+                # Handle arm lines + handle spheres
                 if i < len(h_in) and h_in[i] is not None and (h_in[i] - p).Length > 1e-4:
                     line_coords.append(coin.SbVec3f(p.x, p.y, p.z))
                     line_coords.append(coin.SbVec3f(h_in[i].x, h_in[i].y, h_in[i].z))
-                    handle_marker_coords.append(coin.SbVec3f(h_in[i].x, h_in[i].y, h_in[i].z))
                     num_vertices.append(2)
-                
+                    dm_h = DMPoint(h_in[i])
+                    dm_h.draw_point(self._spheres_sep, radius=r_handle, color=(0.2, 0.7, 1.0))
+                    self._dm_point_spheres.append(dm_h)
+
                 if i < len(h_out) and h_out[i] is not None and (h_out[i] - p).Length > 1e-4:
                     line_coords.append(coin.SbVec3f(p.x, p.y, p.z))
                     line_coords.append(coin.SbVec3f(h_out[i].x, h_out[i].y, h_out[i].z))
-                    handle_marker_coords.append(coin.SbVec3f(h_out[i].x, h_out[i].y, h_out[i].z))
                     num_vertices.append(2)
+                    dm_h = DMPoint(h_out[i])
+                    dm_h.draw_point(self._spheres_sep, radius=r_handle, color=(0.2, 0.7, 1.0))
+                    self._dm_point_spheres.append(dm_h)
 
-        final_coords = knot_coords + marker_coords + handle_marker_coords + line_coords
-        self._ctrl_coords.point.setNum(len(final_coords))
-        self._ctrl_coords.point.setValues(0, final_coords)
-        
-        self._knot_points.numPoints.setValue(len(knot_coords))
-        self._knot_points.startIndex.setValue(0)
-        
-        self._ctrl_points.numPoints.setValue(len(marker_coords))
-        self._ctrl_points.startIndex.setValue(len(knot_coords))
-        
-        self._ctrl_handle_points.numPoints.setValue(len(handle_marker_coords))
-        self._ctrl_handle_points.startIndex.setValue(len(knot_coords) + len(marker_coords))
-        
+        self._ctrl_coords.point.setNum(len(line_coords))
+        if line_coords:
+            self._ctrl_coords.point.setValues(0, line_coords)
         self._ctrl_lines.numVertices.setNum(len(num_vertices))
-        self._ctrl_lines.numVertices.setValues(0, num_vertices)
-        self._ctrl_lines.startIndex.setValue(len(knot_coords) + len(marker_coords) + len(handle_marker_coords))
+        if num_vertices:
+            self._ctrl_lines.numVertices.setValues(0, num_vertices)
+        self._ctrl_lines.startIndex.setValue(0)
