@@ -1,12 +1,10 @@
 import FreeCAD
-import FreeCADGui
-import math
 from PySide import QtCore
 from pivy import coin
 from core import dm_logger
 from core.input_manager import DMInputManager
 from core.dm_point import DMPoint
-from core.dm_object import create_dm_object, get_meshing_type, get_meshing_cell_size
+from core.dm_object import create_dm_object, get_meshing_cell_size
 from core.dm_mesher import mesh_timer
 from tools.dm_base import DMBase
 
@@ -176,14 +174,7 @@ class BoxCreator(PrimitiveCreatorBase):
             dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
             self.dm_points.append(dm_pt)
 
-            # Lock working_plane from the active workplane for consistent transforms
-            if not getattr(self, "working_plane", None):
-                visible_wps = self.get_visible_workplanes()
-                if visible_wps:
-                    self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
-
             dm_logger.info("Box Tool: Click 2nd corner")
-
         elif self.state == 1:
             # 2nd click - determines base size (x/y)
             self.points.append(pos)
@@ -278,8 +269,6 @@ class BoxCreator(PrimitiveCreatorBase):
     def _get_final_points(self):
         if len(self.points) < 3:
             return None
-        wp = getattr(self, "working_plane", None)
-
         loc_p1 = self.to_local(self.points[0])
         loc_p2 = self.to_local(self.points[1])
         loc_p3 = self.to_local(self.points[2])

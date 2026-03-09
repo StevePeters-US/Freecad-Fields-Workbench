@@ -3,26 +3,30 @@ from PySide import QtCore
 from core import dm_logger
 
 class EditDMObjectCommand:
-    """Activates the interactive edit tool for the selected DM Object."""
-    
+    """Activates the lattice editor for modifying a lattice-driven SDF object.
+
+    NOTE: Scope is lattice-driven SDF editing, NOT curve editing.
+    Curve editing is accessed via the curve button when a curve is selected.
+    """
+
     def GetResources(self):
         return {
             'Pixmap': 'EditTool', # custom DM icon
-            'MenuText': 'Edit Tool',
-            'ToolTip': 'General tool editor for the selected Direct Modeling shape.'
+            'MenuText': 'Edit Lattice',
+            'ToolTip': 'Edit the lattice that drives the selected SDF shape.'
         }
-        
+
     def IsActive(self):
         if not FreeCADGui.ActiveDocument:
             return False
-            
+
         sel = FreeCADGui.Selection.getSelection()
         if not sel: return False
-        
-        # Only active if a DM Curve is selected
+
+        # Active for lattice-driven SDF objects (frep/implicit shapes)
         obj = sel[0]
         if hasattr(obj, "Proxy") and obj.Proxy.__class__.__name__ == "DMObjectProxy":
-            if hasattr(obj, "ShapeType") and obj.ShapeType in ["curve"]:
+            if hasattr(obj, "ShapeType") and obj.ShapeType in ["frep", "lattice"]:
                 return True
         return False
         

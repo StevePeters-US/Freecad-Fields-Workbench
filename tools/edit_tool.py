@@ -7,7 +7,11 @@ from core.input_manager import DMInputManager
 
 class EditTool(DMBase):
     """
-    Interactive tool for editing DM curves control points and handles.
+    Interactive tool for editing lattice-driven SDF objects.
+
+    NOTE: This tool's scope has changed — it is no longer for curve editing.
+    Curve editing is handled by the CurveCreator tool (invoked via the curve
+    button when a curve is already selected).
     """
     def __init__(self):
         super().__init__()

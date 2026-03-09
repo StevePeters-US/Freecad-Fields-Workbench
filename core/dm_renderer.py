@@ -32,8 +32,6 @@ class DMRenderer:
         self._frep_wire_style = None
         self._frep_wire_faces = None
         
-        self._frep_corner_coords = None
-        self._frep_corner_pts = None
         self._frep_handle_coords = None
         self._frep_handle_lines = None
 
@@ -136,21 +134,8 @@ class DMRenderer:
             sep.addChild(self._frep_wide_switch)
             self._frep_wide_switch.whichChild = 0 if get_show_wireframe() else -1
 
-            # ── Corner point + handle nodes ──
+            # ── Bounding-box edge lines ──
             corner_sep = coin.SoSeparator()
-
-            c_mat = coin.SoMaterial()
-            c_mat.diffuseColor.setValue(1.0, 1.0, 1.0)
-            corner_sep.addChild(c_mat)
-
-            c_style = coin.SoDrawStyle()
-            c_style.pointSize.setValue(8)
-            corner_sep.addChild(c_style)
-
-            self._frep_corner_coords = coin.SoCoordinate3()
-            corner_sep.addChild(self._frep_corner_coords)
-            self._frep_corner_pts = coin.SoPointSet()
-            corner_sep.addChild(self._frep_corner_pts)
 
             h_mat = coin.SoMaterial()
             h_mat.diffuseColor.setValue(1.0, 0.6, 0.2)
@@ -200,7 +185,7 @@ class DMRenderer:
             dm_logger.info(f"DMRenderer.update_frep_mesh failed ({type(e).__name__}): {e}")
 
     def update_frep_corners(self, field):
-        if not coin or not self._frep_corner_coords:
+        if not coin or not self._frep_handle_coords:
             return
         try:
             placement = getattr(field, "placement", None)
@@ -234,19 +219,15 @@ class DMRenderer:
                     (max_b.x, max_b.y, max_b.z), (min_b.x, max_b.y, max_b.z),
                 ]
 
-            corner_pts = list(corners)
-            all_pts = []
-            
             lines = [
                 (0,1), (1,2), (2,3), (3,0),
                 (4,5), (5,6), (6,7), (7,4),
                 (0,4), (1,5), (2,6), (3,7)
             ]
+            all_pts = []
             for i, j in lines:
                 all_pts.extend([corners[i], corners[j]])
 
-            self._frep_corner_coords.point.setValues(corner_pts)
-            self._frep_corner_pts.numPoints.setValue(len(corner_pts))
             self._frep_handle_coords.point.setValues(all_pts)
             self._frep_handle_lines.numVertices.setValues([2] * len(lines))
         except Exception as e:
