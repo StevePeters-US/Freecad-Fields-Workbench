@@ -178,7 +178,7 @@ class EditTool(DMBase):
 
     def _drag_update(self):
         # Self-terminate if LMB was released (handles cases where on_button1_up is intercepted)
-        if not (QtGui.QApplication.mouseButtons() & QtCore.Qt.LeftButton):
+        if not DMInputManager.get_instance()._left_mouse_down:
             self._stop_drag_timer()
             self.state = 0
             self._selected_element = None

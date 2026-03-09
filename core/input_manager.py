@@ -15,6 +15,7 @@ class DMInputManager(QtCore.QObject):
 
     def __init__(self):
         super().__init__()
+        self._left_mouse_down = False
         self._middle_mouse_down = False
         self._shift_down = False
         self._control_down = False
@@ -44,8 +45,11 @@ class DMInputManager(QtCore.QObject):
                     self._control_down = (event.type() == QtCore.QEvent.KeyPress)
 
             if event.type() in [QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
-                if event.button() == QtCore.Qt.MiddleButton:
-                    self._middle_mouse_down = (event.type() == QtCore.QEvent.MouseButtonPress)
+                is_press = (event.type() == QtCore.QEvent.MouseButtonPress)
+                if event.button() == QtCore.Qt.LeftButton:
+                    self._left_mouse_down = is_press
+                elif event.button() == QtCore.Qt.MiddleButton:
+                    self._middle_mouse_down = is_press
 
             # [Event Owner: Qt Event Filter] Right-click suppression: when a tool is active, consume the right
             # mouse button press so FreeCAD's NavigationStyle never sees it (and
