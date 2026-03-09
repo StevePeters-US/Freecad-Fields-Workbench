@@ -48,6 +48,8 @@ class MeshTimer:
 
     def stop(self, stage: str):
         if stage in self._start:
+            if stage not in self._totals:
+                self._totals[stage] = 0.0
             self._totals[stage] += time.perf_counter() - self._start.pop(stage)
 
     def tick(self):
@@ -66,8 +68,15 @@ class MeshTimer:
         n = self._calls
         total_ms = sum(self._totals.values()) * 1000
         lines = [f"[PERF] {label} — {n} call(s), {total_ms:.1f} ms total"]
-        for s in self._STAGES:
+        
+        # Display stages in _STAGES order first, then any other timed stages
+        dynamic_stages = sorted([s for s in self._totals if s not in self._STAGES and self._totals[s] > 0])
+        all_ordered = self._STAGES + dynamic_stages
+        
+        for s in all_ordered:
+            if s not in self._totals: continue
             t = self._totals[s] * 1000
+            if t == 0 and s not in self._STAGES: continue
             indent = "    " if s in self._SUB_STAGES else "  "
             lines.append(f"{indent}{s:<18} {t:6.1f} ms  ({t/n:5.2f} ms/call)")
         dm_logger.info("\n".join(lines))
@@ -235,9 +244,239 @@ class AdaptiveMCMesher(DMMesher):
 
 
 class SurfaceNetsMesher(DMMesher):
-    """Surface Nets placeholder — falls back to MarchingCubesMesher."""
+    """
+    Naive Surface Nets (Gibson 1998).
+    
+    One vertex per active cell (average of edge crossing points).
+    Produces quad-dominant meshes (triangulated for Coin3D).
+    
+    Vectorized implementation:
+    1. Grid sampling & field eval (same as MC)
+    2. Edge sign-change detection for all 12 edge families
+    3. Net cell detection (cells owning at least one sign-change edge)
+    4. Crossing point computation & averaging per cell
+    5. Quad assembly for each sign-change edge
+    """
     def mesh(self, field: FRepField, cell_size: float) -> tuple:
-        dm_logger.warn("SurfaceNetsMesher not yet implemented. Falling back to Marching Cubes.")
+        min_b, max_b = field.bounding_box()
+
+        def _pad(lo, hi):
+            if hi - lo < 1e-4:
+                mid = (lo + hi) / 2
+                return mid - 1.0, mid + 1.0
+            return lo, hi
+
+        x0, x1 = _pad(min_b.x, max_b.x)
+        y0, y1 = _pad(min_b.y, max_b.y)
+        z0, z1 = _pad(min_b.z, max_b.z)
+
+        mesh_timer.tick()
+
+        dx_phys, dy_phys, dz_phys = (x1 - x0), (y1 - y0), (z1 - z0)
+        nx = max(1, int(np.ceil(dx_phys / cell_size)))
+        ny = max(1, int(np.ceil(dy_phys / cell_size)))
+        nz = max(1, int(np.ceil(dz_phys / cell_size)))
+
+        x = np.linspace(x0, x0 + nx * cell_size, nx + 1)
+        y = np.linspace(y0, y0 + ny * cell_size, ny + 1)
+        z = np.linspace(z0, z0 + nz * cell_size, nz + 1)
+
+        X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+        pts = np.column_stack([X.ravel(), Y.ravel(), Z.ravel()])
+
+        mesh_timer.start("field_eval")
+        vals = field.evaluate_grid(pts).reshape(nx + 1, ny + 1, nz + 1)
+        mesh_timer.stop("field_eval")
+
+        mesh_timer.start("sn_detect_edges")
+        # Identify edges with sign changes. 
+        # Inside < 0, Outside >= 0.
+        is_inside = vals < 0
+        
+        # Edge families (indices of the low-end grid point)
+        # X-edges: (i,j,k) -> (i+1,j,k)
+        ex = is_inside[:-1, :, :] != is_inside[1:, :, :]
+        # Y-edges: (i,j,k) -> (i,j+1,k)
+        ey = is_inside[:, :-1, :] != is_inside[:, 1:, :]
+        # Z-edges: (i,j,k) -> (i,j,k+1)
+        ez = is_inside[:, :, :-1] != is_inside[:, :, 1:]
+        mesh_timer.stop("sn_detect_edges")
+
+        mesh_timer.start("sn_net_cells")
+        # A cell (i,j,k) [0..nx-1, 0..ny-1, 0..nz-1] is a "net cell" 
+        # if any of its 12 edges has a sign change.
+        # Edges of cell (i,j,k):
+        # X: (i,j,k), (i,j+1,k), (i,j,k+1), (i,j+1,k+1)
+        # Y: (i,j,k), (i+1,j,k), (i,j,k+1), (i+1,j,k+1)
+        # Z: (i,j,k), (i+1,j,k), (i,j+1,k), (i+1,j+1,k)
+        
+        cell_active = (
+            ex[:, :-1, :-1] | ex[:, 1:, :-1] | ex[:, :-1, 1:] | ex[:, 1:, 1:] |
+            ey[:-1, :, :-1] | ey[1:, :, :-1] | ey[:-1, :, 1:] | ey[1:, :, 1:] |
+            ez[:-1, :-1, :] | ez[1:, :-1, :] | ez[:-1, 1:, :] | ez[1:, 1:, :]
+        )
+        
+        active_idx = np.argwhere(cell_active)
+        if active_idx.size == 0:
+            return None
+            
+        ai, aj, ak = active_idx[:, 0], active_idx[:, 1], active_idx[:, 2]
+        M = len(ai)
+        mesh_timer.stop("sn_net_cells")
+
+        mesh_timer.start("sn_vertex_compute")
+        # For each active cell, compute the average of all its crossing points.
+        # We need crossing points for every edge of every active cell.
+        
+        # Helper to compute interpolation factor t for v1 -> v2
+        def get_t(v1, v2):
+            dv = v2 - v1
+            safe = np.abs(dv) > 1e-8
+            return np.where(safe, -v1 / np.where(safe, dv, 1.0), 0.5)
+
+        # Grid spacing
+        dx, dy, dz = x[1]-x[0], y[1]-y[0], z[1]-z[0]
+        
+        # Accumulators for average
+        sum_p = np.zeros((M, 3), dtype=np.float64)
+        count = np.zeros(M, dtype=np.int32)
+        
+        # We check all 12 edges. This is slightly redundant but robust for vectorization.
+        # Offset map to edges: (axis, d_off)
+        # X-edges: (i,j,k), (i,j+1,k), (i,j,k+1), (i,j+1,k+1)
+        x_edge_offsets = [(0,0,0), (0,1,0), (0,0,1), (0,1,1)]
+        for dj, dk in [(0,0), (1,0), (0,1), (1,1)]:
+            mask = ex[ai, aj+dj, ak+dk]
+            if np.any(mask):
+                v1 = vals[ai, aj+dj, ak+dk]
+                v2 = vals[ai+1, aj+dj, ak+dk]
+                t = get_t(v1, v2)
+                sum_p[mask, 0] += x[ai[mask]] + t[mask] * dx
+                sum_p[mask, 1] += y[aj[mask] + dj]
+                sum_p[mask, 2] += z[ak[mask] + dk]
+                count[mask] += 1
+                
+        # Y-edges
+        for di, dk in [(0,0), (1,0), (0,1), (1,1)]:
+            mask = ey[ai+di, aj, ak+dk]
+            if np.any(mask):
+                v1 = vals[ai+di, aj, ak+dk]
+                v2 = vals[ai+di, aj+1, ak+dk]
+                t = get_t(v1, v2)
+                sum_p[mask, 0] += x[ai[mask] + di]
+                sum_p[mask, 1] += y[aj[mask]] + t[mask] * dy
+                sum_p[mask, 2] += z[ak[mask] + dk]
+                count[mask] += 1
+                
+        # Z-edges
+        for di, dj in [(0,0), (1,0), (0,1), (1,1)]:
+            mask = ez[ai+di, aj+dj, ak]
+            if np.any(mask):
+                v1 = vals[ai+di, aj+dj, ak]
+                v2 = vals[ai+di, aj+dj, ak+1]
+                t = get_t(v1, v2)
+                sum_p[mask, 0] += x[ai[mask] + di]
+                sum_p[mask, 1] += y[aj[mask] + dj]
+                sum_p[mask, 2] += z[ak[mask]] + t[mask] * dz
+                count[mask] += 1
+
+        cell_verts = sum_p / count[:, None]
+        
+        # Map active cell index to vertex index
+        cell_to_vidx = -np.ones((nx, ny, nz), dtype=np.int32)
+        cell_to_vidx[ai, aj, ak] = np.arange(M, dtype=np.int32)
+        mesh_timer.stop("sn_vertex_compute")
+
+        mesh_timer.start("sn_quad_assembly")
+        # Every sign-change edge is shared by 4 cells. Connect their vertices into a quad.
+        # The quad should be wound so normal matches gradient (v2 - v1).
+        
+        quad_vindices = []
+        
+        # X-axis edges: shared by cells (ai, aj, ak), (ai, aj-1, ak), (ai, aj-1, ak-1), (ai, aj, ak-1)
+        ei, ej, ek = np.where(ex[:, 1:-1, 1:-1])
+        if ei.size > 0:
+            # Shift to cell indices (ej, ek correspond to j,k in ex)
+            ej_c, ek_c = ej + 1, ek + 1
+            v0 = cell_to_vidx[ei, ej_c,   ek_c]
+            v1 = cell_to_vidx[ei, ej_c-1, ek_c]
+            v2 = cell_to_vidx[ei, ej_c-1, ek_c-1]
+            v3 = cell_to_vidx[ei, ej_c,   ek_c-1]
+            valid = (v0 >= 0) & (v1 >= 0) & (v2 >= 0) & (v3 >= 0)
+            if np.any(valid):
+                # Gradient check for winding
+                # For X-edge, if v1 < 0 and v2 > 0, gradient is +X.
+                # v1 is at (ei, ej_c, ek_c), v2 is at (ei+1, ej_c, ek_c)
+                v1_val = vals[ei[valid], ej_c[valid], ek_c[valid]]
+                v2_val = vals[ei[valid]+1, ej_c[valid], ek_c[valid]]
+                flip = v2_val < v1_val
+                q = np.stack([v0[valid], v1[valid], v2[valid], v3[valid]], axis=1)
+                q[flip] = q[flip, ::-1]
+                quad_vindices.append(q)
+
+        # Y-axis edges: shared by cells (ai, aj, ak), (ai-1, aj, ak), (ai-1, aj, ak-1), (ai, aj, ak-1)
+        ei, ej, ek = np.where(ey[1:-1, :, 1:-1])
+        if ej.size > 0:
+            ei_c, ek_c = ei + 1, ek + 1
+            v0 = cell_to_vidx[ei_c,   ej, ek_c]
+            v1 = cell_to_vidx[ei_c,   ej, ek_c-1]
+            v2 = cell_to_vidx[ei_c-1, ej, ek_c-1]
+            v3 = cell_to_vidx[ei_c-1, ej, ek_c]
+            valid = (v0 >= 0) & (v1 >= 0) & (v2 >= 0) & (v3 >= 0)
+            if np.any(valid):
+                v1_val = vals[ei_c[valid], ej[valid], ek_c[valid]]
+                v2_val = vals[ei_c[valid], ej[valid]+1, ek_c[valid]]
+                flip = v2_val > v1_val  # Y-axis needs reverse flip for correct winding
+                q = np.stack([v0[valid], v1[valid], v2[valid], v3[valid]], axis=1)
+                q[flip] = q[flip, ::-1]
+                quad_vindices.append(q)
+
+        # Z-axis edges: shared by (ai, aj, ak), (ai-1, aj, ak), (ai-1, aj-1, ak), (ai, aj-1, ak)
+        ei, ej, ek = np.where(ez[1:-1, 1:-1, :])
+        if ek.size > 0:
+            ei_c, ej_c = ei + 1, ej + 1
+            v0 = cell_to_vidx[ei_c,   ej_c,   ek]
+            v1 = cell_to_vidx[ei_c-1, ej_c,   ek]
+            v2 = cell_to_vidx[ei_c-1, ej_c-1, ek]
+            v3 = cell_to_vidx[ei_c,   ej_c-1, ek]
+            valid = (v0 >= 0) & (v1 >= 0) & (v2 >= 0) & (v3 >= 0)
+            if np.any(valid):
+                v1_val = vals[ei_c[valid], ej_c[valid], ek[valid]]
+                v2_val = vals[ei_c[valid], ej_c[valid], ek[valid]+1]
+                flip = v2_val < v1_val
+                q = np.stack([v0[valid], v1[valid], v2[valid], v3[valid]], axis=1)
+                q[flip] = q[flip, ::-1]
+                quad_vindices.append(q)
+
+        if not quad_vindices:
+            return None
+            
+        all_quads = np.vstack(quad_vindices)
+        mesh_timer.stop("sn_quad_assembly")
+
+        mesh_timer.start("mesh_build")
+        # Triangulate and build flat arrays
+        # Each quad (0,1,2,3) -> (0,1,2) and (0,2,3)
+        tri1 = all_quads[:, [0, 1, 2]]
+        tri2 = all_quads[:, [0, 2, 3]]
+        all_tris = np.vstack([tri1, tri2])
+        
+        flat_verts = cell_verts[all_tris.ravel()].astype(np.float32)
+
+        n_tris = len(all_tris)
+        base = np.arange(n_tris, dtype=np.int32) * 3
+        tri_idx = np.stack([base, base+1, base+2], axis=1)
+        sentinel = np.full((n_tris, 1), -1, dtype=np.int32)
+        flat_idx = np.hstack([tri_idx, sentinel]).ravel()
+        mesh_timer.stop("mesh_build")
+
+        return flat_verts, flat_idx
+
+
+class DualContouringMesher(DMMesher):
+    """Dual Contouring placeholder — falls back to MarchingCubesMesher."""
+    def mesh(self, field: FRepField, cell_size: float) -> tuple:
+        dm_logger.warn("DualContouringMesher not yet implemented. Falling back to Marching Cubes.")
         return MarchingCubesMesher().mesh(field, cell_size)
 
 
@@ -246,4 +485,5 @@ def get_active_mesher(type_override=None) -> DMMesher:
     st = type_override if type_override is not None else get_meshing_type()
     if st == 1:   return AdaptiveMCMesher()
     elif st == 2: return SurfaceNetsMesher()
+    elif st == 3: return DualContouringMesher()
     else:         return MarchingCubesMesher()

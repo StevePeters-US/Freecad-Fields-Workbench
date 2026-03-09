@@ -44,6 +44,9 @@ class DMRenderer:
         self._ctrl_lines = None
         self._spheres_sep = None
         self._dm_point_spheres = []  # DMPoint instances for control points and handles
+        
+        # Standalone Point specific
+        self._point_marker = None     # DMPoint instance for ShapeType == "point"
 
     def update_visibility(self, is_visible):
         if self.vis_switch:
@@ -298,6 +301,36 @@ class DMRenderer:
                 self._frep_draw_style.style = coin.SoDrawStyle.FILLED
             except AttributeError:
                 self._frep_draw_style.style = 1
+
+    # -------------------------------------------------------------------------
+    # Point Rendering
+    # -------------------------------------------------------------------------
+
+    def setup_point_marker_nodes(self):
+        if not coin: return
+        from core.dm_point import DMPoint
+        
+        # We use a separator for the point marker
+        self._point_sep = coin.SoSeparator()
+        if self.vis_switch:
+            self.vis_switch.addChild(self._point_sep)
+        else:
+            self.vobj.RootNode.addChild(self._point_sep)
+            
+        # Initial DMPoint. Position will be set in update_point_marker
+        self._point_marker = DMPoint(FreeCAD.Vector(0,0,0))
+        self._point_marker.draw_point(self._point_sep, radius=self._corner_sphere_radius())
+
+    def update_point_marker(self, fp):
+        if not self._point_marker:
+            self.setup_point_marker_nodes()
+        if not self._point_marker:
+            return
+            
+        pos = getattr(fp, "Position", FreeCAD.Vector(0,0,0))
+        self._point_marker.position = pos
+        # Use the same 8px logic as corners/handles for consistency
+        self._point_marker.update_draw(radius=self._corner_sphere_radius())
 
     # -------------------------------------------------------------------------
     # Curve / Control Cage Rendering

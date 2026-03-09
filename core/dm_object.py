@@ -52,7 +52,8 @@ def get_meshing_type():
     Return the meshing approach:
     0: Marching Cubes (Standard SDF)
     1: Adaptive Marching Cubes
-    2: NURBS based F-Rep approach
+    2: Surface Nets
+    3: Dual Contouring
     """
     return FreeCAD.ParamGet(_PARAM_PATH).GetInt("MeshingType", 0)
 
@@ -196,7 +197,8 @@ class DMObjectProxy:
                 obj.MeshingType = [
                     "Marching Cubes (Standard SDF)",
                     "Adaptive Marching Cubes",
-                    "NURBS based F-Rep approach"
+                    "Surface Nets",
+                    "Dual Contouring"
                 ]
                 obj.MeshingType = get_meshing_type()
 
@@ -343,33 +345,27 @@ class DMViewProvider:
         vobj.LineColor = (1.0, 0.5, 0.0)
         vobj.LineWidth = get_line_width()
         vobj.PointSize = get_point_size()
-        if hasattr(vobj.Object, "ShapeType") and vobj.Object.ShapeType == "surface":
+        
+        shape_type = getattr(vobj.Object, "ShapeType", None)
+        if shape_type == "point":
+            vobj.PointSize = 0.0
+            vobj.LineWidth = 0.0
+        elif shape_type == "surface":
             vobj.DisplayMode = "Shaded"
             vobj.PointSize = 0.0
             vobj.LineWidth = 0.0
-        elif hasattr(vobj.Object, "ShapeType") and vobj.Object.ShapeType == "frep":
-            # Frep objects render via Coin3D; suppress the Part shape renderer
-            try:
-                # Add our custom display modes directly to the ViewProvider
-                # We need to manually handle property changes for these because
-                # FreeCAD's built-in "No Drawing" will hide the Coin3D node entirely.
-                pass
-            except Exception:
-                pass
+        elif shape_type == "frep":
             vobj.PointSize = 0.0
             vobj.LineWidth = 0.0
-        from . import dm_logger
-        shape_type = getattr(vobj.Object, "ShapeType", None)
-        if shape_type == "frep":
             try:
                 vobj.DisplayMode = "Shaded"
-            except ValueError as e:
-                dm_logger.debug(f"DMViewProvider.setup_view: Failed to set DisplayMode to 'Shaded': {e}")
+            except Exception:
+                pass
         else:
             try:
                 vobj.DisplayMode = "Flat Lines"
-            except ValueError as e:
-                dm_logger.debug(f"DMViewProvider.setup_view: Failed to set DisplayMode to 'Flat Lines': {e}")
+            except Exception:
+                pass
 
         # DMRenderer handles all Coin3D overlays (meshes, handles, etc)
         self.renderer = None
@@ -390,6 +386,10 @@ class DMViewProvider:
             # Setup direct mesh rendering for F-Rep objects
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "frep":
                 self.renderer.setup_frep_mesh_nodes()
+            # Setup point marker for point objects
+            elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "point":
+                self.renderer.setup_point_marker_nodes()
+                self.renderer.update_point_marker(self.Object)
 
     def on_prefs_changed(self):
         """Update Coin3D styles and visibility based on global preferences."""
@@ -427,6 +427,9 @@ class DMViewProvider:
             if self.renderer:
                 vobj = fp.ViewObject
                 self.renderer.set_frep_display_mode(vobj.DisplayMode)
+        elif prop == "Position" and hasattr(fp, "ShapeType") and fp.ShapeType == "point":
+            if self.renderer:
+                self.renderer.update_point_marker(fp)
         elif not prop or prop in ["Points", "HandleIn", "HandleOut", "Closed", "EditMode"]:
             if self.renderer:
                 self.renderer.rebuild_control_cage(fp)
