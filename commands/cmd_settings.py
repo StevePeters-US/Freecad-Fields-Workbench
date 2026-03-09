@@ -92,7 +92,8 @@ class _SettingsDialog(QtGui.QDialog):
         self._meshing_combo.addItems([
             "Marching Cubes (Standard SDF)",
             "Adaptive Marching Cubes",
-            "NURBS based F-Rep approach"
+            "Surface Nets",
+            "Dual Contouring"
         ])
         self._meshing_combo.setCurrentIndex(current_meshing)
         layout.addRow("Meshing Type:", self._meshing_combo)
@@ -117,8 +118,7 @@ class _SettingsDialog(QtGui.QDialog):
     def _on_accept(self):
         from core.dm_object import (set_show_wireframe, set_line_width, set_point_size, 
                                     set_picking_radius, set_meshing_type, set_meshing_cell_size,
-                                    set_max_bounds, set_perf_profiler_enabled, refresh_all_dm_objects,
-                                    get_developer_mode, set_developer_mode)
+                                    set_max_bounds, set_perf_profiler_enabled, refresh_all_dm_objects)
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()
