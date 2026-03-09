@@ -1,15 +1,36 @@
 import FreeCAD
-import Part
+from pivy import coin
 from .dm_base import NURBSPrimitiveCreator
 from core import dm_logger
+from core.dm_point import DMPoint
 
 class PointCreator(NURBSPrimitiveCreator):
     """Tool to create a DMPoint object at a clicked location."""
-    
+
     def __init__(self):
         super().__init__()
         self.created_points = []
+        self._cursor_dm_pt = None
+        self.dm_points = []
+        self.sg = self.view.getSceneGraph() if self.view else None
+        self.points_root = coin.SoSeparator()
+        if self.sg:
+            self.sg.addChild(self.points_root)
         dm_logger.debug("PointCreator initialized")
+
+    def _do_terminate(self):
+        if self._cursor_dm_pt:
+            self._cursor_dm_pt.undraw()
+            self._cursor_dm_pt = None
+        for dm_pt in self.dm_points:
+            dm_pt.undraw()
+        self.dm_points.clear()
+        try:
+            if self.sg and self.points_root:
+                self.sg.removeChild(self.points_root)
+        except Exception as e:
+            dm_logger.debug(f"PointCreator._do_terminate: {e}")
+        super()._do_terminate()
 
     def handle_click(self, event_dict):
         try:
@@ -21,25 +42,34 @@ class PointCreator(NURBSPrimitiveCreator):
                 return False
 
             dm_logger.info(f"Placing point at: {pt}")
-            
+
             self.update_active_object("point", {"Position": pt, "debug_pt": pt})
-            
+
             if self._active_obj:
                 self._active_obj.Label = "Point"
                 self.created_points.append(self._active_obj.Name)
-                # clear active object so a new one is spawned on next move
                 self._active_obj = None
-                
+
+            # Permanent sphere at committed position
+            dm_pt = DMPoint(pt)
+            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pt))
+            self.dm_points.append(dm_pt)
+
             return True
         except Exception:
             dm_logger.exception("PointCreator.handle_click error")
             return False
 
     def handle_move(self, event_dict):
-        # Update point preview (just the crosshair)
         pt = self.get_mouse_plane_pt(event_dict)
         if pt:
             self.update_active_object("point", {"Position": pt, "debug_pt": pt})
+            if self._cursor_dm_pt is None:
+                self._cursor_dm_pt = DMPoint(pt)
+                self._cursor_dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pt))
+            else:
+                self._cursor_dm_pt.position = pt
+                self._cursor_dm_pt.update_draw(radius=self._compute_handle_radius(ref_pt=pt))
 
     def _do_finish(self):
         # Called when right clicking (i.e. accept and finish)

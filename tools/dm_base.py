@@ -534,6 +534,35 @@ class DMBase:
             return obj.Name, subname
         return None, None
 
+    def _compute_handle_radius(self, ref_pt=None):
+        """Sphere radius in world units — sized to look ~8 px on screen."""
+        try:
+            cam = self.view.getCameraNode()
+            viewer = self.view.getViewer()
+            vp_h = 800.0
+            try:
+                if hasattr(viewer, "getGlxSize"):
+                    sz = viewer.getGlxSize(); vp_h = float(sz[1])
+                elif hasattr(viewer, "getSize"):
+                    sz = viewer.getSize()
+                    vp_h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
+            except Exception:
+                pass
+            if hasattr(cam, "height"):
+                half_world_h = cam.height.getValue() / 2.0
+            elif hasattr(cam, "heightAngle"):
+                cam_vals = cam.position.getValue()
+                cam_pos_v = FreeCAD.Vector(cam_vals[0], cam_vals[1], cam_vals[2])
+                ref = ref_pt if ref_pt is not None else FreeCAD.Vector(0, 0, 0)
+                depth = (ref - cam_pos_v).Length
+                half_world_h = depth * math.tan(cam.heightAngle.getValue() / 2.0)
+            else:
+                half_world_h = 100.0
+            px_per_world = (vp_h / 2.0) / max(half_world_h, 1e-6)
+            return max(2.0, 8.0 / px_per_world)
+        except Exception:
+            return 5.0
+
 # ─────────────────────────────────────────────────────────────────────────────
 # NURBSPrimitiveCreator
 # ─────────────────────────────────────────────────────────────────────────────

@@ -223,37 +223,6 @@ class WorkPlaneCreator(DMBase):
             dm_logger.debug(f"WorkPlaneCreator: _get_initial_size failed: {e}")
             return 100.0
 
-    def _compute_handle_radius(self):
-        """Sphere radius in world units — sized to look ~8 px on screen."""
-        try:
-            cam = self.view.getCameraNode()
-            viewer = self.view.getViewer()
-            vp_h = 800.0
-            try:
-                if hasattr(viewer, "getGlxSize"):
-                    sz = viewer.getGlxSize(); vp_h = float(sz[1])
-                elif hasattr(viewer, "getSize"):
-                    sz = viewer.getSize()
-                    vp_h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
-            except Exception:
-                pass
-            obj = self.target_wp or self.preview_obj
-            if hasattr(cam, "height"):
-                half_world_h = cam.height.getValue() / 2.0
-            elif hasattr(cam, "heightAngle"):
-                cam_vals = cam.position.getValue()
-                cam_pos_v = FreeCAD.Vector(cam_vals[0], cam_vals[1], cam_vals[2])
-                ref = obj.Placement.Base if obj else FreeCAD.Vector(0, 0, 0)
-                depth = (ref - cam_pos_v).Length
-                fov = cam.heightAngle.getValue()
-                half_world_h = depth * math.tan(fov / 2.0)
-            else:
-                half_world_h = 100.0
-            px_per_world = (vp_h / 2.0) / max(half_world_h, 1e-6)
-            return max(2.0, 8.0 / px_per_world)
-        except Exception:
-            return 5.0
-
     def update_handles(self):
         obj = self.target_wp if self.target_wp else self.preview_obj
         if not obj or not hasattr(obj, "Length"):
@@ -274,7 +243,7 @@ class WorkPlaneCreator(DMBase):
         ]
         plc = obj.Placement
         corners_global = [plc.multVec(c) for c in corners_local]
-        radius = self._compute_handle_radius()
+        radius = self._compute_handle_radius(ref_pt=obj.Placement.Base if obj else None)
         for corner, xf, sphere in zip(corners_global, self.handle_transforms, self.handle_spheres):
             xf.translation.setValue(corner.x, corner.y, corner.z)
             xf.scaleFactor.setValue(1, 1, 1)
@@ -307,7 +276,7 @@ class WorkPlaneCreator(DMBase):
             FreeCAD.Vector(-l, -w, 0), FreeCAD.Vector(l, -w, 0),
             FreeCAD.Vector(l,  w, 0),  FreeCAD.Vector(-l, w, 0),
         ]]
-        radius = self._compute_handle_radius()
+        radius = self._compute_handle_radius(ref_pt=obj.Placement.Base if obj else None)
 
         best_dist = float('inf')
         best_idx = -1

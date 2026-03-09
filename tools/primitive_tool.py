@@ -2,8 +2,10 @@ import FreeCAD
 import FreeCADGui
 import math
 from PySide import QtCore
+from pivy import coin
 from core import dm_logger
 from core.input_manager import DMInputManager
+from core.dm_point import DMPoint
 from core.dm_object import create_dm_object, get_meshing_type, get_meshing_cell_size
 from core.dm_mesher import mesh_timer
 from tools.dm_base import DMBase
@@ -139,11 +141,27 @@ class BoxCreator(PrimitiveCreatorBase):
         self.points = []
         self.current_point = None
         self._height_drag_base = None
+        self.dm_points = []
+        self.sg = self.view.getSceneGraph() if self.view else None
+        self.points_root = coin.SoSeparator()
+        if self.sg:
+            self.sg.addChild(self.points_root)
         # Pre-load the active workplane so preview is correct before the 1st click
         visible_wps = self.get_visible_workplanes()
         if visible_wps:
             self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
         dm_logger.info("Box Tool: Click 1st corner")
+
+    def _do_terminate(self):
+        for dm_pt in self.dm_points:
+            dm_pt.undraw()
+        self.dm_points.clear()
+        try:
+            if self.sg and self.points_root:
+                self.sg.removeChild(self.points_root)
+        except Exception as e:
+            dm_logger.debug(f"BoxCreator._do_terminate: {e}")
+        super()._do_terminate()
 
     def on_button1_down(self, event_dict):
         pos = self.get_mouse_plane_pt(event_dict)
@@ -154,19 +172,25 @@ class BoxCreator(PrimitiveCreatorBase):
             # 1st click - anchor the tool
             self.points.append(pos)
             self.state = 1
-            
+            dm_pt = DMPoint(pos)
+            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+            self.dm_points.append(dm_pt)
+
             # Lock working_plane from the active workplane for consistent transforms
             if not getattr(self, "working_plane", None):
                 visible_wps = self.get_visible_workplanes()
                 if visible_wps:
                     self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
-            
+
             dm_logger.info("Box Tool: Click 2nd corner")
-            
+
         elif self.state == 1:
             # 2nd click - determines base size (x/y)
             self.points.append(pos)
             self.state = 2
+            dm_pt = DMPoint(pos)
+            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+            self.dm_points.append(dm_pt)
             
             # 2. Add start pos for height drag
             pos2d = DMInputManager.get_instance().get_mouse_pos(event_dict)
@@ -178,9 +202,13 @@ class BoxCreator(PrimitiveCreatorBase):
         elif self.state == 2:
             # 3rd click - determines height (z). Finalize shape.
             self.points.append(self.current_point)
-            
+            if self.current_point:
+                dm_pt = DMPoint(self.current_point)
+                dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=self.current_point))
+                self.dm_points.append(dm_pt)
+
             # Transition to a finalized state or finish tool
-            self.state = 3 
+            self.state = 3
             self._finalize_object("Box")
             # Note: Right click implicitly finishes the tool as handled by DMBase
 

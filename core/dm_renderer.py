@@ -333,7 +333,6 @@ class DMRenderer:
         k_pts_sep.addChild(self._knot_points)
         
         self.vobj.addDisplayMode(self._ctrl_cage_sep, "ControlCage")
-        self.vobj.RootNode.addChild(self._ctrl_cage_sep)
 
     def rebuild_control_cage(self, fp):
         if not coin: return
