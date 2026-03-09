@@ -16,16 +16,17 @@ class EditTool(DMBase):
     def __init__(self):
         super().__init__()
         self._target_obj = None
-        
+
         self._hovered_element = None # (index, type)
         self._selected_element = None # (index, type)
-        
+
         # State
         self.drag_plane_n = None
         self.drag_plane_o = None
-        
+
         self._cursor_active = False
         self._last_click_time = 0
+        self._drag_timer = None
 
     def activate(self):
         sel = FreeCADGui.Selection.getSelection()
@@ -150,16 +151,53 @@ class EditTool(DMBase):
             
         return None
 
-    def handle_click(self, event_dict):
-        click_count = event_dict.get("ClickCount", 1)
-        
+    def on_button1_down(self, event_dict):
+        result = self.handle_click(event_dict)
         if self.state == 1:
-            # DROP logic
+            self._start_drag_timer()
+        return result
+
+    def on_button1_up(self, _event_dict):
+        self._stop_drag_timer()
+        if self.state == 1:
             self.state = 0
             self._selected_element = None
             dm_logger.debug("Dropped element")
-            return True
-            
+        return True
+
+    def _start_drag_timer(self):
+        self._stop_drag_timer()
+        self._drag_timer = QtCore.QTimer()
+        self._drag_timer.timeout.connect(self._drag_update)
+        self._drag_timer.start(16)
+
+    def _stop_drag_timer(self):
+        if self._drag_timer:
+            self._drag_timer.stop()
+            self._drag_timer = None
+
+    def _drag_update(self):
+        # Self-terminate if LMB was released (handles cases where on_button1_up is intercepted)
+        if not (QtGui.QApplication.mouseButtons() & QtCore.Qt.LeftButton):
+            self._stop_drag_timer()
+            self.state = 0
+            self._selected_element = None
+            return
+        if self.state != 1 or not self._selected_element:
+            self._stop_drag_timer()
+            return
+        mouse_pos = DMInputManager.get_instance()._last_qt_pos
+        event_dict = {"QtPosition": mouse_pos}
+        pt_global = self.projector.get_mouse_world_pos(
+            event_dict, self.drag_plane_n, self.drag_plane_o, place_on_geometry=False
+        )
+        if pt_global:
+            pt_local = self._target_obj.Placement.inverse().multVec(pt_global)
+            self._update_element(self._selected_element, pt_local)
+
+    def handle_click(self, event_dict):
+        click_count = event_dict.get("ClickCount", 1)
+
         # DOUBLE-CLICK to ADD point
         if click_count > 1:
             hit_p = self._hit_test_edge(None, None) # Uses current mouse pos internally
@@ -418,6 +456,7 @@ class EditTool(DMBase):
         return False
 
     def finish(self):
+        self._stop_drag_timer()
         if self._target_obj:
             self._target_obj.EditMode = False
         if self._cursor_active:
@@ -426,6 +465,7 @@ class EditTool(DMBase):
         super().finish()
 
     def _do_terminate(self):
+        self._stop_drag_timer()
         if self._target_obj:
             self._target_obj.EditMode = False
         if self._cursor_active:

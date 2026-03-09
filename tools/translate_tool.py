@@ -5,15 +5,15 @@ Moves whole DMObjects or selected sub-elements (vertices/handles).
 
 import FreeCAD
 import FreeCADGui
-from PySide import QtCore
+from PySide import QtCore, QtGui
 from core import dm_logger
+from core.input_manager import DMInputManager
 from .dm_base import DMBase
 
 class TranslateTool(DMBase):
     def __init__(self):
         super().__init__()
-        self.state = 1 # Start in dragging mode
-        
+
         # Selection tracking
         self.targets = [] # List of dicts: {"obj": obj, "type": "point"|"handle_in"|"handle_out"|"placement", "idx": int|None, "orig_world": Vector|Placement}
         self.obj_orig_points = {} # obj -> original_points_list
@@ -113,8 +113,9 @@ class TranslateTool(DMBase):
         self.center_w /= len(self.targets)
         self.start_mouse_pos = self.center_w
         
-        self.constraint_axis = None 
+        self.constraint_axis = None
         self.constraint_plane = None
+        self.state = 0  # Waiting for LMB press to begin drag
         dm_logger.debug(f"TranslateTool started with {len(self.targets)} targets.")
 
     def handle_keyboard(self, event_dict):
@@ -138,8 +139,11 @@ class TranslateTool(DMBase):
         return super().handle_keyboard(event_dict)
 
     def handle_move(self, event_dict):
+        if self.state != 1:
+            return
+
         cam_dir = self.view.getViewDirection()
-        pt = self.get_mouse_world_pos(event_dict, cam_dir, self.center_w)
+        pt = self.projector.get_mouse_world_pos(event_dict, cam_dir, self.center_w, place_on_geometry=False)
         if pt is None: return
 
         delta = pt - self.start_mouse_pos
@@ -223,13 +227,64 @@ class TranslateTool(DMBase):
         for obj in dirty:
             obj.touch(); obj.Document.recompute()
 
-    def handle_click(self, event_dict):
-        btn = event_dict.get("Button")
-        if btn == "BUTTON1": self.finish(); return True
-        elif btn == "BUTTON3": self.cancel(); return True
-        return False
+    def on_button1_down(self, event_dict):
+        cam_dir = self.view.getViewDirection()
+        pt = self.projector.get_mouse_world_pos(event_dict, cam_dir, self.center_w, place_on_geometry=False)
+        if pt is not None:
+            self.start_mouse_pos = pt
+            self.state = 1
+            self._start_drag_timer()
+        return True
+
+    def on_button1_up(self, _event_dict):
+        self._stop_drag_timer()
+        if self.state == 1:
+            self.finish()
+        return True
+
+    def on_button3_down(self, _event_dict):
+        self.cancel()
+        return True
+
+    def _start_drag_timer(self):
+        self._stop_drag_timer()
+        self._drag_timer = QtCore.QTimer()
+        self._drag_timer.timeout.connect(self._drag_update)
+        self._drag_timer.start(16)
+
+    def _stop_drag_timer(self):
+        if getattr(self, "_drag_timer", None):
+            self._drag_timer.stop()
+            self._drag_timer = None
+
+    def _drag_update(self):
+        # Self-terminate if LMB was released (handles cases where on_button1_up is intercepted)
+        if not (QtGui.QApplication.mouseButtons() & QtCore.Qt.LeftButton):
+            self._stop_drag_timer()
+            self.state = 0
+            return
+        if self.state != 1:
+            self._stop_drag_timer()
+            return
+        mouse_pos = DMInputManager.get_instance()._last_qt_pos
+        cam_dir = self.view.getViewDirection()
+        pt = self.projector.get_mouse_world_pos(
+            {"QtPosition": mouse_pos}, cam_dir, self.center_w, place_on_geometry=False
+        )
+        if pt is None:
+            return
+        delta = pt - self.start_mouse_pos
+        if self.constraint_axis == 'x': delta = FreeCAD.Vector(delta.x, 0, 0)
+        elif self.constraint_axis == 'y': delta = FreeCAD.Vector(0, delta.y, 0)
+        elif self.constraint_axis == 'z': delta = FreeCAD.Vector(0, 0, delta.z)
+        if self.constraint_plane == 'xy': delta.z = 0
+        elif self.constraint_plane == 'yz': delta.x = 0
+        elif self.constraint_plane == 'xz': delta.y = 0
+        self.apply_delta(delta)
+        self.view.redraw()
 
     def cancel(self):
+        self._stop_drag_timer()
         for obj, p in self.obj_orig_placement.items():
             obj.Placement = p
             if obj in self.obj_orig_points:
@@ -243,6 +298,7 @@ class TranslateTool(DMBase):
         self.terminate()
 
     def finish(self):
+        self._stop_drag_timer()
         self.terminate()
 
     def get_context_menu(self, event_dict=None):

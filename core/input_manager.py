@@ -65,8 +65,8 @@ class DMInputManager(QtCore.QObject):
                                     QtCore.QTimer.singleShot(0, tool.finish)
                         return True  # always consume right-click when tool active
 
-            # 2. ShortcutOverride: claim 'S' and 'D' for the active tool so FreeCAD
-            #    menus don't consume them before Coin3D gets the KeyPress.
+            # 2. ShortcutOverride: claim 'S', 'D', and 'E' so FreeCAD menus don't
+            #    consume them before Coin3D gets the KeyPress.
             #    [Event Owner: Qt Event Filter] (to prevent FreeCAD from stealing hotkeys like S and D)
             if event.type() == QtCore.QEvent.ShortcutOverride:
                 text = event.text().lower() if hasattr(event, "text") else ""
@@ -79,20 +79,46 @@ class DMInputManager(QtCore.QObject):
                     if text == 'd' and (hasattr(tool, 'get_context_menu') or hasattr(tool, 'on_tool_menu')):
                         event.accept()
                         return True
+                if not tool and text == 'e':
+                    # Claim 'E' when any editable DM object is selected
+                    sel = FreeCADGui.Selection.getSelection()
+                    if any(hasattr(o, "Proxy") and getattr(o.Proxy, "__class__", None).__name__ in ("DMWorkPlane", "DMObjectProxy") for o in sel):
+                        event.accept()
+                        return True
 
-            # 3. Handle default context menu ('D' key) only when no tool is active.
-            #    When a tool is active, Coin3D handle_keyboard handles 'D' instead.
+            # 3. Handle global hotkeys when no tool is active.
             #    [Event Owner: Coin3D handle_keyboard (for tools), Qt Event Filter (for global menus)]
             if event.type() == QtCore.QEvent.KeyPress:
                 key = event.key()
                 text = event.text().lower() if hasattr(event, "text") else ""
+                from core.dm_tool_manager import DMToolManager
+                _no_tool = not DMToolManager.get_instance().has_active_tool()
+
+                # 'D' — default context menu
                 if (key == QtCore.Qt.Key_D or text == 'd') and not self._is_menu_active():
-                    from core.dm_tool_manager import DMToolManager
-                    if not DMToolManager.get_instance().has_active_tool():
+                    if _no_tool:
                         from core.dm_menu import DMMenuManager
                         if not DMMenuManager.get_instance()._ignore_hotkeys:
                             DMMenuManager.get_instance().show_context_menu()
                             return True
+
+                # 'E' — edit selected DM object (or TODO: common params for multiple selections)
+                if (key == QtCore.Qt.Key_E or text == 'e') and not self._is_menu_active():
+                    if _no_tool:
+                        sel = FreeCADGui.Selection.getSelection()
+                        if sel:
+                            # TODO: if multiple DM objects are selected, edit their common parameters
+                            obj = sel[0]
+                            proxy_name = getattr(getattr(obj, "Proxy", None), "__class__", type(None)).__name__
+                            if proxy_name == "DMWorkPlane":
+                                from tools.work_plane_tool import WorkPlaneCreator
+                                WorkPlaneCreator()
+                                return True
+                            elif proxy_name == "DMObjectProxy":
+                                from tools.edit_tool import EditTool
+                                tool = EditTool()
+                                tool.activate()
+                                return True
 
             # [Event Owner: Qt Event Filter] Suppress FreeCAD context menu when a DM tool is active or a menu is open
             if event.type() == QtCore.QEvent.ContextMenu:
