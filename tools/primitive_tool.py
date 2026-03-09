@@ -80,8 +80,9 @@ class PrimitiveCreatorBase(DMBase):
         points = self._get_final_points()
         if field is None:
             return
+        self._finished = True  # Prevent _do_terminate from cleaning up the committed object
         QtCore.QTimer.singleShot(0, lambda: self.__do_commit(name, field, points))
-        self.finish()
+        self.terminate()
 
     def __do_commit(self, name, field, points):
         obj = self._preview_obj
@@ -182,12 +183,7 @@ class BoxCreator(PrimitiveCreatorBase):
             dm_pt = DMPoint(pos)
             dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
             self.dm_points.append(dm_pt)
-            
-            # 2. Add start pos for height drag
-            pos2d = DMInputManager.get_instance().get_mouse_pos(event_dict)
-            self._height_drag_start_pos = pos2d
             self._height_drag_base = pos
-            
             dm_logger.info("Box Tool: Click height")
             
         elif self.state == 2:
@@ -212,18 +208,12 @@ class BoxCreator(PrimitiveCreatorBase):
         """Height drag: move current_point along workplane normal."""
         if self._height_drag_base is None:
             return
-            
+
         wp = getattr(self, "working_plane", None)
         normal = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
 
-        # Augment the event_dict with the 2D screen position where the drag started.
-        # get_projected_point uses this as the anchor for its screen-space projection.
-        drag_event = dict(event_dict) if event_dict else {}
-        if hasattr(self, "_height_drag_start_pos") and self._height_drag_start_pos:
-            drag_event["DragStart2D"] = self._height_drag_start_pos
-
-        self.current_point = DMInputManager.get_instance().get_projected_point(
-            self.view, self._height_drag_base, normal, drag_event
+        self.current_point = DMInputManager.get_instance().get_axis_point(
+            self.view, self._height_drag_base, normal, event_dict
         )
 
     def _get_preview_field(self):

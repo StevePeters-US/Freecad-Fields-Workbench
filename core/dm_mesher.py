@@ -474,10 +474,264 @@ class SurfaceNetsMesher(DMMesher):
 
 
 class DualContouringMesher(DMMesher):
-    """Dual Contouring placeholder — falls back to MarchingCubesMesher."""
+    """
+    Dual Contouring (Ju et al. 2002).
+    
+    Preserves sharp features by solving a Quadratic Error Function (QEF) 
+    per cell to find the optimal vertex position.
+    
+    Implementation:
+    1. Grid sampling (same as MC)
+    2. Detect sign-change edges
+    3. For each crossing edge: compute p (crossing) and n (normal)
+    4. Accumulate QEF (AtA, Atb) for the 4 cells sharing each edge
+    5. Batch solve QEFs using SVD
+    6. Assemble quads from dual vertices
+    """
     def mesh(self, field: FRepField, cell_size: float) -> tuple:
-        dm_logger.warn("DualContouringMesher not yet implemented. Falling back to Marching Cubes.")
-        return MarchingCubesMesher().mesh(field, cell_size)
+        min_b, max_b = field.bounding_box()
+
+        def _pad(lo, hi):
+            if hi - lo < 1e-4:
+                mid = (lo + hi) / 2
+                return mid - 1.0, mid + 1.0
+            return lo, hi
+
+        x0, x1 = _pad(min_b.x, max_b.x)
+        y0, y1 = _pad(min_b.y, max_b.y)
+        z0, z1 = _pad(min_b.z, max_b.z)
+
+        mesh_timer.tick()
+
+        nx = max(1, int(np.ceil((x1 - x0) / cell_size)))
+        ny = max(1, int(np.ceil((y1 - y0) / cell_size)))
+        nz = max(1, int(np.ceil((z1 - z0) / cell_size)))
+
+        x = np.linspace(x0, x0 + nx * cell_size, nx + 1)
+        y = np.linspace(y0, y0 + ny * cell_size, ny + 1)
+        z = np.linspace(z0, z0 + nz * cell_size, nz + 1)
+
+        X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+        pts = np.column_stack([X.ravel(), Y.ravel(), Z.ravel()])
+
+        mesh_timer.start("field_eval")
+        vals = field.evaluate_grid(pts).reshape(nx + 1, ny + 1, nz + 1)
+        mesh_timer.stop("field_eval")
+
+        mesh_timer.start("dc_detect_edges")
+        is_inside = vals < 0
+        ex = is_inside[:-1, :, :] != is_inside[1:, :, :]
+        ey = is_inside[:, :-1, :] != is_inside[:, 1:, :]
+        ez = is_inside[:, :, :-1] != is_inside[:, :, 1:]
+        mesh_timer.stop("dc_detect_edges")
+
+        mesh_timer.start("dc_qef_collect")
+        # Identify active cells (those possessing at least one crossing edge)
+        # For DC, a cell is active if it shares an edge with a sign change.
+        active_cells = (
+            ex[:, :-1, :-1] | ex[:, 1:, :-1] | ex[:, :-1, 1:] | ex[:, 1:, 1:] |
+            ey[:-1, :, :-1] | ey[1:, :, :-1] | ey[:-1, :, 1:] | ey[1:, :, 1:] |
+            ez[:-1, :-1, :] | ez[1:, :-1, :] | ez[:-1, 1:, :] | ez[1:, 1:, :]
+        )
+        active_idx = np.argwhere(active_cells)
+        if active_idx.size == 0:
+            return None
+        
+        ai, aj, ak = active_idx[:, 0], active_idx[:, 1], active_idx[:, 2]
+        M = len(ai)
+        
+        # Map (i,j,k) -> active index 0..M-1
+        cell_to_active = -np.ones((nx, ny, nz), dtype=np.int32)
+        cell_to_active[ai, aj, ak] = np.arange(M, dtype=np.int32)
+
+        # Pre-allocate QEF data
+        # AtA @ v = Atb
+        ata = np.zeros((M, 3, 3), dtype=np.float64)
+        atb = np.zeros((M, 3), dtype=np.float64)
+        mass_point = np.zeros((M, 3), dtype=np.float64)
+        count = np.zeros(M, dtype=np.int32)
+
+        def get_t(v1, v2):
+            dv = v2 - v1
+            safe = np.abs(dv) > 1e-8
+            return np.where(safe, -v1 / np.where(safe, dv, 1.0), 0.5)
+
+        dx_s, dy_s, dz_s = x[1]-x[0], y[1]-y[0], z[1]-z[0]
+
+        # X-Edge crossings: (i,j,k) -> (i+1,j,k)
+        # Shared by 4 cells: (i,j,k), (i,j-1,k), (i,j-1,k-1), (i,j,k-1)
+        ei_x, ej_x, ek_x = np.where(ex)
+        if ei_x.size > 0:
+            v1, v2 = vals[ei_x, ej_x, ek_x], vals[ei_x+1, ej_x, ek_x]
+            t = get_t(v1, v2)
+            px = x[ei_x] + t * dx_s
+            py = y[ej_x]
+            pz = z[ek_x]
+            pts_edge = np.column_stack([px, py, pz])
+            for pe in pts_edge:
+                p_vec = FreeCAD.Vector(*pe)
+                n_vec = field.gradient(p_vec).normalize()
+                n = np.array([n_vec.x, n_vec.y, n_vec.z])
+                
+                # Update 4 sharing cells
+                idx_i, idx_j, idx_k = int(np.floor((pe[0]-x0)/dx_s)), int(np.floor((pe[1]-y0)/dy_s)), int(np.floor((pe[2]-z0)/dz_s))
+                for dj, dk in [(0,0), (-1,0), (-1,-1), (0,-1)]:
+                    cj, ck = ej_x + dj, ek_x + dk
+                    # Vectorize this inner loop over ei_x?
+                    # For simplicity and robustness, we'll do the 4 offsets but keep them broadly vectorized.
+            
+        # Refined vectorized QEF collection
+        def accumulate_qef(edges, axis, offset_tuples):
+            # edges: (nx, ny, nz) bool mask for sign changes on this axis
+            # offset_tuples: list of (di, dj, dk) to find the 4 sharing cells
+            ei, ej, ek = np.where(edges)
+            if ei.size == 0: return
+            
+            v1 = vals[ei, ej, ek]
+            if axis == 0: v2 = vals[ei+1, ej, ek]
+            elif axis == 1: v2 = vals[ei, ej+1, ek]
+            else: v2 = vals[ei, ej, ek+1]
+            
+            t = get_t(v1, v2)
+            px = x[ei] + (t * dx_s if axis==0 else 0)
+            py = y[ej] + (t * dy_s if axis==1 else 0)
+            pz = z[ek] + (t * dz_s if axis==2 else 0)
+            pts_edge = np.column_stack([px, py, pz])
+            
+            # Gradients must be evaluated at the crossing points
+            # This is the slow part (Python loop over edges)
+            for m in range(len(ei)):
+                p = pts_edge[m]
+                n_vec = field.gradient(FreeCAD.Vector(*p))
+                if n_vec.Length < 1e-12: continue
+                n_vec.normalize()
+                n = np.array([n_vec.x, n_vec.y, n_vec.z])
+                
+                # Accumulate for each of the 4 sharing cells
+                ii, jj, kk = ei[m], ej[m], ek[m]
+                for di, dj, dk in offset_tuples:
+                    ci, cj, ck = ii+di, jj+dj, kk+dk
+                    if 0 <= ci < nx and 0 <= cj < ny and 0 <= ck < nz:
+                        v_idx = cell_to_active[ci, cj, ck]
+                        if v_idx >= 0:
+                            ata[v_idx] += np.outer(n, n)
+                            atb[v_idx] += n * np.dot(n, p)
+                            mass_point[v_idx] += p
+                            count[v_idx] += 1
+
+        accumulate_qef(ex, 0, [(0, 0, 0), (0, -1, 0), (0, -1, -1), (0, 0, -1)])
+        accumulate_qef(ey, 1, [(0, 0, 0), (-1, 0, 0), (-1, 0, -1), (0, 0, -1)])
+        accumulate_qef(ez, 2, [(0, 0, 0), (-1, 0, 0), (-1, -1, 0), (0, -1, 0)])
+        mesh_timer.stop("dc_qef_collect")
+
+        mesh_timer.start("dc_qef_solve")
+        # Solve per-cell QEF
+        cell_verts = np.zeros((M, 3), dtype=np.float64)
+        
+        # Batch SVD
+        U, S, Vh = np.linalg.svd(ata) # (M, 3, 3)
+        # Threshold for pseudo-inverse
+        max_s = np.max(S, axis=1)
+        threshold = 0.1 * max_s
+        
+        # Use a hybrid approach: if rank < 3, or if solve yields point outside cell,
+        # use mass point.
+        for i in range(M):
+            if count[i] == 0: continue
+            
+            # SVD Solve
+            s_inv = np.zeros(3)
+            for j in range(3):
+                if S[i, j] > threshold[i]:
+                    s_inv[j] = 1.0 / S[i, j]
+            
+            # v = V @ Sinv @ Ut @ atb
+            pinv = Vh[i].T @ np.diag(s_inv) @ U[i].T
+            v = pinv @ atb[i]
+            
+            # Clamp to cell bounds
+            cx, cy, cz = x[ai[i]], y[aj[i]], z[ak[i]]
+            eps = 1e-4
+            if (v[0] < cx - eps or v[0] > cx + dx_s + eps or
+                v[1] < cy - eps or v[1] > cy + dy_s + eps or
+                v[2] < cz - eps or v[2] > cz + dz_s + eps or
+                threshold[i] < 1e-6):
+                # Fallback to mass point if solution is outside or unstable
+                cell_verts[i] = mass_point[i] / count[i]
+            else:
+                cell_verts[i] = v
+        mesh_timer.stop("dc_qef_solve")
+
+        mesh_timer.start("dc_quad_assembly")
+        quad_vindices = []
+        
+        # Emit quads for each sign-change edge
+        # X-edges (ei, ej, ek) shared by cells (ai, aj, ak), (ai, aj-1, ak), (ai, aj-1, ak-1), (ai, aj, ak-1)
+        ei, ej, ek = np.where(ex[:, 1:-1, 1:-1])
+        if ei.size > 0:
+            ej_c, ek_c = ej + 1, ek + 1
+            v0 = cell_to_active[ei, ej_c,   ek_c]
+            v1 = cell_to_active[ei, ej_c-1, ek_c]
+            v2 = cell_to_active[ei, ej_c-1, ek_c-1]
+            v3 = cell_to_active[ei, ej_c,   ek_c-1]
+            valid = (v0 >= 0) & (v1 >= 0) & (v2 >= 0) & (v3 >= 0)
+            if np.any(valid):
+                v1_val, v2_val = vals[ei[valid], ej_c[valid], ek_c[valid]], vals[ei[valid]+1, ej_c[valid], ek_c[valid]]
+                flip = v2_val < v1_val
+                q = np.stack([v0[valid], v1[valid], v2[valid], v3[valid]], axis=1)
+                q[flip] = q[flip, ::-1]
+                quad_vindices.append(q)
+
+        # Y-edges
+        ei, ej, ek = np.where(ey[1:-1, :, 1:-1])
+        if ej.size > 0:
+            ei_c, ek_c = ei + 1, ek + 1
+            v0 = cell_to_active[ei_c,   ej, ek_c]
+            v1 = cell_to_active[ei_c,   ej, ek_c-1]
+            v2 = cell_to_active[ei_c-1, ej, ek_c-1]
+            v3 = cell_to_active[ei_c-1, ej, ek_c]
+            valid = (v0 >= 0) & (v1 >= 0) & (v2 >= 0) & (v3 >= 0)
+            if np.any(valid):
+                v1_val, v2_val = vals[ei_c[valid], ej[valid], ek_c[valid]], vals[ei_c[valid], ej[valid]+1, ek_c[valid]]
+                flip = v2_val > v1_val
+                q = np.stack([v0[valid], v1[valid], v2[valid], v3[valid]], axis=1)
+                q[flip] = q[flip, ::-1]
+                quad_vindices.append(q)
+
+        # Z-edges
+        ei, ej, ek = np.where(ez[1:-1, 1:-1, :])
+        if ek.size > 0:
+            ei_c, ej_c = ei + 1, ej + 1
+            v0 = cell_to_active[ei_c,   ej_c,   ek]
+            v1 = cell_to_active[ei_c-1, ej_c,   ek]
+            v2 = cell_to_active[ei_c-1, ej_c-1, ek]
+            v3 = cell_to_active[ei_c,   ej_c-1, ek]
+            valid = (v0 >= 0) & (v1 >= 0) & (v2 >= 0) & (v3 >= 0)
+            if np.any(valid):
+                v1_val, v2_val = vals[ei_c[valid], ej_c[valid], ek[valid]], vals[ei_c[valid], ej_c[valid], ek[valid]+1]
+                flip = v2_val < v1_val
+                q = np.stack([v0[valid], v1[valid], v2[valid], v3[valid]], axis=1)
+                q[flip] = q[flip, ::-1]
+                quad_vindices.append(q)
+
+        if not quad_vindices:
+            return None
+        all_quads = np.vstack(quad_vindices)
+        mesh_timer.stop("dc_quad_assembly")
+
+        mesh_timer.start("mesh_build")
+        tri1, tri2 = all_quads[:, [0, 1, 2]], all_quads[:, [0, 2, 3]]
+        all_tris = np.vstack([tri1, tri2])
+        flat_verts = cell_verts[all_tris.ravel()].astype(np.float32)
+
+        n_tris = len(all_tris)
+        base = np.arange(n_tris, dtype=np.int32) * 3
+        tri_idx = np.stack([base, base+1, base+2], axis=1)
+        sentinel = np.full((n_tris, 1), -1, dtype=np.int32)
+        flat_idx = np.hstack([tri_idx, sentinel]).ravel()
+        mesh_timer.stop("mesh_build")
+
+        return flat_verts, flat_idx
 
 
 def get_active_mesher(type_override=None) -> DMMesher:

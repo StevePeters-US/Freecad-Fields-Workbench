@@ -378,6 +378,43 @@ class DMInputManager(QtCore.QObject):
             dm_logger.debug(f"get_projected_point failed: {e}")
         return base_point_3d
 
+    def get_axis_point(self, view, base, normal, event_dict):
+        """
+        Returns the point on the axis (base + t * normal) that is closest to
+        the mouse ray.  This is the geometrically correct way to drag out a
+        height: the result literally sits where the cursor points in 3D space,
+        independent of camera angle or zoom level.
+
+        Uses the standard closest-point-of-two-skew-lines formula:
+            w = ray_origin - base
+            b = ray_dir · normal
+            s = (w·normal - b*(w·ray_dir)) / (1 - b²)
+            result = base + s * normal
+        """
+        ray_p, ray_d = self.get_ray(view, event_dict)
+        if ray_p is None or ray_d is None:
+            return base
+        try:
+            n = FreeCAD.Vector(normal)
+            n.normalize()
+
+            w = ray_p - base          # vector from axis origin to ray origin
+            b = ray_d.dot(n)          # cos(angle) between ray dir and axis
+            denom = 1.0 - b * b       # sin²(angle); zero when parallel
+
+            if abs(denom) < 1e-8:
+                # Axis is pointing straight at the camera — no depth info.
+                return base
+
+            e = w.dot(n)
+            d = w.dot(ray_d)
+            s = (e - b * d) / denom   # signed distance along axis
+
+            return base + n * s
+
+        except Exception as ex:
+            dm_logger.debug(f"get_axis_point failed: {ex}")
+            return base
 
     def get_view_transform(self, view, target_pt):
         """
