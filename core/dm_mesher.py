@@ -1,5 +1,6 @@
 import time
 import Part
+import FreeCAD
 import numpy as np
 
 from core import dm_logger
@@ -116,7 +117,8 @@ class MarchingCubesMesher(DMMesher):
             if hi - lo < 1e-4:
                 mid = (lo + hi) / 2
                 return mid - 1.0, mid + 1.0
-            return lo, hi
+            # Add one cell size of padding to all sides to ensure solid encasement
+            return lo - cell_size, hi + cell_size
 
         x0, x1 = _pad(min_b.x, max_b.x)
         y0, y1 = _pad(min_b.y, max_b.y)
@@ -237,9 +239,9 @@ class MarchingCubesMesher(DMMesher):
 
 
 class AdaptiveMCMesher(DMMesher):
-    """Adaptive Marching Cubes placeholder — falls back to MarchingCubesMesher."""
+    """Adaptive Marching Cubes placeholder — currently falls back to MarchingCubesMesher."""
     def mesh(self, field: FRepField, cell_size: float) -> tuple:
-        dm_logger.warn("AdaptiveMCMesher not yet implemented. Falling back to Marching Cubes.")
+        dm_logger.warn("AdaptiveMCMesher is not yet implemented (it is currently identical to Marching Cubes).")
         return MarchingCubesMesher().mesh(field, cell_size)
 
 
@@ -264,7 +266,8 @@ class SurfaceNetsMesher(DMMesher):
             if hi - lo < 1e-4:
                 mid = (lo + hi) / 2
                 return mid - 1.0, mid + 1.0
-            return lo, hi
+            # Add one cell size of padding to all sides to ensure solid encasement
+            return lo - cell_size, hi + cell_size
 
         x0, x1 = _pad(min_b.x, max_b.x)
         y0, y1 = _pad(min_b.y, max_b.y)
@@ -426,7 +429,7 @@ class SurfaceNetsMesher(DMMesher):
             if np.any(valid):
                 v1_val = vals[ei_c[valid], ej[valid], ek_c[valid]]
                 v2_val = vals[ei_c[valid], ej[valid]+1, ek_c[valid]]
-                flip = v2_val > v1_val  # Y-axis needs reverse flip for correct winding
+                flip = v2_val < v1_val  # Consistent with X-axis
                 q = np.stack([v0[valid], v1[valid], v2[valid], v3[valid]], axis=1)
                 q[flip] = q[flip, ::-1]
                 quad_vindices.append(q)
@@ -495,7 +498,8 @@ class DualContouringMesher(DMMesher):
             if hi - lo < 1e-4:
                 mid = (lo + hi) / 2
                 return mid - 1.0, mid + 1.0
-            return lo, hi
+            # Add one cell size of padding to all sides to ensure solid encasement
+            return lo - cell_size, hi + cell_size
 
         x0, x1 = _pad(min_b.x, max_b.x)
         y0, y1 = _pad(min_b.y, max_b.y)
@@ -568,17 +572,7 @@ class DualContouringMesher(DMMesher):
             py = y[ej_x]
             pz = z[ek_x]
             pts_edge = np.column_stack([px, py, pz])
-            for pe in pts_edge:
-                p_vec = FreeCAD.Vector(*pe)
-                n_vec = field.gradient(p_vec).normalize()
-                n = np.array([n_vec.x, n_vec.y, n_vec.z])
-                
-                # Update 4 sharing cells
-                idx_i, idx_j, idx_k = int(np.floor((pe[0]-x0)/dx_s)), int(np.floor((pe[1]-y0)/dy_s)), int(np.floor((pe[2]-z0)/dz_s))
-                for dj, dk in [(0,0), (-1,0), (-1,-1), (0,-1)]:
-                    cj, ck = ej_x + dj, ek_x + dk
-                    # Vectorize this inner loop over ei_x?
-                    # For simplicity and robustness, we'll do the 4 offsets but keep them broadly vectorized.
+            # (Removal of redundant loop)
             
         # Refined vectorized QEF collection
         def accumulate_qef(edges, axis, offset_tuples):
@@ -693,7 +687,7 @@ class DualContouringMesher(DMMesher):
             valid = (v0 >= 0) & (v1 >= 0) & (v2 >= 0) & (v3 >= 0)
             if np.any(valid):
                 v1_val, v2_val = vals[ei_c[valid], ej[valid], ek_c[valid]], vals[ei_c[valid], ej[valid]+1, ek_c[valid]]
-                flip = v2_val > v1_val
+                flip = v2_val < v1_val
                 q = np.stack([v0[valid], v1[valid], v2[valid], v3[valid]], axis=1)
                 q[flip] = q[flip, ::-1]
                 quad_vindices.append(q)
@@ -735,9 +729,23 @@ class DualContouringMesher(DMMesher):
 
 
 def get_active_mesher(type_override=None) -> DMMesher:
-    """Return the active mesher based on global settings or a specific type override."""
+    """Return the active mesher based on global settings or a specific type override.
+    
+    Handles both integer indices and string labels from FreeCAD's PropertyEnumeration.
+    """
     st = type_override if type_override is not None else get_meshing_type()
-    if st == 1:   return AdaptiveMCMesher()
-    elif st == 2: return SurfaceNetsMesher()
-    elif st == 3: return DualContouringMesher()
-    else:         return MarchingCubesMesher()
+    
+    # Map index or label to worker class
+    # Order: 0: MC, 1: AMC, 2: SN, 3: DC
+    mesher = MarchingCubesMesher()
+    label = str(st)
+    
+    if st == 1 or "Adaptive Marching Cubes" in label:
+        mesher = AdaptiveMCMesher()
+    elif st == 2 or "Surface Nets" in label:
+        mesher = SurfaceNetsMesher()
+    elif st == 3 or "Dual Contouring" in label:
+        mesher = DualContouringMesher()
+    
+    # dm_logger.debug(f"DirectModeling: Using mesher {mesher.__class__.__name__} (selection: {st})")
+    return mesher

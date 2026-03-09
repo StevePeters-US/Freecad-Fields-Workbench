@@ -135,6 +135,8 @@ class PrimitiveCreatorBase(DMBase):
 
 
 class BoxCreator(PrimitiveCreatorBase):
+    _last_working_plane = None  # Persists across instances; set on first click
+
     def __init__(self):
         super().__init__()
         self.points = []
@@ -145,10 +147,17 @@ class BoxCreator(PrimitiveCreatorBase):
         self.points_root = coin.SoSeparator()
         if self.sg:
             self.sg.addChild(self.points_root)
-        # Pre-load the active workplane so preview is correct before the 1st click
-        visible_wps = self.get_visible_workplanes()
-        if visible_wps:
-            self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
+        # Pre-load a workplane for the initial preview, in priority order:
+        #   1. Workplane detected from current selection (_detect_selected_workplane, set by super)
+        #   2. Last workplane clicked during a previous box tool session
+        #   3. First visible workplane in document order (fallback)
+        if not self.working_plane:
+            if BoxCreator._last_working_plane is not None:
+                self.working_plane = BoxCreator._last_working_plane
+            else:
+                visible_wps = self.get_visible_workplanes()
+                if visible_wps:
+                    self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
         dm_logger.info("Box Tool: Click 1st corner")
 
     def _do_terminate(self):
@@ -163,11 +172,30 @@ class BoxCreator(PrimitiveCreatorBase):
         super()._do_terminate()
 
     def on_button1_down(self, event_dict):
-        pos = self.get_mouse_plane_pt(event_dict)
+        # Call projector directly so we can capture which workplane was hit.
+        result = self.projector.get_mouse_plane_pt(
+            event_dict,
+            place_on_geometry=False,
+            working_plane=getattr(self, "working_plane", None)
+        )
+        if isinstance(result, tuple):
+            pos, wp_hit = result
+        else:
+            pos, wp_hit = result, None
+
         if pos is None:
             return True
 
         if self.state == 0:
+            # Lock onto the workplane that was actually clicked.
+            if wp_hit is not None:
+                self.working_plane = (
+                    wp_hit.getGlobalPlacement()
+                    if hasattr(wp_hit, "getGlobalPlacement")
+                    else wp_hit.Placement
+                )
+            # Remember this workplane for the next invocation of the box tool.
+            BoxCreator._last_working_plane = self.working_plane
             # 1st click - anchor the tool
             self.points.append(pos)
             self.state = 1

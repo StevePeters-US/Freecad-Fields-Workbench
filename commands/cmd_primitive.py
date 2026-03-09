@@ -28,10 +28,6 @@ class CommandDMCreation:
         from tools.primitive_tool import BoxCreator, SphereCreator, CylinderCreator
         from core.input_manager import DMInputManager
         
-        # Verify the mesher settings
-        if get_frep_storage_type() != 0:
-            dm_logger.warn(f"Warning: Only MarchingCubes (Type 0) is fully implemented for rendering primitives.")
-
         manager = DMInputManager.get_instance()
         
         if self.c_type == "Box":
