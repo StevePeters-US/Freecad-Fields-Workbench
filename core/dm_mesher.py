@@ -943,6 +943,196 @@ class DualContouringMesher(DMMesher):
 
         return flat_verts, flat_idx
 
+def decimate_flat_tris(verts, indices, angle_tol=5.0):
+    """
+    Merges coplanar adjacent triangles to reduce triangle count.
+    
+    verts: (N*3, 3) float32 — flat vertex array
+    indices: (N*4,) int32 — flat index array with -1 sentinels
+    angle_tol: float — maximum angle in degrees between triangle normals to be considered coplanar
+    
+    Returns: (new_verts, new_indices) in the same format.
+    """
+    if len(indices) == 0:
+        return verts, indices
+
+    n_tris = len(indices) // 4
+    tri_verts = verts.reshape(n_tris, 3, 3).astype(np.float64)
+    
+    # 1. Calculate Face Normals
+    v0 = tri_verts[:, 0, :]
+    v1 = tri_verts[:, 1, :]
+    v2 = tri_verts[:, 2, :]
+    
+    raw_normals = np.cross(v1 - v0, v2 - v0)
+    norms = np.linalg.norm(raw_normals, axis=1)
+    
+    valid_mask = norms > 1e-12
+    normals = np.zeros_like(raw_normals)
+    normals[valid_mask] = raw_normals[valid_mask] / norms[valid_mask][:, None]
+    
+    # 2. Build Face Adjacency
+    # We use rounded vertex positions as keys since vertices are not shared.
+    def get_v_hash(v):
+        return tuple((v / 1e-5).round().astype(np.int64))
+        
+    edge_to_faces = {} # edge_hash -> list of face_indices
+    
+    for i in range(n_tris):
+        if not valid_mask[i]:
+            continue
+        v_hashes = [get_v_hash(tri_verts[i, j]) for j in range(3)]
+        # Triangle edges
+        edges = [
+            frozenset([v_hashes[0], v_hashes[1]]),
+            frozenset([v_hashes[1], v_hashes[2]]),
+            frozenset([v_hashes[2], v_hashes[0]])
+        ]
+        for e in edges:
+            if e not in edge_to_faces:
+                edge_to_faces[e] = []
+            edge_to_faces[e].append(i)
+            
+    # Adjacency graph
+    adj = [[] for _ in range(n_tris)]
+    for faces in edge_to_faces.values():
+        if len(faces) == 2:
+            f1, f2 = faces
+            adj[f1].append(f2)
+            adj[f2].append(f1)
+            
+    # 3. Group Coplanar Adjacent Triangles
+    cos_tol = np.cos(np.radians(angle_tol))
+    visited = np.zeros(n_tris, dtype=bool)
+    groups = []
+    
+    for i in range(n_tris):
+        if visited[i] or not valid_mask[i]:
+            continue
+        
+        group = []
+        stack = [i]
+        visited[i] = True
+        n0 = normals[i]
+        
+        while stack:
+            curr = stack.pop()
+            group.append(curr)
+            
+            for neighbor in adj[curr]:
+                if not visited[neighbor]:
+                    # Planarity check
+                    if np.dot(n0, normals[neighbor]) > cos_tol:
+                        visited[neighbor] = True
+                        stack.append(neighbor)
+        groups.append(group)
+        
+    # 4. Extract Boundaries and Re-triangulate
+    final_verts = []
+    final_idx = []
+    curr_v_count = 0
+    
+    # Pre-mapping of hashes to representative positions for boundary reconstruction
+    # (Using the very first encounter of a rounded vertex to keep it consistent)
+    hash_to_pos = {}
+    for i in range(n_tris):
+        if not valid_mask[i]: continue
+        for j in range(3):
+            h = get_v_hash(tri_verts[i, j])
+            if h not in hash_to_pos:
+                hash_to_pos[h] = tri_verts[i, j]
+
+    for group in groups:
+        if len(group) == 1:
+            # No decimation possible for single triangle
+            f_idx = group[0]
+            final_verts.append(tri_verts[f_idx])
+            final_idx.extend([curr_v_count, curr_v_count+1, curr_v_count+2, -1])
+            curr_v_count += 3
+            continue
+            
+        # Count edge occurrences within the group
+        group_edge_counts = {}
+        for f_idx in group:
+            v_hashes = [get_v_hash(tri_verts[f_idx, j]) for j in range(3)]
+            # Use directed edges for boundary tracing: (v1, v2)
+            edges = [(v_hashes[0], v_hashes[1]), (v_hashes[1], v_hashes[2]), (v_hashes[2], v_hashes[0])]
+            for e in edges:
+                # Store as sorted tuple for existence check, but we need direction for loops
+                rev_e = (e[1], e[0])
+                canonical = tuple(sorted(e))
+                group_edge_counts[canonical] = group_edge_counts.get(canonical, 0) + 1
+
+        # Boundary edges are those that appear only once in the group
+        boundary_edges = []
+        for f_idx in group:
+            v_hashes = [get_v_hash(tri_verts[f_idx, j]) for j in range(3)]
+            edges = [(v_hashes[0], v_hashes[1]), (v_hashes[1], v_hashes[2]), (v_hashes[2], v_hashes[0])]
+            for e in edges:
+                if group_edge_counts[tuple(sorted(e))] == 1:
+                    boundary_edges.append(e)
+                    
+        if not boundary_edges:
+            continue
+            
+        # 5. Assemble and Simplify Boundary Loops
+        # Group boundary edges into contiguous loops
+        edge_map = {e[0]: e[1] for e in boundary_edges}
+        loops = []
+        while edge_map:
+            start_v = next(iter(edge_map))
+            loop = [start_v]
+            curr_v = edge_map.pop(start_v)
+            while curr_v != start_v and curr_v in edge_map:
+                loop.append(curr_v)
+                next_v = edge_map.pop(curr_v)
+                curr_v = next_v
+            loops.append(loop)
+
+        # Simplify loops by removing collinear vertices
+        simplified_loops = []
+        for loop in loops:
+            if len(loop) < 3: continue
+            simple = []
+            for i in range(len(loop)):
+                p0 = hash_to_pos[loop[i-1]]
+                p1 = hash_to_pos[loop[i]]
+                p2 = hash_to_pos[loop[(i+1)%len(loop)]]
+                
+                v1 = p1 - p0
+                v2 = p2 - p1
+                v1_n = np.linalg.norm(v1)
+                v2_n = np.linalg.norm(v2)
+                
+                if v1_n > 1e-8 and v2_n > 1e-8:
+                    cos_a = np.dot(v1, v2) / (v1_n * v2_n)
+                    if cos_a > 1.0 - 1e-6: # Collinear
+                        continue
+                simple.append(loop[i])
+            simplified_loops.append(simple)
+
+        # 6. Triangulate (Simple Centroid Fan for primary loop)
+        # TODO: A more robust triangulator (ear-clipping) for complex/holey polygons.
+        # For now, we use a simple fan which works for most convex/simple CAD faces.
+        for loop in simplified_loops:
+            if len(loop) < 3: continue
+            
+            # Use the first vertex as the fan center
+            v_root = hash_to_pos[loop[0]]
+            for i in range(1, len(loop) - 1):
+                v_a = hash_to_pos[loop[i]]
+                v_b = hash_to_pos[loop[i+1]]
+                
+                final_verts.append([v_root, v_a, v_b])
+                final_idx.extend([curr_v_count, curr_v_count+1, curr_v_count+2, -1])
+                curr_v_count += 3
+
+    if not final_verts:
+        return np.zeros((0, 3), dtype=np.float32), np.zeros(0, dtype=np.int32)
+        
+    return np.array(final_verts).reshape(-1, 3).astype(np.float32), np.array(final_idx, dtype=np.int32)
+
+
 
 def get_active_mesher(type_override=None) -> DMMesher:
     """Return the active mesher based on global settings or a specific type override.
