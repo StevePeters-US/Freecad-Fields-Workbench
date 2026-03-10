@@ -97,6 +97,13 @@ def set_perf_profiler_enabled(val):
     except:
         pass
 
+def get_curvature_threshold():
+    """Return the curvature threshold for adaptive meshing."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("CurvatureThreshold", 0.1)
+
+def set_curvature_threshold(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("CurvatureThreshold", float(val))
+
 
 
 

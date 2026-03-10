@@ -126,7 +126,7 @@ at cell_size=1.0, while preserving edge sharpness within 0.1mm.
 
 ---
 
-### M-004: Curvature threshold as a user setting
+### [x] M-004: Curvature threshold as a user setting
 
 **File:** `core/dm_object.py`  
 **What:** Add FreeCAD preference accessors:

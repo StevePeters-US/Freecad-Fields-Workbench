@@ -35,11 +35,12 @@ class _SettingsDialog(QtGui.QDialog):
         current_lw = get_line_width()
         current_ps = get_point_size()
         from core.dm_object import (get_picking_radius, get_meshing_type, get_max_bounds, 
-                                    get_meshing_cell_size)
+                                    get_meshing_cell_size, get_curvature_threshold)
         current_pr = get_picking_radius()
         current_meshing = get_meshing_type()
         current_res = get_meshing_cell_size()
         current_mb = get_max_bounds()
+        current_curv = get_curvature_threshold()
 
         layout = QtGui.QFormLayout(self)
 
@@ -107,6 +108,15 @@ class _SettingsDialog(QtGui.QDialog):
         self._res_spin.setToolTip("Global cell size for SDF meshing in millimeters (smaller = more detail)")
         layout.addRow("Meshing Cell Size (mm):", self._res_spin)
 
+        # Curvature Threshold spinbox
+        self._curv_spin = QtGui.QDoubleSpinBox()
+        self._curv_spin.setRange(0.01, 1.0)
+        self._curv_spin.setSingleStep(0.01)
+        self._curv_spin.setDecimals(2)
+        self._curv_spin.setValue(current_curv)
+        self._curv_spin.setToolTip("Adaptive MC curvature threshold (lower = more detail on edges)")
+        layout.addRow("Curvature Threshold:", self._curv_spin)
+
         # Buttons
         btn_box = QtGui.QDialogButtonBox(
             QtGui.QDialogButtonBox.Ok | QtGui.QDialogButtonBox.Cancel
@@ -118,7 +128,8 @@ class _SettingsDialog(QtGui.QDialog):
     def _on_accept(self):
         from core.dm_object import (set_show_wireframe, set_line_width, set_point_size, 
                                     set_picking_radius, set_meshing_type, set_meshing_cell_size,
-                                    set_max_bounds, set_perf_profiler_enabled, refresh_all_dm_objects)
+                                    set_max_bounds, set_perf_profiler_enabled, set_curvature_threshold,
+                                    refresh_all_dm_objects)
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()
@@ -126,6 +137,7 @@ class _SettingsDialog(QtGui.QDialog):
         meshing = self._meshing_combo.currentIndex()
         res = self._res_spin.value()
         mb = self._mb_spin.value()
+        curv = self._curv_spin.value()
 
         set_show_wireframe(wire)
         set_line_width(lw)
@@ -134,6 +146,7 @@ class _SettingsDialog(QtGui.QDialog):
         set_meshing_type(meshing)
         set_meshing_cell_size(self._res_spin.value())
         set_max_bounds(mb)
+        set_curvature_threshold(curv)
         set_perf_profiler_enabled(self._perf_check.isChecked())
         
         from core.dm_logger import set_enable_crash_log
@@ -142,7 +155,7 @@ class _SettingsDialog(QtGui.QDialog):
         # Apply to all existing objects
         refresh_all_dm_objects()
 
-        dm_logger.info(f"DM Settings: wire={wire}, lw={lw}, ps={ps}, pr={pr}, meshing={meshing}, res={res}, mb={mb}")
+        dm_logger.info(f"DM Settings: wire={wire}, lw={lw}, ps={ps}, pr={pr}, meshing={meshing}, res={res}, mb={mb}, curv={curv}")
         self.accept()
 
 
