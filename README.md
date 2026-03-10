@@ -218,6 +218,23 @@ Set `DEBUG_DM_CRASH=1` to also write logs to `~/.FreeCAD/DirectModeling.log`.
 
 ---
 
+## Future: CNC Tool Path Generation
+
+One of the longer-term goals of this project is to generate CNC tool paths directly from the function-based SDF representation — without any intermediate meshing step.
+
+Because SDFs encode geometry as a continuous function rather than a polygon mesh, several CAM problems map onto them naturally:
+
+- **Cutter-radius compensation** — the tool center path for a ball-end mill of radius `r` is the isosurface `f(p) = r`. No mesh offsetting needed; just change the evaluation threshold.
+- **Gouge detection** — a tool at position `p` is gouging if `f(p) < r`. A single function evaluation, testable at any point along the path.
+- **Surface normals** — `∇f` gives exact, smooth normals everywhere. Ideal for 5-axis tool orientation without mesh normal interpolation artifacts.
+- **Adaptive stepover** — principal curvatures can be derived from the Hessian of `f`, enabling scallop-height equalization analytically.
+- **Rest machining / pocket detection** — regions accessible to a small tool but not a large one are `{p : f_large(p) > 0 and f_small(p) ≤ r}`. Pure SDF logic.
+- **Z-slice roughing** — a 2D cut boundary at height `z_i` is the zero-crossing of `f(x, y, z_i)`, extracted via marching squares on a 2D slice.
+
+This approach only works cleanly with **analytic/function-based** SDFs (not voxel grids), which is why the engine in this workbench evaluates fields procedurally rather than baking them to a volume.
+
+---
+
 ## Installation
 
 1. Clone or symlink this repo into your FreeCAD `Mod` directory:
