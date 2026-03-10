@@ -65,7 +65,7 @@ The existing `gradient()` is per-point and used in DC's inner loop (line 599) â€
 
 ---
 
-### M-002: Add `curvature_grid()` method to `FRepField`
+### [x] M-002: Add `curvature_grid()` method to `FRepField`
 
 **File:** `core/frep/frep_field.py`  
 **What:** Add `curvature_grid(self, points: np.ndarray, h: float = 1e-3) -> np.ndarray` that

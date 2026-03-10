@@ -55,3 +55,18 @@ class FRepField:
         
         # Stack into (N,3) array and ensure float64 output
         return np.column_stack([gx, gy, gz]).astype(np.float64)
+
+    def curvature_grid(self, points: np.ndarray, h: float = 1e-3) -> np.ndarray:
+        """Approximate mean curvature via Laplacian of SDF. Returns (N,) float64."""
+        f0 = self.evaluate_grid(points)
+        lap = np.zeros(len(points), dtype=np.float64)
+        for axis in range(3):
+            p_plus = points.copy(); p_plus[:, axis] += h
+            p_minus = points.copy(); p_minus[:, axis] -= h
+            lap += (self.evaluate_grid(p_plus) + self.evaluate_grid(p_minus) - 2 * f0) / (h * h)
+        
+        grad = self.gradient_grid(points, h)
+        grad_mag = np.linalg.norm(grad, axis=1)
+        grad_mag = np.maximum(grad_mag, 1e-12)
+        
+        return np.abs(lap) / grad_mag
