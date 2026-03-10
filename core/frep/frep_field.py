@@ -37,3 +37,21 @@ class FRepField:
             pt = FreeCAD.Vector(points[i, 0], points[i, 1], points[i, 2])
             results[i] = self.evaluate(pt)
         return results
+
+    def gradient_grid(self, points: np.ndarray, h: float = 1e-4) -> np.ndarray:
+        """Batch central-difference gradient over (N,3) points → (N,3) float64."""
+        # Shift in each axis to perform central difference (f(x+h) - f(x-h))/(2h)
+        pts_xp = points.copy(); pts_xp[:, 0] += h
+        pts_xm = points.copy(); pts_xm[:, 0] -= h
+        pts_yp = points.copy(); pts_yp[:, 1] += h
+        pts_ym = points.copy(); pts_ym[:, 1] -= h
+        pts_zp = points.copy(); pts_zp[:, 2] += h
+        pts_zm = points.copy(); pts_zm[:, 2] -= h
+        
+        # Batch evaluate all shifted points
+        gx = (self.evaluate_grid(pts_xp) - self.evaluate_grid(pts_xm)) / (2 * h)
+        gy = (self.evaluate_grid(pts_yp) - self.evaluate_grid(pts_ym)) / (2 * h)
+        gz = (self.evaluate_grid(pts_zp) - self.evaluate_grid(pts_zm)) / (2 * h)
+        
+        # Stack into (N,3) array and ensure float64 output
+        return np.column_stack([gx, gy, gz]).astype(np.float64)

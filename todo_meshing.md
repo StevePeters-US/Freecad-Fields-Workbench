@@ -37,7 +37,7 @@ without sacrificing visual quality.
 These tasks provide the vectorized gradient and curvature primitives that
 all adaptive algorithms depend on. No mesher changes yet.
 
-### M-001: Add `gradient_grid()` batch method to `FRepField`
+### [x] M-001: Add `gradient_grid()` batch method to `FRepField`
 
 **File:** `core/frep/frep_field.py`  
 **What:** Add a new method `gradient_grid(self, points: np.ndarray, h: float = 1e-4) -> np.ndarray` that
