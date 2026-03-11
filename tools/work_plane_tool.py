@@ -181,10 +181,25 @@ class WorkPlaneCreator(DMBase):
                 0.0,      0.0,      0.0,      1.0
             )
             return FreeCAD.Placement(m)
-        return None
 
-        # Fallback to camera-facing at origin-plane depth
+        # Fallback to current working plane or standard XY plane
         try:
+            # We want to use the active working plane if one exists, otherwise default XY plane
+            wp = getattr(self, "working_plane", None)
+            if wp:
+                n = wp.Rotation.multVec(FreeCAD.Vector(0,0,1))
+                o = wp.Base
+                rot = wp.Rotation
+            else:
+                n = FreeCAD.Vector(0, 0, 1)
+                o = FreeCAD.Vector(0, 0, 0)
+                rot = FreeCAD.Rotation(0, 0, 0, 1)
+
+            pt = self.projector.get_mouse_world_pos(event_dict, n, o, place_on_geometry=False)
+            if pt:
+                return FreeCAD.Placement(pt, rot)
+                
+            # If ray missed the plane entirely (parallel camera), fallback to camera-facing
             pos_2d = DMInputManager.get_instance().get_mouse_pos(event_dict)
             mouse_pt = None
             try: mouse_pt = self.view.getPoint(pos_2d[0], pos_2d[1])
@@ -196,7 +211,7 @@ class WorkPlaneCreator(DMBase):
                 
             return self.get_camera_facing_placement(mouse_pt)
         except Exception as e:
-            dm_logger.debug(f"WorkPlaneCreator: camera-facing fallback failed: {e}")
+            dm_logger.debug(f"WorkPlaneCreator: workplane fallback failed: {e}")
         return None
 
     def _get_initial_size(self, pos):

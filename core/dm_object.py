@@ -111,12 +111,16 @@ def get_decimate_enabled():
 def set_decimate_enabled(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetBool("DecimateEnabled", bool(val))
 
-def get_use_point_cloud() -> bool:
-    """Return True to render F-Rep objects as a point cloud instead of a triangle mesh."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("UsePointCloud", False)
+RENDER_MODE_MESH        = 0
+RENDER_MODE_POINT_CLOUD = 1
+RENDER_MODE_RAY_MARCH   = 2
 
-def set_use_point_cloud(val: bool):
-    FreeCAD.ParamGet(_PARAM_PATH).SetBool("UsePointCloud", bool(val))
+def get_render_mode() -> int:
+    """Return the active F-Rep render mode (0=Mesh, 1=PointCloud, 2=RayMarch)."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("RenderMode", RENDER_MODE_MESH)
+
+def set_render_mode(val: int):
+    FreeCAD.ParamGet(_PARAM_PATH).SetInt("RenderMode", int(val))
 
 def get_deduplicate_enabled():
     """Return whether vertex deduplication is enabled."""
