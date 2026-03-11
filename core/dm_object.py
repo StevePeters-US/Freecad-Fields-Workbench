@@ -423,9 +423,13 @@ class DMViewProvider:
                 self.renderer.rebuild_control_cage(self.Object)
             # Setup direct mesh rendering for F-Rep objects
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "frep":
-                if get_use_point_cloud():
+                mode = get_render_mode()
+                if mode == RENDER_MODE_POINT_CLOUD:
                     from core.dm_point_cloud_renderer import DMPointCloudRenderer
                     self.point_cloud_renderer = DMPointCloudRenderer(vobj)
+                elif mode == RENDER_MODE_RAY_MARCH:
+                    from core.dm_ray_march_renderer import DMRayMarchRenderer
+                    self.ray_march_renderer = DMRayMarchRenderer(vobj)
                 else:
                     self.renderer.setup_frep_mesh_nodes()
             # Setup point marker for point objects
@@ -457,14 +461,17 @@ class DMViewProvider:
             # Called after execute() sets fp.Shape — safe to update Coin3D here
             proxy = getattr(fp, "Proxy", None)
             field = getattr(proxy, "FRepField", None) if proxy else None
+            pc    = getattr(self, "point_cloud_renderer", None)
+            rm    = getattr(self, "ray_march_renderer",   None)
 
-            pc = getattr(self, "point_cloud_renderer", None)
             if pc is not None and field is not None:
                 pc.update(field, get_meshing_cell_size())
+            elif rm is not None and field is not None:
+                rm.update(field, get_meshing_cell_size())
             elif proxy and self.renderer:
                 self.renderer.update_frep_mesh(
                     getattr(proxy, "_frep_verts", None),
-                    getattr(proxy, "_frep_idx", None)
+                    getattr(proxy, "_frep_idx",   None),
                 )
                 if field:
                     self.renderer.update_frep_corners(field)

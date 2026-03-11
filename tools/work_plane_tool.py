@@ -182,24 +182,19 @@ class WorkPlaneCreator(DMBase):
             )
             return FreeCAD.Placement(m)
 
-        # Fallback to current working plane or standard XY plane
+        # Fallback to current working plane or camera-facing plane
         try:
-            # We want to use the active working plane if one exists, otherwise default XY plane
+            # We want to use the active working plane if one exists, otherwise camera-facing
             wp = getattr(self, "working_plane", None)
             if wp:
                 n = wp.Rotation.multVec(FreeCAD.Vector(0,0,1))
                 o = wp.Base
                 rot = wp.Rotation
-            else:
-                n = FreeCAD.Vector(0, 0, 1)
-                o = FreeCAD.Vector(0, 0, 0)
-                rot = FreeCAD.Rotation(0, 0, 0, 1)
-
-            pt = self.projector.get_mouse_world_pos(event_dict, n, o, place_on_geometry=False)
-            if pt:
-                return FreeCAD.Placement(pt, rot)
+                pt = self.projector.get_mouse_world_pos(event_dict, n, o, place_on_geometry=False)
+                if pt:
+                    return FreeCAD.Placement(pt, rot)
                 
-            # If ray missed the plane entirely (parallel camera), fallback to camera-facing
+            # If no working plane or ray missed, fallback to camera-facing
             pos_2d = DMInputManager.get_instance().get_mouse_pos(event_dict)
             mouse_pt = None
             try: mouse_pt = self.view.getPoint(pos_2d[0], pos_2d[1])
