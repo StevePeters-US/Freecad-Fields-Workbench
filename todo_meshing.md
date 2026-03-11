@@ -210,7 +210,7 @@ This can also be optionally called at the end of each mesher.
 The current DC mesher has a Python `for` loop over every crossing edge (line 597-614).
 This is the main performance bottleneck for DC.
 
-### M-008: Vectorize DC `accumulate_qef` inner loop
+### [x] M-008: Vectorize DC `accumulate_qef` inner loop
 
 **File:** `core/dm_mesher.py` lines 578-618  
 **What:** Replace the per-edge Python loop at line 597 with batch gradient evaluation

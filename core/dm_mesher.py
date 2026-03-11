@@ -836,25 +836,41 @@ class DualContouringMesher(DMMesher):
             pts_edge = np.column_stack([px, py, pz])
             
             # Gradients must be evaluated at the crossing points
-            # This is the slow part (Python loop over edges)
-            for m in range(len(ei)):
-                p = pts_edge[m]
-                n_vec = field.gradient(FreeCAD.Vector(*p))
-                if n_vec.Length < 1e-12: continue
-                n_vec.normalize()
-                n = np.array([n_vec.x, n_vec.y, n_vec.z])
+            # Vectorized batch evaluation
+            grads = field.gradient_grid(pts_edge)
+            norms = np.linalg.norm(grads, axis=1, keepdims=True)
+            valid = norms.ravel() > 1e-12
+            
+            n = grads[valid] / norms[valid]
+            p = pts_edge[valid]
+            ei_v, ej_v, ek_v = ei[valid], ej[valid], ek[valid]
+            
+            if len(n) == 0: return
+
+            for di, dj, dk in offset_tuples:
+                ci, cj, ck = ei_v + di, ej_v + dj, ek_v + dk
+                in_bounds = (ci >= 0) & (ci < nx) & (cj >= 0) & (cj < ny) & (ck >= 0) & (ck < nz)
                 
-                # Accumulate for each of the 4 sharing cells
-                ii, jj, kk = ei[m], ej[m], ek[m]
-                for di, dj, dk in offset_tuples:
-                    ci, cj, ck = ii+di, jj+dj, kk+dk
-                    if 0 <= ci < nx and 0 <= cj < ny and 0 <= ck < nz:
-                        v_idx = cell_to_active[ci, cj, ck]
-                        if v_idx >= 0:
-                            ata[v_idx] += np.outer(n, n)
-                            atb[v_idx] += n * np.dot(n, p)
-                            mass_point[v_idx] += p
-                            count[v_idx] += 1
+                if not np.any(in_bounds): continue
+                
+                v_indices = cell_to_active[ci[in_bounds], cj[in_bounds], ck[in_bounds]]
+                active_mask = v_indices >= 0
+                
+                if not np.any(active_mask): continue
+                
+                final_indices = v_indices[active_mask]
+                final_n = n[in_bounds][active_mask]
+                final_p = p[in_bounds][active_mask]
+                
+                # Outer products: (K, 3, 1) * (K, 1, 3) -> (K, 3, 3)
+                ata_contrib = final_n[:, :, None] * final_n[:, None, :]
+                # Dot product contribution: n * dot(n, p)
+                atb_contrib = final_n * np.sum(final_n * final_p, axis=1, keepdims=True)
+                
+                np.add.at(ata, final_indices, ata_contrib)
+                np.add.at(atb, final_indices, atb_contrib)
+                np.add.at(mass_point, final_indices, final_p)
+                np.add.at(count, final_indices, 1)
 
         accumulate_qef(ex, 0, [(0, 0, 0), (0, -1, 0), (0, -1, -1), (0, 0, -1)])
         accumulate_qef(ey, 1, [(0, 0, 0), (-1, 0, 0), (-1, 0, -1), (0, 0, -1)])
