@@ -690,6 +690,85 @@ class SurfaceNetsMesher(DMMesher):
         all_quads = np.vstack(quad_vindices)
         mesh_timer.stop("sn_quad_assembly")
 
+        # Relaxation Loop (Constrained Laplacian Smoothing)
+        mesh_timer.start("sn_relax")
+        n_iters = 3
+        curr_verts = cell_verts.copy()
+        
+        # Build adjacency matrix using NumPy
+        # We want to find which vertices are connected to which.
+        # all_quads: (N_quads, 4)
+        # Edges: (0,1), (1,2), (2,3), (3,0)
+        edges = np.vstack([
+            all_quads[:, [0, 1]],
+            all_quads[:, [1, 2]],
+            all_quads[:, [2, 3]],
+            all_quads[:, [3, 0]]
+        ])
+        # Sort edges to handle undirected graph properly
+        edges = np.sort(edges, axis=1)
+        unique_edges = np.unique(edges, axis=0)
+        
+        # For each vertex, we need its neighbors.
+        v_idx, counts = np.unique(unique_edges.ravel(), return_counts=True)
+        max_valence = np.max(counts)
+        adj_table = np.full((M, max_valence), -1, dtype=np.int32)
+        
+        # Vectorized adjacency construction
+        v_a, v_b = unique_edges[:, 0], unique_edges[:, 1]
+        
+        # We need to assign v_b to v_a's slots and vice-versa
+        # v_ptr tracks the next available slot for each vertex
+        # This is the only part that's hard to vectorize perfectly without a loop over max_valence
+        v_ptr = np.zeros(M, dtype=np.int32)
+        
+        # 1. Create (2*E, 2) array of all directed edges [v_from, v_to]
+        all_dir_edges = np.vstack([unique_edges, unique_edges[:, [1, 0]]])
+        # 2. Sort by v_from
+        sort_idx = np.argsort(all_dir_edges[:, 0])
+        sorted_edges = all_dir_edges[sort_idx]
+        
+        # 3. Fill adj_table using vectorized indexing where possible
+        v_from = sorted_edges[:, 0]
+        v_to = sorted_edges[:, 1]
+        
+        # Find start and count of each vertex in sorted_edges
+        v_unique, v_start, v_counts = np.unique(v_from, return_index=True, return_counts=True)
+        
+        # Fill adj_table slots. This loop only runs max_valence times (e.g. 6-10)
+        for i in range(max_valence):
+            mask = i < v_counts
+            if not np.any(mask): break
+            adj_table[v_unique[mask], i] = v_to[v_start[mask] + i]
+            
+        for it in range(n_iters):
+            # 1. Laplacian Smoothing Step (Vectorized)
+            # Gather neighbor positions: (M, MaxValence, 3)
+            # Mask out -1s
+            mask = adj_table != -1 # (M, MaxValence)
+            neighbor_pos = curr_verts[adj_table] # (M, MaxValence, 3)
+            neighbor_pos[~mask] = 0
+            
+            # Sum neighbors and divide by count
+            neighbor_sum = np.sum(neighbor_pos, axis=1) # (M, 3)
+            neighbor_count = np.sum(mask, axis=1, keepdims=True) # (M, 1)
+            neighbor_count = np.maximum(neighbor_count, 1) # Avoid div by zero
+            
+            new_verts = neighbor_sum / neighbor_count
+            
+            # 2. Newton Projection Step (Vectorized)
+            sdf_vals = field.evaluate_grid(new_verts)
+            grads = field.gradient_grid(new_verts)
+            grad_sq_mags = np.sum(grads**2, axis=1)
+            
+            safe = grad_sq_mags > 1e-12
+            new_verts[safe] -= (sdf_vals[safe] / grad_sq_mags[safe])[:, None] * grads[safe]
+            
+            curr_verts = new_verts
+            
+        cell_verts = curr_verts
+        mesh_timer.stop("sn_relax")
+
         mesh_timer.start("mesh_build")
         # Triangulate and build flat arrays
         # Each quad (0,1,2,3) -> (0,1,2) and (0,2,3)

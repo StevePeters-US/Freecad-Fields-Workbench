@@ -239,7 +239,7 @@ n = grads[valid] / norms[valid]
 
 ## Tier 6 — Surface Nets Relaxation (Quality)
 
-### M-009: Add Laplacian relaxation to `SurfaceNetsMesher`
+### [x] M-009: Add Laplacian relaxation to `SurfaceNetsMesher`
 
 **File:** `core/dm_mesher.py` — inside `SurfaceNetsMesher.mesh()`, after line 386  
 **What:** After computing initial cell vertices (average of crossings), run 2-3 iterations
