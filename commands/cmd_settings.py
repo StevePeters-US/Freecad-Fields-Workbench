@@ -35,7 +35,7 @@ class _SettingsDialog(QtGui.QDialog):
         current_lw = get_line_width()
         current_ps = get_point_size()
         from core.dm_object import (get_picking_radius, get_meshing_type, get_max_bounds, 
-                                    get_meshing_cell_size, get_curvature_threshold)
+                                    get_meshing_cell_size, get_curvature_threshold, get_decimate_enabled)
         current_pr = get_picking_radius()
         current_meshing = get_meshing_type()
         current_res = get_meshing_cell_size()
@@ -63,6 +63,12 @@ class _SettingsDialog(QtGui.QDialog):
         self._perf_check.setChecked(get_perf_profiler_enabled())
         self._perf_check.setToolTip("Enable detailed mesh generation performance logging")
         layout.addRow("Enable Performance Profiler:", self._perf_check)
+
+        # Decimation checkbox
+        self._decimate_check = QtGui.QCheckBox()
+        self._decimate_check.setChecked(get_decimate_enabled())
+        self._decimate_check.setToolTip("Remove redundant triangles from flat faces")
+        layout.addRow("Enable Decimation:", self._decimate_check)
 
         # Line Width spinbox
         self._lw_spin = QtGui.QDoubleSpinBox()
@@ -129,7 +135,7 @@ class _SettingsDialog(QtGui.QDialog):
         from core.dm_object import (set_show_wireframe, set_line_width, set_point_size, 
                                     set_picking_radius, set_meshing_type, set_meshing_cell_size,
                                     set_max_bounds, set_perf_profiler_enabled, set_curvature_threshold,
-                                    refresh_all_dm_objects)
+                                    set_decimate_enabled, refresh_all_dm_objects)
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()
@@ -147,6 +153,7 @@ class _SettingsDialog(QtGui.QDialog):
         set_meshing_cell_size(self._res_spin.value())
         set_max_bounds(mb)
         set_curvature_threshold(curv)
+        set_decimate_enabled(self._decimate_check.isChecked())
         set_perf_profiler_enabled(self._perf_check.isChecked())
         
         from core.dm_logger import set_enable_crash_log

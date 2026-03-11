@@ -104,6 +104,13 @@ def get_curvature_threshold():
 def set_curvature_threshold(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetFloat("CurvatureThreshold", float(val))
 
+def get_decimate_enabled():
+    """Return whether flat-triangle decimation is enabled."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("DecimateEnabled", True)
+
+def set_decimate_enabled(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetBool("DecimateEnabled", bool(val))
+
 
 
 
@@ -208,6 +215,9 @@ class DMObjectProxy:
                     "Dual Contouring"
                 ]
                 obj.MeshingType = get_meshing_type()
+            if not hasattr(obj, "DecimateEnabled"):
+                obj.addProperty("App::PropertyBool", "DecimateEnabled", "FRep", "Enable flat-triangle decimation")
+                obj.DecimateEnabled = get_decimate_enabled()
 
     def build_shape(self, fp):
         """Return a Part.Shape based on the object's properties."""
@@ -580,6 +590,8 @@ def refresh_all_dm_objects():
                 obj.ShowWireframe = bool(show_wire)
             if hasattr(obj, "MeshingType"):
                 obj.MeshingType = int(m_type)
+            if hasattr(obj, "DecimateEnabled"):
+                obj.DecimateEnabled = bool(get_decimate_enabled())
                 
             proxy = getattr(obj.ViewObject, "Proxy", None)
             if proxy and hasattr(proxy, "on_prefs_changed"):

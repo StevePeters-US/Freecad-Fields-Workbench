@@ -6,7 +6,7 @@ import numpy as np
 from core import dm_logger
 from core.frep.frep_field import FRepField
 from core.frep.marching_cubes.mc_tables import edgeTable, triTable
-from core.dm_object import get_meshing_type
+from core.dm_object import get_meshing_type, get_decimate_enabled
 
 # Pre-convert lookup tables to numpy arrays for fast indexing
 _EDGE_TABLE = np.array(edgeTable, dtype=np.int32)
@@ -31,6 +31,7 @@ class MeshTimer:
     _STAGES = [
         "field_eval", "cube_index", "active_filter",
         "corner_extract", "edge_interp", "tri_extract", "mesh_build",
+        "decimate",
         "mb_list_conv", "mb_mesh_obj", "mb_make_shape", "mb_make_solid"
     ]
     # Sub-stages to indent in summary output
@@ -235,6 +236,12 @@ class MarchingCubesMesher(DMMesher):
         flat_idx = np.hstack([tri_idx, sentinel]).ravel()
 
         mesh_timer.stop("mesh_build")
+
+        if get_decimate_enabled():
+            mesh_timer.start("decimate")
+            flat_verts, flat_idx = decimate_flat_tris(flat_verts, flat_idx)
+            mesh_timer.stop("decimate")
+
         return flat_verts, flat_idx
 
 
@@ -458,6 +465,11 @@ class AdaptiveMCMesher(DMMesher):
         flat_idx = np.hstack([tri_idx, sentinel]).ravel()
         mesh_timer.stop("mesh_build")
         
+        if get_decimate_enabled():
+            mesh_timer.start("decimate")
+            flat_verts, flat_idx = decimate_flat_tris(flat_verts, flat_idx)
+            mesh_timer.stop("decimate")
+
         return flat_verts, flat_idx
 
 
@@ -688,6 +700,11 @@ class SurfaceNetsMesher(DMMesher):
         sentinel = np.full((n_tris, 1), -1, dtype=np.int32)
         flat_idx = np.hstack([tri_idx, sentinel]).ravel()
         mesh_timer.stop("mesh_build")
+
+        if get_decimate_enabled():
+            mesh_timer.start("decimate")
+            flat_verts, flat_idx = decimate_flat_tris(flat_verts, flat_idx)
+            mesh_timer.stop("decimate")
 
         return flat_verts, flat_idx
 
@@ -941,7 +958,13 @@ class DualContouringMesher(DMMesher):
         flat_idx = np.hstack([tri_idx, sentinel]).ravel()
         mesh_timer.stop("mesh_build")
 
+        if get_decimate_enabled():
+            mesh_timer.start("decimate")
+            flat_verts, flat_idx = decimate_flat_tris(flat_verts, flat_idx)
+            mesh_timer.stop("decimate")
+
         return flat_verts, flat_idx
+
 
 def decimate_flat_tris(verts, indices, angle_tol=5.0):
     """
