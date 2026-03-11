@@ -86,19 +86,6 @@ frag.parameter.set1Value(0, u)
 | `vec3` | `SoUniformShaderParameter3f` | `u.value.setValue(coin.SbVec3f(x, y, z))` |
 | `vec4` | `SoUniformShaderParameter4f` | `u.value.setValue(coin.SbVec4f(x, y, z, w))` |
 | `int` | `SoUniformShaderParameter1i` | `u.value.setValue(int_val)` |
-| `mat4` | `SoUniformShaderParameterMatrix` | `u.value.setValue(coin.SbMatrix(*flat_16))` |
-
-**`SbMatrix` constructor** takes 16 individual float arguments in row-major order:
-```python
-m = coin.SbMatrix(
-    a11, a12, a13, a14,
-    a21, a22, a23, a24,
-    a31, a32, a33, a34,
-    a41, a42, a43, a44,
-)
-# Or from a 16-tuple:
-m = coin.SbMatrix(*flat_16_tuple)
-```
 
 ### Updating Uniform Values Without Recompiling
 
@@ -106,16 +93,74 @@ Uniform *values* can be updated by mutating the existing node — no shader reco
 
 ```python
 # At setup time: store the node reference
-self._u_radius = coin.SoUniformShaderParameter1f()
-self._u_radius.name.setValue("u_sphere_root_radius")
-self._u_radius.value.setValue(5.0)
-frag.parameter.set1Value(0, self._u_radius)
+self._u_bbox_min = coin.SoUniformShaderParameter3f()
+self._u_bbox_min.name.setValue("u_bbox_min")
+self._u_bbox_min.value.setValue(coin.SbVec3f(0, 0, 0))
+frag.parameter.set1Value(1, self._u_bbox_min)
 
-# Later, when the radius changes:
-self._u_radius.value.setValue(7.0)   # Coin3D marks it dirty; updated next frame
+# Later, when the bbox changes:
+self._u_bbox_min.value.setValue(coin.SbVec3f(x, y, z))  # dirty-marked; updated next frame
 ```
 
-Keep a `dict[str, SoUniformShaderParameter*]` to look up nodes by name for live updates.
+---
+
+## 3D Volume Texture (SoTexture3)
+
+`SoTexture3` uploads a 3D texture to the GPU. Used by `DMRayMarchRenderer` to hold the
+baked SDF volume.
+
+```python
+tex = coin.SoTexture3()
+
+# Wrapping — clamp so out-of-bounds UVW returns edge values (not wrapped SDF)
+tex.wrapR.setValue(coin.SoTexture3.CLAMP_TO_EDGE)
+tex.wrapS.setValue(coin.SoTexture3.CLAMP_TO_EDGE)
+tex.wrapT.setValue(coin.SoTexture3.CLAMP_TO_EDGE)
+
+# Filtering — NEAREST is required when using packed float bytes.
+# Linear interpolation of IEEE 754 packed bytes produces garbage values.
+tex.minFilter.setValue(coin.SoTexture3.NEAREST)
+tex.magFilter.setValue(coin.SoTexture3.NEAREST)
+
+# Upload image data: (SbVec3s size, int num_channels, bytes data)
+size = coin.SbVec3s(resolution, resolution, resolution)
+tex.image.setValue(size, 4, rgba_bytes)   # nc=4 → GL_RGBA8 internally
+```
+
+**Placement in scene graph:** `SoTexture3` must appear *before* the proxy geometry nodes.
+Coin3D binds it to texture unit 0 automatically. The GLSL sampler uniform must be set to `0`:
+
+```python
+u_vol = coin.SoUniformShaderParameter1i()
+u_vol.name.setValue("u_sdf_vol")
+u_vol.value.setValue(0)           # texture unit 0
+frag.parameter.set1Value(0, u_vol)
+```
+
+**Updating the texture** (when the SDF changes — no shader recompile needed):
+
+```python
+tex.image.setValue(coin.SbVec3s(res, res, res), 4, new_rgba_bytes)
+```
+
+**Packed float encoding** (Python → GLSL round-trip):
+
+```python
+# Python: pack float32 values as RGBA bytes (little-endian: R=LSB, A=MSB)
+rgba = sdf_vals.astype(np.float32).view(np.uint8).reshape(-1, 4)
+```
+
+```glsl
+// GLSL 1.30+: unpack RGBA bytes back to float32
+float unpack_float(vec4 c) {
+    uvec4 b    = uvec4(round(c * 255.0));
+    uint  bits = b.r | (b.g << 8u) | (b.b << 16u) | (b.a << 24u);
+    return uintBitsToFloat(bits);
+}
+```
+
+`uintBitsToFloat` requires `#version 130`. Use `texture(sampler3D, uvw)` (not `texture3D`)
+for GLSL 1.30+.
 
 ---
 
