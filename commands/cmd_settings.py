@@ -70,6 +70,16 @@ class _SettingsDialog(QtGui.QDialog):
         self._decimate_check.setToolTip("Remove redundant triangles from flat faces")
         layout.addRow("Enable Decimation:", self._decimate_check)
 
+        # Point Cloud Renderer
+        from core.dm_object import get_use_point_cloud
+        self._point_cloud_check = QtGui.QCheckBox()
+        self._point_cloud_check.setChecked(get_use_point_cloud())
+        self._point_cloud_check.setToolTip(
+            "Render F-Rep objects as a shaded point cloud instead of a triangle mesh.\n"
+            "Faster to update during interactive editing. Takes effect after document reload."
+        )
+        layout.addRow("Point Cloud Preview:", self._point_cloud_check)
+
         # Line Width spinbox
         self._lw_spin = QtGui.QDoubleSpinBox()
         self._lw_spin.setRange(0.5, 20.0)
@@ -132,10 +142,10 @@ class _SettingsDialog(QtGui.QDialog):
         layout.addRow(btn_box)
 
     def _on_accept(self):
-        from core.dm_object import (set_show_wireframe, set_line_width, set_point_size, 
+        from core.dm_object import (set_show_wireframe, set_line_width, set_point_size,
                                     set_picking_radius, set_meshing_type, set_meshing_cell_size,
                                     set_max_bounds, set_perf_profiler_enabled, set_curvature_threshold,
-                                    set_decimate_enabled, refresh_all_dm_objects)
+                                    set_decimate_enabled, set_use_point_cloud, refresh_all_dm_objects)
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()
@@ -154,6 +164,7 @@ class _SettingsDialog(QtGui.QDialog):
         set_max_bounds(mb)
         set_curvature_threshold(curv)
         set_decimate_enabled(self._decimate_check.isChecked())
+        set_use_point_cloud(self._point_cloud_check.isChecked())
         set_perf_profiler_enabled(self._perf_check.isChecked())
         
         from core.dm_logger import set_enable_crash_log

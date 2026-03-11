@@ -111,6 +111,13 @@ def get_decimate_enabled():
 def set_decimate_enabled(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetBool("DecimateEnabled", bool(val))
 
+def get_use_point_cloud() -> bool:
+    """Return True to render F-Rep objects as a point cloud instead of a triangle mesh."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("UsePointCloud", False)
+
+def set_use_point_cloud(val: bool):
+    FreeCAD.ParamGet(_PARAM_PATH).SetBool("UsePointCloud", bool(val))
+
 def get_deduplicate_enabled():
     """Return whether vertex deduplication is enabled."""
     return FreeCAD.ParamGet(_PARAM_PATH).GetBool("DeduplicateEnabled", True)
@@ -412,7 +419,11 @@ class DMViewProvider:
                 self.renderer.rebuild_control_cage(self.Object)
             # Setup direct mesh rendering for F-Rep objects
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "frep":
-                self.renderer.setup_frep_mesh_nodes()
+                if get_use_point_cloud():
+                    from core.dm_point_cloud_renderer import DMPointCloudRenderer
+                    self.point_cloud_renderer = DMPointCloudRenderer(vobj)
+                else:
+                    self.renderer.setup_frep_mesh_nodes()
             # Setup point marker for point objects
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "point":
                 self.renderer.setup_point_marker_nodes()
@@ -441,12 +452,16 @@ class DMViewProvider:
         if prop == "Shape" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":
             # Called after execute() sets fp.Shape — safe to update Coin3D here
             proxy = getattr(fp, "Proxy", None)
-            if proxy and self.renderer:
+            field = getattr(proxy, "FRepField", None) if proxy else None
+
+            pc = getattr(self, "point_cloud_renderer", None)
+            if pc is not None and field is not None:
+                pc.update(field, get_meshing_cell_size())
+            elif proxy and self.renderer:
                 self.renderer.update_frep_mesh(
                     getattr(proxy, "_frep_verts", None),
                     getattr(proxy, "_frep_idx", None)
                 )
-                field = getattr(proxy, "FRepField", None)
                 if field:
                     self.renderer.update_frep_corners(field)
         elif prop == "DisplayMode" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":

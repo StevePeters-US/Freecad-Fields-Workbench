@@ -1,4 +1,4 @@
-# Direct Modeling Workbench — GPU Ray Marching Task List
+# Direct Modeling Workbench — Ray March Renderer Task List
 
 > Tasks are ordered by dependency. Each task is atomic and self-contained.
 > Intended audience: junior developer or AI model (Gemini Flash).
@@ -8,524 +8,434 @@
 
 ## Background
 
-The current F-Rep pipeline tessellates the SDF on CPU (Marching Cubes / Surface Nets /
-Dual Contouring) and renders triangles via Coin3D's fixed-function pipeline. This requires
-re-meshing on every parameter change and cannot produce smooth silhouettes.
-
-The goal is a **GPU ray marching renderer** that works for **any** `FRepField` regardless
-of its internal structure. The SDF is not compiled into the shader — instead it is baked
-to a 3D volume texture via the universal `evaluate_grid()` interface, and a fixed, never-
-changing GLSL shader sphere-traces against that texture.
+The renderer must work with any `FRepField` using only its public interface:
+`evaluate_grid()`, `gradient_grid()`, `bounding_box()`. No SDF-class-specific code
+is permitted anywhere in the rendering pipeline.
 
 ### Architecture
 
 ```
-FRepField.evaluate_grid()           ← works for any SDF
-    ↓
-bake_sdf_volume()                   ← samples a 3D grid (resolution³ points)
-    ↓
-pack_sdf_rgba()                     ← encodes each float32 as 4 RGBA bytes (IEEE 754 LE)
-    ↓
-SoTexture3.image                    ← uploaded as RGBA8 texture, GL_NEAREST filtering
-    ↓
-Fixed GLSL fragment shader          ← decodes float, sphere-traces, Phong shades
+field.evaluate_grid()
+      │
+      ▼
+  sdf_baker.py                       ← CPU: sample SDF on uniform grid,
+  bake_sdf_to_atlas(field, cell_size)    clamp, normalise to uint8,
+      │                                  tile z-slices into 2D atlas
+      ▼
+  SoTexture2 (image field)           ← GPU texture upload (Coin3D)
+      │
+      ▼
+  GLSL fragment shader               ← per-fragment ray march:
+  sample_sdf(p)                          manual 8-tap trilinear from atlas,
+  + sphere trace loop                    discard on miss, Phong shading,
+  + Phong + gl_FragDepth                 correct depth
 ```
 
-The shader is **identical for every SDF** — it has no knowledge of spheres, boxes, or
-any other primitive. Only the texture contents and two AABB uniforms change when the field
-changes.
+The fragment shader is a **compile-once fixed program**. The only things that change
+per-update are: the texture image data, the AABB uniforms, and the atlas dimension uniforms.
+No shader recompile ever.
 
-### Packed Float Encoding
+### Atlas Layout
 
-SDF values are packed as raw IEEE 754 `float32` bytes into an RGBA8 texture
-(one voxel = 4 bytes). On x86/x64 (little-endian):
+The 3D grid has `(nx+1) × (ny+1) × (nz+1)` samples. The `(nz+1)` z-slices (each
+`(nx+1) × (ny+1)` pixels) are tiled into a 2D texture:
 
-```python
-# Python (pack):
-rgba = sdf_vals.astype(np.float32).view(np.uint8).reshape(-1, 4)
-# byte layout per voxel: R=byte0 (LSB), G=byte1, B=byte2, A=byte3 (MSB)
 ```
+atz = ceil(sqrt(nz + 1))              # tiles across
+aty = ceil((nz + 1) / atz)           # tiles down
+total_w = atz * (nx + 1)  pixels
+total_h = aty * (ny + 1)  pixels
+```
+
+Slice `iz` occupies column `c = iz % atz`, row `r = iz // atz`.
+Texel `(ix, iy)` in slice `iz` sits at atlas pixel `(c*(nx+1)+ix, r*(ny+1)+iy)`.
+
+### Trilinear Sampling in GLSL
+
+Sample at exact texel centres (no hardware bilinear bleed between tiles):
 
 ```glsl
-// GLSL (unpack, requires #version 130 for uintBitsToFloat):
-float unpack_float(vec4 c) {
-    uvec4 b    = uvec4(round(c * 255.0));
-    uint  bits = b.r | (b.g << 8u) | (b.b << 16u) | (b.a << 24u);
-    return uintBitsToFloat(bits);
+float sample_texel(float ix, float iy, float iz) {
+    float c = floor(mod(iz, float(u_atz)));
+    float r = floor(iz / float(u_atz));
+    float u = (c * (float(u_nx) + 1.0) + ix + 0.5) / u_atlas_w;
+    float v = (r * (float(u_ny) + 1.0) + iy + 0.5) / u_atlas_h;
+    return texture2D(u_sdf_tex, vec2(u, v)).r;   // GL_LUMINANCE8 → [0,1]
+}
+
+float sample_sdf(vec3 p) {
+    if (any(lessThan(p, u_bbox_min)) || any(greaterThan(p, u_bbox_max)))
+        return u_max_dist;
+
+    vec3 uvw = (p - u_bbox_min) / (u_bbox_max - u_bbox_min);
+    float gx = clamp(uvw.x * float(u_nx), 0.0, float(u_nx));
+    float gy = clamp(uvw.y * float(u_ny), 0.0, float(u_ny));
+    float gz = clamp(uvw.z * float(u_nz), 0.0, float(u_nz));
+
+    float x0 = floor(gx); float x1 = min(x0+1.0, float(u_nx));
+    float y0 = floor(gy); float y1 = min(y0+1.0, float(u_ny));
+    float z0 = floor(gz); float z1 = min(z0+1.0, float(u_nz));
+    float fx = gx-x0;  float fy = gy-y0;  float fz = gz-z0;
+
+    float s = mix(
+        mix(mix(sample_texel(x0,y0,z0), sample_texel(x1,y0,z0), fx),
+            mix(sample_texel(x0,y1,z0), sample_texel(x1,y1,z0), fx), fy),
+        mix(mix(sample_texel(x0,y0,z1), sample_texel(x1,y0,z1), fx),
+            mix(sample_texel(x0,y1,z1), sample_texel(x1,y1,z1), fx), fy),
+        fz);
+    return (s * 2.0 - 1.0) * u_max_dist;
 }
 ```
 
-The texture must use `GL_NEAREST` filtering — linear interpolation of packed float bytes
-produces garbage. This is set via `SoTexture3.minFilter` / `magFilter`.
+Uses only GLSL 1.10 constructs (`mod`, `floor`, `mix`, `texture2D`) — no integer
+bitwise ops or `#version 130` features required.
 
-### Coordinate Mapping
+### GLSL Uniforms
 
-The baked grid covers the field's AABB (plus a small margin). The shader maps a world-space
-point `p` to texture UVW coordinates:
-
-```glsl
-vec3 uvw = (p - u_bbox_min) / (u_bbox_max - u_bbox_min);
-float d  = unpack_float(texture(u_sdf_vol, uvw));
-```
-
-`u_bbox_min` and `u_bbox_max` are vec3 uniforms; they match the exact coverage of the baked
-grid and the proxy box geometry.
+| Name | Type | Coin3D class | Purpose |
+|------|------|-------------|---------|
+| `u_sdf_tex` | `sampler2D` | `SoUniformShaderParameter1i` = 0 | SDF atlas (texture unit 0) |
+| `u_nx`, `u_ny`, `u_nz` | `int` | `SoUniformShaderParameter1i` | grid sample counts |
+| `u_atz` | `int` | `SoUniformShaderParameter1i` | atlas tile columns |
+| `u_atlas_w`, `u_atlas_h` | `float` | `SoUniformShaderParameter1f` | atlas pixel dimensions |
+| `u_bbox_min`, `u_bbox_max` | `vec3` | `SoUniformShaderParameter3f` | padded grid AABB |
+| `u_max_dist` | `float` | `SoUniformShaderParameter1f` | SDF clamp range (= 4 × cell_size) |
 
 ### Key APIs
 
 | Symbol | Location | Purpose |
 |--------|----------|---------|
-| `FRepField.evaluate_grid()` | `core/frep/frep_field.py:30` | Batch SDF eval `(N,3) → (N,)` — works for any field |
-| `FRepField.bounding_box()` | `core/frep/frep_field.py:20` | AABB `→ (Vector, Vector)` |
-| `DMViewProvider.attach()` | `core/dm_object.py:400` | Hook to instantiate `DMRayMarchRenderer` |
-| `DMViewProvider.updateData()` | `core/dm_object.py:435` | Hook to call `renderer.update(field)` |
-| `get_*` preference helpers | `core/dm_object.py:29–68` | Pattern for new preferences |
-| `proxy.FRepField` | set in `DMObjectProxy.execute()` | The live field to render |
+| `field.evaluate_grid(pts)` | `core/frep/frep_field.py:30` | Only SDF API used by renderer |
+| `field.bounding_box()` | `core/frep/frep_field.py:20` | Returns `(Vector, Vector)` |
+| grid/pad setup pattern | `core/dm_mesher.py:117–143` | Copy this exactly for grid setup |
+| `DMViewProvider.attach()` | `core/dm_object.py:400` | Hook for new renderer |
+| `DMViewProvider.updateData()` | `core/dm_object.py:435` | Hook for update calls |
+| `proxy.FRepField` | set before `execute()` returns | The live field |
+| `get_meshing_cell_size()` | `core/dm_object.py:63` | Cell size preference (mm) |
 
 ---
 
-## Tier 1 — Volume Baking Utilities
+## Tier 1 — SDF Baker
 
-Create the new file `core/dm_ray_march_renderer.py`. All tasks in this file build toward
-the `DMRayMarchRenderer` class. Start with the module-level utility functions.
+### R-001: Create `core/frep/sdf_baker.py`
 
-### R-001: Add `pack_sdf_rgba()` and `bake_sdf_volume()` to new file
+**File:** `core/frep/sdf_baker.py` — new file
 
-**File:** `core/dm_ray_march_renderer.py` — new file; add these as module-level functions
+**What:** Evaluate the SDF on a uniform grid, clamp + normalise to uint8, tile z-slices
+into a 2D luminance atlas. Returns all the metadata the renderer needs to set up its
+uniforms and update the texture.
 
-**What:** `pack_sdf_rgba` encodes float32 SDF values as raw IEEE 754 bytes into an RGBA
-uint8 array. `bake_sdf_volume` evaluates the field on a uniform 3D grid and returns the
-packed RGBA volume plus the grid's AABB as two `(x, y, z)` tuples.
-
-**Implementation:**
+Uses the identical `_pad` / grid setup from `core/dm_mesher.py:117–143` — copy it verbatim.
 
 ```python
 """
-core/dm_ray_march_renderer.py
+core/frep/sdf_baker.py
 
-GPU ray-marching renderer for F-Rep SDF objects.
-Evaluates any FRepField into a 3D RGBA texture via pack_sdf_rgba / bake_sdf_volume,
-then sphere-traces it in a fixed GLSL fragment shader.
+Bakes any FRepField to a 2D luminance atlas for GPU ray marching.
+Only uses field.evaluate_grid() and field.bounding_box() — no primitives.
 """
+import math
 import numpy as np
 
-try:
-    from pivy import coin
-except ImportError:
-    coin = None
 
-
-def pack_sdf_rgba(sdf_vals: np.ndarray) -> np.ndarray:
+def bake_sdf_to_atlas(field, cell_size: float) -> dict:
     """
-    Encode float32 SDF values as RGBA uint8 using raw IEEE 754 bytes.
-
-    On little-endian x86/x64: R=byte0 (LSB), G=byte1, B=byte2, A=byte3 (MSB).
-    The texture must be sampled with GL_NEAREST — linear interpolation of packed
-    bytes produces garbage.
+    Sample the SDF on a uniform grid and pack it as a 2D uint8 atlas.
 
     Args:
-        sdf_vals: (N,) float32 array of SDF values.
-    Returns:
-        (N, 4) uint8 array suitable for SoTexture3.image.
-    """
-    return sdf_vals.astype(np.float32).view(np.uint8).reshape(-1, 4)
+        field:     Any FRepField subclass.
+        cell_size: Grid spacing in mm. Controls resolution and clamp range.
 
-
-def bake_sdf_volume(field, resolution: int = 64):
+    Returns dict with keys:
+        atlas_bytes : bytes        — uint8 luminance pixels, row-major
+        atlas_w     : int          — atlas pixel width  (= atz * (nx+1))
+        atlas_h     : int          — atlas pixel height (= aty * (ny+1))
+        nx, ny, nz  : int          — grid cell counts
+        atz         : int          — atlas tile columns
+        bbox_min    : FreeCAD.Vector
+        bbox_max    : FreeCAD.Vector
+        max_dist    : float        — SDF clamp range in mm (= 4 * cell_size)
     """
-    Evaluate field on a resolution³ grid covering its bounding box.
-
-    Args:
-        field:      Any FRepField subclass.
-        resolution: Number of voxels along each axis. Default 64.
-    Returns:
-        rgba   (np.ndarray): (resolution, resolution, resolution, 4) uint8 packed SDF.
-        bbox   (tuple):      ((x0,y0,z0), (x1,y1,z1)) world-space grid coverage.
-    """
-    import FreeCAD
     mn, mx = field.bounding_box()
 
-    # Add a small margin so the proxy box edges don't clip surface voxels
-    dims = [mx.x - mn.x, mx.y - mn.y, mx.z - mn.z]
-    margin = max(dims) * 0.02 if any(d > 0 for d in dims) else 1.0
-    x0, y0, z0 = mn.x - margin, mn.y - margin, mn.z - margin
-    x1, y1, z1 = mx.x + margin, mx.y + margin, mx.z + margin
+    # Identical to dm_mesher.py:117–143
+    def _pad(lo, hi):
+        if hi - lo < 1e-4:
+            mid = (lo + hi) / 2
+            return mid - 1.0, mid + 1.0
+        return lo - cell_size, hi + cell_size
 
-    x = np.linspace(x0, x1, resolution)
-    y = np.linspace(y0, y1, resolution)
-    z = np.linspace(z0, z1, resolution)
-    X, Y, Z = np.meshgrid(x, y, z, indexing='ij')
+    x0, x1 = _pad(mn.x, mx.x)
+    y0, y1 = _pad(mn.y, mx.y)
+    z0, z1 = _pad(mn.z, mx.z)
+
+    nx = max(1, int(math.ceil((x1 - x0) / cell_size)))
+    ny = max(1, int(math.ceil((y1 - y0) / cell_size)))
+    nz = max(1, int(math.ceil((z1 - z0) / cell_size)))
+
+    xs = np.linspace(x0, x0 + nx * cell_size, nx + 1)
+    ys = np.linspace(y0, y0 + ny * cell_size, ny + 1)
+    zs = np.linspace(z0, z0 + nz * cell_size, nz + 1)
+
+    X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
     pts = np.column_stack([X.ravel(), Y.ravel(), Z.ravel()]).astype(np.float32)
+    vals = field.evaluate_grid(pts).reshape(nx + 1, ny + 1, nz + 1)  # (nx+1,ny+1,nz+1)
 
-    sdf_vals = field.evaluate_grid(pts)
-    rgba = pack_sdf_rgba(sdf_vals).reshape(resolution, resolution, resolution, 4)
+    # Clamp and normalise to [0, 255]
+    max_dist = cell_size * 4.0
+    clamped  = np.clip(vals, -max_dist, max_dist)
+    norm     = ((clamped / max_dist + 1.0) * 0.5 * 255.0).astype(np.uint8)
 
-    return rgba, ((x0, y0, z0), (x1, y1, z1))
+    # Tile z-slices into 2D atlas
+    nslices = nz + 1
+    atz = max(1, int(math.ceil(math.sqrt(nslices))))
+    aty = int(math.ceil(nslices / atz))
+
+    atlas_w = atz * (nx + 1)
+    atlas_h = aty * (ny + 1)
+    atlas   = np.zeros((atlas_h, atlas_w), dtype=np.uint8)
+
+    for iz in range(nslices):
+        col = iz % atz
+        row = iz // atz
+        x_off = col * (nx + 1)
+        y_off = row * (ny + 1)
+        # norm is (nx+1, ny+1, nz+1), indexing='ij' → axis 0=x, 1=y, 2=z
+        # Atlas rows = y axis, cols = x axis
+        slice_xy = norm[:, :, iz]          # shape (nx+1, ny+1)
+        atlas[y_off:y_off + ny + 1, x_off:x_off + nx + 1] = slice_xy.T  # transpose: row=y, col=x
+
+    import FreeCAD
+    return {
+        "atlas_bytes": atlas.tobytes(),
+        "atlas_w":     atlas_w,
+        "atlas_h":     atlas_h,
+        "nx": nx, "ny": ny, "nz": nz,
+        "atz":         atz,
+        "bbox_min":    FreeCAD.Vector(x0, y0, z0),
+        "bbox_max":    FreeCAD.Vector(x0 + nx * cell_size,
+                                      y0 + ny * cell_size,
+                                      z0 + nz * cell_size),
+        "max_dist":    max_dist,
+    }
 ```
 
 ---
 
-## Tier 2 — GLSL Shader Strings
+## Tier 2 — Ray March Renderer
 
-### R-002: Add `_VERT_SRC` and `_FRAG_SRC` constants to `core/dm_ray_march_renderer.py`
+### R-002: Create `core/dm_ray_march_renderer.py`
 
-**File:** `core/dm_ray_march_renderer.py` — append after the `bake_sdf_volume` function
+**File:** `core/dm_ray_march_renderer.py` — new file
 
-**What:** Two module-level string constants holding the vertex and fragment shader source.
-These never change regardless of which SDF is rendered.
+**What:** Coin3D scene graph owner. Shader is compiled once in `_setup_nodes()` and never
+recompiled. `update(field, cell_size)` bakes the SDF, uploads the new texture bytes,
+and pushes updated uniform values.
 
-**`_VERT_SRC`** — passes world-space vertex position to the fragment shader:
-
-```python
-_VERT_SRC = """
-#version 130
-out vec3 vWorldPos;
-void main() {
-    vWorldPos   = gl_Vertex.xyz;   // proxy box vertices are set in world/SDF space
-    gl_Position = ftransform();
-}
-"""
-```
-
-**`_FRAG_SRC`** — decodes packed float from 3D texture, AABB-clips the ray, sphere-traces,
-computes normal via finite differences, Phong shades, writes depth:
-
-```python
-_FRAG_SRC = """
-#version 130
-in  vec3 vWorldPos;
-
-uniform sampler3D u_sdf_vol;   // packed float32 RGBA volume texture
-uniform vec3      u_bbox_min;  // world-space lower corner of texture coverage
-uniform vec3      u_bbox_max;  // world-space upper corner of texture coverage
-
-// Decode IEEE 754 float32 packed as RGBA8 bytes (little-endian: R=LSB, A=MSB)
-float unpack_float(vec4 c) {
-    uvec4 b    = uvec4(round(c * 255.0));
-    uint  bits = b.r | (b.g << 8u) | (b.b << 16u) | (b.a << 24u);
-    return uintBitsToFloat(bits);
-}
-
-float sdf(vec3 p) {
-    vec3 uvw = (p - u_bbox_min) / (u_bbox_max - u_bbox_min);
-    uvw = clamp(uvw, 0.001, 0.999);
-    return unpack_float(texture(u_sdf_vol, uvw));
-}
-
-// AABB slab test — returns (tmin, tmax); hit when tmin < tmax
-vec2 aabb_hit(vec3 ro, vec3 rd) {
-    vec3 inv = 1.0 / rd;
-    vec3 t0  = (u_bbox_min - ro) * inv;
-    vec3 t1  = (u_bbox_max - ro) * inv;
-    vec3 mn  = min(t0, t1);
-    vec3 mx  = max(t0, t1);
-    return vec2(max(max(mn.x, mn.y), mn.z),
-                min(min(mx.x, mx.y), mx.z));
-}
-
-const int   MAX_STEPS = 128;
-const float EPSILON   = 0.001;
-
-float march(vec3 ro, vec3 rd, float t0, float t1) {
-    float t = t0;
-    for (int i = 0; i < MAX_STEPS; i++) {
-        float d = sdf(ro + t * rd);
-        if (d < EPSILON) return t;
-        t += abs(d);            // abs() guards against tiny negative overshoots
-        if (t > t1) break;
-    }
-    return -1.0;
-}
-
-vec3 normal(vec3 p) {
-    float h = (u_bbox_max.x - u_bbox_min.x) / 64.0;  // ~1 voxel width
-    return normalize(vec3(
-        sdf(p + vec3(h,0,0)) - sdf(p - vec3(h,0,0)),
-        sdf(p + vec3(0,h,0)) - sdf(p - vec3(0,h,0)),
-        sdf(p + vec3(0,0,h)) - sdf(p - vec3(0,0,h))
-    ));
-}
-
-void main() {
-    // Camera world position (model matrix ≈ identity — vertices in world space)
-    vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0, 0.0, 0.0, 1.0)).xyz;
-
-    // Ray — perspective vs orthographic
-    bool is_ortho = (gl_ProjectionMatrix[3][3] > 0.5);
-    vec3 ro, rd;
-    if (is_ortho) {
-        rd = normalize((gl_ModelViewMatrixInverse * vec4(0.0, 0.0, -1.0, 0.0)).xyz);
-        ro = vWorldPos;
-    } else {
-        ro = cam;
-        rd = normalize(vWorldPos - cam);
-    }
-
-    // Clip to volume
-    vec2 ivl = aabb_hit(ro, rd);
-    if (ivl.x >= ivl.y) discard;
-    float t0 = max(ivl.x, 0.0);
-
-    // Trace
-    float t = march(ro, rd, t0, ivl.y);
-    if (t < 0.0) discard;
-
-    vec3 hit = ro + t * rd;
-    vec3 N   = normal(hit);
-
-    // Phong — matches existing SoMaterial: diffuse=(1,0.5,0), spec=(0.3,0.3,0.3), shin=38
-    vec3  Kd = vec3(1.0, 0.5, 0.0);
-    vec3  Ks = vec3(0.3, 0.3, 0.3);
-    float sh = 38.0;
-
-    vec3 L;
-    if (gl_LightSource[0].position.w < 0.5)
-        L = normalize((gl_ModelViewMatrixInverse * vec4(gl_LightSource[0].position.xyz, 0.0)).xyz);
-    else
-        L = normalize((gl_ModelViewMatrixInverse * gl_LightSource[0].position).xyz - hit);
-
-    vec3  V    = normalize(cam - hit);
-    vec3  R    = reflect(-L, N);
-    float diff = max(dot(N, L), 0.0);
-    float spec = pow(max(dot(R, V), 0.0), sh);
-
-    gl_FragColor = vec4(0.2 * Kd + diff * Kd + spec * Ks, 1.0);
-
-    // Write surface depth for correct occlusion with other scene objects
-    vec4 clip = gl_ProjectionMatrix * gl_ModelViewMatrix * vec4(hit, 1.0);
-    gl_FragDepth = (clip.z / clip.w + 1.0) * 0.5;
-}
-"""
-```
-
----
-
-## Tier 3 — Coin3D Renderer
-
-### R-003: Add `DMRayMarchRenderer.__init__` and `setup_nodes()` to `core/dm_ray_march_renderer.py`
-
-**File:** `core/dm_ray_march_renderer.py` — append after the shader string constants
-
-**What:** The class skeleton and scene graph constructor. The scene graph layout is:
-
+**Scene graph:**
 ```
 SoSeparator
-├── SoShapeHints          — UNKNOWN_ORDERING (no face culling)
-├── SoTexture3            — packed float SDF volume; updated on each field change
-├── SoShaderProgram       — holds the fixed vertex + fragment shaders
-│   ├── SoVertexShader    — emits vWorldPos varying
-│   └── SoFragmentShader  — sphere-traces texture; holds all uniforms
-│       ├── SoUniformShaderParameter1i  u_sdf_vol   = 0  (texture unit 0)
-│       ├── SoUniformShaderParameter3f  u_bbox_min
-│       └── SoUniformShaderParameter3f  u_bbox_max
-├── SoCoordinate3         — 8 AABB corner vertices in world space (updated on change)
-└── SoIndexedFaceSet      — 6 quads forming the proxy bounding box (fixed topology)
+├── SoShapeHints          (UNKNOWN_ORDERING)
+├── SoTexture2            (GL_LUMINANCE8 atlas, wrapS/wrapT = CLAMP)
+├── SoShaderProgram
+│   ├── SoVertexShader
+│   └── SoFragmentShader
+│       └── parameters[]  (all SoUniform* nodes, attached once, updated in-place)
+├── SoCoordinate3         (8 AABB corners, updated each call)
+└── SoIndexedFaceSet      (static 6-face indices)
 ```
 
-**Implementation:**
-
+**AABB face index list:**
 ```python
-class DMRayMarchRenderer:
-    """GPU ray-marching renderer backed by a 3D SDF volume texture."""
-
-    def __init__(self, vobj):
-        self._sep        = None
-        self._tex3       = None   # SoTexture3
-        self._frag       = None   # SoFragmentShader (holds uniforms)
-        self._u_bbox_min = None   # SoUniformShaderParameter3f
-        self._u_bbox_max = None   # SoUniformShaderParameter3f
-        self._coords     = None   # SoCoordinate3 (proxy box corners)
-        if coin:
-            self._setup_nodes(vobj)
-
-    def _setup_nodes(self, vobj):
-        sep = coin.SoSeparator()
-
-        # No face culling — proxy box visible from inside and outside
-        hints = coin.SoShapeHints()
-        hints.vertexOrdering.setValue(coin.SoShapeHints.UNKNOWN_ORDERING)
-        sep.addChild(hints)
-
-        # 3D texture — placeholder; filled by update()
-        tex = coin.SoTexture3()
-        tex.wrapR.setValue(coin.SoTexture3.CLAMP_TO_EDGE)
-        tex.wrapS.setValue(coin.SoTexture3.CLAMP_TO_EDGE)
-        tex.wrapT.setValue(coin.SoTexture3.CLAMP_TO_EDGE)
-        # GL_NEAREST required: linear interpolation of packed bytes gives garbage
-        tex.minFilter.setValue(coin.SoTexture3.NEAREST)
-        tex.magFilter.setValue(coin.SoTexture3.NEAREST)
-        sep.addChild(tex)
-
-        # Fixed shader program (never recompiled)
-        prog = coin.SoShaderProgram()
-        vert = coin.SoVertexShader()
-        vert.sourceType.setValue(coin.SoShader.GLSL_PROGRAM)
-        vert.sourceProgram.setValue(_VERT_SRC)
-        frag = coin.SoFragmentShader()
-        frag.sourceType.setValue(coin.SoShader.GLSL_PROGRAM)
-        frag.sourceProgram.setValue(_FRAG_SRC)
-
-        # Sampler uniform — always texture unit 0
-        u_vol = coin.SoUniformShaderParameter1i()
-        u_vol.name.setValue("u_sdf_vol")
-        u_vol.value.setValue(0)
-        frag.parameter.set1Value(0, u_vol)
-
-        # AABB uniforms — updated by update()
-        u_min = coin.SoUniformShaderParameter3f()
-        u_min.name.setValue("u_bbox_min")
-        u_min.value.setValue(coin.SbVec3f(0, 0, 0))
-        frag.parameter.set1Value(1, u_min)
-
-        u_max = coin.SoUniformShaderParameter3f()
-        u_max.name.setValue("u_bbox_max")
-        u_max.value.setValue(coin.SbVec3f(1, 1, 1))
-        frag.parameter.set1Value(2, u_max)
-
-        prog.shaderObject.set1Value(0, vert)
-        prog.shaderObject.set1Value(1, frag)
-        sep.addChild(prog)
-
-        # Proxy bounding box — world-space vertices, fixed quad topology
-        coords = coin.SoCoordinate3()
-        coords.point.setValues(0, 8, [(0, 0, 0)] * 8)  # placeholder
-
-        faces = coin.SoIndexedFaceSet()
-        face_idx = [
-            0, 1, 2, 3, -1,   # z-min face
-            4, 7, 6, 5, -1,   # z-max face
-            0, 4, 5, 1, -1,   # y-min face
-            1, 5, 6, 2, -1,   # x-max face
-            2, 6, 7, 3, -1,   # y-max face
-            0, 3, 7, 4, -1,   # x-min face
-        ]
-        faces.coordIndex.setValues(0, len(face_idx), face_idx)
-        sep.addChild(coords)
-        sep.addChild(faces)
-
-        self._sep        = sep
-        self._tex3       = tex
-        self._frag       = frag
-        self._u_bbox_min = u_min
-        self._u_bbox_max = u_max
-        self._coords     = coords
-
-        vobj.RootNode.addChild(sep)
+_FACE_IDX = [0,1,2,3,-1, 4,7,6,5,-1, 0,4,5,1,-1, 1,5,6,2,-1, 2,6,7,3,-1, 0,3,7,4,-1]
 ```
 
-**Depends on:** R-001, R-002
+**AABB corners from bbox:**
+```python
+def _bbox_corners(mn, mx):
+    x0,y0,z0 = mn.x,mn.y,mn.z;  x1,y1,z1 = mx.x,mx.y,mx.z
+    return [(x0,y0,z0),(x1,y0,z0),(x1,y1,z0),(x0,y1,z0),
+            (x0,y0,z1),(x1,y0,z1),(x1,y1,z1),(x0,y1,z1)]
+```
+
+**Vertex shader** (pass world position to fragment stage):
+```glsl
+varying vec3 v_world_pos;
+void main() {
+    v_world_pos = gl_Vertex.xyz;
+    gl_Position = ftransform();
+}
+```
+
+**Fragment shader** (full source, compile-once, never changes):
+```glsl
+varying vec3  v_world_pos;
+uniform sampler2D u_sdf_tex;
+uniform int   u_nx;
+uniform int   u_ny;
+uniform int   u_nz;
+uniform int   u_atz;
+uniform float u_atlas_w;
+uniform float u_atlas_h;
+uniform vec3  u_bbox_min;
+uniform vec3  u_bbox_max;
+uniform float u_max_dist;
+
+float sample_texel(float ix, float iy, float iz) {
+    float c = floor(mod(iz, float(u_atz)));
+    float r = floor(iz / float(u_atz));
+    float u = (c * (float(u_nx) + 1.0) + ix + 0.5) / u_atlas_w;
+    float v = (r * (float(u_ny) + 1.0) + iy + 0.5) / u_atlas_h;
+    return texture2D(u_sdf_tex, vec2(u, v)).r;
+}
+
+float sample_sdf(vec3 p) {
+    if (any(lessThan(p, u_bbox_min)) || any(greaterThan(p, u_bbox_max)))
+        return u_max_dist;
+    vec3 uvw = (p - u_bbox_min) / (u_bbox_max - u_bbox_min);
+    float gx = clamp(uvw.x * float(u_nx), 0.0, float(u_nx));
+    float gy = clamp(uvw.y * float(u_ny), 0.0, float(u_ny));
+    float gz = clamp(uvw.z * float(u_nz), 0.0, float(u_nz));
+    float x0=floor(gx); float x1=min(x0+1.0,float(u_nx));
+    float y0=floor(gy); float y1=min(y0+1.0,float(u_ny));
+    float z0=floor(gz); float z1=min(z0+1.0,float(u_nz));
+    float fx=gx-x0; float fy=gy-y0; float fz=gz-z0;
+    float s = mix(
+        mix(mix(sample_texel(x0,y0,z0),sample_texel(x1,y0,z0),fx),
+            mix(sample_texel(x0,y1,z0),sample_texel(x1,y1,z0),fx),fy),
+        mix(mix(sample_texel(x0,y0,z1),sample_texel(x1,y0,z1),fx),
+            mix(sample_texel(x0,y1,z1),sample_texel(x1,y1,z1),fx),fy),
+        fz);
+    return (s * 2.0 - 1.0) * u_max_dist;
+}
+
+vec3 sdf_normal(vec3 p) {
+    float h = u_max_dist * 0.015;
+    vec2 k = vec2(1.0, -1.0);
+    return normalize(
+        k.xyy * sample_sdf(p + k.xyy*h) +
+        k.yyx * sample_sdf(p + k.yyx*h) +
+        k.yxy * sample_sdf(p + k.yxy*h) +
+        k.xxx * sample_sdf(p + k.xxx*h));
+}
+
+void main() {
+    vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
+    vec3 ro   = v_world_pos;
+    vec3 rd   = normalize(v_world_pos - cam);
+    float hit_thresh = u_max_dist * 0.04;  // ~10x quantisation step of uint8 data
+
+    float t  = 0.0;
+    bool hit = false;
+    for (int i = 0; i < 128; i++) {
+        vec3 p = ro + t * rd;
+        if (any(lessThan(p, u_bbox_min)) || any(greaterThan(p, u_bbox_max))) break;
+        float d = sample_sdf(p);
+        if (d < hit_thresh) { hit = true; break; }
+        t += max(d, hit_thresh);
+    }
+    if (!hit) discard;
+
+    vec3 hp  = ro + t * rd;
+    vec3 n   = sdf_normal(hp);
+    vec3 ld  = normalize(gl_LightSource[0].position.xyz - hp);
+    float diff = max(dot(n, ld), 0.0);
+    vec3 vd    = normalize(cam - hp);
+    float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
+    vec3 color = vec3(1.0,0.5,0.0)*(0.15 + 0.75*diff) + vec3(0.4)*spec;
+
+    gl_FragColor = vec4(color, 1.0);
+    vec4 clip    = gl_ProjectionMatrix * gl_ModelViewMatrix * vec4(hp, 1.0);
+    gl_FragDepth = (clip.z / clip.w + 1.0) * 0.5;
+}
+```
+
+**Uniform setup** — called once in `_setup_nodes()`, values patched on each `update()`:
+
+Create the uniform nodes with placeholder values, store them in a dict
+`self._u = {"u_nx": node, ...}`. To update a value later, call `node.value.setValue(...)`.
+
+| Uniform | Node type | Initial value |
+|---------|-----------|---------------|
+| `u_sdf_tex` | `SoUniformShaderParameter1i` | 0 |
+| `u_nx`, `u_ny`, `u_nz` | `SoUniformShaderParameter1i` | 0 |
+| `u_atz` | `SoUniformShaderParameter1i` | 1 |
+| `u_atlas_w`, `u_atlas_h` | `SoUniformShaderParameter1f` | 1.0 |
+| `u_bbox_min`, `u_bbox_max` | `SoUniformShaderParameter3f` | SbVec3f(0,0,0) |
+| `u_max_dist` | `SoUniformShaderParameter1f` | 1.0 |
+
+Attach all nodes to `frag.parameter` in `_setup_nodes()`. In `update()`, patch values
+with `self._u["u_nx"].value.setValue(baked["nx"])` etc.
+
+**Texture update** — call `self._tex.image.setValue(coin.SbVec2s(w, h), 1, data_bytes)`
+where `data_bytes = baked["atlas_bytes"]`. This triggers re-upload to the GPU.
+
+**`update()` method:**
+1. Call `bake_sdf_to_atlas(field, cell_size)` → `baked` dict
+2. Upload texture: `self._tex.image.setValue(...)`
+3. Update all uniforms from `baked`
+4. Update AABB corners: `self._coords.point.setNum(0); self._coords.point.setValues(...)`
+
+**Depends on:** R-001
 
 ---
 
-### R-004: Add `DMRayMarchRenderer.update()` to `core/dm_ray_march_renderer.py`
+## Tier 3 — Integration Cleanup
 
-**File:** `core/dm_ray_march_renderer.py` — append method to `DMRayMarchRenderer`
-
-**What:** Bakes the field to a volume texture, uploads it via `SoTexture3.image`, updates
-the AABB uniforms, and resizes the proxy box corners to match the baked grid coverage.
-
-**Implementation:**
-
-```python
-    def update(self, field, resolution: int = 64):
-        """
-        Re-bake the SDF volume and refresh all Coin3D nodes.
-
-        Args:
-            field:      Any FRepField — evaluated via evaluate_grid(), no other requirements.
-            resolution: Voxels per axis. Default 64 (262 144 evaluations).
-                        Increase to 128 for higher quality at the cost of ~8× bake time.
-        """
-        if not coin or self._tex3 is None:
-            return
-
-        from core import dm_logger
-        dm_logger.debug(f"DMRayMarchRenderer.update: baking {resolution}³ volume")
-
-        rgba, (mn, mx) = bake_sdf_volume(field, resolution)
-
-        # Upload to SoTexture3 as RGBA8 (4 bytes per voxel)
-        size = coin.SbVec3s(resolution, resolution, resolution)
-        self._tex3.image.setValue(size, 4, rgba.tobytes())
-
-        # Update AABB uniforms
-        self._u_bbox_min.value.setValue(coin.SbVec3f(*mn))
-        self._u_bbox_max.value.setValue(coin.SbVec3f(*mx))
-
-        # Resize proxy box to match baked grid coverage
-        x0, y0, z0 = mn
-        x1, y1, z1 = mx
-        corners = [
-            (x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0),
-            (x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1),
-        ]
-        self._coords.point.setValues(0, 8, corners)
-```
-
-**Depends on:** R-001, R-003
-
----
-
-## Tier 4 — Integration
-
-### R-005: Add `get_use_ray_march()` and `get_ray_march_resolution()` to `core/dm_object.py`
-
-**File:** `core/dm_object.py` — add after `set_meshing_cell_size()` (after line 68)
-
-**What:** Follow the exact pattern of the existing accessors. `_PARAM_PATH` is already defined
-at line 26.
-
-```python
-def get_use_ray_march() -> bool:
-    """Return True to use GPU ray marching instead of CPU meshing for F-Rep objects."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("UseRayMarching", False)
-
-def set_use_ray_march(val: bool):
-    FreeCAD.ParamGet(_PARAM_PATH).SetBool("UseRayMarching", bool(val))
-
-def get_ray_march_resolution() -> int:
-    """Return the voxel resolution per axis for the SDF volume texture (default 64)."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("RayMarchResolution", 64)
-
-def set_ray_march_resolution(val: int):
-    FreeCAD.ParamGet(_PARAM_PATH).SetInt("RayMarchResolution", int(val))
-```
-
----
-
-### R-006: Wire `DMRayMarchRenderer` into `DMViewProvider`
+### R-003: Replace `UsePointCloud` boolean with `RenderMode` int in `core/dm_object.py`
 
 **File:** `core/dm_object.py`
 
-**Edit 1 — `attach()` at line 414.**
+**What:** Remove `get_use_point_cloud()` and `set_use_point_cloud()`. Replace with a
+tri-state int and named constants.
 
-Replace the existing bare `self.renderer.setup_frep_mesh_nodes()` line with:
+```python
+RENDER_MODE_MESH        = 0
+RENDER_MODE_POINT_CLOUD = 1
+RENDER_MODE_RAY_MARCH   = 2
+
+def get_render_mode() -> int:
+    """Return the active F-Rep render mode (0=Mesh, 1=PointCloud, 2=RayMarch)."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("RenderMode", RENDER_MODE_MESH)
+
+def set_render_mode(val: int):
+    FreeCAD.ParamGet(_PARAM_PATH).SetInt("RenderMode", int(val))
+```
+
+---
+
+### R-004: Update `DMViewProvider` to use `get_render_mode()` and add ray march branch
+
+**File:** `core/dm_object.py`
+
+**Edit 1 — `attach()`.** Replace the frep branch (currently checks `get_use_point_cloud()`):
 
 ```python
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "frep":
-                if get_use_ray_march():
+                mode = get_render_mode()
+                if mode == RENDER_MODE_POINT_CLOUD:
+                    from core.dm_point_cloud_renderer import DMPointCloudRenderer
+                    self.point_cloud_renderer = DMPointCloudRenderer(vobj)
+                elif mode == RENDER_MODE_RAY_MARCH:
                     from core.dm_ray_march_renderer import DMRayMarchRenderer
                     self.ray_march_renderer = DMRayMarchRenderer(vobj)
                 else:
                     self.renderer.setup_frep_mesh_nodes()
 ```
 
-Add `from core.dm_object import get_use_ray_march` at the top of `attach()` (or at the
-module level if preferred — follow the existing import style in the file).
-
-**Edit 2 — `updateData()` at lines 441–451.**
-
-Replace the existing `if prop == "Shape" and ... ShapeType == "frep":` block with:
+**Edit 2 — `updateData()`.** Replace the `if prop == "Shape" and ... frep:` block:
 
 ```python
         if prop == "Shape" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":
             proxy = getattr(fp, "Proxy", None)
             field = getattr(proxy, "FRepField", None) if proxy else None
+            pc    = getattr(self, "point_cloud_renderer", None)
+            rm    = getattr(self, "ray_march_renderer",   None)
 
-            ray_march = getattr(self, "ray_march_renderer", None)
-            if ray_march is not None and field is not None:
-                resolution = get_ray_march_resolution()
-                ray_march.update(field, resolution)
+            if pc is not None and field is not None:
+                pc.update(field, get_meshing_cell_size())
+            elif rm is not None and field is not None:
+                rm.update(field, get_meshing_cell_size())
             elif proxy and self.renderer:
                 self.renderer.update_frep_mesh(
                     getattr(proxy, "_frep_verts", None),
@@ -535,29 +445,48 @@ Replace the existing `if prop == "Shape" and ... ShapeType == "frep":` block wit
                     self.renderer.update_frep_corners(field)
 ```
 
-Add `from core.dm_object import get_ray_march_resolution` alongside the other import added
-in Edit 1, or at module level.
+**Depends on:** R-002, R-003
 
-**Note:** `proxy.FRepField` must be assigned on the proxy object before `fp.Shape` is set
-in `DMObjectProxy.execute()`. Verify this is the case. If `FRepField` is not stored on the
-proxy, store it there before the `fp.Shape = Part.Shape()` line.
+---
 
-**Depends on:** R-003, R-004, R-005
+### R-005: Replace settings checkbox with render mode combo box in `commands/cmd_settings.py`
+
+**File:** `commands/cmd_settings.py`
+
+**Edit 1 — `__init__()`.** Remove the "Point Cloud Preview" `QCheckBox` block. Add:
+
+```python
+        from core.dm_object import get_render_mode
+        self._render_mode_combo = QtGui.QComboBox()
+        self._render_mode_combo.addItems([
+            "Triangle Mesh",
+            "Point Cloud",
+            "Ray March (GPU)",
+        ])
+        self._render_mode_combo.setCurrentIndex(get_render_mode())
+        self._render_mode_combo.setToolTip(
+            "Triangle Mesh: CPU marching cubes — full quality.\n"
+            "Point Cloud: fast zero-crossing samples — good for interactive editing.\n"
+            "Ray March: GPU sphere tracing — no triangulation, smooth shading.\n"
+            "Changes take effect after document reload."
+        )
+        layout.addRow("F-Rep Renderer:", self._render_mode_combo)
+```
+
+**Edit 2 — `_on_accept()`.** Replace `set_use_point_cloud` with `set_render_mode` in the
+import and the setter call:
+
+```python
+        set_render_mode(self._render_mode_combo.currentIndex())
+```
+
+**Depends on:** R-003
 
 ---
 
 ## Agent Skills
 
-See `.agents/skills/` for project-specific knowledge:
-
 | Skill | Purpose |
 |-------|---------|
-| `coin3d_shader_api` | SoShaderProgram, SoTexture3, uniform nodes, proxy geometry, built-in GLSL matrices |
-| `dm_renderer_architecture` | Full Coin3D scene graph layout, ShapeType branching, where to hook new renderers |
-| `dm_logging` | Logging conventions (`dm_logger.info`, `dm_logger.debug`) |
-
-See `.agents/workflows/` for executable workflows:
-
-| Workflow | Purpose |
-|----------|---------|
-| `/fix-task` | Fix a single task from this list by ID (e.g. `/fix-task R-003`) |
+| `coin3d_shader_api` | `SoShaderProgram` setup, uniform node types, proxy geometry |
+| `dm_todo_format` | Task format and conventions for this project |
