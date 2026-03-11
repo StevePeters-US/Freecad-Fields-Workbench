@@ -111,6 +111,13 @@ def get_decimate_enabled():
 def set_decimate_enabled(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetBool("DecimateEnabled", bool(val))
 
+def get_deduplicate_enabled():
+    """Return whether vertex deduplication is enabled."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("DeduplicateEnabled", True)
+
+def set_deduplicate_enabled(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetBool("DeduplicateEnabled", bool(val))
+
 
 
 
@@ -218,6 +225,9 @@ class DMObjectProxy:
             if not hasattr(obj, "DecimateEnabled"):
                 obj.addProperty("App::PropertyBool", "DecimateEnabled", "FRep", "Enable flat-triangle decimation")
                 obj.DecimateEnabled = get_decimate_enabled()
+            if not hasattr(obj, "DeduplicateEnabled"):
+                obj.addProperty("App::PropertyBool", "DeduplicateEnabled", "FRep", "Enable vertex deduplication")
+                obj.DeduplicateEnabled = get_deduplicate_enabled()
 
     def build_shape(self, fp):
         """Return a Part.Shape based on the object's properties."""
@@ -592,6 +602,8 @@ def refresh_all_dm_objects():
                 obj.MeshingType = int(m_type)
             if hasattr(obj, "DecimateEnabled"):
                 obj.DecimateEnabled = bool(get_decimate_enabled())
+            if hasattr(obj, "DeduplicateEnabled"):
+                obj.DeduplicateEnabled = bool(get_deduplicate_enabled())
                 
             proxy = getattr(obj.ViewObject, "Proxy", None)
             if proxy and hasattr(proxy, "on_prefs_changed"):

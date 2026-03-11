@@ -6,7 +6,7 @@ import numpy as np
 from core import dm_logger
 from core.frep.frep_field import FRepField
 from core.frep.marching_cubes.mc_tables import edgeTable, triTable
-from core.dm_object import get_meshing_type, get_decimate_enabled
+from core.dm_object import get_meshing_type, get_decimate_enabled, get_deduplicate_enabled
 
 # Pre-convert lookup tables to numpy arrays for fast indexing
 _EDGE_TABLE = np.array(edgeTable, dtype=np.int32)
@@ -31,7 +31,7 @@ class MeshTimer:
     _STAGES = [
         "field_eval", "cube_index", "active_filter",
         "corner_extract", "edge_interp", "tri_extract", "mesh_build",
-        "decimate",
+        "decimate", "deduplicate",
         "mb_list_conv", "mb_mesh_obj", "mb_make_shape", "mb_make_solid"
     ]
     # Sub-stages to indent in summary output
@@ -241,6 +241,11 @@ class MarchingCubesMesher(DMMesher):
             mesh_timer.start("decimate")
             flat_verts, flat_idx = decimate_flat_tris(flat_verts, flat_idx)
             mesh_timer.stop("decimate")
+
+        if get_deduplicate_enabled():
+            mesh_timer.start("deduplicate")
+            flat_verts, flat_idx = deduplicate_verts(flat_verts, flat_idx)
+            mesh_timer.stop("deduplicate")
 
         return flat_verts, flat_idx
 
@@ -706,6 +711,11 @@ class SurfaceNetsMesher(DMMesher):
             flat_verts, flat_idx = decimate_flat_tris(flat_verts, flat_idx)
             mesh_timer.stop("decimate")
 
+        if get_deduplicate_enabled():
+            mesh_timer.start("deduplicate")
+            flat_verts, flat_idx = deduplicate_verts(flat_verts, flat_idx)
+            mesh_timer.stop("deduplicate")
+
         return flat_verts, flat_idx
 
 
@@ -963,6 +973,11 @@ class DualContouringMesher(DMMesher):
             flat_verts, flat_idx = decimate_flat_tris(flat_verts, flat_idx)
             mesh_timer.stop("decimate")
 
+        if get_deduplicate_enabled():
+            mesh_timer.start("deduplicate")
+            flat_verts, flat_idx = deduplicate_verts(flat_verts, flat_idx)
+            mesh_timer.stop("deduplicate")
+
         return flat_verts, flat_idx
 
 
@@ -1154,6 +1169,59 @@ def decimate_flat_tris(verts, indices, angle_tol=5.0):
         return np.zeros((0, 3), dtype=np.float32), np.zeros(0, dtype=np.int32)
         
     return np.array(final_verts).reshape(-1, 3).astype(np.float32), np.array(final_idx, dtype=np.int32)
+
+
+def deduplicate_verts(flat_verts, flat_idx, tol=1e-5):
+    """
+    Deduplicates vertices and updates the index buffer.
+    
+    flat_verts: (N, 3) float32
+    flat_idx: (M,) int32 with -1 sentinels
+    tol: float — rounding tolerance for vertex matching
+    
+    Returns: (unique_verts, new_idx)
+    """
+    if len(flat_verts) == 0:
+        return flat_verts, flat_idx
+        
+    # 1. Round vertices to tolerance
+    rounded = np.round(flat_verts / tol) * tol
+    
+    # 2. Find unique vertices
+    # np.unique returns unique rows and indices to reconstruct the original array
+    unique_verts, inverse = np.unique(rounded, axis=0, return_inverse=True)
+    
+    # 3. Remap index buffer
+    # flat_idx contains indices into flat_verts. We need to remap them using 'inverse'.
+    # -1 sentinels must remain unchanged.
+    
+    # Create a mapping for all indices in flat_verts
+    # inverse[i] is the index in unique_verts corresponding to flat_verts[i]
+    
+    # Work on a copy of flat_idx
+    new_idx = flat_idx.copy()
+    
+    # Mask for non-sentinel indices
+    mask = new_idx != -1
+    
+    # Replace mesh indices with their unique vertex counterparts
+    # Since flat_verts were emitted 3-per-triangle, flat_idx [0, 1, 2, -1, 3, 4, 5, -1]
+    # maps exactly to inverse indices [inverse[0], inverse[1], inverse[2], -1, ...]
+    
+    # If the meshers emitted Shared Index buffers this would be different, 
+    # but currently they emit unique vertices per triangle.
+    # The valid indices in flat_idx are always 0..len(flat_verts)-1 in order.
+    # Wait, SN and DC might actually use indices differently?
+    # No, look at mesh_build in MC/SN/DC:
+    # MC: tri_idx = np.stack([base, base+1, base+2], axis=1) -> flat_idx
+    # SN: flat_verts = cell_verts[all_tris.ravel()] ... tri_idx = np.stack([base, base+1, base+2], axis=1)
+    # DC: (in the portion not seen, but likely similar)
+    
+    # So new_idx[mask] are currently 0, 1, 2, 3, 4, 5...
+    # We replace them with inverse[new_idx[mask]]
+    new_idx[mask] = inverse[new_idx[mask]]
+    
+    return unique_verts.astype(np.float32), new_idx.astype(np.int32)
 
 
 
