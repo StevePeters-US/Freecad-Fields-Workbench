@@ -254,7 +254,7 @@ Step 2 — Add after `update()`:
 
 ---
 
-### G-004: Wire ray march renderer visibility to `DMViewProvider.onChanged`
+### [x] G-004: Wire ray march renderer visibility to `DMViewProvider.onChanged`
 
 **File:** `core/dm_object.py` — modify `onChanged()` method (lines 508–512)
 
@@ -353,7 +353,7 @@ Step 2 — In `update()` (line 220), change the texture upload from 1 component 
 
 Extract smooth cross-section curves from F-Rep SDFs.
 
-### G-007: Create `core/frep/sdf_slicer.py` — marching squares and curve fitting
+### [x] G-007: Create `core/frep/sdf_slicer.py` — marching squares and curve fitting
 
 **File:** `core/frep/sdf_slicer.py` — new file
 
@@ -623,7 +623,7 @@ def fit_dm_curve(contour_points, closed=False, smooth_factor=0.33):
 
 ---
 
-### G-008: Create `commands/cmd_sdf_slice.py` — FreeCAD slice command
+### [x] G-008: Create `commands/cmd_sdf_slice.py` — FreeCAD slice command
 
 **File:** `commands/cmd_sdf_slice.py` — new file
 
@@ -719,7 +719,7 @@ FreeCADGui.addCommand('DM_SDFSlice', SDFSliceCommand())
 
 ---
 
-### G-009: Register `DM_SDFSlice` in toolbar and menu
+### [x] G-009: Register `DM_SDFSlice` in toolbar and menu
 
 **File:** `InitGui.py` — add to the command lists
 
