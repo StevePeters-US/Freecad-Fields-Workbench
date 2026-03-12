@@ -425,9 +425,9 @@ if st == "frep":
 Add an explicit command for meshing an F-Rep field into a `Part.Shape`,
 decoupled from the render/recompute cycle.
 
-### X-004: Create `DM_MeshToShape` command
+### X-004: Create `DM_SDFToShape` command
 
-**File:** `commands/cmd_mesh_export.py` — new file
+**File:** `commands/cmd_sdf_export.py` — new file
 
 **What:** A FreeCAD command that takes the selected frep object's `FRepField`,
 meshes it using the active mesher at the configured cell size, converts the
@@ -453,7 +453,7 @@ class CommandMeshToShape:
 
     def GetResources(self):
         return {
-            'MenuText': 'Mesh to Shape',
+            'MenuText': 'SDF to Shape',
             'ToolTip': (
                 'Generate a triangle mesh from the selected F-Rep object\n'
                 'and create a Part.Shape solid.\n\n'
@@ -461,6 +461,7 @@ class CommandMeshToShape:
                 'on the object (or the global setting if unset).\n'
                 'Use 0.1 mm for CNC-quality output.'
             ),
+            'Resources': {'Icon': 'SDFToShape.svg'}
         }
 
     def IsActive(self):
@@ -472,7 +473,7 @@ class CommandMeshToShape:
     def Activated(self):
         sel = FreeCADGui.Selection.getSelection()
         if len(sel) != 1:
-            dm_logger.error("Mesh to Shape: Select exactly one F-Rep object.")
+            dm_logger.error("SDF to Shape: Select exactly one F-Rep object.")
             return
 
         obj = sel[0]
@@ -480,7 +481,7 @@ class CommandMeshToShape:
         field = getattr(proxy, "FRepField", None) if proxy else None
         if field is None:
             dm_logger.error(
-                f"Mesh to Shape: '{obj.Label}' has no FRepField."
+                f"SDF to Shape: '{obj.Label}' has no FRepField."
             )
             return
 
@@ -496,12 +497,12 @@ class CommandMeshToShape:
             mesher = get_active_mesher(type_override=m_type)
 
             dm_logger.info(
-                f"Mesh to Shape: meshing '{obj.Label}' at "
+                f"SDF to Shape: meshing '{obj.Label}' at "
                 f"{cell_size:.2f} mm..."
             )
             result = mesher.mesh(field, cell_size=cell_size)
             if result is None:
-                dm_logger.error("Mesh to Shape: mesher returned None.")
+                dm_logger.error("SDF to Shape: mesher returned None.")
                 return
 
             flat_verts, flat_idx = result
@@ -510,7 +511,7 @@ class CommandMeshToShape:
             shape = _triangles_to_shape(flat_verts, flat_idx)
             if shape is None or shape.isNull():
                 dm_logger.error(
-                    "Mesh to Shape: failed to build Part.Shape from mesh."
+                    "SDF to Shape: failed to build Part.Shape from mesh."
                 )
                 return
 
@@ -532,12 +533,12 @@ class CommandMeshToShape:
             FreeCADGui.Selection.addSelection(new_obj)
             n_tris = len(flat_idx) // 4
             dm_logger.info(
-                f"Mesh to Shape: created '{new_obj.Label}' "
+                f"SDF to Shape: created '{new_obj.Label}' "
                 f"({n_tris} triangles, cell_size={cell_size:.2f} mm)"
             )
 
         except Exception as e:
-            dm_logger.error(f"Mesh to Shape failed: {e}")
+            dm_logger.error(f"SDF to Shape failed: {e}")
             import traceback
             traceback.print_exc()
 
@@ -582,31 +583,31 @@ def _triangles_to_shape(flat_verts, flat_idx):
         return shape
 
 
-FreeCADGui.addCommand('DM_MeshToShape', CommandMeshToShape())
+FreeCADGui.addCommand('DM_SDFToShape', CommandSDFToShape())
 ```
 
 ---
 
-### X-005: Register `DM_MeshToShape` in toolbar and menu
+### X-005: Register `DM_SDFToShape` in toolbar and menu
 
 **File:** `InitGui.py` — modify `Initialize()` method
 
-**What:** Import the new command module and add `DM_MeshToShape` to the
+**What:** Import the new command module and add `DM_SDFToShape` to the
 "DM - Operations" toolbar and the "Direct Modeling" menu.
 
 **Edit 1 — Add import (after line 64):**
 ```python
-            import commands.cmd_mesh_export
+            import commands.cmd_sdf_export
 ```
 
 **Edit 2 — Add to toolbar (line 88, before `'DM_OpenSketcher'`):**
 ```python
-                'DM_MeshToShape',
+                'DM_SDFToShape',
 ```
 
 **Edit 3 — Add to menu (line 106, before `'DM_OpenSketcher'`):**
 ```python
-                'DM_MeshToShape',
+                'DM_SDFToShape',
 ```
 
 **Depends on:** X-004

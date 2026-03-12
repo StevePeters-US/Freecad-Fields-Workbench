@@ -1,0 +1,149 @@
+"""
+commands/cmd_sdf_export.py
+
+Export an F-Rep field to a meshed Part.Shape solid.
+"""
+
+import FreeCAD
+import FreeCADGui
+import Part
+import numpy as np
+from core import dm_logger
+
+
+class CommandSDFToShape:
+    """Export a DM F-Rep object to a triangulated Part.Shape."""
+
+    def GetResources(self):
+        return {
+            'MenuText': 'SDF to Shape',
+            'ToolTip': (
+                'Generate a triangle mesh from the selected F-Rep object\n'
+                'and create a Part.Shape solid.\n\n'
+                'Resolution is controlled by the MeshingCellSize property\n'
+                'on the object (or the global setting if unset).\n'
+                'Use 0.1 mm for CNC-quality output.'
+            ),
+            'Resources': {'Icon': 'SDFToShape.svg'}
+        }
+
+    def IsActive(self):
+        sel = FreeCADGui.Selection.getSelection()
+        if len(sel) != 1:
+            return False
+        return getattr(sel[0], "ShapeType", None) == "frep"
+
+    def Activated(self):
+        sel = FreeCADGui.Selection.getSelection()
+        if len(sel) != 1:
+            dm_logger.error("SDF to Shape: Select exactly one F-Rep object.")
+            return
+
+        obj = sel[0]
+        proxy = getattr(obj, "Proxy", None)
+        field = getattr(proxy, "FRepField", None) if proxy else None
+        if field is None:
+            dm_logger.error(
+                f"SDF to Shape: '{obj.Label}' has no FRepField."
+            )
+            return
+
+        try:
+            from core.dm_object import get_meshing_cell_size
+            from core.dm_mesher import get_active_mesher
+
+            # Use the object's own cell size if set, else global default
+            cell_size = float(
+                getattr(obj, "MeshingCellSize", get_meshing_cell_size())
+            )
+            m_type = getattr(obj, "MeshingType", None)
+            mesher = get_active_mesher(type_override=m_type)
+
+            dm_logger.info(
+                f"SDF to Shape: meshing '{obj.Label}' at "
+                f"{cell_size:.2f} mm..."
+            )
+            result = mesher.mesh(field, cell_size=cell_size)
+            if result is None:
+                dm_logger.error("SDF to Shape: mesher returned None.")
+                return
+
+            flat_verts, flat_idx = result
+
+            # Convert flat triangle arrays to Part.Shape via Mesh
+            shape = _triangles_to_shape(flat_verts, flat_idx)
+            if shape is None or shape.isNull():
+                dm_logger.error(
+                    "SDF to Shape: failed to build Part.Shape from mesh."
+                )
+                return
+
+            # Create a new Part::Feature with the solid shape
+            doc = FreeCAD.activeDocument()
+            new_obj = doc.addObject("Part::Feature", f"{obj.Label}_Mesh")
+            new_obj.Shape = shape
+
+            # Style: match the orange DM look
+            if hasattr(new_obj, "ViewObject") and new_obj.ViewObject:
+                new_obj.ViewObject.ShapeColor = (1.0, 0.5, 0.0)
+                try:
+                    new_obj.ViewObject.DisplayMode = "Shaded"
+                except Exception:
+                    pass
+
+            doc.recompute()
+            FreeCADGui.Selection.clearSelection()
+            FreeCADGui.Selection.addSelection(new_obj)
+            n_tris = len(flat_idx) // 4
+            dm_logger.info(
+                f"SDF to Shape: created '{new_obj.Label}' "
+                f"({n_tris} triangles, cell_size={cell_size:.2f} mm)"
+            )
+
+        except Exception as e:
+            dm_logger.error(f"SDF to Shape failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+
+def _triangles_to_shape(flat_verts, flat_idx):
+    """Convert Coin3D-format triangle arrays to a Part.Shape.
+
+    Args:
+        flat_verts: (N*3, 3) float32 — one row per triangle vertex
+        flat_idx:   (N*4,) int32 — [v0, v1, v2, -1, ...] sentinels
+
+    Returns:
+        Part.Shape (solid if possible, shell otherwise), or None on failure.
+    """
+    import Mesh
+
+    # Extract triangle vertex indices (skip -1 sentinels)
+    idx = flat_idx.reshape(-1, 4)[:, :3]  # (N_tris, 3)
+
+    # Build Mesh.Mesh from facets
+    facets = []
+    for tri in idx:
+        v0 = flat_verts[tri[0]]
+        v1 = flat_verts[tri[1]]
+        v2 = flat_verts[tri[2]]
+        facets.append([
+            (float(v0[0]), float(v0[1]), float(v0[2])),
+            (float(v1[0]), float(v1[1]), float(v1[2])),
+            (float(v2[0]), float(v2[1]), float(v2[2])),
+        ])
+
+    mesh = Mesh.Mesh(facets)
+
+    # Convert to Part.Shape via sewing
+    shape = Part.Shape()
+    shape.makeShapeFromMesh(mesh.Topology, 0.1)
+    try:
+        solid = Part.makeSolid(shape)
+        return solid
+    except Exception:
+        dm_logger.debug("SDF to Shape: could not make solid, returning shell")
+        return shape
+
+
+FreeCADGui.addCommand('DM_SDFToShape', CommandSDFToShape())
