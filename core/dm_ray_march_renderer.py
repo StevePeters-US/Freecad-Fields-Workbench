@@ -86,7 +86,9 @@ float sample_sdf(vec3 p) {
 }
 
 vec3 sdf_normal(vec3 p) {
-    float h = u_max_dist * 0.015;
+    // Scale epsilon with voxel size for stable normals
+    float cell = (u_bbox_max.x - u_bbox_min.x) / max(float(u_nx), 1.0);
+    float h = cell * 0.5;
     vec2 k = vec2(1.0, -1.0);
     return normalize(
         k.xyy * sample_sdf(p + k.xyy*h) +
@@ -95,42 +97,69 @@ vec3 sdf_normal(vec3 p) {
         k.xxx * sample_sdf(p + k.xxx*h));
 }
 
+// AABB-ray intersection: returns (tNear, tFar). Miss if tNear > tFar.
+vec2 intersect_aabb(vec3 ro, vec3 rd) {
+    vec3 inv_rd = 1.0 / rd;
+    vec3 t1 = (u_bbox_min - ro) * inv_rd;
+    vec3 t2 = (u_bbox_max - ro) * inv_rd;
+    vec3 tmin = min(t1, t2);
+    vec3 tmax = max(t1, t2);
+    float tNear = max(max(tmin.x, tmin.y), tmin.z);
+    float tFar  = min(min(tmax.x, tmax.y), tmax.z);
+    return vec2(tNear, tFar);
+}
+
 void main() {
-    // 1. Unproject near plane point (z = -1.0 in NDC is the near plane)
+    // 1. Unproject NDC to world-space ray
     vec4 ndc_near = vec4(v_uv, -1.0, 1.0);
     vec4 world_near = gl_ModelViewProjectionMatrixInverse * ndc_near;
-    world_near /= world_near.w; 
+    world_near /= world_near.w;
 
-    // 2. Unproject far plane point (z = 1.0 in NDC is the far plane)
     vec4 ndc_far = vec4(v_uv, 1.0, 1.0);
     vec4 world_far = gl_ModelViewProjectionMatrixInverse * ndc_far;
     world_far /= world_far.w;
 
-    // 3. Compute Ray Origin and Direction
     vec3 ro = world_near.xyz;
     vec3 rd = normalize(world_far.xyz - world_near.xyz);
     vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
 
-    float hit_thresh = u_max_dist * 0.04;
+    // 2. AABB-ray intersection — skip rays that miss the bounding box
+    vec2 tBox = intersect_aabb(ro, rd);
+    float tNear = max(tBox.x, 0.0);  // clamp to ray origin
+    float tFar  = tBox.y;
+    if (tNear > tFar) discard;        // ray misses box entirely
 
-    float t  = 0.0;
+    // 3. Sphere-trace from tNear to tFar
+    float hit_thresh = u_max_dist * 0.001;
+    float min_step   = hit_thresh;
+    float t = tNear;
     bool hit = false;
-    for (int i = 0; i < 128; i++) {
+    float d;
+
+    for (int i = 0; i < 256; i++) {
         vec3 p = ro + t * rd;
-        if (any(lessThan(p, u_bbox_min)) || any(greaterThan(p, u_bbox_max))) {
-             // If we haven't hit yet and we're outside the box, 
-             // we need to skip to the entry point or break if already past exit.
-             // For simplicity, we just keep stepping if we're near the box, 
-             // but here we check d and exit if we're far.
-             float d = sample_sdf(p);
-             if (d > u_max_dist * 2.0) { t += d; continue; }
-        }
-        float d = sample_sdf(p);
-        if (d < hit_thresh) { hit = true; break; }
-        t += max(d, hit_thresh);
+        d = sample_sdf(p);
+        if (abs(d) < hit_thresh) { hit = true; break; }
+        t += max(abs(d), min_step);
+        if (t > tFar) break;
     }
     if (!hit) discard;
 
+    // 4. Bisection refinement for sub-voxel accuracy
+    float t_lo = t - min_step;
+    float t_hi = t;
+    for (int j = 0; j < 8; j++) {
+        float t_mid = (t_lo + t_hi) * 0.5;
+        float d_mid = sample_sdf(ro + t_mid * rd);
+        if (d_mid < 0.0) {
+            t_hi = t_mid;
+        } else {
+            t_lo = t_mid;
+        }
+    }
+    t = (t_lo + t_hi) * 0.5;
+
+    // 5. Shading
     vec3 hp  = ro + t * rd;
     vec3 n   = sdf_normal(hp);
     vec3 ld  = normalize(gl_LightSource[0].position.xyz - hp);
@@ -140,6 +169,8 @@ void main() {
     vec3 color = vec3(1.0,0.5,0.0)*(0.15 + 0.75*diff) + vec3(0.4)*spec;
 
     gl_FragColor = vec4(color, 1.0);
+
+    // 6. Correct depth write
     vec4 clip    = gl_ProjectionMatrix * gl_ModelViewMatrix * vec4(hp, 1.0);
     gl_FragDepth = (clip.z / clip.w + 1.0) * 0.5;
 }
