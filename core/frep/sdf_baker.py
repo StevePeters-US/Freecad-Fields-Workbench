@@ -51,10 +51,10 @@ def bake_sdf_to_atlas(field, cell_size: float) -> dict:
     pts = np.column_stack([X.ravel(), Y.ravel(), Z.ravel()]).astype(np.float32)
     vals = field.evaluate_grid(pts).reshape(nx + 1, ny + 1, nz + 1)  # (nx+1,ny+1,nz+1)
 
-    # Clamp and normalise to [0, 255]
-    max_dist = cell_size * 4.0
+    # Clamp and normalise to [0, 65535] (uint16 for smooth gradients)
+    max_dist = cell_size * 8.0
     clamped  = np.clip(vals, -max_dist, max_dist)
-    norm     = ((clamped / max_dist + 1.0) * 0.5 * 255.0).astype(np.uint8)
+    norm     = ((clamped / max_dist + 1.0) * 0.5 * 65535.0).astype(np.uint16)
 
     # Tile z-slices into 2D atlas
     nslices = nz + 1
@@ -63,7 +63,7 @@ def bake_sdf_to_atlas(field, cell_size: float) -> dict:
 
     atlas_w = atz * (nx + 1)
     atlas_h = aty * (ny + 1)
-    atlas   = np.zeros((atlas_h, atlas_w), dtype=np.uint8)
+    atlas   = np.zeros((atlas_h, atlas_w), dtype=np.uint16)
 
     for iz in range(nslices):
         col = iz % atz
@@ -75,9 +75,17 @@ def bake_sdf_to_atlas(field, cell_size: float) -> dict:
         slice_xy = norm[:, :, iz]          # shape (nx+1, ny+1)
         atlas[y_off:y_off + ny + 1, x_off:x_off + nx + 1] = slice_xy.T  # transpose: row=y, col=x
 
+    # Pack uint16 as two-channel uint8 (high byte, low byte) for GL_LUMINANCE_ALPHA
+    high = (atlas >> 8).astype(np.uint8)
+    low  = (atlas & 0xFF).astype(np.uint8)
+    # Interleave: [h0, l0, h1, l1, ...] for LUMINANCE_ALPHA format
+    packed = np.empty((atlas_h, atlas_w, 2), dtype=np.uint8)
+    packed[:, :, 0] = high
+    packed[:, :, 1] = low
+
     import FreeCAD
     return {
-        "atlas_bytes": atlas.tobytes(),
+        "atlas_bytes": packed.tobytes(),
         "atlas_w":     atlas_w,
         "atlas_h":     atlas_h,
         "nx": nx, "ny": ny, "nz": nz,

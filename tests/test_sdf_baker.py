@@ -60,7 +60,10 @@ def test_sdf_baker():
     assert baked["atlas_h"] == 52
     
     # 4. Check atlas data integrity
-    atlas = np.frombuffer(baked["atlas_bytes"], dtype=np.uint8).reshape(baked["atlas_h"], baked["atlas_w"])
+    # atlas_bytes is now (H, W, 2) uint8 interleaved
+    raw = np.frombuffer(baked["atlas_bytes"], dtype=np.uint8).reshape(baked["atlas_h"], baked["atlas_w"], 2)
+    # Reconstruct uint16: high byte << 8 | low byte
+    atlas = raw[:, :, 0].astype(np.uint32) << 8 | raw[:, :, 1]
     
     # Center pixel of slice 6 (middle slice)
     # iz = 6
@@ -72,21 +75,23 @@ def test_sdf_baker():
     # Grand atlas pixel: (26 + 6, 13 + 6) = (32, 19)
     
     # At (0,0,0), SDF for sphere R=10 is -10.0
-    # max_dist = cell_size * 4 = 8.0
-    # Clamped to -8.0
-    # Normalized: ((-8.0 / 8.0 + 1.0) * 0.5 * 255) = 0
+    # max_dist = cell_size * 8 = 16.0
+    # Clamped to -10.0 (inside range)
+    # Normalized: ((-10.0 / 16.0 + 1.0) * 0.5 * 65535) = ((-0.625 + 1.0) * 0.5 * 65535) = 0.1875 * 65535 = 12287.8...
+    expected_center = int(round((-10.0 / baked["max_dist"] + 1.0) * 0.5 * 65535))
     center_val = atlas[19, 32]
-    print(f"Center value (at origin): {center_val} (Expected: 0)", flush=True)
-    assert center_val == 0
+    print(f"Center value (at origin): {center_val} (Expected: ~{expected_center})", flush=True)
+    assert abs(int(center_val) - expected_center) <= 1
     
     # Far corner pixel of first slice (iz=0, ix=0, iy=0)
     # P = (-12, -12, -12). Dist = sqrt(12^2 * 3) = 20.78
     # SDF = 20.78 - 10 = 10.78
-    # Clamped to 8.0
-    # Normalized: ((8.0 / 8.0 + 1.0) * 0.5 * 255) = 255
+    # Clamped to 10.78 (inside range 16.0)
+    # Normalized: ((10.78 / 16.0 + 1.0) * 0.5 * 65535)
+    expected_corner = int(round((10.7846097 / baked["max_dist"] + 1.0) * 0.5 * 65535))
     corner_val = atlas[0, 0]
-    print(f"Corner value (at (-12,-12,-12)): {corner_val} (Expected: 255)", flush=True)
-    assert corner_val == 255
+    print(f"Corner value (at (-12,-12,-12)): {corner_val} (Expected: ~{expected_corner})", flush=True)
+    assert abs(int(corner_val) - expected_corner) <= 2
 
     print("Test passed: SDF Baker implementation is correct.", flush=True)
 
