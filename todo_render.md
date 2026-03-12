@@ -284,7 +284,7 @@ renderer if present.
 
 Reduce banding from uint8 quantization.
 
-### G-005: Upgrade SDF baker to uint16 atlas
+### [x] G-005: Upgrade SDF baker to uint16 atlas
 
 **File:** `core/frep/sdf_baker.py` — modify `bake_sdf_to_atlas()` (lines 54–57, 80)
 
@@ -320,7 +320,7 @@ And change the return `atlas_bytes` to:
 
 ---
 
-### G-006: Update ray march renderer for uint16 texture
+### [x] G-006: Update ray march renderer for uint16 texture
 
 **File:** `core/dm_ray_march_renderer.py` — modify `_setup_nodes()` and `update()`
 

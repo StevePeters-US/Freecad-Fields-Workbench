@@ -65,7 +65,8 @@ float sample_texel(float ix, float iy, float iz) {
     float r = floor(iz / float(u_atz));
     float u = (c * (float(u_nx) + 1.0) + ix + 0.5) / u_atlas_w;
     float v = (r * (float(u_ny) + 1.0) + iy + 0.5) / u_atlas_h;
-    return texture2D(u_sdf_tex, vec2(u, v)).r;
+    vec4 t = texture2D(u_sdf_tex, vec2(u, v));
+    return t.r + t.a / 256.0;  // reconstruct uint16 from high (r) + low (a) channels
 }
 
 float sample_sdf(vec3 p) {
@@ -250,8 +251,8 @@ void main() {
     def update(self, field, cell_size):
         baked = bake_sdf_to_atlas(field, cell_size)
         
-        # 1. Texture upload
-        self._tex.image.setValue(coin.SbVec2s(baked["atlas_w"], baked["atlas_h"]), 1, baked["atlas_bytes"])
+        # 1. Texture upload (LUMINANCE_ALPHA, 2 channels)
+        self._tex.image.setValue(coin.SbVec2s(baked["atlas_w"], baked["atlas_h"]), 2, baked["atlas_bytes"])
         
         # 2. Update uniforms
         self._u["u_nx"].value.setValue(int(baked["nx"]))
