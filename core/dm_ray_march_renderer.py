@@ -9,12 +9,7 @@ import FreeCAD
 import pivy.coin as coin
 from core.frep.sdf_baker import bake_sdf_to_atlas
 
-_FACE_IDX = [0,1,2,3,-1, 4,7,6,5,-1, 0,4,5,1,-1, 1,5,6,2,-1, 2,6,7,3,-1, 0,3,7,4,-1]
 
-def _bbox_corners(mn, mx):
-    x0,y0,z0 = mn.x,mn.y,mn.z;  x1,y1,z1 = mx.x,mx.y,mx.z
-    return [(x0,y0,z0),(x1,y0,z0),(x1,y1,z0),(x0,y1,z0),
-            (x0,y0,z1),(x1,y0,z1),(x1,y1,z1),(x0,y1,z1)]
 
 class DMRayMarchRenderer:
     def __init__(self, vobj):
@@ -24,31 +19,33 @@ class DMRayMarchRenderer:
         self._tex = None
         self._coords = None
         self._setup_nodes()
-        vobj.addFrontRoot(self.root)
+        vobj.RootNode.addChild(self.root)
 
     def _setup_nodes(self):
         # 1. Texture Atlas
         self._tex = coin.SoTexture2()
         self._tex.model.setValue(coin.SoTexture2.REPLACE) # We use our own shading
-        self._tex.wrapS.setValue(coin.SoTexture2.CLAMP_TO_EDGE)
-        self._tex.wrapT.setValue(coin.SoTexture2.CLAMP_TO_EDGE)
+        self._tex.wrapS.setValue(coin.SoTexture2.CLAMP)
+        self._tex.wrapT.setValue(coin.SoTexture2.CLAMP)
         self.root.addChild(self._tex)
 
         # 2. Shader Program
         shader = coin.SoShaderProgram()
         v_shader = coin.SoVertexShader()
+        v_shader.sourceType.setValue(coin.SoShaderObject.GLSL_PROGRAM)
         f_shader = coin.SoFragmentShader()
+        f_shader.sourceType.setValue(coin.SoShaderObject.GLSL_PROGRAM)
         
         v_shader.sourceProgram.setValue("""
-varying vec3 v_world_pos;
+varying vec2 v_uv;
 void main() {
-    v_world_pos = gl_Vertex.xyz;
-    gl_Position = ftransform();
+    v_uv = gl_Vertex.xy;
+    gl_Position = vec4(gl_Vertex.xy, 0.0, 1.0);
 }
 """)
         
         f_shader.sourceProgram.setValue("""
-varying vec3  v_world_pos;
+varying vec2  v_uv;
 uniform sampler2D u_sdf_tex;
 uniform int   u_nx;
 uniform int   u_ny;
@@ -99,16 +96,35 @@ vec3 sdf_normal(vec3 p) {
 }
 
 void main() {
+    // 1. Unproject near plane point (z = -1.0 in NDC is the near plane)
+    vec4 ndc_near = vec4(v_uv, -1.0, 1.0);
+    vec4 world_near = gl_ModelViewProjectionMatrixInverse * ndc_near;
+    world_near /= world_near.w; 
+
+    // 2. Unproject far plane point (z = 1.0 in NDC is the far plane)
+    vec4 ndc_far = vec4(v_uv, 1.0, 1.0);
+    vec4 world_far = gl_ModelViewProjectionMatrixInverse * ndc_far;
+    world_far /= world_far.w;
+
+    // 3. Compute Ray Origin and Direction
+    vec3 ro = world_near.xyz;
+    vec3 rd = normalize(world_far.xyz - world_near.xyz);
     vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
-    vec3 ro   = v_world_pos;
-    vec3 rd   = normalize(v_world_pos - cam);
+
     float hit_thresh = u_max_dist * 0.04;
 
     float t  = 0.0;
     bool hit = false;
     for (int i = 0; i < 128; i++) {
         vec3 p = ro + t * rd;
-        if (any(lessThan(p, u_bbox_min)) || any(greaterThan(p, u_bbox_max))) break;
+        if (any(lessThan(p, u_bbox_min)) || any(greaterThan(p, u_bbox_max))) {
+             // If we haven't hit yet and we're outside the box, 
+             // we need to skip to the entry point or break if already past exit.
+             // For simplicity, we just keep stepping if we're near the box, 
+             // but here we check d and exit if we're far.
+             float d = sample_sdf(p);
+             if (d > u_max_dist * 2.0) { t += d; continue; }
+        }
         float d = sample_sdf(p);
         if (d < hit_thresh) { hit = true; break; }
         t += max(d, hit_thresh);
@@ -129,66 +145,72 @@ void main() {
 }
 """)
         # 3. Uniforms
-        u_sdf_tex = coin.SoUniformShaderParameter1i()
+        u_sdf_tex = coin.SoShaderParameter1i()
         u_sdf_tex.name.setValue("u_sdf_tex")
         u_sdf_tex.value.setValue(0)
         
-        self._u["u_nx"] = coin.SoUniformShaderParameter1i()
+        self._u["u_nx"] = coin.SoShaderParameter1i()
         self._u["u_nx"].name.setValue("u_nx")
         self._u["u_nx"].value.setValue(0)
         
-        self._u["u_ny"] = coin.SoUniformShaderParameter1i()
+        self._u["u_ny"] = coin.SoShaderParameter1i()
         self._u["u_ny"].name.setValue("u_ny")
         self._u["u_ny"].value.setValue(0)
         
-        self._u["u_nz"] = coin.SoUniformShaderParameter1i()
+        self._u["u_nz"] = coin.SoShaderParameter1i()
         self._u["u_nz"].name.setValue("u_nz")
         self._u["u_nz"].value.setValue(0)
         
-        self._u["u_atz"] = coin.SoUniformShaderParameter1i()
+        self._u["u_atz"] = coin.SoShaderParameter1i()
         self._u["u_atz"].name.setValue("u_atz")
         self._u["u_atz"].value.setValue(1)
         
-        self._u["u_atlas_w"] = coin.SoUniformShaderParameter1f()
+        self._u["u_atlas_w"] = coin.SoShaderParameter1f()
         self._u["u_atlas_w"].name.setValue("u_atlas_w")
         self._u["u_atlas_w"].value.setValue(1.0)
         
-        self._u["u_atlas_h"] = coin.SoUniformShaderParameter1f()
+        self._u["u_atlas_h"] = coin.SoShaderParameter1f()
         self._u["u_atlas_h"].name.setValue("u_atlas_h")
         self._u["u_atlas_h"].value.setValue(1.0)
         
-        self._u["u_bbox_min"] = coin.SoUniformShaderParameter3f()
+        self._u["u_bbox_min"] = coin.SoShaderParameter3f()
         self._u["u_bbox_min"].name.setValue("u_bbox_min")
         self._u["u_bbox_min"].value.setValue(coin.SbVec3f(0,0,0))
         
-        self._u["u_bbox_max"] = coin.SoUniformShaderParameter3f()
+        self._u["u_bbox_max"] = coin.SoShaderParameter3f()
         self._u["u_bbox_max"].name.setValue("u_bbox_max")
         self._u["u_bbox_max"].value.setValue(coin.SbVec3f(0,0,0))
         
-        self._u["u_max_dist"] = coin.SoUniformShaderParameter1f()
+        self._u["u_max_dist"] = coin.SoShaderParameter1f()
         self._u["u_max_dist"].name.setValue("u_max_dist")
         self._u["u_max_dist"].value.setValue(1.0)
         
         f_shader.parameter.setNum(0)
-        f_shader.parameter.addChild(u_sdf_tex)
-        for name in ["u_nx", "u_ny", "u_nz", "u_atz", "u_atlas_w", "u_atlas_h", 
-                     "u_bbox_min", "u_bbox_max", "u_max_dist"]:
-            f_shader.parameter.addChild(self._u[name])
+        f_shader.parameter.set1Value(0, u_sdf_tex)
+        for i, name in enumerate(["u_nx", "u_ny", "u_nz", "u_atz", "u_atlas_w", "u_atlas_h", 
+                                  "u_bbox_min", "u_bbox_max", "u_max_dist"]):
+            f_shader.parameter.set1Value(i + 1, self._u[name])
             
-        shader.addChild(v_shader)
-        shader.addChild(f_shader)
+        shader.shaderObject.set1Value(0, v_shader)
+        shader.shaderObject.set1Value(1, f_shader)
         self.root.addChild(shader)
         
-        # 4. AABB Geometry (Proxy)
+        # 4. Quad Geometry
         hints = coin.SoShapeHints()
         hints.vertexOrdering.setValue(coin.SoShapeHints.UNKNOWN_ORDERING)
         self.root.addChild(hints)
         
         self._coords = coin.SoCoordinate3()
+        self._coords.point.setValues(0, 4, [
+            (-1, -1, 0),
+            ( 1, -1, 0),
+            ( 1,  1, 0),
+            (-1,  1, 0)
+        ])
         self.root.addChild(self._coords)
         
         faceset = coin.SoIndexedFaceSet()
-        faceset.coordIndex.setValues(0, len(_FACE_IDX), _FACE_IDX)
+        faceset.coordIndex.setValues(0, 10, [0, 1, 2, -1, 0, 2, 3, -1])
         self.root.addChild(faceset)
 
     def update(self, field, cell_size):
@@ -211,7 +233,4 @@ void main() {
         
         self._u["u_max_dist"].value.setValue(float(baked["max_dist"]))
         
-        # 3. Update AABB corners
-        corners = _bbox_corners(mn, mx)
-        self._coords.point.setNum(0)
-        self._coords.point.setValues(0, 8, corners)
+        # 3. (No geometry update needed for quad)

@@ -484,9 +484,27 @@ import and the setter call:
 
 ---
 
+## Tier 4 — Full-Screen Quad Ray Marching
+
+### R-006: Refactor `dm_ray_march_renderer.py` for Full-Screen Quad
+
+**File:** `core/dm_ray_march_renderer.py`
+
+**What:** Replace the AABB proxy geometry pattern with a single full-screen quad pattern.
+This allows the fragment shader to evaluate the whole screen, removing the dependency on tracking FRep bounds accurately on the CPU side. The Raymarching loop still uses `u_bbox_min` and `u_bbox_max` internally to break early.
+
+**Updates:**
+1. Replace `_coords` and `faceset` with a 4-vertex quad spanning `[-1, 1]` in XY.
+2. Update Vertex Shader to use `gl_Position = vec4(gl_Vertex.xy, 0.0, 1.0);`.
+3. Update Fragment Shader to unproject the `[-1, 1]` NDC coordinates into `ro` and `rd` using `gl_ModelViewProjectionMatrixInverse`.
+4. Ensure `hints.vertexOrdering` is set to `UNKNOWN_ORDERING`.
+
+---
+
 ## Agent Skills
 
 | Skill | Purpose |
 |-------|---------|
 | `coin3d_shader_api` | `SoShaderProgram` setup, uniform node types, proxy geometry |
+| `coin3d_fullscreen_quad` | Full-screen quad rendering pipeline and unprojection math |
 | `dm_todo_format` | Task format and conventions for this project |

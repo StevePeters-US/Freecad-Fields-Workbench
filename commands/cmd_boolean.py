@@ -39,17 +39,83 @@ class CommandDMBoolean:
             dm_logger.error(f"DM_{self.operation}: Select at least two objects.")
             return
 
+        # Check if all objects are F-Rep
+        all_frep = all(
+            getattr(obj, "ShapeType", None) == "frep" for obj in sel
+        )
+
+        if all_frep:
+            self._frep_boolean(sel)
+        else:
+            self._brep_boolean(sel)
+
+    def _frep_boolean(self, sel):
+        """Compose FRepField trees for F-Rep objects."""
+        from core.frep.frep_composer import UnionField, SubtractionField, IntersectionField
+        from core.dm_object import create_dm_object
+
+        _OP_CLASS = {
+            "Add":          UnionField,
+            "Subtract":     SubtractionField,
+            "Intersection": IntersectionField,
+        }
+
+        try:
+            # Extract fields from selected objects
+            fields = []
+            for obj in sel:
+                proxy = getattr(obj, "Proxy", None)
+                field = getattr(proxy, "FRepField", None) if proxy else None
+                if field is None:
+                    dm_logger.error(
+                        f"DM_{self.operation}: '{obj.Label}' has no FRepField."
+                    )
+                    return
+                fields.append(field)
+
+            # Compose fields left-to-right
+            composer_cls = _OP_CLASS[self.operation]
+            result_field = fields[0]
+            for i in range(1, len(fields)):
+                result_field = composer_cls(result_field, fields[i])
+
+            # Create new frep object with composed field
+            new_name = f"{self.operation}"
+            result = create_dm_object(name=new_name, shape_type="frep")
+            result.Proxy.FRepField = result_field
+            result.touch()
+
+            doc = FreeCAD.activeDocument()
+
+            # Hide originals
+            for obj in sel:
+                if hasattr(obj, "ViewObject") and obj.ViewObject:
+                    obj.ViewObject.Visibility = False
+
+            doc.recompute()
+            FreeCADGui.Selection.clearSelection()
+            FreeCADGui.Selection.addSelection(result)
+            dm_logger.info(
+                f"F-Rep {self.operation}: composed {len(fields)} fields."
+            )
+        except Exception as e:
+            dm_logger.error(f"DM_{self.operation} (F-Rep) failed: {e}")
+
+    def _brep_boolean(self, sel):
+        """Existing BRep boolean logic for non-frep objects."""
         # Verify all selected objects are DM objects
         for obj in sel:
             if not hasattr(obj, "ShapeType"):
-                dm_logger.error(f"DM_{self.operation}: '{obj.Label}' is not a DM object.")
+                dm_logger.error(
+                    f"DM_{self.operation}: '{obj.Label}' is not a DM object."
+                )
                 return
 
         from core.dm_object import create_dm_object
 
         try:
             doc = FreeCAD.activeDocument()
-            
+
             # Combine shapes using native Part operations
             shape_a = sel[0].Shape
             for i in range(1, len(sel)):
@@ -60,11 +126,11 @@ class CommandDMBoolean:
                     shape_a = shape_a.cut(shape_b)
                 elif self.operation == "Intersection":
                     shape_a = shape_a.common(shape_b)
-            
+
             new_name = f"{self.operation}"
             result = create_dm_object(
-                name       = new_name,
-                shape_type = "boolean",
+                name=new_name,
+                shape_type="boolean",
             )
             result.Shape = shape_a
 
