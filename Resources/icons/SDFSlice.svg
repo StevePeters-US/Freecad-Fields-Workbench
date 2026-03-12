@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" version="1.1">
+    <!-- Base Shape -->
+    <path d="M 16 12 L 48 12 L 48 44 L 16 44 Z" style="fill:#e0e0e0;stroke:#000000;stroke-width:2"/>
+    <path d="M 24 20 L 56 20 L 56 52 L 24 52 Z" style="fill:#ffffff;stroke:#000000;stroke-width:1"/>
+    
+    <!-- Slice Plan Lines -->
+    <path d="M 4 32 L 60 32" style="fill:none;stroke:#ffaa00;stroke-width:3"/>
+    <path d="M 4 28 L 60 28" style="fill:none;stroke:#ffaa00;stroke-width:1;stroke-dasharray:2,2"/>
+    <path d="M 4 36 L 60 36" style="fill:none;stroke:#ffaa00;stroke-width:1;stroke-dasharray:2,2"/>
+</svg>

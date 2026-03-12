@@ -63,6 +63,7 @@ class DirectModelingWorkbench(Workbench):
             import commands.cmd_edit
             import commands.cmd_primitive
             import commands.cmd_sdf_export
+            import commands.cmd_sdf_slice
             
             # Import core modules
             import core as FCDirectModeling
@@ -86,6 +87,7 @@ class DirectModelingWorkbench(Workbench):
                 'DM_Add',
                 'DM_Subtract',
                 'DM_Intersection',
+                'DM_SDFSlice',
                 'DM_SDFToShape',
                 'DM_OpenSketcher',
             ])
@@ -105,6 +107,7 @@ class DirectModelingWorkbench(Workbench):
                 'DM_Add',
                 'DM_Subtract',
                 'DM_Intersection',
+                'DM_SDFSlice',
                 'DM_SDFToShape',
                 'DM_OpenSketcher',
             ])
