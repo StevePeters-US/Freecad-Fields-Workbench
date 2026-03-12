@@ -210,7 +210,7 @@ void main() {
         self.root.addChild(self._coords)
         
         faceset = coin.SoIndexedFaceSet()
-        faceset.coordIndex.setValues(0, 10, [0, 1, 2, -1, 0, 2, 3, -1])
+        faceset.coordIndex.setValues(0, 8, [0, 1, 2, -1, 0, 2, 3, -1])
         self.root.addChild(faceset)
 
     def update(self, field, cell_size):

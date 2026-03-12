@@ -44,7 +44,7 @@ DM curve objects compatible with the existing curve editing system.
 
 These fixes eliminate the "hairy lines" artifact and make the GPU render usable.
 
-### G-001: Fix `coordIndex.setValues` buffer overread
+### [x] G-001: Fix `coordIndex.setValues` buffer overread
 
 **File:** `core/dm_ray_march_renderer.py` — line 213
 
