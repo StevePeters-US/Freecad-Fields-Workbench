@@ -16,6 +16,7 @@ class CommandSDFToShape:
 
     def GetResources(self):
         return {
+            'Pixmap': 'SDFToShape',
             'MenuText': 'SDF to Shape',
             'ToolTip': (
                 'Generate a triangle mesh from the selected F-Rep object\n'
@@ -24,7 +25,6 @@ class CommandSDFToShape:
                 'on the object (or the global setting if unset).\n'
                 'Use 0.1 mm for CNC-quality output.'
             ),
-            'Resources': {'Icon': 'SDFToShape.svg'}
         }
 
     def IsActive(self):

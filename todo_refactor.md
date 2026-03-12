@@ -62,7 +62,7 @@ Rewrite the boolean commands to compose F-Rep field trees instead of
 using BRep `Part.Shape` operations. This is the foundation — all other
 refactoring depends on booleans preserving the SDF tree.
 
-### X-001: Rewrite `CommandDMBoolean.Activated()` for F-Rep field composition
+### [x] X-001: Rewrite `CommandDMBoolean.Activated()` for F-Rep field composition
 
 **File:** `commands/cmd_boolean.py` — replace `Activated()` method (lines 36–81)
 
@@ -187,7 +187,7 @@ def _brep_boolean(self, sel):
 
 ---
 
-### X-002: Unit test for F-Rep boolean composition
+### [x] X-002: Unit test for F-Rep boolean composition
 
 **File:** `tests/test_frep_boolean.py` — new file
 
@@ -353,7 +353,7 @@ if __name__ == "__main__":
 Skip expensive meshing in `execute()` when the render mode doesn't need triangles.
 This makes GPU preview modes (ray march, formulaic SDF) respond instantly.
 
-### X-003: Skip meshing in `execute()` for GPU render modes
+### [x] X-003: Skip meshing in `execute()` for GPU render modes
 
 **File:** `core/dm_object.py` — modify `DMObjectProxy.execute()` frep branch (lines 336–354)
 
@@ -425,7 +425,7 @@ if st == "frep":
 Add an explicit command for meshing an F-Rep field into a `Part.Shape`,
 decoupled from the render/recompute cycle.
 
-### X-004: Create `DM_SDFToShape` command
+### [x] X-004: Create `DM_SDFToShape` command
 
 **File:** `commands/cmd_sdf_export.py` — new file
 
@@ -436,7 +436,7 @@ with that shape. The original frep object is kept (not hidden or deleted).
 
 ```python
 """
-commands/cmd_mesh_export.py
+commands/cmd_sdf_export.py
 
 Export an F-Rep field to a meshed Part.Shape solid.
 """
@@ -448,11 +448,12 @@ import numpy as np
 from core import dm_logger
 
 
-class CommandMeshToShape:
+class CommandSDFToShape:
     """Export a DM F-Rep object to a triangulated Part.Shape."""
 
     def GetResources(self):
         return {
+            'Pixmap': 'SDFToShape',
             'MenuText': 'SDF to Shape',
             'ToolTip': (
                 'Generate a triangle mesh from the selected F-Rep object\n'
@@ -461,7 +462,6 @@ class CommandMeshToShape:
                 'on the object (or the global setting if unset).\n'
                 'Use 0.1 mm for CNC-quality output.'
             ),
-            'Resources': {'Icon': 'SDFToShape.svg'}
         }
 
     def IsActive(self):
@@ -588,7 +588,7 @@ FreeCADGui.addCommand('DM_SDFToShape', CommandSDFToShape())
 
 ---
 
-### X-005: Register `DM_SDFToShape` in toolbar and menu
+### [x] X-005: Register `DM_SDFToShape` in toolbar and menu
 
 **File:** `InitGui.py` — modify `Initialize()` method
 
@@ -614,7 +614,7 @@ FreeCADGui.addCommand('DM_SDFToShape', CommandSDFToShape())
 
 ---
 
-### X-006: Unit test for `_triangles_to_shape` helper
+### [x] X-006: Unit test for `_triangles_to_shape` helper
 
 **File:** `tests/test_mesh_export.py` — new file
 
