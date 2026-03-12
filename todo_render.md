@@ -58,7 +58,7 @@ These fixes eliminate the "hairy lines" artifact and make the GPU render usable.
 
 ---
 
-### G-002: Rewrite fragment shader with proper AABB-ray clipping and hit test
+### [x] G-002: Rewrite fragment shader with proper AABB-ray clipping and hit test
 
 **File:** `core/dm_ray_march_renderer.py` — replace the fragment shader string (lines 47–145)
 
@@ -210,7 +210,7 @@ void main() {
 
 ---
 
-### G-003: Add `set_visible()` method to `DMRayMarchRenderer`
+### [x] G-003: Add `set_visible()` method to `DMRayMarchRenderer`
 
 **File:** `core/dm_ray_march_renderer.py` — append after `update()` method (after line 237)
 

@@ -107,14 +107,20 @@ class DMPointCloudRenderer:
     """Coin3D point-cloud renderer backed by SDF zero-crossing samples."""
 
     def __init__(self, vobj):
+        self.vobj = vobj
         self._sep     = None
+        self._switch  = None
         self._coords  = None   # SoCoordinate3
         self._normals = None   # SoNormal
         if coin:
             self._setup_nodes(vobj)
 
     def _setup_nodes(self, vobj):
+        self._switch = coin.SoSwitch()
+        self._switch.whichChild = 0 if vobj.Visibility else -1
+
         sep = coin.SoSeparator()
+        self._sep = sep
 
         mat = coin.SoMaterial()
         mat.diffuseColor.setValue(coin.SbColor(1.0, 0.5, 0.0))
@@ -138,11 +144,16 @@ class DMPointCloudRenderer:
 
         sep.addChild(coin.SoPointSet())
 
-        self._sep     = sep
         self._coords  = coords
         self._normals = normals_node
 
-        vobj.RootNode.addChild(sep)
+        self._switch.addChild(sep)
+        vobj.RootNode.addChild(self._switch)
+
+    def set_visible(self, visible):
+        """Toggle visibility of the point cloud render."""
+        if self._switch:
+            self._switch.whichChild = 0 if visible else -1
 
     def update(self, field, cell_size: float):
         """

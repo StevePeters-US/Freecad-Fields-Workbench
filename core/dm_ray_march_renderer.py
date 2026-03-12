@@ -17,7 +17,7 @@ class DMRayMarchRenderer:
         self.root = coin.SoSeparator()
         self._switch = coin.SoSwitch()
         self._switch.addChild(self.root)
-        self._switch.whichChild = 0  # visible by default
+        self._switch.whichChild = 0 if vobj.Visibility else -1  # respect initial visibility
         self._u = {}      # Uniform nodes
         self._tex = None
         self._coords = None
