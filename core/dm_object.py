@@ -335,21 +335,32 @@ class DMObjectProxy:
 
             if st == "frep":
                 if hasattr(self, "FRepField") and self.FRepField is not None:
-                    from core.dm_mesher import get_active_mesher
-                    m_type = getattr(fp, "MeshingType", None)
-                    mesher = get_active_mesher(type_override=m_type)
-                    res = float(getattr(fp, "MeshingCellSize", getattr(self, "_final_resolution", get_meshing_cell_size())))
-                    result = mesher.mesh(self.FRepField, cell_size=res)
-                    if result is not None:
-                        self._frep_verts, self._frep_idx = result
+                    render_mode = get_render_mode()
+                    if render_mode in (RENDER_MODE_MESH, RENDER_MODE_POINT_CLOUD):
+                        # Mesh mode: generate triangles for Coin3D rendering
+                        from core.dm_mesher import get_active_mesher
+                        m_type = getattr(fp, "MeshingType", None)
+                        mesher = get_active_mesher(type_override=m_type)
+                        res = float(getattr(fp, "MeshingCellSize",
+                                    getattr(self, "_final_resolution",
+                                            get_meshing_cell_size())))
+                        result = mesher.mesh(self.FRepField, cell_size=res)
+                        if result is not None:
+                            self._frep_verts, self._frep_idx = result
+                        else:
+                            self._frep_verts = self._frep_idx = None
                     else:
+                        # GPU preview mode: skip meshing, renderer reads
+                        # field directly via proxy.FRepField
                         self._frep_verts = self._frep_idx = None
                 else:
-                    dm_logger.debug(f"DMObjectProxy: Built NULL shape for {fp.Label} (expected if object is empty)")
+                    dm_logger.debug(
+                        f"DMObjectProxy: Built NULL shape for {fp.Label}"
+                        " (expected if object is empty)"
+                    )
                     self._frep_verts = self._frep_idx = None
 
                 # Setting fp.Shape triggers ViewProvider.updateData(fp, "Shape")
-                # which is called on the correct ViewProvider instance.
                 fp.Shape = Part.Shape()
                 return
 
