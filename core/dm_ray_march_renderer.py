@@ -15,11 +15,14 @@ class DMRayMarchRenderer:
     def __init__(self, vobj):
         self.vobj = vobj  # FreeCAD ViewProvider
         self.root = coin.SoSeparator()
+        self._switch = coin.SoSwitch()
+        self._switch.addChild(self.root)
+        self._switch.whichChild = 0  # visible by default
         self._u = {}      # Uniform nodes
         self._tex = None
         self._coords = None
         self._setup_nodes()
-        vobj.RootNode.addChild(self.root)
+        vobj.RootNode.addChild(self._switch)
 
     def _setup_nodes(self):
         # 1. Texture Atlas
@@ -265,3 +268,8 @@ void main() {
         self._u["u_max_dist"].value.setValue(float(baked["max_dist"]))
         
         # 3. (No geometry update needed for quad)
+
+    def set_visible(self, visible):
+        """Toggle visibility of the ray march render."""
+        if hasattr(self, "_switch"):
+            self._switch.whichChild = 0 if visible else -1

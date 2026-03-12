@@ -501,14 +501,27 @@ class DMViewProvider:
         if not prop:
             self.on_prefs_changed()
             # Also ensure visibility is correct
+            vobj = fp.ViewObject
             if self.renderer:
-                vobj = fp.ViewObject
                 self.renderer.update_visibility(vobj.Visibility)
+            rm = getattr(self, "ray_march_renderer", None)
+            if rm:
+                rm.set_visible(vobj.Visibility)
+            pc = getattr(self, "point_cloud_renderer", None)
+            if pc and hasattr(pc, "set_visible"):
+                pc.set_visible(vobj.Visibility)
 
     def onChanged(self, vobj, prop):
         """Called when a property of the ViewObject changes (e.g. Visibility)."""
-        if prop == "Visibility" and self.renderer:
-            self.renderer.update_visibility(vobj.Visibility)
+        if prop == "Visibility":
+            if self.renderer:
+                self.renderer.update_visibility(vobj.Visibility)
+            rm = getattr(self, "ray_march_renderer", None)
+            if rm:
+                rm.set_visible(vobj.Visibility)
+            pc = getattr(self, "point_cloud_renderer", None)
+            if pc and hasattr(pc, "set_visible"):
+                pc.set_visible(vobj.Visibility)
 
         
 
