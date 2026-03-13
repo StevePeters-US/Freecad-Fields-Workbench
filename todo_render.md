@@ -737,27 +737,66 @@ FreeCADGui.addCommand('DM_SDFSlice', SDFSliceCommand())
 
 ## Tier 4 — Polish
 
-### G-010: Add edge anti-aliasing to fragment shader
+### [x] G-010: Add Bounding Box Proxy to prevent View Clipping
 
-**File:** `core/dm_ray_march_renderer.py` — modify fragment shader (inside string from G-002)
+**File:** `core/dm_ray_march_renderer.py`
 
-**What:** Add screen-space anti-aliasing by blending alpha near the SDF boundary edges.
-Replace the hard discard with a soft alpha falloff.
+**What:** The full-screen quad is at `Z=0` covering `[-1, 1]` in XY. Because it's the only geometry in the scene, Coin3D calculates a 0-depth bounding box. This causes FreeCAD's camera near/far clip planes to squish tightly around `Z=0`, generating enormous floating-point errors in the ray unprojection matrix, which leads to degenerate triangles, tearing, and view clipping.
+Fix this by providing an invisible proxy shape with the exact SDF bounding box to force correct camera planes.
 
-**Implementation:** In the shader `main()`, after the depth write, add:
-```glsl
-    // Edge AA: fade alpha near the SDF boundary
-    float edge_dist = abs(sample_sdf(hp));
-    float aa_width = u_max_dist * 0.002;
-    float alpha = smoothstep(0.0, aa_width, hit_thresh - edge_dist);
-    gl_FragColor = vec4(color, alpha);
+**Implementation:**
+
+Step 1 — In `_setup_nodes()`, right after the `_switch` setup (or just before returning), add:
+```python
+        # 5. Bounding box proxy to fix Coin3D near/far clipping
+        self._bbox_sep = coin.SoSeparator()
+        bbox_style = coin.SoDrawStyle()
+        bbox_style.style.setValue(coin.SoDrawStyle.INVISIBLE)
+        self._bbox_sep.addChild(bbox_style)
+        
+        self._bbox_coords = coin.SoCoordinate3()
+        self._bbox_sep.addChild(self._bbox_coords)
+        
+        bbox_pts = coin.SoPointSet()
+        bbox_pts.numPoints.setValue(8)
+        self._bbox_sep.addChild(bbox_pts)
+        
+        self.root.addChild(self._bbox_sep)
 ```
-And replace `if (!hit) discard;` with:
-```glsl
-    if (!hit) { gl_FragColor = vec4(0.0); gl_FragDepth = 1.0; return; }
+
+Step 2 — In `update()`, inside the uniform update block, set the 8 corners:
+```python
+        mn, mx = baked["bbox_min"], baked["bbox_max"]
+        self._bbox_coords.point.setValues(0, 8, [
+            (mn.x, mn.y, mn.z), (mx.x, mn.y, mn.z),
+            (mn.x, mx.y, mn.z), (mx.x, mx.y, mn.z),
+            (mn.x, mn.y, mx.z), (mx.x, mn.y, mx.z),
+            (mn.x, mx.y, mx.z), (mx.x, mx.y, mx.z)
+        ])
 ```
 
-**Depends on:** G-002
+**Depends on:** G-006
+
+---
+
+### G-011: Fix uint16 texture reconstruction precision (Terracing)
+
+**File:** `core/dm_ray_march_renderer.py` — modify `sample_texel()` in fragment shader
+
+**What:** The current uint16 reconstruction formula (`t.r + t.a / 256.0`) is mathematically imprecise, mapping to `257/256` instead of `65535/65535`. This creates value discontinuities ("steps") when the low byte wraps, causing visible terracing and bumpy sides on flat F-Rep objects.
+
+**Implementation:** In the fragment shader string, replace the reconstruction in `sample_texel()`:
+```glsl
+    vec4 t = texture2D(u_sdf_tex, vec2(u, v));
+    // Mathematically exact uint16 reconstruction for OpenGL
+    return (t.r * 65280.0 + t.a * 255.0) / 65535.0;
+```
+
+**Depends on:** G-006
+
+---
+
+### G-012: Add edge anti-aliasing to fragment shader
 
 ---
 

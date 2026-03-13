@@ -248,6 +248,21 @@ void main() {
         faceset.coordIndex.setValues(0, 8, [0, 1, 2, -1, 0, 2, 3, -1])
         self.root.addChild(faceset)
 
+        # 5. Bounding box proxy to fix Coin3D near/far clipping
+        self._bbox_sep = coin.SoSeparator()
+        bbox_style = coin.SoDrawStyle()
+        bbox_style.style.setValue(coin.SoDrawStyle.INVISIBLE)
+        self._bbox_sep.addChild(bbox_style)
+        
+        self._bbox_coords = coin.SoCoordinate3()
+        self._bbox_sep.addChild(self._bbox_coords)
+        
+        bbox_pts = coin.SoPointSet()
+        bbox_pts.numPoints.setValue(8)
+        self._bbox_sep.addChild(bbox_pts)
+        
+        self.root.addChild(self._bbox_sep)
+
     def update(self, field, cell_size):
         baked = bake_sdf_to_atlas(field, cell_size)
         
@@ -265,6 +280,13 @@ void main() {
         mn, mx = baked["bbox_min"], baked["bbox_max"]
         self._u["u_bbox_min"].value.setValue(coin.SbVec3f(mn.x, mn.y, mn.z))
         self._u["u_bbox_max"].value.setValue(coin.SbVec3f(mx.x, mx.y, mx.z))
+        
+        self._bbox_coords.point.setValues(0, 8, [
+            (mn.x, mn.y, mn.z), (mx.x, mn.y, mn.z),
+            (mn.x, mx.y, mn.z), (mx.x, mx.y, mn.z),
+            (mn.x, mn.y, mx.z), (mx.x, mn.y, mx.z),
+            (mn.x, mx.y, mx.z), (mx.x, mx.y, mx.z)
+        ])
         
         self._u["u_max_dist"].value.setValue(float(baked["max_dist"]))
         
