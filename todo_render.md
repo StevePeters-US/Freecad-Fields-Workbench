@@ -1085,7 +1085,7 @@ with:
 
 ---
 
-### G-019: Add near clip distance setting to DM Settings
+### [x] G-019: Add near clip distance setting to DM Settings
 
 **File:** `core/dm_object.py` — add getter/setter after `set_deduplicate_enabled()` (line 130)
 **File:** `commands/cmd_settings.py` — add UI control and apply logic
@@ -1172,6 +1172,126 @@ add:
 
 ---
 
+## Tier 8 — Depth Ordering Fixes
+
+> **Root cause analysis:** The ray march renderer's `_shader_sep` has no explicit
+> `SoMaterial` node. It inherits material state from the parent ViewProvider context.
+> Coin3D classifies geometry as **opaque** (transparency=0) or **transparent**
+> (transparency>0) based on the active material. Opaque geometry renders first with
+> depth writes enabled; transparent geometry renders second with depth writes
+> **disabled**. If the inherited material has any transparency, the full-screen quad
+> is classified as transparent — its `gl_FragDepth` values never reach the depth
+> buffer. Result: the work plane (also transparent, rendered after opaques) cannot
+> depth-test against the SDF, and multiple SDF quads overwrite each other in scene
+> graph order rather than per-pixel depth order.
+
+### [x] G-021: Add explicit opaque material to shader separator (PRIMARY DEPTH FIX)
+
+**File:** `core/dm_ray_march_renderer.py` — modify `_setup_nodes()` (after line 57)
+
+**What:** Add an `SoMaterial` with `transparency=0.0` as the first child of `_shader_sep`
+to guarantee the full-screen quad is classified as opaque geometry. This ensures Coin3D
+renders it in the opaque pass with depth writes enabled, making `gl_FragDepth` values
+participate in the depth buffer for correct ordering with all other scene geometry
+(work plane, NURBS objects, other SDF volumes).
+
+> **Required reading:** `.agents/skills/dm_coin3d_depth_ordering/SKILL.md`
+
+**Implementation:** In `_setup_nodes()`, immediately after creating `_shader_sep`
+(line 57: `self._shader_sep = coin.SoSeparator()`), add:
+
+```python
+        # Force opaque classification — without this, the quad inherits the parent
+        # ViewProvider's material, which may have transparency > 0, causing Coin3D
+        # to render the quad in the transparent pass with depth writes DISABLED.
+        quad_mat = coin.SoMaterial()
+        quad_mat.transparency.setValue(0.0)
+        self._shader_sep.addChild(quad_mat)
+```
+
+The resulting scene graph for `_shader_sep` becomes:
+```
+_shader_sep (SoSeparator)
+├── SoMaterial (transparency=0.0)     ← NEW
+├── SoComplexity (textureQuality=0.0)
+├── SoTexture2
+├── SoShaderProgram
+├── SoShapeHints
+├── SoCoordinate3 (quad)
+└── SoIndexedFaceSet (2 triangles)
+```
+
+**Depends on:** G-015
+
+---
+
+### G-022: Add explicit depth buffer control to shader separator
+
+**File:** `core/dm_ray_march_renderer.py` — modify `_setup_nodes()`
+
+**What:** Add an `SoDepthBuffer` node (if available in pivy) to explicitly enable depth
+testing and depth writing for the ray march quad. This is a belt-and-suspenders fix:
+G-021 should ensure opaque classification, but `SoDepthBuffer` provides an explicit
+guarantee regardless of Coin3D's material-based classification logic.
+
+> **Required reading:** `.agents/skills/dm_coin3d_depth_ordering/SKILL.md`
+
+**Implementation:** In `_setup_nodes()`, after the `SoMaterial` added in G-021, add:
+
+```python
+        # Explicit depth buffer control (belt-and-suspenders with opaque material)
+        try:
+            depth_buf = coin.SoDepthBuffer()
+            depth_buf.test.setValue(True)   # GL_DEPTH_TEST enabled
+            depth_buf.write.setValue(True)  # glDepthMask(GL_TRUE)
+            self._shader_sep.addChild(depth_buf)
+        except AttributeError:
+            pass  # SoDepthBuffer not available in this Coin3D/pivy version
+```
+
+**Depends on:** G-021
+
+---
+
+### G-023: Use `gl_DepthRange` in `gl_FragDepth` formula for Coin3D compatibility
+
+**File:** `core/dm_ray_march_renderer.py` — modify section 6 in the fragment shader string
+
+**What:** The current depth formula `(clip.z / clip.w + 1.0) * 0.5` assumes the standard
+`glDepthRange(0, 1)`. While this is the OpenGL default, Coin3D or FreeCAD may configure a
+different depth range (e.g. for multi-pass rendering or depth partitioning). Use the GLSL
+built-in `gl_DepthRange` struct to ensure the depth value matches whatever range Coin3D
+has actually configured.
+
+> **Required reading:** `.agents/skills/dm_coin3d_depth_ordering/SKILL.md`
+
+**Implementation:** In the fragment shader, replace section 6:
+
+```glsl
+    // 6. Correct depth write
+    vec4 clip    = gl_ProjectionMatrix * gl_ModelViewMatrix * vec4(hp, 1.0);
+    gl_FragDepth = (clip.z / clip.w + 1.0) * 0.5;
+```
+
+with:
+
+```glsl
+    // 6. Depth write — use gl_DepthRange for Coin3D compatibility
+    vec4 clip     = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
+    float ndc_z   = clip.z / clip.w;
+    gl_FragDepth  = gl_DepthRange.near
+                  + gl_DepthRange.diff * (ndc_z * 0.5 + 0.5);
+```
+
+Note: `gl_DepthRange.diff` = `gl_DepthRange.far - gl_DepthRange.near`. When the depth
+range is the standard `[0, 1]`, this produces the same result as the original formula.
+Also changed `gl_ProjectionMatrix * gl_ModelViewMatrix` to the equivalent pre-multiplied
+`gl_ModelViewProjectionMatrix` (one less matrix multiply per fragment).
+
+**Depends on:** G-021
+
+---
+
 ## Agent Skills
 
 | Skill | Purpose |
@@ -1180,6 +1300,7 @@ add:
 | `coin3d_fullscreen_quad` | Full-screen quad rendering pipeline and unprojection math |
 | `dm_ray_march_scene_graph` | Correct Coin3D scene graph structure for the ray march renderer |
 | `dm_glsl_lighting` | Eye-space vs world-space coordinate transforms for GLSL lighting in Coin3D |
+| `dm_coin3d_depth_ordering` | Coin3D opaque/transparent render passes, depth buffer control, `gl_FragDepth` interop |
 | `dm_sdf_slicer` | Marching squares, DM curve compatibility, `fit_dm_curve` contract |
 | `dm_todo_format` | Task format and conventions for this project |
 

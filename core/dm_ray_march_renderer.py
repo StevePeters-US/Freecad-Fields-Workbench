@@ -56,6 +56,22 @@ class DMRayMarchRenderer:
         # 2. Shader-scoped separator (isolates shader from bbox proxy)
         self._shader_sep = coin.SoSeparator()
 
+        # Force opaque classification — without this, the quad inherits the parent
+        # ViewProvider's material, which may have transparency > 0, causing Coin3D
+        # to render the quad in the transparent pass with depth writes DISABLED.
+        quad_mat = coin.SoMaterial()
+        quad_mat.transparency.setValue(0.0)
+        self._shader_sep.addChild(quad_mat)
+
+        # Explicit depth buffer control (belt-and-suspenders with opaque material)
+        try:
+            depth_buf = coin.SoDepthBuffer()
+            depth_buf.test.setValue(True)   # GL_DEPTH_TEST enabled
+            depth_buf.write.setValue(True)  # glDepthMask(GL_TRUE)
+            self._shader_sep.addChild(depth_buf)
+        except AttributeError:
+            pass  # SoDepthBuffer not available in this Coin3D/pivy version
+
         # 2a. Force GL_NEAREST filtering (shader does its own trilinear;
         #     hardware bilinear bleeds across atlas tile boundaries)
         complexity = coin.SoComplexity()
@@ -225,9 +241,11 @@ void main() {
         gl_FragColor = vec4(vec3(float(march_iters) / 256.0), 1.0);
     }
 
-    // 6. Correct depth write
-    vec4 clip    = gl_ProjectionMatrix * gl_ModelViewMatrix * vec4(hp, 1.0);
-    gl_FragDepth = (clip.z / clip.w + 1.0) * 0.5;
+    // 6. Depth write — use gl_DepthRange for Coin3D compatibility
+    vec4 clip     = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
+    float ndc_z   = clip.z / clip.w;
+    gl_FragDepth  = gl_DepthRange.near
+                  + gl_DepthRange.diff * (ndc_z * 0.5 + 0.5);
 }
 """)
         # 2d. Uniforms
