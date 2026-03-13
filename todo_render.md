@@ -779,7 +779,7 @@ Step 2 — In `update()`, inside the uniform update block, set the 8 corners:
 
 ---
 
-### G-011: Fix uint16 texture reconstruction precision (Terracing)
+### [x] G-011: Fix uint16 texture reconstruction precision (Terracing)
 
 **File:** `core/dm_ray_march_renderer.py` — modify `sample_texel()` in fragment shader
 

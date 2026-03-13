@@ -66,7 +66,8 @@ float sample_texel(float ix, float iy, float iz) {
     float u = (c * (float(u_nx) + 1.0) + ix + 0.5) / u_atlas_w;
     float v = (r * (float(u_ny) + 1.0) + iy + 0.5) / u_atlas_h;
     vec4 t = texture2D(u_sdf_tex, vec2(u, v));
-    return t.r + t.a / 256.0;  // reconstruct uint16 from high (r) + low (a) channels
+    // Mathematically exact uint16 reconstruction for OpenGL
+    return (t.r * 65280.0 + t.a * 255.0) / 65535.0;
 }
 
 float sample_sdf(vec3 p) {
