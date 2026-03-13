@@ -42,6 +42,19 @@ class _SettingsDialog(QtGui.QDialog):
         current_mb = get_max_bounds()
         current_curv = get_curvature_threshold()
 
+        # Near Clip Distance spinbox
+        from core.dm_object import get_near_clip_distance
+        self._near_clip_spin = QtGui.QDoubleSpinBox()
+        self._near_clip_spin.setRange(0.0, 10000.0)
+        self._near_clip_spin.setSingleStep(1.0)
+        self._near_clip_spin.setDecimals(1)
+        self._near_clip_spin.setValue(get_near_clip_distance())
+        self._near_clip_spin.setToolTip(
+            "Override camera near clipping distance in mm.\n"
+            "Set to 0 for automatic (FreeCAD default).\n"
+            "Increase if F-Rep objects are clipped when zoomed in."
+        )
+
         layout = QtGui.QFormLayout(self)
 
         # Show Wireframe checkbox
@@ -140,6 +153,8 @@ class _SettingsDialog(QtGui.QDialog):
         self._curv_spin.setToolTip("Adaptive MC curvature threshold (lower = more detail on edges)")
         layout.addRow("Curvature Threshold:", self._curv_spin)
 
+        layout.addRow("Near Clip Distance (mm):", self._near_clip_spin)
+
         # Buttons
         btn_box = QtGui.QDialogButtonBox(
             QtGui.QDialogButtonBox.Ok | QtGui.QDialogButtonBox.Cancel
@@ -152,7 +167,9 @@ class _SettingsDialog(QtGui.QDialog):
         from core.dm_object import (set_show_wireframe, set_line_width, set_point_size,
                                     set_picking_radius, set_meshing_type, set_meshing_cell_size,
                                     set_max_bounds, set_perf_profiler_enabled, set_curvature_threshold,
-                                    set_decimate_enabled, set_render_mode, refresh_all_dm_objects)
+                                    set_decimate_enabled, set_render_mode, refresh_all_dm_objects,
+                                    set_near_clip_distance, apply_near_clip_override)
+        from core.dm_logger import set_enable_crash_log
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()
@@ -174,8 +191,10 @@ class _SettingsDialog(QtGui.QDialog):
         set_render_mode(self._render_mode_combo.currentIndex())
         set_perf_profiler_enabled(self._perf_check.isChecked())
         
-        from core.dm_logger import set_enable_crash_log
         set_enable_crash_log(self._log_check.isChecked())
+        
+        set_near_clip_distance(self._near_clip_spin.value())
+        apply_near_clip_override()
         
         # Apply to all existing objects
         refresh_all_dm_objects()

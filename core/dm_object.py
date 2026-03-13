@@ -130,6 +130,30 @@ def set_deduplicate_enabled(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetBool("DeduplicateEnabled", bool(val))
 
 
+def get_near_clip_distance():
+    """Return the near clip distance override in mm (0 = auto)."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("NearClipDistance", 0.0)
+
+def set_near_clip_distance(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("NearClipDistance", float(val))
+
+def apply_near_clip_override():
+    """Apply near clip distance override to the active camera, if set."""
+    dist = get_near_clip_distance()
+    if dist <= 0.0:
+        return  # auto mode
+    try:
+        import FreeCADGui
+        from . import dm_logger
+        view = FreeCADGui.ActiveDocument.ActiveView
+        if view:
+            cam = view.getCameraNode()
+            if cam:
+                cam.nearDistance.setValue(dist)
+    except Exception:
+        pass
+
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -522,6 +546,9 @@ class DMViewProvider:
             pc = getattr(self, "point_cloud_renderer", None)
             if pc and hasattr(pc, "set_visible"):
                 pc.set_visible(vobj.Visibility)
+
+        # Re-apply near clip override (FreeCAD navigation resets camera params)
+        apply_near_clip_override()
 
         
 

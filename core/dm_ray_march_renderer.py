@@ -25,14 +25,51 @@ class DMRayMarchRenderer:
         vobj.RootNode.addChild(self._switch)
 
     def _setup_nodes(self):
-        # 1. Texture Atlas
+        # 1. Bounding box proxy (added to root FIRST for correct near/far clipping)
+        #    Must be OUTSIDE the shader separator so it doesn't inherit the ray march shader.
+        self._bbox_sep = coin.SoSeparator()
+        
+        # Transparent material (Coin3D BBox action ignores INVISIBLE draw style)
+        mat = coin.SoMaterial()
+        mat.transparency.setValue(1.0)
+        self._bbox_sep.addChild(mat)
+        
+        # Prevent picking
+        pick = coin.SoPickStyle()
+        pick.style.setValue(coin.SoPickStyle.UNPICKABLE)
+        self._bbox_sep.addChild(pick)
+        
+        self._bbox_coords = coin.SoCoordinate3()
+        self._bbox_sep.addChild(self._bbox_coords)
+        
+        # Ensure we have actual bounded edges (12 edges of a box = 36 indices)
+        bbox_lines = coin.SoIndexedLineSet()
+        bbox_lines.coordIndex.setValues(0, 36, [
+            0,1,-1, 1,3,-1, 3,2,-1, 2,0,-1,
+            4,5,-1, 5,7,-1, 7,6,-1, 6,4,-1,
+            0,4,-1, 1,5,-1, 2,6,-1, 3,7,-1
+        ])
+        self._bbox_sep.addChild(bbox_lines)
+        
+        self.root.addChild(self._bbox_sep)
+
+        # 2. Shader-scoped separator (isolates shader from bbox proxy)
+        self._shader_sep = coin.SoSeparator()
+
+        # 2a. Force GL_NEAREST filtering (shader does its own trilinear;
+        #     hardware bilinear bleeds across atlas tile boundaries)
+        complexity = coin.SoComplexity()
+        complexity.textureQuality.setValue(0.0)   # GL_NEAREST / GL_NEAREST
+        self._shader_sep.addChild(complexity)
+
+        # 2b. Texture Atlas
         self._tex = coin.SoTexture2()
         self._tex.model.setValue(coin.SoTexture2.REPLACE) # We use our own shading
         self._tex.wrapS.setValue(coin.SoTexture2.CLAMP)
         self._tex.wrapT.setValue(coin.SoTexture2.CLAMP)
-        self.root.addChild(self._tex)
+        self._shader_sep.addChild(self._tex)
 
-        # 2. Shader Program
+        # 2c. Shader Program
         shader = coin.SoShaderProgram()
         v_shader = coin.SoVertexShader()
         v_shader.sourceType.setValue(coin.SoShaderObject.GLSL_PROGRAM)
@@ -59,6 +96,7 @@ uniform float u_atlas_h;
 uniform vec3  u_bbox_min;
 uniform vec3  u_bbox_max;
 uniform float u_max_dist;
+uniform int   u_debug_mode;
 
 float sample_texel(float ix, float iy, float iz) {
     float c = floor(mod(iz, float(u_atz)));
@@ -138,8 +176,10 @@ void main() {
     float t = tNear;
     bool hit = false;
     float d;
+    int march_iters = 0;
 
     for (int i = 0; i < 256; i++) {
+        march_iters = i;
         vec3 p = ro + t * rd;
         d = sample_sdf(p);
         if (abs(d) < hit_thresh) { hit = true; break; }
@@ -150,10 +190,24 @@ void main() {
 
 
 
-    // 5. Shading
+    // 5. Shading — transform light from eye space to world space
     vec3 hp  = ro + t * rd;
     vec3 n   = sdf_normal(hp);
-    vec3 ld  = normalize(gl_LightSource[0].position.xyz - hp);
+
+    // gl_LightSource[0].position is in EYE space (OpenGL convention).
+    // For directional lights (w==0), .xyz is the light direction in eye space.
+    // For positional lights (w==1), .xyz is the position in eye space.
+    vec4 light_eye = gl_LightSource[0].position;
+    vec3 ld;
+    if (light_eye.w < 0.5) {
+        // Directional light: transform direction to world space
+        ld = normalize((gl_ModelViewMatrixInverse * vec4(light_eye.xyz, 0.0)).xyz);
+    } else {
+        // Positional light: transform position to world space, then direction
+        vec3 light_world = (gl_ModelViewMatrixInverse * light_eye).xyz;
+        ld = normalize(light_world - hp);
+    }
+
     float diff = max(dot(n, ld), 0.0);
     vec3 vd    = normalize(cam - hp);
     float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
@@ -161,12 +215,22 @@ void main() {
 
     gl_FragColor = vec4(color, 1.0);
 
+    // Debug colour overrides
+    if (u_debug_mode == 1) {
+        float v = sample_sdf(hp) / u_max_dist * 0.5 + 0.5;
+        gl_FragColor = vec4(v, 0.0, 1.0 - v, 1.0);
+    } else if (u_debug_mode == 2) {
+        gl_FragColor = vec4(n * 0.5 + 0.5, 1.0);
+    } else if (u_debug_mode == 3) {
+        gl_FragColor = vec4(vec3(float(march_iters) / 256.0), 1.0);
+    }
+
     // 6. Correct depth write
     vec4 clip    = gl_ProjectionMatrix * gl_ModelViewMatrix * vec4(hp, 1.0);
     gl_FragDepth = (clip.z / clip.w + 1.0) * 0.5;
 }
 """)
-        # 3. Uniforms
+        # 2d. Uniforms
         u_sdf_tex = coin.SoShaderParameter1i()
         u_sdf_tex.name.setValue("u_sdf_tex")
         u_sdf_tex.value.setValue(0)
@@ -209,18 +273,22 @@ void main() {
         
         f_shader.parameter.setNum(0)
         f_shader.parameter.set1Value(0, u_sdf_tex)
+        self._u["u_debug_mode"] = coin.SoShaderParameter1i()
+        self._u["u_debug_mode"].name.setValue("u_debug_mode")
+        self._u["u_debug_mode"].value.setValue(0)
+
         for i, name in enumerate(["u_nx", "u_ny", "u_nz", "u_atz", "u_atlas_w", "u_atlas_h", 
-                                  "u_bbox_min", "u_bbox_max", "u_max_dist"]):
+                                  "u_bbox_min", "u_bbox_max", "u_max_dist", "u_debug_mode"]):
             f_shader.parameter.set1Value(i + 1, self._u[name])
             
         shader.shaderObject.set1Value(0, v_shader)
         shader.shaderObject.set1Value(1, f_shader)
-        self.root.addChild(shader)
+        self._shader_sep.addChild(shader)
         
-        # 4. Quad Geometry
+        # 2e. Quad Geometry
         hints = coin.SoShapeHints()
         hints.vertexOrdering.setValue(coin.SoShapeHints.UNKNOWN_ORDERING)
-        self.root.addChild(hints)
+        self._shader_sep.addChild(hints)
         
         self._coords = coin.SoCoordinate3()
         self._coords.point.setValues(0, 4, [
@@ -229,38 +297,13 @@ void main() {
             ( 1,  1, 0),
             (-1,  1, 0)
         ])
-        self.root.addChild(self._coords)
+        self._shader_sep.addChild(self._coords)
         
         faceset = coin.SoIndexedFaceSet()
         faceset.coordIndex.setValues(0, 8, [0, 1, 2, -1, 0, 2, 3, -1])
-        self.root.addChild(faceset)
+        self._shader_sep.addChild(faceset)
 
-        # 5. Bounding box proxy to fix Coin3D near/far clipping
-        self._bbox_sep = coin.SoSeparator()
-        
-        # Transparent material (Coin3D BBox action ignores INVISIBLE draw style)
-        mat = coin.SoMaterial()
-        mat.transparency.setValue(1.0)
-        self._bbox_sep.addChild(mat)
-        
-        # Prevent picking
-        pick = coin.SoPickStyle()
-        pick.style.setValue(coin.SoPickStyle.UNPICKABLE)
-        self._bbox_sep.addChild(pick)
-        
-        self._bbox_coords = coin.SoCoordinate3()
-        self._bbox_sep.addChild(self._bbox_coords)
-        
-        # Ensure we have actual bounded edges (12 edges of a box = 36 indices)
-        bbox_lines = coin.SoIndexedLineSet()
-        bbox_lines.coordIndex.setValues(0, 36, [
-            0,1,-1, 1,3,-1, 3,2,-1, 2,0,-1,
-            4,5,-1, 5,7,-1, 7,6,-1, 6,4,-1,
-            0,4,-1, 1,5,-1, 2,6,-1, 3,7,-1
-        ])
-        self._bbox_sep.addChild(bbox_lines)
-        
-        self.root.addChild(self._bbox_sep)
+        self.root.addChild(self._shader_sep)
 
     def update(self, field, cell_size):
         baked = bake_sdf_to_atlas(field, cell_size)
@@ -295,3 +338,7 @@ void main() {
         """Toggle visibility of the ray march render."""
         if hasattr(self, "_switch"):
             self._switch.whichChild = 0 if visible else -1
+
+    def set_debug_mode(self, mode):
+        """Set debug colour mode: 0=normal, 1=SDF heat-map, 2=normals, 3=iterations."""
+        self._u["u_debug_mode"].value.setValue(int(mode))

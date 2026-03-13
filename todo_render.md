@@ -840,7 +840,7 @@ To fix this, we replace the `SoDrawStyle` with an `SoMaterial` having 100% trans
 
 ---
 
-### G-014: Fix Sphere Tracing Math (Fixes "Lines" and "Wrong Triangles")
+### [x] G-014: Fix Sphere Tracing Math (Fixes "Lines" and "Wrong Triangles")
 
 **File:** `core/dm_ray_march_renderer.py` — modify `sample_sdf()` and `main()` in fragment shader
 
@@ -884,7 +884,291 @@ Step 2 — In `main()`, remove the 8-step bisection refinement completely. It's 
 
 ---
 
+## Tier 6 — Scene Graph & Texture Fixes
+
+> **Root cause analysis:** The "faces rendered as lines" artifact is caused by the
+> Coin3D scene graph structure. The `SoShaderProgram` is a direct child of
+> `self.root` (the main `SoSeparator`), so **every renderable child** of root
+> inherits the ray march shader — including the bounding-box proxy's
+> `SoIndexedLineSet`. When Coin3D traverses the bbox proxy, the vertex shader
+> does `gl_Position = vec4(gl_Vertex.xy, 0.0, 1.0)`, treating world-space box
+> coordinates (e.g. `(-20, -20)`) as NDC clip coords. After GPU viewport
+> clipping, fragments that survive execute the ray march fragment shader as
+> 1-pixel-wide **lines** — producing the characteristic "faces rendered as
+> lines" artifact seen in the screenshots.
+
+### [x] G-015: Isolate shader scope from bbox proxy (PRIMARY FIX)
+
+**File:** `core/dm_ray_march_renderer.py` — restructure `_setup_nodes()`
+
+**What:** The `SoShaderProgram`, texture, quad coordinates, and `SoIndexedFaceSet`
+must be inside their own `SoSeparator` so the shader does **not** leak into the
+bounding-box proxy. The bbox proxy must remain a direct child of `self.root`
+(outside the shader separator) so its world-space coordinates participate in
+Coin3D's bounding-box computation without being rendered by the ray march shader.
+
+> **Required reading:** `.agents/skills/coin3d_fullscreen_quad/SKILL.md`
+
+**Implementation:**
+
+Restructure `_setup_nodes()` so the scene graph looks like this:
+
+```
+self.root (SoSeparator)
+├── self._bbox_sep (SoSeparator)         ← bbox proxy (NO shader here)
+│   ├── SoMaterial (transparency=1.0)
+│   ├── SoPickStyle (UNPICKABLE)
+│   ├── _bbox_coords (SoCoordinate3)
+│   └── SoIndexedLineSet (12 edges)
+└── self._shader_sep (SoSeparator)       ← NEW: shader-scoped group
+    ├── SoTexture2
+    ├── SoShaderProgram (vertex + fragment)
+    ├── SoShapeHints (UNKNOWN_ORDERING)
+    ├── SoCoordinate3 (quad: (-1,-1)..(1,1))
+    └── SoIndexedFaceSet (2 triangles)
+```
+
+Step 1 — Create `self._shader_sep = coin.SoSeparator()` and add the texture,
+shader program, shape hints, quad coords, and face set as children of
+`_shader_sep` instead of `self.root`.
+
+Step 2 — Add `self._bbox_sep` to `self.root` **first**, then add
+`self._shader_sep` to `self.root` **second**. This ensures the bbox coordinates
+are traversed for bounding-box purposes but never rendered with the shader.
+
+Step 3 — No changes needed in `update()` — it already sets `_bbox_coords` and
+uniforms independently.
+
+**Depends on:** G-013
+
+---
+
+### [x] G-016: Force NEAREST texture filtering on SDF atlas
+
+**File:** `core/dm_ray_march_renderer.py` — modify `_setup_nodes()`
+
+**What:** Coin3D defaults to `GL_LINEAR` (bilinear) texture filtering. Since the
+shader performs its own trilinear interpolation via `sample_texel()`, the hardware
+bilinear filter is redundant and **harmful**: at tile boundaries in the atlas, the
+2×2 sampling kernel bleeds values from adjacent z-slice tiles, corrupting the SDF.
+Force `GL_NEAREST` filtering by inserting an `SoComplexity` node with
+`textureQuality = 0.0` before the texture node.
+
+**Implementation:** In `_setup_nodes()`, inside `_shader_sep`, add before the
+`SoTexture2` node:
+
+```python
+        complexity = coin.SoComplexity()
+        complexity.textureQuality.setValue(0.0)   # GL_NEAREST / GL_NEAREST
+        self._shader_sep.addChild(complexity)
+```
+
+**Depends on:** G-015
+
+---
+
+### [x] G-017: Add shader debug colour mode
+
+**File:** `core/dm_ray_march_renderer.py` — modify fragment shader + add uniform
+
+**What:** Add a `u_debug_mode` integer uniform that overrides the final fragment
+colour to visualize diagnostic data. This makes it easy to diagnose future
+rendering issues without modifying the shader source each time.
+
+| `u_debug_mode` | Output |
+|:-:|:-|
+| 0 | Normal shading (default) |
+| 1 | SDF value heat-map (blue=negative → red=positive) |
+| 2 | Surface normal as RGB |
+| 3 | Ray march iteration count as grayscale |
+
+**Implementation:**
+
+Step 1 — Add a `uniform int u_debug_mode;` declaration in the fragment shader.
+
+Step 2 — After shading (section 5), add:
+```glsl
+    if (u_debug_mode == 1) {
+        float v = sample_sdf(hp) / u_max_dist * 0.5 + 0.5;
+        gl_FragColor = vec4(v, 0.0, 1.0 - v, 1.0);
+    } else if (u_debug_mode == 2) {
+        gl_FragColor = vec4(n * 0.5 + 0.5, 1.0);
+    } else if (u_debug_mode == 3) {
+        // Need to track iteration count in the march loop
+        gl_FragColor = vec4(vec3(float(march_iters) / 256.0), 1.0);
+    }
+```
+(Also change the march loop to track `march_iters`.)
+
+Step 3 — Add the uniform node in Python:
+```python
+        self._u["u_debug_mode"] = coin.SoShaderParameter1i()
+        self._u["u_debug_mode"].name.setValue("u_debug_mode")
+        self._u["u_debug_mode"].value.setValue(0)
+```
+
+Step 4 — Add a `set_debug_mode(mode)` method on `DMRayMarchRenderer`.
+
+**Depends on:** G-015
+
+---
+
 ### G-012: Add edge anti-aliasing to fragment shader
+
+**Depends on:** G-015
+
+---
+
+## Tier 7 — Lighting & Camera Fixes
+
+### [x] G-018: Fix scene lighting in fragment shader (coordinate space mismatch)
+
+**File:** `core/dm_ray_march_renderer.py` — modify section 5 (Shading) in the fragment shader string (around line 193)
+
+**What:** The shader computes `ld = normalize(gl_LightSource[0].position.xyz - hp)`, but
+`gl_LightSource[0].position` is in **eye space** (pre-transformed by the ModelView matrix by
+OpenGL convention) while `hp` is in **world space** (computed via `gl_ModelViewProjectionMatrixInverse`
+unprojection). This coordinate space mismatch produces a near-zero or nonsensical light direction,
+making the surface appear uniformly dark with no diffuse response.
+
+FreeCAD's default headlight is a directional light (`position.w == 0.0`), so its `.xyz` is a
+direction in eye space, not a position. We must transform it to world space before dotting with
+the world-space normal.
+
+> **Required reading:** `.agents/skills/dm_glsl_lighting/SKILL.md`
+
+**Implementation:** In the fragment shader, replace the shading block (section 5):
+
+```glsl
+    // 5. Shading
+    vec3 hp  = ro + t * rd;
+    vec3 n   = sdf_normal(hp);
+    vec3 ld  = normalize(gl_LightSource[0].position.xyz - hp);
+    float diff = max(dot(n, ld), 0.0);
+    vec3 vd    = normalize(cam - hp);
+    float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
+    vec3 color = vec3(1.0,0.5,0.0)*(0.15 + 0.75*diff) + vec3(0.4)*spec;
+
+    gl_FragColor = vec4(color, 1.0);
+```
+
+with:
+
+```glsl
+    // 5. Shading — transform light from eye space to world space
+    vec3 hp  = ro + t * rd;
+    vec3 n   = sdf_normal(hp);
+
+    // gl_LightSource[0].position is in EYE space (OpenGL convention).
+    // For directional lights (w==0), .xyz is the light direction in eye space.
+    // For positional lights (w==1), .xyz is the position in eye space.
+    vec4 light_eye = gl_LightSource[0].position;
+    vec3 ld;
+    if (light_eye.w < 0.5) {
+        // Directional light: transform direction to world space
+        ld = normalize((gl_ModelViewMatrixInverse * vec4(light_eye.xyz, 0.0)).xyz);
+    } else {
+        // Positional light: transform position to world space, then direction
+        vec3 light_world = (gl_ModelViewMatrixInverse * light_eye).xyz;
+        ld = normalize(light_world - hp);
+    }
+
+    float diff = max(dot(n, ld), 0.0);
+    vec3 vd    = normalize(cam - hp);
+    float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
+    vec3 color = vec3(1.0,0.5,0.0)*(0.15 + 0.75*diff) + vec3(0.4)*spec;
+
+    gl_FragColor = vec4(color, 1.0);
+```
+
+**Depends on:** G-015
+
+---
+
+### G-019: Add near clip distance setting to DM Settings
+
+**File:** `core/dm_object.py` — add getter/setter after `set_deduplicate_enabled()` (line 130)
+**File:** `commands/cmd_settings.py` — add UI control and apply logic
+
+**What:** FreeCAD's auto-computed camera near plane can clip F-Rep objects rendered via the
+ray march shader, especially when the camera is close to large objects. Add a configurable
+near clip distance override. When set to 0 (default), FreeCAD's automatic near plane is used.
+When set to a positive value, the camera's `nearDistance` is forced to that value after each
+recompute.
+
+**Implementation:**
+
+Step 1 — In `core/dm_object.py`, after `set_deduplicate_enabled()` (line 130), add:
+```python
+def get_near_clip_distance():
+    """Return the near clip distance override in mm (0 = auto)."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("NearClipDistance", 0.0)
+
+def set_near_clip_distance(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("NearClipDistance", float(val))
+
+def apply_near_clip_override():
+    """Apply near clip distance override to the active camera, if set."""
+    dist = get_near_clip_distance()
+    if dist <= 0.0:
+        return  # auto mode
+    try:
+        import FreeCADGui
+        view = FreeCADGui.ActiveDocument.ActiveView
+        cam = view.getCameraNode()
+        cam.nearDistance.setValue(dist)
+    except Exception:
+        pass
+```
+
+Step 2 — In `commands/cmd_settings.py`, in `_SettingsDialog.__init__()`, after the
+Curvature Threshold row (line 141), add:
+```python
+        # Near Clip Distance spinbox
+        from core.dm_object import get_near_clip_distance
+        self._near_clip_spin = QtGui.QDoubleSpinBox()
+        self._near_clip_spin.setRange(0.0, 10000.0)
+        self._near_clip_spin.setSingleStep(1.0)
+        self._near_clip_spin.setDecimals(1)
+        self._near_clip_spin.setValue(get_near_clip_distance())
+        self._near_clip_spin.setToolTip(
+            "Override camera near clipping distance in mm.\n"
+            "Set to 0 for automatic (FreeCAD default).\n"
+            "Increase if F-Rep objects are clipped when zoomed in."
+        )
+        layout.addRow("Near Clip Distance (mm):", self._near_clip_spin)
+```
+
+Step 3 — In `commands/cmd_settings.py`, in `_on_accept()`, after the existing setters
+(around line 178), add:
+```python
+        from core.dm_object import set_near_clip_distance, apply_near_clip_override
+        set_near_clip_distance(self._near_clip_spin.value())
+        apply_near_clip_override()
+```
+
+**Depends on:** None (independent of shader tasks)
+
+---
+
+### [x] G-020: Apply near clip override on document recompute
+
+**File:** `core/dm_object.py` — modify `DMViewProvider.updateData()` or `onChanged()`
+
+**What:** The near clip override from G-019 must be re-applied whenever the scene
+changes, because FreeCAD's navigation resets camera parameters on zoom/pan.
+Hook into `DMViewProvider.onChanged()` to call `apply_near_clip_override()` whenever
+the `Visibility` property changes or the document recomputes.
+
+**Implementation:** In `DMViewProvider.onChanged()`, after the existing visibility handling,
+add:
+```python
+        # Re-apply near clip override (FreeCAD navigation resets camera params)
+        from core.dm_object import apply_near_clip_override
+        apply_near_clip_override()
+```
+
+**Depends on:** G-019
 
 ---
 
@@ -894,6 +1178,8 @@ Step 2 — In `main()`, remove the 8-step bisection refinement completely. It's 
 |-------|---------|
 | `coin3d_shader_api` | `SoShaderProgram` setup, uniform node types, proxy geometry |
 | `coin3d_fullscreen_quad` | Full-screen quad rendering pipeline and unprojection math |
+| `dm_ray_march_scene_graph` | Correct Coin3D scene graph structure for the ray march renderer |
+| `dm_glsl_lighting` | Eye-space vs world-space coordinate transforms for GLSL lighting in Coin3D |
 | `dm_sdf_slicer` | Marching squares, DM curve compatibility, `fit_dm_curve` contract |
 | `dm_todo_format` | Task format and conventions for this project |
 
