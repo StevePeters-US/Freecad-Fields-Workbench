@@ -71,8 +71,6 @@ float sample_texel(float ix, float iy, float iz) {
 }
 
 float sample_sdf(vec3 p) {
-    if (any(lessThan(p, u_bbox_min)) || any(greaterThan(p, u_bbox_max)))
-        return u_max_dist;
     vec3 uvw = (p - u_bbox_min) / (u_bbox_max - u_bbox_min);
     float gx = clamp(uvw.x * float(u_nx), 0.0, float(u_nx));
     float gy = clamp(uvw.y * float(u_ny), 0.0, float(u_ny));
@@ -150,19 +148,7 @@ void main() {
     }
     if (!hit) discard;
 
-    // 4. Bisection refinement for sub-voxel accuracy
-    float t_lo = t - min_step;
-    float t_hi = t;
-    for (int j = 0; j < 8; j++) {
-        float t_mid = (t_lo + t_hi) * 0.5;
-        float d_mid = sample_sdf(ro + t_mid * rd);
-        if (d_mid < 0.0) {
-            t_hi = t_mid;
-        } else {
-            t_lo = t_mid;
-        }
-    }
-    t = (t_lo + t_hi) * 0.5;
+
 
     // 5. Shading
     vec3 hp  = ro + t * rd;
