@@ -251,16 +251,28 @@ void main() {
 
         # 5. Bounding box proxy to fix Coin3D near/far clipping
         self._bbox_sep = coin.SoSeparator()
-        bbox_style = coin.SoDrawStyle()
-        bbox_style.style.setValue(coin.SoDrawStyle.INVISIBLE)
-        self._bbox_sep.addChild(bbox_style)
+        
+        # Transparent material (Coin3D BBox action ignores INVISIBLE draw style)
+        mat = coin.SoMaterial()
+        mat.transparency.setValue(1.0)
+        self._bbox_sep.addChild(mat)
+        
+        # Prevent picking
+        pick = coin.SoPickStyle()
+        pick.style.setValue(coin.SoPickStyle.UNPICKABLE)
+        self._bbox_sep.addChild(pick)
         
         self._bbox_coords = coin.SoCoordinate3()
         self._bbox_sep.addChild(self._bbox_coords)
         
-        bbox_pts = coin.SoPointSet()
-        bbox_pts.numPoints.setValue(8)
-        self._bbox_sep.addChild(bbox_pts)
+        # Ensure we have actual bounded edges (12 edges of a box = 36 indices)
+        bbox_lines = coin.SoIndexedLineSet()
+        bbox_lines.coordIndex.setValues(0, 36, [
+            0,1,-1, 1,3,-1, 3,2,-1, 2,0,-1,
+            4,5,-1, 5,7,-1, 7,6,-1, 6,4,-1,
+            0,4,-1, 1,5,-1, 2,6,-1, 3,7,-1
+        ])
+        self._bbox_sep.addChild(bbox_lines)
         
         self.root.addChild(self._bbox_sep)
 

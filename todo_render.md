@@ -796,6 +796,94 @@ Step 2 — In `update()`, inside the uniform update block, set the 8 corners:
 
 ---
 
+## Tier 5 — Critical Render Bug Fixes 
+
+### [x] G-013: Fix Bounding Box Proxy (Fixes Viewplane Clipping)
+
+**File:** `core/dm_ray_march_renderer.py`
+
+**What:** In task G-010, `SoDrawStyle.INVISIBLE` was used on the bounding box proxy to hide it. Unfortunately, Open Inventor/Coin3D ignores invisible nodes during `SoGetBoundingBoxAction`. Therefore, the proxy did not expand the scene bounding box, and FreeCAD's camera near/far planes still squish tightly around the Z=0 quad, destroying projection matrix precision and causing clipping.
+To fix this, we replace the `SoDrawStyle` with an `SoMaterial` having 100% transparency, and use an `SoIndexedLineSet` that actually has geometric edges, plus an `SoPickStyle` to keep it unpickable.
+
+**Implementation:** In `_setup_nodes()`, replace the existing `# 5. Bounding box proxy...` section with:
+```python
+        # 5. Bounding box proxy to fix Coin3D near/far clipping
+        self._bbox_sep = coin.SoSeparator()
+        
+        # Transparent material (Coin3D BBox action ignores INVISIBLE draw style)
+        mat = coin.SoMaterial()
+        mat.transparency.setValue(1.0)
+        self._bbox_sep.addChild(mat)
+        
+        # Prevent picking
+        pick = coin.SoPickStyle()
+        pick.style.setValue(coin.SoPickStyle.UNPICKABLE)
+        self._bbox_sep.addChild(pick)
+        
+        self._bbox_coords = coin.SoCoordinate3()
+        self._bbox_sep.addChild(self._bbox_coords)
+        
+        # Ensure we have actual bounded edges (12 edges of a box = 36 indices)
+        bbox_lines = coin.SoIndexedLineSet()
+        bbox_lines.coordIndex.setValues(0, 36, [
+            0,1,-1, 1,3,-1, 3,2,-1, 2,0,-1,
+            4,5,-1, 5,7,-1, 7,6,-1, 6,4,-1,
+            0,4,-1, 1,5,-1, 2,6,-1, 3,7,-1
+        ])
+        self._bbox_sep.addChild(bbox_lines)
+        
+        self.root.addChild(self._bbox_sep)
+```
+*(No changes needed in `update()`; it already sets the 8 corners)*
+
+**Depends on:** G-010
+
+---
+
+### G-014: Fix Sphere Tracing Math (Fixes "Lines" and "Wrong Triangles")
+
+**File:** `core/dm_ray_march_renderer.py` — modify `sample_sdf()` and `main()` in fragment shader
+
+**What:** The ray marcher has two mathematical flaws causing the SDF faces to tear into lines and noisy triangles:
+1. `sample_sdf` checks `any(lessThan(p, u_bbox_min))` and returns `u_max_dist`. Floating precision on `tNear` pushes rays slightly outside the box, causing them to immediately return `u_max_dist` and jump past the geometry, destroying the surface exactly at the box bounds.
+2. The bisection refinement loops between `t - min_step` and `t`. However, the loop stops when `abs(d) < hit_thresh` which often occurs BEFORE crossing the boundary (`d > 0`). Bracketing between two outside points converges on pure noise. 
+
+**Implementation:** 
+
+Step 1 — In `sample_sdf()`, delete the strict bounding box check. The texture clamping is mathematically safe and sufficient. Change the start of `sample_sdf()` from:
+```glsl
+float sample_sdf(vec3 p) {
+    if (any(lessThan(p, u_bbox_min)) || any(greaterThan(p, u_bbox_max)))
+        return u_max_dist;
+    vec3 uvw = (p - u_bbox_min) / (u_bbox_max - u_bbox_min);
+```
+To just:
+```glsl
+float sample_sdf(vec3 p) {
+    vec3 uvw = (p - u_bbox_min) / (u_bbox_max - u_bbox_min);
+```
+
+Step 2 — In `main()`, remove the 8-step bisection refinement completely. It's conceptually invalid for `abs(d) < thresh` exits. Remove this block:
+```glsl
+    // 4. Bisection refinement for sub-voxel accuracy
+    float t_lo = t - min_step;
+    float t_hi = t;
+    for (int j = 0; j < 8; j++) {
+        float t_mid = (t_lo + t_hi) * 0.5;
+        float d_mid = sample_sdf(ro + t_mid * rd);
+        if (d_mid < 0.0) {
+            t_hi = t_mid;
+        } else {
+            t_lo = t_mid;
+        }
+    }
+    t = (t_lo + t_hi) * 0.5;
+```
+
+**Depends on:** G-002
+
+---
+
 ### G-012: Add edge anti-aliasing to fragment shader
 
 ---
