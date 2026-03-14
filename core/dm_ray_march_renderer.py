@@ -29,10 +29,10 @@ class DMRayMarchRenderer:
         #    Must be OUTSIDE the shader separator so it doesn't inherit the ray march shader.
         self._bbox_sep = coin.SoSeparator()
         
-        # Transparent material (Coin3D BBox action ignores INVISIBLE draw style)
-        mat = coin.SoMaterial()
-        mat.transparency.setValue(1.0)
-        self._bbox_sep.addChild(mat)
+        # Invisible draw style (reliably hides lines while keeping bbox contribution)
+        draw = coin.SoDrawStyle()
+        draw.style.setValue(coin.SoDrawStyle.INVISIBLE)
+        self._bbox_sep.addChild(draw)
         
         # Prevent picking
         pick = coin.SoPickStyle()
@@ -154,11 +154,10 @@ vec3 sdf_normal(vec3 p) {
         k.xxx * sample_sdf(p + k.xxx*h));
 }
 
-// AABB-ray intersection: returns (tNear, tFar). Miss if tNear > tFar.
+// AABB-ray intersection: returns (tNear, tFar).
 vec2 intersect_aabb(vec3 ro, vec3 rd) {
-    vec3 inv_rd = 1.0 / rd;
-    vec3 t1 = (u_bbox_min - ro) * inv_rd;
-    vec3 t2 = (u_bbox_max - ro) * inv_rd;
+    vec3 t1 = (u_bbox_min - ro) / rd;
+    vec3 t2 = (u_bbox_max - ro) / rd;
     vec3 tmin = min(t1, t2);
     vec3 tmax = max(t1, t2);
     float tNear = max(max(tmin.x, tmin.y), tmin.z);
@@ -303,22 +302,36 @@ void main() {
         shader.shaderObject.set1Value(1, f_shader)
         self._shader_sep.addChild(shader)
         
-        # 2e. Quad Geometry
+        # 2e. Quad Geometry + AABB expansion points
         hints = coin.SoShapeHints()
         hints.vertexOrdering.setValue(coin.SoShapeHints.UNKNOWN_ORDERING)
         self._shader_sep.addChild(hints)
         
         self._coords = coin.SoCoordinate3()
-        self._coords.point.setValues(0, 4, [
-            (-1, -1, 0),
-            ( 1, -1, 0),
-            ( 1,  1, 0),
-            (-1,  1, 0)
+        # Points 0-7: AABB corners (updated in update())
+        # Points 8-11: NDC quad [-1, 1]
+        self._coords.point.setValues(8, 4, [
+            (-1, -1, 0), ( 1, -1, 0), ( 1,  1, 0), (-1,  1, 0)
         ])
         self._shader_sep.addChild(self._coords)
+
+        # Invisible point set using points 0-7 to expand the separator's bbox
+        bbox_style = coin.SoDrawStyle()
+        bbox_style.style.setValue(coin.SoDrawStyle.INVISIBLE)
+        self._shader_sep.addChild(bbox_style)
         
+        self._bbox_expansion = coin.SoPointSet()
+        self._bbox_expansion.numPoints.setValue(8) # First 8 points
+        self._shader_sep.addChild(self._bbox_expansion)
+        
+        # Reset draw style for the quad
+        quad_style = coin.SoDrawStyle()
+        quad_style.style.setValue(coin.SoDrawStyle.FILLED)
+        self._shader_sep.addChild(quad_style)
+
         faceset = coin.SoIndexedFaceSet()
-        faceset.coordIndex.setValues(0, 8, [0, 1, 2, -1, 0, 2, 3, -1])
+        # Use indices 8-11 for the quad triangles
+        faceset.coordIndex.setValues(0, 8, [8, 9, 10, -1, 8, 10, 11, -1])
         self._shader_sep.addChild(faceset)
 
         self.root.addChild(self._shader_sep)
@@ -350,7 +363,13 @@ void main() {
         
         self._u["u_max_dist"].value.setValue(float(baked["max_dist"]))
         
-        # 3. (No geometry update needed for quad)
+        # 3. Update expansion points in shader-sep to prevent culling
+        self._coords.point.setValues(0, 8, [
+            (mn.x, mn.y, mn.z), (mx.x, mn.y, mn.z),
+            (mn.x, mx.y, mn.z), (mx.x, mx.y, mn.z),
+            (mn.x, mn.y, mx.z), (mx.x, mn.y, mx.z),
+            (mn.x, mx.y, mx.z), (mx.x, mx.y, mx.z)
+        ])
 
     def set_visible(self, visible):
         """Toggle visibility of the ray march render."""

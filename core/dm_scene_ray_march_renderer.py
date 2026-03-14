@@ -66,6 +66,8 @@ class DMSceneRayMarchRenderer:
     def _setup_nodes(self):
         # 1. Bounding box proxy (outside shader sep for correct near/far clipping)
         self._bbox_sep = coin.SoSeparator()
+        
+        # Transparent material (Coin3D BBox action ignores INVISIBLE draw style)
         mat = coin.SoMaterial()
         mat.transparency.setValue(1.0)
         self._bbox_sep.addChild(mat)
@@ -146,6 +148,12 @@ uniform float u_max_dist[8];
 uniform int   u_row_offset[8];
 uniform vec3  u_bbox_min[8];
 uniform vec3  u_bbox_max[8];
+float sdBox(vec3 p, vec3 bmin, vec3 bmax) {
+    vec3 center = (bmax + bmin) * 0.5;
+    vec3 halfDim = (bmax - bmin) * 0.5;
+    vec3 q = abs(p - center) - halfDim;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
 
 float sample_texel_field(int fi, float ix, float iy, float iz) {
     float c = floor(mod(iz, float(u_atz[fi])));
@@ -159,9 +167,10 @@ float sample_texel_field(int fi, float ix, float iy, float iz) {
 }
 
 float sample_sdf_field(int fi, vec3 p) {
-    // Outside this field's bbox → return max_dist (miss)
-    if (any(lessThan(p, u_bbox_min[fi])) || any(greaterThan(p, u_bbox_max[fi])))
-        return u_max_dist[fi];
+    // Outside this field's bbox -> return distance to box (safe step)
+    float d_box = sdBox(p, u_bbox_min[fi], u_bbox_max[fi]);
+    if (d_box > 0.001) return d_box;
+
     vec3 uvw = (p - u_bbox_min[fi]) / (u_bbox_max[fi] - u_bbox_min[fi]);
     float gx = clamp(uvw.x * float(u_nx[fi]), 0.0, float(u_nx[fi]));
     float gy = clamp(uvw.y * float(u_ny[fi]), 0.0, float(u_ny[fi]));
@@ -190,12 +199,10 @@ vec3 sdf_normal_field(int fi, vec3 p) {
         k.xxx * sample_sdf_field(fi, p + k.xxx*h));
 }
 
-// Combined AABB = union of all field AABBs (used for ray culling only)
-// Each field has its own AABB; we clip to each field's AABB during sampling.
+// AABB-ray intersection: returns (tNear, tFar).
 vec2 intersect_aabb(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
-    vec3 inv_rd = 1.0 / rd;
-    vec3 t1 = (bmin - ro) * inv_rd;
-    vec3 t2 = (bmax - ro) * inv_rd;
+    vec3 t1 = (bmin - ro) / rd;
+    vec3 t2 = (bmax - ro) / rd;
     vec3 tmin = min(t1, t2);
     vec3 tmax = max(t1, t2);
     float tNear = max(max(tmin.x, tmin.y), tmin.z);
@@ -359,18 +366,38 @@ void main() {
         shader.shaderObject.set1Value(1, f_shader)
         self._shader_sep.addChild(shader)
 
-        # Quad Geometry
+        # 3. Quad Geometry + AABB expansion points
         hints = coin.SoShapeHints()
         hints.vertexOrdering.setValue(coin.SoShapeHints.UNKNOWN_ORDERING)
         self._shader_sep.addChild(hints)
-        coords = coin.SoCoordinate3()
-        coords.point.setValues(0, 4, [
+        
+        self._coords = coin.SoCoordinate3()
+        # Points 0-7: Combined AABB corners (updated in _rebuild())
+        # Points 8-11: NDC quad [-1, 1]
+        self._coords.point.setValues(8, 4, [
             (-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)
         ])
-        self._shader_sep.addChild(coords)
+        self._shader_sep.addChild(self._coords)
+
+        # Transparent material for expansion points to prevent culling
+        bbox_mat = coin.SoMaterial()
+        bbox_mat.transparency.setValue(1.0)
+        self._shader_sep.addChild(bbox_mat)
+        
+        self._bbox_expansion = coin.SoPointSet()
+        self._bbox_expansion.numPoints.setValue(8)
+        self._shader_sep.addChild(self._bbox_expansion)
+        
+        # Reset for quad
+        quad_style = coin.SoDrawStyle()
+        quad_style.style.setValue(coin.SoDrawStyle.FILLED)
+        self._shader_sep.addChild(quad_style)
+
         faceset = coin.SoIndexedFaceSet()
-        faceset.coordIndex.setValues(0, 8, [0, 1, 2, -1, 0, 2, 3, -1])
+        # Use indices 8-11 for the quad triangles
+        faceset.coordIndex.setValues(0, 8, [8, 9, 10, -1, 8, 10, 11, -1])
         self._shader_sep.addChild(faceset)
+
         self._root.addChild(self._shader_sep)
 
     # -- Public API --
@@ -485,12 +512,14 @@ void main() {
         mx_all = FreeCAD.Vector(max(v.x for v in all_mx),
                                 max(v.y for v in all_mx),
                                 max(v.z for v in all_mx))
-        self._bbox_coords.point.setValues(0, 8, [
+        pts = [
             (mn_all.x, mn_all.y, mn_all.z), (mx_all.x, mn_all.y, mn_all.z),
             (mn_all.x, mx_all.y, mn_all.z), (mx_all.x, mx_all.y, mn_all.z),
             (mn_all.x, mn_all.y, mx_all.z), (mx_all.x, mn_all.y, mx_all.z),
             (mn_all.x, mx_all.y, mx_all.z), (mx_all.x, mx_all.y, mx_all.z)
-        ])
+        ]
+        self._bbox_coords.point.setValues(0, 8, pts)
+        self._coords.point.setValues(0, 8, pts)
 
         self._switch.whichChild = 0
         dm_logger.debug(f"SceneRayMarch: rebuilt ({n_fields} fields, "
