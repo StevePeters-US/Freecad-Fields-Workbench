@@ -78,6 +78,17 @@ class ViewProviderDMWorkPlane:
 
         self.grid_sep = coin.SoSeparator()
         
+        # Ensure transparent workplane geometry depth-tests against opaque SDF renders.
+        # test=True: discard fragments behind opaque surfaces (e.g. SDF quad).
+        # write=False: don't write depth — transparent objects must not occlude each other.
+        try:
+            wp_depth = coin.SoDepthBuffer()
+            wp_depth.test.setValue(True)
+            wp_depth.write.setValue(False)
+            self.grid_sep.addChild(wp_depth)
+        except AttributeError:
+            pass  # SoDepthBuffer not available in this Coin3D/pivy version
+        
         # Material for grid and plane
         self.plane_mat = coin.SoMaterial()
         self.plane_mat.diffuseColor.setValue(0.2, 0.6, 0.9)
