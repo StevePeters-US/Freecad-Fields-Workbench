@@ -142,7 +142,10 @@ void main() {
 }
 """)
 
-        # Fragment shader: identical to per-object DMRayMarchRenderer
+        # Fragment shader: texture-only SDF sampling, no analytical primitive SDFs.
+        # Per-field AABB ray intervals drive stepping — the march only samples
+        # texture inside a field's bbox and steps toward the next field entry
+        # when outside all active fields.
         f_shader.sourceProgram.setValue("""
 varying vec2  v_uv;
 uniform sampler2D u_sdf_tex;
@@ -161,17 +164,10 @@ uniform float u_max_dist[8];
 uniform int   u_row_offset[8];
 uniform vec3  u_bbox_min[8];
 uniform vec3  u_bbox_max[8];
-float sdBox(vec3 p, vec3 bmin, vec3 bmax) {
-    vec3 center = (bmax + bmin) * 0.5;
-    vec3 halfDim = (bmax - bmin) * 0.5;
-    vec3 q = abs(p - center) - halfDim;
-    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
-}
 
 float sample_texel_field(int fi, float ix, float iy, float iz) {
     float c = floor(mod(iz, float(u_atz[fi])));
     float r = floor(iz / float(u_atz[fi]));
-    // atlas UV: x within this field's column layout, y offset by row_offset
     float u = (c * (float(u_nx[fi]) + 1.0) + ix + 0.5) / u_combined_atlas_w;
     float v = (float(u_row_offset[fi]) + r * (float(u_ny[fi]) + 1.0) + iy + 0.5)
               / u_combined_atlas_h;
@@ -179,11 +175,8 @@ float sample_texel_field(int fi, float ix, float iy, float iz) {
     return (t.r * 65280.0 + t.a * 255.0) / 65535.0;
 }
 
+// Pure texture trilinear lookup — no analytical primitive SDF.
 float sample_sdf_field(int fi, vec3 p) {
-    // Outside this field's bbox -> return distance to box (safe step)
-    float d_box = sdBox(p, u_bbox_min[fi], u_bbox_max[fi]);
-    if (d_box > 0.001) return d_box;
-
     vec3 uvw = (p - u_bbox_min[fi]) / (u_bbox_max[fi] - u_bbox_min[fi]);
     float gx = clamp(uvw.x * float(u_nx[fi]), 0.0, float(u_nx[fi]));
     float gy = clamp(uvw.y * float(u_ny[fi]), 0.0, float(u_ny[fi]));
@@ -212,15 +205,13 @@ vec3 sdf_normal_field(int fi, vec3 p) {
         k.xxx * sample_sdf_field(fi, p + k.xxx*h));
 }
 
-// AABB-ray intersection: returns (tNear, tFar).
 vec2 intersect_aabb(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
     vec3 t1 = (bmin - ro) / rd;
     vec3 t2 = (bmax - ro) / rd;
     vec3 tmin = min(t1, t2);
     vec3 tmax = max(t1, t2);
-    float tNear = max(max(tmin.x, tmin.y), tmin.z);
-    float tFar  = min(min(tmax.x, tmax.y), tmax.z);
-    return vec2(tNear, tFar);
+    return vec2(max(max(tmin.x, tmin.y), tmin.z),
+                min(min(tmax.x, tmax.y), tmax.z));
 }
 
 void main() {
@@ -231,11 +222,28 @@ void main() {
     vec4 ndc_far = vec4(v_uv, 1.0, 1.0);
     vec4 world_far = gl_ModelViewProjectionMatrixInverse * ndc_far;
     world_far /= world_far.w;
-    vec3 ro = world_near.xyz;
-    vec3 rd = normalize(world_far.xyz - world_near.xyz);
     vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
 
-    // 2. Compute combined AABB for early ray cull (union of all field AABBs)
+    // Ray origin strategy to avoid near-plane clipping.
+    // FreeCAD auto-adjusts nearDistance based on scene geometry. F-Rep objects
+    // have a null Part.Shape so the near plane can be pushed past the SDF surface.
+    //
+    // Perspective: start ray at camera position — completely bypasses the near
+    //   plane. tNear clamped to 0 for the camera-inside-AABB case.
+    // Orthographic: world_near is the correct per-pixel origin, but tNear is NOT
+    //   clamped to 0, so the march starts at the actual AABB entry even when
+    //   world_near has been pushed inside the AABB by FreeCAD's auto-clip.
+    vec3 ro, rd;
+    bool is_persp = (gl_ProjectionMatrix[3][3] < 0.5);
+    if (is_persp) {
+        ro = cam;
+        rd = normalize(world_near.xyz - cam);
+    } else {
+        ro = world_near.xyz;
+        rd = normalize(world_far.xyz - world_near.xyz);
+    }
+
+    // 2. Combined AABB for early discard
     vec3 scene_min = u_bbox_min[0];
     vec3 scene_max = u_bbox_max[0];
     for (int fi = 1; fi < 8; fi++) {
@@ -244,14 +252,27 @@ void main() {
         scene_max = max(scene_max, u_bbox_max[fi]);
     }
     vec2 tBox = intersect_aabb(ro, rd, scene_min, scene_max);
-    float tNear = max(tBox.x, 0.0);
+    float tNear = is_persp ? max(tBox.x, 0.0) : tBox.x;
     float tFar  = tBox.y;
     if (tNear > tFar) discard;
 
-    // 3. Multi-field sphere trace
-    // Step size = min(|sdf_0|, |sdf_1|, ...) — safe step that won't skip any surface.
-    // Hit check: first field with |sdf_fi| < hit_thresh wins (no cross-field blending).
-    float global_hit_thresh = 0.001;  // relative; refined per-field below
+    // 3. Per-field AABB ray intervals — computed once, used in the march loop.
+    // When t is before a field's entry, we step toward it.
+    // When t is inside a field's range, we sample the texture SDF.
+    // No analytical primitive SDFs are used anywhere.
+    float ftn[8];
+    float ftf[8];
+    for (int fi = 0; fi < 8; fi++) {
+        if (fi < u_num_fields) {
+            vec2 fi_int = intersect_aabb(ro, rd, u_bbox_min[fi], u_bbox_max[fi]);
+            ftn[fi] = is_persp ? max(fi_int.x, 0.0) : fi_int.x;
+            ftf[fi] = fi_int.y;
+        } else {
+            ftn[fi] =  1.0e10;
+            ftf[fi] = -1.0e10;
+        }
+    }
+
     float t = tNear;
     bool hit = false;
     int hit_field = 0;
@@ -260,22 +281,28 @@ void main() {
     for (int i = 0; i < 256; i++) {
         march_iters = i;
         vec3 p = ro + t * rd;
+        float min_d = 1.0e10;
 
-        float min_abs_sdf = 1.0e10;
         for (int fi = 0; fi < 8; fi++) {
             if (fi >= u_num_fields) break;
+            if (ftn[fi] > ftf[fi]) continue;   // ray misses this field entirely
+            if (t > ftf[fi])       continue;   // already past this field
+            if (t < ftn[fi]) {
+                // Not yet inside this field — step toward its entry point
+                min_d = min(min_d, ftn[fi] - t);
+                continue;
+            }
+            // Inside this field's bbox — texture-only sample.
+            // abs(d): valid sphere-trace step from both outside (d>0) and
+            // inside (d<0), and catches the surface in both directions.
             float d = sample_sdf_field(fi, p);
             float thresh = u_max_dist[fi] * 0.001;
-            if (d < thresh) {
-                hit = true;
-                hit_field = fi;
-                break;
-            }
-            min_abs_sdf = min(min_abs_sdf, abs(d));
+            if (abs(d) < thresh) { hit = true; hit_field = fi; break; }
+            min_d = min(min_d, abs(d));
         }
         if (hit) break;
 
-        t += max(min_abs_sdf, 0.0001);
+        t += max(min_d, 0.0001);
         if (t > tFar) break;
     }
     if (!hit) discard;
@@ -298,7 +325,6 @@ void main() {
     vec3 color = vec3(1.0,0.5,0.0)*(0.15 + 0.75*diff) + vec3(0.4)*spec;
     gl_FragColor = vec4(color, 1.0);
 
-    // Debug overrides
     if (u_debug_mode == 1) {
         float v = sample_sdf_field(hit_field, hp) / u_max_dist[hit_field] * 0.5 + 0.5;
         gl_FragColor = vec4(v, 0.0, 1.0 - v, 1.0);
@@ -384,13 +410,6 @@ void main() {
         hints.vertexOrdering.setValue(coin.SoShapeHints.UNKNOWN_ORDERING)
         self._shader_sep.addChild(hints)
 
-        # Force opaque material EXPLICITLY before the quad geometry.
-        # This prevents the transparent material from expansion points
-        # from leaking into the quad's state.
-        quad_mat = coin.SoMaterial()
-        quad_mat.transparency.setValue(0.0)
-        self._shader_sep.addChild(quad_mat)
-        
         self._coords = coin.SoCoordinate3()
         # Points 0-7: Combined AABB corners (updated in _rebuild())
         # Points 8-11: NDC quad [-1, 1]
@@ -412,6 +431,13 @@ void main() {
         quad_style = coin.SoDrawStyle()
         quad_style.style.setValue(coin.SoDrawStyle.FILLED)
         self._shader_sep.addChild(quad_style)
+
+        # Force opaque material EXPLICITLY before the quad geometry.
+        # This prevents the transparent material from expansion points
+        # from leaking into the quad's state.
+        quad_mat = coin.SoMaterial()
+        quad_mat.transparency.setValue(0.0)
+        self._shader_sep.addChild(quad_mat)
 
         faceset = coin.SoIndexedFaceSet()
         # Use indices 8-11 for the quad triangles
