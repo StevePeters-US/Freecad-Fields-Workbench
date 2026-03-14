@@ -130,6 +130,14 @@ def set_deduplicate_enabled(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetBool("DeduplicateEnabled", bool(val))
 
 
+def get_render_debug_mode():
+    """Return whether render debug mode is enabled."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("RenderDebugMode", False)
+
+def set_render_debug_mode(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetBool("RenderDebugMode", bool(val))
+
+
 def get_near_clip_distance():
     """Return the near clip distance override in mm (0 = auto)."""
     return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("NearClipDistance", 0.0)
@@ -377,20 +385,13 @@ class DMObjectProxy:
                         # GPU preview mode: skip meshing, renderer reads
                         # field directly via proxy.FRepField
                         self._frep_verts = self._frep_idx = None
-                else:
-                    dm_logger.debug(
-                        f"DMObjectProxy: Built NULL shape for {fp.Label}"
-                        " (expected if object is empty)"
-                    )
-                    self._frep_verts = self._frep_idx = None
+                self._frep_verts = self._frep_idx = None
 
                 # Setting fp.Shape triggers ViewProvider.updateData(fp, "Shape")
                 fp.Shape = Part.Shape()
                 return
 
             new_shape = self.build_shape(fp)
-            if new_shape.isNull():
-                dm_logger.debug(f"DMObjectProxy: Built NULL shape for {fp.Label} (expected if object is empty)")
             fp.Shape = new_shape
 
         except Exception:
@@ -447,7 +448,7 @@ class DMViewProvider:
     def attach(self, vobj):
         from . import dm_logger
         self.Object = vobj.Object
-        dm_logger.debug(f"DMViewProvider.attach: obj={self.Object.Label}, coin_avail={coin is not None}")
+
 
         if coin:
             from core.dm_renderer import DMRenderer
@@ -477,6 +478,10 @@ class DMViewProvider:
         if self.renderer:
             self.renderer.on_prefs_changed(self.Object)
             
+        if hasattr(self, "_scene_rm_label"):
+            from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+            DMSceneRayMarchRenderer.get_instance().on_prefs_changed()
+
         # Check for render mode changes
         new_mode = get_render_mode()
         if self._render_mode is not None and self._render_mode != new_mode:
@@ -679,7 +684,7 @@ def create_dm_object(name, shape_type, params=None, placement=None):
                 except Exception as e:
                     dm_logger.debug(f"create_dm_object: Failed to set visibility for {name}: {e}")
         
-        dm_logger.debug(f"create_dm_object: Created {name} ({shape_type}), triggering recompute...")
+
         obj.touch()
         doc.recompute()
         

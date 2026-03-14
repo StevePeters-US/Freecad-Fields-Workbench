@@ -51,7 +51,15 @@ class DMRayMarchRenderer:
         ])
         self._bbox_sep.addChild(bbox_lines)
         
-        self.root.addChild(self._bbox_sep)
+        self._bbox_switch = coin.SoSwitch()
+        self._bbox_sep = coin.SoSeparator()
+        self._bbox_switch.addChild(self._bbox_sep)
+        self.root.addChild(self._bbox_switch)
+        
+        from core.dm_object import get_render_debug_mode
+        self._bbox_switch.whichChild = 0 if get_render_debug_mode() else -1
+        
+        # self.root.addChild(self._bbox_sep)  <- moved to switch above
 
         # 2. Shader-scoped separator (isolates shader from bbox proxy)
         self._shader_sep = coin.SoSeparator()
@@ -386,3 +394,11 @@ void main() {
     def set_debug_mode(self, mode):
         """Set debug colour mode: 0=normal, 1=SDF heat-map, 2=normals, 3=iterations."""
         self._u["u_debug_mode"].value.setValue(int(mode))
+
+    def on_prefs_changed(self):
+        """Update renderer based on global prefs."""
+        from core.dm_object import get_render_debug_mode
+        debug = get_render_debug_mode()
+        self._bbox_switch.whichChild = 0 if debug else -1
+        self.set_debug_mode(3 if debug else 0)
+

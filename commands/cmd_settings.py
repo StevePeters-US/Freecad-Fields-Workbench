@@ -83,6 +83,13 @@ class _SettingsDialog(QtGui.QDialog):
         self._decimate_check.setToolTip("Remove redundant triangles from flat faces")
         layout.addRow("Enable Decimation:", self._decimate_check)
 
+        # Render Debug Mode
+        from core.dm_object import get_render_debug_mode
+        self._debug_check = QtGui.QCheckBox()
+        self._debug_check.setChecked(get_render_debug_mode())
+        self._debug_check.setToolTip("Show SDF bounding boxes and enable shader debug views")
+        layout.addRow("Render Debug Mode:", self._debug_check)
+
         # F-Rep Renderer Selection
         from core.dm_object import get_render_mode
         self._render_mode_combo = QtGui.QComboBox()
@@ -168,7 +175,8 @@ class _SettingsDialog(QtGui.QDialog):
                                     set_picking_radius, set_meshing_type, set_meshing_cell_size,
                                     set_max_bounds, set_perf_profiler_enabled, set_curvature_threshold,
                                     set_decimate_enabled, set_render_mode, refresh_all_dm_objects,
-                                    set_near_clip_distance, apply_near_clip_override)
+                                    set_near_clip_distance, apply_near_clip_override,
+                                    set_render_debug_mode)
         from core.dm_logger import set_enable_crash_log
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
@@ -190,6 +198,8 @@ class _SettingsDialog(QtGui.QDialog):
         set_decimate_enabled(self._decimate_check.isChecked())
         set_render_mode(self._render_mode_combo.currentIndex())
         set_perf_profiler_enabled(self._perf_check.isChecked())
+        set_render_debug_mode(self._debug_check.isChecked())
+
         
         set_enable_crash_log(self._log_check.isChecked())
         

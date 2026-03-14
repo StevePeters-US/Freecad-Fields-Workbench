@@ -144,7 +144,7 @@ class ViewProjector:
                     visible = True  # assume visible if we can't check
                 if visible:
                     planes.append(obj)
-        dm_logger.debug_throttled("gvwp", f"get_visible_workplanes: returning {len(planes)} planes")
+
         return planes
 
     def get_base_plane(self, wp_obj=None):

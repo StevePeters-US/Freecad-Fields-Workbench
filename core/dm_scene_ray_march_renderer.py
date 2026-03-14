@@ -57,8 +57,8 @@ class DMSceneRayMarchRenderer:
             sg = view.getSceneGraph()
             sg.addChild(self._switch)
             self._attached = True
-        except Exception as e:
-            dm_logger.debug(f"SceneRayMarch: attach failed: {e}")
+        except Exception:
+            pass
 
     def _detach(self):
         if not self._attached:
@@ -73,7 +73,13 @@ class DMSceneRayMarchRenderer:
 
     def _setup_nodes(self):
         # 1. Bounding box proxy (outside shader sep for correct near/far clipping)
+        self._bbox_switch = coin.SoSwitch()
         self._bbox_sep = coin.SoSeparator()
+        self._bbox_switch.addChild(self._bbox_sep)
+        self._root.addChild(self._bbox_switch)
+        
+        from core.dm_object import get_render_debug_mode
+        self._bbox_switch.whichChild = 0 if get_render_debug_mode() else -1
         
         # Transparent material (Coin3D BBox action ignores INVISIBLE draw style)
         mat = coin.SoMaterial()
@@ -91,7 +97,7 @@ class DMSceneRayMarchRenderer:
             0,4,-1, 1,5,-1, 2,6,-1, 3,7,-1
         ])
         self._bbox_sep.addChild(bbox_lines)
-        self._root.addChild(self._bbox_sep)
+        # self._root.addChild(self._bbox_sep)  <- moved to switch above
 
         # 2. Shader-scoped separator (isolates shader from bbox proxy)
         self._shader_sep = coin.SoSeparator()
@@ -488,6 +494,15 @@ void main() {
         """Set debug colour mode: 0=normal, 1=SDF heat-map, 2=normals, 3=iterations."""
         self._u["u_debug_mode"].value.setValue(int(mode))
 
+    def on_prefs_changed(self):
+        """Update renderer based on global prefs."""
+        from core.dm_object import get_render_debug_mode
+        debug = get_render_debug_mode()
+        self._bbox_switch.whichChild = 0 if debug else -1
+        # Also sync shader debug mode if we're in debug
+        self.set_debug_mode(3 if debug else 0) # Use iterations mode by default for debug
+        
+
     MAX_FIELDS = 8
 
     def _rebuild(self):
@@ -575,5 +590,4 @@ void main() {
         self._coords.point.setValues(0, 8, pts)
 
         self._switch.whichChild = 0
-        dm_logger.debug(f"SceneRayMarch: rebuilt ({n_fields} fields, "
-                        f"stacked atlas {max_w}x{total_h})")
+
