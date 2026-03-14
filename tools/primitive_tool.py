@@ -312,38 +312,97 @@ class BoxCreator(PrimitiveCreatorBase):
 
 
 class SphereCreator(PrimitiveCreatorBase):
+    _last_working_plane = None
+
     def __init__(self):
         super().__init__()
         self.center = None
         self.current_point = None
+        self.dm_points = []
+        self.sg = self.view.getSceneGraph() if self.view else None
+        self.points_root = coin.SoSeparator()
+        if self.sg:
+            self.sg.addChild(self.points_root)
+
+        if not self.working_plane:
+            if SphereCreator._last_working_plane is not None:
+                self.working_plane = SphereCreator._last_working_plane
+            else:
+                visible_wps = self.get_visible_workplanes()
+                if visible_wps:
+                    self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
+
         dm_logger.info("Sphere Tool: Click center")
 
+    def _do_terminate(self):
+        for dm_pt in self.dm_points:
+            dm_pt.undraw()
+        self.dm_points.clear()
+        try:
+            if self.sg and self.points_root:
+                self.sg.removeChild(self.points_root)
+        except Exception as e:
+            dm_logger.debug(f"SphereCreator._do_terminate: {e}")
+        super()._do_terminate()
+
     def on_button1_down(self, event_dict):
-        pos = self.get_mouse_world_pos(event_dict)
+        result = self.projector.get_mouse_plane_pt(
+            event_dict,
+            place_on_geometry=False,
+            working_plane=getattr(self, "working_plane", None)
+        )
+        if isinstance(result, tuple):
+            pos, wp_hit = result
+        else:
+            pos, wp_hit = result, None
+
         if pos is None:
             return True
 
         if self.state == 0:
+            if wp_hit is not None:
+                self.working_plane = (
+                    wp_hit.getGlobalPlacement()
+                    if hasattr(wp_hit, "getGlobalPlacement")
+                    else wp_hit.Placement
+                )
+            SphereCreator._last_working_plane = self.working_plane
+
             self.center = pos
             self.state = 1
+
+            dm_pt = DMPoint(pos)
+            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+            self.dm_points.append(dm_pt)
+
             dm_logger.info("Sphere Tool: Click radius")
         elif self.state == 1:
             self.current_point = pos
             self.state = 2
+
+            dm_pt = DMPoint(pos)
+            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+            self.dm_points.append(dm_pt)
+
             self._finalize_object("Sphere")
 
         return True
 
     def on_move_state_1(self, event_dict):
-        self.current_point = self.get_mouse_world_pos(event_dict)
+        self.current_point = self.get_mouse_plane_pt(event_dict)
 
     def _get_preview_field(self):
         if self.center is None or self.current_point is None:
             return None
-        radius = (self.current_point - self.center).Length
+        
+        # Calculate radius in local space
+        loc_center = self.to_local(self.center)
+        loc_current = self.to_local(self.current_point)
+        radius = (loc_current - loc_center).Length
+        
         if radius < 0.01:
             return None
-        return SdfSphereField(self.center, radius)
+        return SdfSphereField(loc_center, radius, placement=getattr(self, "working_plane", None))
 
     def _get_final_field(self):
         return self._get_preview_field()
@@ -356,64 +415,148 @@ class SphereCreator(PrimitiveCreatorBase):
 
 
 class CylinderCreator(PrimitiveCreatorBase):
+    _last_working_plane = None
+
     def __init__(self):
         super().__init__()
         self.points = []
         self.current_point = None
+        self.dm_points = []
+        self._height_drag_base = None
+        self.sg = self.view.getSceneGraph() if self.view else None
+        self.points_root = coin.SoSeparator()
+        if self.sg:
+            self.sg.addChild(self.points_root)
+
+        if not self.working_plane:
+            if CylinderCreator._last_working_plane is not None:
+                self.working_plane = CylinderCreator._last_working_plane
+            else:
+                visible_wps = self.get_visible_workplanes()
+                if visible_wps:
+                    self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
+
         dm_logger.info("Cylinder Tool: Click base center")
 
+    def _do_terminate(self):
+        for dm_pt in self.dm_points:
+            dm_pt.undraw()
+        self.dm_points.clear()
+        try:
+            if self.sg and self.points_root:
+                self.sg.removeChild(self.points_root)
+        except Exception as e:
+            dm_logger.debug(f"CylinderCreator._do_terminate: {e}")
+        super()._do_terminate()
+
     def on_button1_down(self, event_dict):
-        pos = self.get_mouse_world_pos(event_dict)
+        result = self.projector.get_mouse_plane_pt(
+            event_dict,
+            place_on_geometry=False,
+            working_plane=getattr(self, "working_plane", None)
+        )
+        if isinstance(result, tuple):
+            pos, wp_hit = result
+        else:
+            pos, wp_hit = result, None
+
         if pos is None:
             return True
 
         if self.state == 0:
+            if wp_hit is not None:
+                self.working_plane = (
+                    wp_hit.getGlobalPlacement()
+                    if hasattr(wp_hit, "getGlobalPlacement")
+                    else wp_hit.Placement
+                )
+            CylinderCreator._last_working_plane = self.working_plane
+
             self.points.append(pos)
             self.state = 1
+
+            dm_pt = DMPoint(pos)
+            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+            self.dm_points.append(dm_pt)
+
             dm_logger.info("Cylinder Tool: Click radius")
         elif self.state == 1:
             self.points.append(pos)
             self.state = 2
+            self._height_drag_base = pos
+
+            dm_pt = DMPoint(pos)
+            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+            self.dm_points.append(dm_pt)
+
             dm_logger.info("Cylinder Tool: Click height")
         elif self.state == 2:
-            self.points.append(pos)
-            self.current_point = pos
+            self.points.append(self.current_point)
             self.state = 3
+
+            if self.current_point:
+                dm_pt = DMPoint(self.current_point)
+                dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=self.current_point))
+                self.dm_points.append(dm_pt)
+
             self._finalize_object("Cylinder")
 
         return True
 
     def on_move_state_1(self, event_dict):
-        self.current_point = self.get_mouse_world_pos(event_dict)
+        self.current_point = self.get_mouse_plane_pt(event_dict)
 
     def on_move_state_2(self, event_dict):
-        self.current_point = self.get_mouse_world_pos(event_dict)
+        """Height drag: move current_point along workplane normal."""
+        if self._height_drag_base is None:
+            return
+
+        wp = getattr(self, "working_plane", None)
+        # Explicit normal from workplane rotation
+        normal = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
+
+        self.current_point = DMInputManager.get_instance().get_axis_point(
+            self.view, self._height_drag_base, normal, event_dict
+        )
 
     def _get_preview_field(self):
         if not self.points or self.current_point is None:
             return None
-        c_base = self.points[0]
-        n, _ = self.get_base_plane()
+            
+        wp = getattr(self, "working_plane", None)
+        loc_base = self.to_local(self.points[0])
+        loc_current = self.to_local(self.current_point)
+        
+        # Axis in local space is always Z (0,0,1) for this tool's logic
+        loc_axis = FreeCAD.Vector(0, 0, 1)
+        
         if self.state == 1:
-            radius = (self.current_point - c_base).Length
+            radius = (loc_current - loc_base).Length
             height = 1.0  # minimal placeholder
         else:
-            radius = (self.points[1] - c_base).Length
-            height = (self.current_point - c_base).dot(n)
+            loc_p1 = self.to_local(self.points[1])
+            radius = (loc_p1 - loc_base).Length
+            height = (loc_current - loc_base).z # Project onto local Z
+            
         if radius < 0.01:
             return None
-        center = c_base + n * (height / 2.0)
-        return SdfCylinderField(center, n, radius, max(abs(height), 0.01))
+            
+        return SdfCylinderField(loc_base, loc_axis, radius, max(abs(height), 0.01), placement=wp)
 
     def _get_final_field(self):
         if len(self.points) < 3:
             return None
-        c_base, p_rad, p_height = self.points
-        n, _ = self.get_base_plane()
-        radius = (p_rad - c_base).Length
-        height = (p_height - c_base).dot(n)
-        center = c_base + n * (height / 2.0)
-        return SdfCylinderField(center, n, radius, abs(height))
+            
+        wp = getattr(self, "working_plane", None)
+        loc_base = self.to_local(self.points[0])
+        loc_p_rad = self.to_local(self.points[1])
+        loc_p_height = self.to_local(self.points[2])
+        
+        loc_axis = FreeCAD.Vector(0, 0, 1)
+        radius = (loc_p_rad - loc_base).Length
+        height = (loc_p_height - loc_base).z
+        
+        return SdfCylinderField(loc_base, loc_axis, radius, abs(height), placement=wp)
 
     def _get_final_points(self):
         if len(self.points) < 3:
