@@ -32,15 +32,15 @@ class DMBase:
         self._terminated = False
         self.view = FreeCADGui.activeView()
         self.doc = FreeCAD.ActiveDocument
-        if not self.view:
-            # Try to get it from ActiveDocument as fallback
+        
+        if not self.view and FreeCADGui.ActiveDocument:
             try:
                 self.view = FreeCADGui.ActiveDocument.ActiveView
             except Exception as e:
                 dm_logger.debug(f"DMBase.__init__: Failed to get view from document: {e}")
         
         if not self.view:
-            dm_logger.error("DEBUG: DMBase: Could not find active view!")
+            dm_logger.error("DMBase: Could not find active view!")
             return
 
 

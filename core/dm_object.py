@@ -694,13 +694,17 @@ def create_dm_object(name, shape_type, params=None, placement=None):
                 FreeCADGui.Selection.clearSelection()
                 FreeCADGui.Selection.addSelection(obj)
                 
-                active_view = FreeCADGui.ActiveDocument.ActiveView
-                if active_view:
+                active_document = FreeCADGui.ActiveDocument
+                active_view = getattr(active_document, "ActiveView", None) if active_document else None
+                if not active_view:
+                    active_view = FreeCADGui.activeView()
+
+                if active_view and hasattr(active_view, "viewSelection"):
                     active_view.viewSelection()
                 
                 FreeCADGui.updateGui()
             except Exception as e:
-                dm_logger.debug(f"create_dm_object: Selection/View setup failed for {name}: {e}")
+                dm_logger.debug(f"create_dm_object: Selection/View setup failed for {name} ({type(e).__name__}): {e}")
         
         dm_logger.debug(f"create_dm_object: {name} created successfully")
         if hasattr(obj, "ViewObject") and obj.ViewObject:

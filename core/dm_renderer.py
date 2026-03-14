@@ -214,7 +214,14 @@ class DMRenderer:
         """Compute sphere radius to appear ~8px on screen, matching DMBase._compute_handle_radius."""
         try:
             import FreeCADGui
-            view = FreeCADGui.ActiveDocument.ActiveView
+            view = FreeCADGui.activeView()
+            if not view:
+                active_doc = FreeCADGui.ActiveDocument
+                view = getattr(active_doc, "ActiveView", None) if active_doc else None
+            
+            if not view:
+                return 5.0
+
             cam = view.getCameraNode()
             viewer = view.getViewer()
             vp_h = 800.0
