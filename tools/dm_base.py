@@ -258,9 +258,6 @@ class DMBase:
             elif event_type == "SoLocation2Event":
                 self.handle_move(event_dict)
             elif event_type == "SoKeyboardEvent":
-                if event_dict["State"] == "DOWN":
-                    key = event_dict.get("Key", "None")
-                    dm_logger.debug(f"DEBUG: SoKeyboardEvent DOWN: {key}")
                     return self.handle_keyboard(event_dict)
             else:
                 # For tools that need to update on camera move (like WorkPlaneCreator preview)
@@ -314,12 +311,12 @@ class DMBase:
         # Tool Option 0 (Shift)
         if "SHIFT" in key:
             self.on_tool_option_0()
-            return True
+            return False
             
         # Tool Option 1 (Ctrl)
         if "CONTROL" in key or "CTRL" in key:
             self.on_tool_option_1()
-            return True
+            return False
             
         # Snapping Menu (S)
         if key == "S":
