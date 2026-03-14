@@ -330,8 +330,15 @@ void main() {
         self._shader_sep.addChild(quad_style)
 
         faceset = coin.SoIndexedFaceSet()
-        # Use indices 8-11 for the quad triangles
-        faceset.coordIndex.setValues(0, 8, [8, 9, 10, -1, 8, 10, 11, -1])
+        # Use indices 8-11 for the quad triangles, plus 8 degenerate triangles 
+        # (one for each corner 0-7) to force the shape's bbox to exactly include
+        # the entire scene bounding box. This prevents Coin3D from culling the quad
+        # when zooming into a part of the SDF while other parts (or the origin) 
+        # are off-screen.
+        indices = [8, 9, 10, -1, 8, 10, 11, -1]
+        for i in range(8):
+            indices.extend([i, i, i, -1])
+        faceset.coordIndex.setValues(0, len(indices), indices)
         self._shader_sep.addChild(faceset)
 
         self.root.addChild(self._shader_sep)
