@@ -570,6 +570,10 @@ class DMViewProvider:
         # 2. Setup new state
         if new_mode == RENDER_MODE_RAY_MARCH:
             self._scene_rm_label = self.Object.Label
+            # Ensure a sensible default near clip distance to prevent hardware clipping
+            from .dm_object import get_near_clip_distance, set_near_clip_distance
+            if get_near_clip_distance() == 0.0:
+                set_near_clip_distance(1.0)
         elif new_mode == RENDER_MODE_POINT_CLOUD:
             from core.dm_point_cloud_renderer import DMPointCloudRenderer
             self.point_cloud_renderer = DMPointCloudRenderer(vobj)

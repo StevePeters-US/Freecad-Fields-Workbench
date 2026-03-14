@@ -10,7 +10,7 @@ import FreeCADGui
 import pivy.coin as coin
 from core import dm_logger
 from core.frep.sdf_baker import bake_sdf_to_atlas
-from core.frep.frep_composer import UnionField
+
 
 
 class DMSceneRayMarchRenderer:
@@ -36,6 +36,14 @@ class DMSceneRayMarchRenderer:
         self._tex = None
         self._bbox_coords = None
         self._root = coin.SoSeparator()
+        # Disable frustum culling and caching. renderCulling is the key one:
+        # without it, Coin3D culls the separator when the field's AABB is
+        # partially behind the near plane (camera close-up).
+        for attr in ["renderCulling", "renderCaching", "cullCaching", "boundingBoxCaching"]:
+            try:
+                getattr(self._root, attr).setValue(coin.SoSeparator.OFF)
+            except AttributeError:
+                pass
         self._switch = coin.SoSwitch()
         self._switch.addChild(self._root)
         self._switch.whichChild = -1
@@ -87,6 +95,11 @@ class DMSceneRayMarchRenderer:
 
         # 2. Shader-scoped separator (isolates shader from bbox proxy)
         self._shader_sep = coin.SoSeparator()
+        for attr in ["renderCulling", "renderCaching", "cullCaching", "boundingBoxCaching"]:
+            try:
+                getattr(self._shader_sep, attr).setValue(coin.SoSeparator.OFF)
+            except AttributeError:
+                pass
 
         # Force opaque classification for correct depth writes
         quad_mat = coin.SoMaterial()
@@ -253,7 +266,7 @@ void main() {
             if (fi >= u_num_fields) break;
             float d = sample_sdf_field(fi, p);
             float thresh = u_max_dist[fi] * 0.001;
-            if (abs(d) < thresh) {
+            if (d < thresh) {
                 hit = true;
                 hit_field = fi;
                 break;
@@ -370,6 +383,13 @@ void main() {
         hints = coin.SoShapeHints()
         hints.vertexOrdering.setValue(coin.SoShapeHints.UNKNOWN_ORDERING)
         self._shader_sep.addChild(hints)
+
+        # Force opaque material EXPLICITLY before the quad geometry.
+        # This prevents the transparent material from expansion points
+        # from leaking into the quad's state.
+        quad_mat = coin.SoMaterial()
+        quad_mat.transparency.setValue(0.0)
+        self._shader_sep.addChild(quad_mat)
         
         self._coords = coin.SoCoordinate3()
         # Points 0-7: Combined AABB corners (updated in _rebuild())
