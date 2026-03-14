@@ -463,8 +463,7 @@ class DMViewProvider:
                     from core.dm_point_cloud_renderer import DMPointCloudRenderer
                     self.point_cloud_renderer = DMPointCloudRenderer(vobj)
                 elif mode == RENDER_MODE_RAY_MARCH:
-                    from core.dm_ray_march_renderer import DMRayMarchRenderer
-                    self.ray_march_renderer = DMRayMarchRenderer(vobj)
+                    self._scene_rm_label = vobj.Object.Label
                 else:
                     self.renderer.setup_frep_mesh_nodes()
             # Setup point marker for point objects
@@ -497,12 +496,13 @@ class DMViewProvider:
             proxy = getattr(fp, "Proxy", None)
             field = getattr(proxy, "FRepField", None) if proxy else None
             pc    = getattr(self, "point_cloud_renderer", None)
-            rm    = getattr(self, "ray_march_renderer",   None)
 
             if pc is not None and field is not None:
                 pc.update(field, get_meshing_cell_size())
-            elif rm is not None and field is not None:
-                rm.update(field, get_meshing_cell_size())
+            elif hasattr(self, "_scene_rm_label") and field is not None:
+                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                sr = DMSceneRayMarchRenderer.get_instance()
+                sr.update_field(self._scene_rm_label, field)
             elif proxy and self.renderer:
                 self.renderer.update_frep_mesh(
                     getattr(proxy, "_frep_verts", None),
@@ -528,9 +528,10 @@ class DMViewProvider:
             vobj = fp.ViewObject
             if self.renderer:
                 self.renderer.update_visibility(vobj.Visibility)
-            rm = getattr(self, "ray_march_renderer", None)
-            if rm:
-                rm.set_visible(vobj.Visibility)
+            if hasattr(self, "_scene_rm_label"):
+                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                sr = DMSceneRayMarchRenderer.get_instance()
+                sr.set_field_visible(self._scene_rm_label, vobj.Visibility)
             pc = getattr(self, "point_cloud_renderer", None)
             if pc and hasattr(pc, "set_visible"):
                 pc.set_visible(vobj.Visibility)
@@ -540,15 +541,27 @@ class DMViewProvider:
         if prop == "Visibility":
             if self.renderer:
                 self.renderer.update_visibility(vobj.Visibility)
-            rm = getattr(self, "ray_march_renderer", None)
-            if rm:
-                rm.set_visible(vobj.Visibility)
+            if hasattr(self, "_scene_rm_label"):
+                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                sr = DMSceneRayMarchRenderer.get_instance()
+                sr.set_field_visible(self._scene_rm_label, vobj.Visibility)
             pc = getattr(self, "point_cloud_renderer", None)
             if pc and hasattr(pc, "set_visible"):
                 pc.set_visible(vobj.Visibility)
 
         # Re-apply near clip override (FreeCAD navigation resets camera params)
         apply_near_clip_override()
+
+    def onDelete(self, vobj, subelements):
+        """Called when the object is about to be deleted."""
+        if hasattr(self, "_scene_rm_label"):
+            try:
+                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                sr = DMSceneRayMarchRenderer.get_instance()
+                sr.unregister_field(self._scene_rm_label)
+            except Exception:
+                pass
+        return True
 
         
 

@@ -134,6 +134,12 @@ class DirectModelingWorkbench(Workbench):
         except Exception as e:
             from core import dm_logger
             dm_logger.error(f"DM Deactivated Error: {e}")
+        try:
+            from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+            DMSceneRayMarchRenderer.destroy()
+        except Exception as e:
+            from core import dm_logger
+            dm_logger.error(f"DM Deactivated SceneRM Error: {e}")
 
 # Add the workbench to FreeCAD's list of available workbenches
 FreeCADGui.addWorkbench(DirectModelingWorkbench())
