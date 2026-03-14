@@ -410,6 +410,7 @@ class DMViewProvider:
         # setup_view MUST run before vobj.Proxy = self.
         # In FreeCAD, assigning Proxy triggers attach() synchronously,
         # which sets _frep_coords etc. setup_view() must not overwrite them.
+        self._render_mode = None
         self.setup_view(vobj)
         vobj.Proxy = self
 
@@ -452,13 +453,14 @@ class DMViewProvider:
             from core.dm_renderer import DMRenderer
             self.renderer = DMRenderer(vobj)
 
-            # Setup curve overlay if it's a curve
+            # Setup renderer based on mode
+            mode = get_render_mode()
+            self._render_mode = mode
+            
             if hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "curve":
                 self.renderer.setup_coin_overlay()
                 self.renderer.rebuild_control_cage(self.Object)
-            # Setup direct mesh rendering for F-Rep objects
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "frep":
-                mode = get_render_mode()
                 if mode == RENDER_MODE_POINT_CLOUD:
                     from core.dm_point_cloud_renderer import DMPointCloudRenderer
                     self.point_cloud_renderer = DMPointCloudRenderer(vobj)
@@ -466,7 +468,6 @@ class DMViewProvider:
                     self._scene_rm_label = vobj.Object.Label
                 else:
                     self.renderer.setup_frep_mesh_nodes()
-            # Setup point marker for point objects
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "point":
                 self.renderer.setup_point_marker_nodes()
                 self.renderer.update_point_marker(self.Object)
@@ -476,6 +477,11 @@ class DMViewProvider:
         if self.renderer:
             self.renderer.on_prefs_changed(self.Object)
             
+        # Check for render mode changes
+        new_mode = get_render_mode()
+        if self._render_mode is not None and self._render_mode != new_mode:
+            self._swap_renderer(new_mode)
+
         # Generic FreeCAD ViewObject properties
         try:
             vobj = self.Object.ViewObject
@@ -535,6 +541,46 @@ class DMViewProvider:
             pc = getattr(self, "point_cloud_renderer", None)
             if pc and hasattr(pc, "set_visible"):
                 pc.set_visible(vobj.Visibility)
+
+    def _swap_renderer(self, new_mode):
+        """Cleanup current renderer and switch to a new one."""
+        from . import dm_logger
+        dm_logger.debug(f"DMViewProvider._swap_renderer: {self._render_mode} -> {new_mode}")
+        
+        # 1. Cleanup current state
+        if self._render_mode == RENDER_MODE_RAY_MARCH:
+            if hasattr(self, "_scene_rm_label"):
+                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                sr = DMSceneRayMarchRenderer.get_instance()
+                sr.unregister_field(self._scene_rm_label)
+                delattr(self, "_scene_rm_label")
+        elif self._render_mode == RENDER_MODE_POINT_CLOUD:
+            pc = getattr(self, "point_cloud_renderer", None)
+            if pc:
+                if hasattr(pc, "detach"):
+                    pc.detach()
+                self.point_cloud_renderer = None
+        else: # Mesh mode
+            if self.renderer and hasattr(self.renderer, "update_frep_mesh"):
+                self.renderer.update_frep_mesh(None, None)
+
+        self._render_mode = new_mode
+        vobj = self.Object.ViewObject
+        
+        # 2. Setup new state
+        if new_mode == RENDER_MODE_RAY_MARCH:
+            self._scene_rm_label = self.Object.Label
+        elif new_mode == RENDER_MODE_POINT_CLOUD:
+            from core.dm_point_cloud_renderer import DMPointCloudRenderer
+            self.point_cloud_renderer = DMPointCloudRenderer(vobj)
+        else: # Mesh mode
+            if self.renderer:
+                if not self.renderer._frep_coords:
+                    self.renderer.setup_frep_mesh_nodes()
+        
+        # 3. Trigger object execution to populate new renderer
+        self.Object.Proxy.execute(self.Object)
+        self.updateData(self.Object, "Shape")
 
     def onChanged(self, vobj, prop):
         """Called when a property of the ViewObject changes (e.g. Visibility)."""

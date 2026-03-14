@@ -176,3 +176,14 @@ class DMPointCloudRenderer:
 
         self._coords.point.setValues(0, len(pts), pts.tolist())
         self._normals.vector.setValues(0, len(normals), normals.tolist())
+    def detach(self):
+        """Remove nodes from the scene graph."""
+        if self._switch and self.vobj and self.vobj.RootNode:
+            try:
+                self.vobj.RootNode.removeChild(self._switch)
+            except Exception:
+                pass
+        self._sep = None
+        self._switch = None
+        self._coords = None
+        self._normals = None

@@ -1079,3 +1079,350 @@ Replace the existing operations section in the menu (the `'DM_Translate' ... 'DM
 ```
 
 **Depends on:** O-004, O-007, O-010, O-013
+
+---
+
+## Tier 6 — Positioning & Scale
+
+### O-015: `ScaleField` — uniform scaling wrapper
+
+**File:** `core/frep/frep_modifier.py` — append after `ElongateModifierField` class (end of file)
+
+**What:** Uniformly scales the child field by factor `s`. Input point is divided by `s`, output
+distance is multiplied by `s` to preserve the SDF property. Ref: `opScale()`.
+
+```python
+class ScaleField(FRepField):
+    """Uniform scale wrapper. s > 1 makes the shape larger. Ref: opScale() iq."""
+    def __init__(self, child: FRepField, s: float):
+        self.child = child
+        self.s = s
+
+    def evaluate(self, point: FreeCAD.Vector) -> float:
+        p = FreeCAD.Vector(point.x / self.s, point.y / self.s, point.z / self.s)
+        return self.child.evaluate(p) * self.s
+
+    def evaluate_grid(self, points: np.ndarray) -> np.ndarray:
+        return (self.child.evaluate_grid(points / self.s) * self.s).astype(np.float32)
+
+    def bounding_box(self):
+        mn, mx = self.child.bounding_box()
+        return (mn * self.s, mx * self.s)
+```
+
+---
+
+### O-016: Icon and command for Scale
+
+**File:** `Resources/icons/ModScale.svg` — create new file; also add command to `commands/cmd_modifier.py`
+
+**`Resources/icons/ModScale.svg`:**
+```xml
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" version="1.1">
+  <circle cx="32" cy="32" r="10" style="fill:none;stroke:#000000;stroke-width:1;stroke-dasharray:4,4"/>
+  <circle cx="32" cy="32" r="22" style="fill:#e0e0e0;stroke:#ffaa00;stroke-width:2"/>
+  <line x1="4" y1="4" x2="14" y2="14" style="stroke:#ffaa00;stroke-width:2"/>
+  <line x1="60" y1="4" x2="50" y2="14" style="stroke:#ffaa00;stroke-width:2"/>
+  <line x1="4" y1="60" x2="14" y2="50" style="stroke:#ffaa00;stroke-width:2"/>
+  <line x1="60" y1="60" x2="50" y2="50" style="stroke:#ffaa00;stroke-width:2"/>
+</svg>
+```
+
+**Add to `commands/cmd_modifier.py`** — append before the `FreeCADGui.addCommand` block at the end of the file:
+
+```python
+class CommandDMScale:
+    def GetResources(self):
+        return {'Pixmap': 'ModScale', 'MenuText': 'Scale',
+                'ToolTip': 'Uniformly scale the selected F-Rep by a factor of 2.'}
+    def IsActive(self): return FreeCAD.activeDocument() is not None
+    def Activated(self):
+        from core.dm_object import create_dm_object
+        from core.frep.frep_modifier import ScaleField
+        src_obj, field = _get_single_frep_field('Scale')
+        if field is None: return
+        new_field = ScaleField(field, s=2.0)
+        obj = create_dm_object(name='Scale', shape_type='frep')
+        obj.Proxy.FRepField = new_field
+        src_obj.ViewObject.Visibility = False
+        obj.touch();  FreeCAD.activeDocument().recompute()
+```
+
+**Also update `DMModifierGroup.GetCommands()`** to include `'DM_Scale'`:
+```python
+def GetCommands(self): return ('DM_Round', 'DM_Onion', 'DM_Elongate', 'DM_Scale')
+```
+
+**Also add at end of file:**
+```python
+FreeCADGui.addCommand('DM_Scale', CommandDMScale())
+```
+
+**Depends on:** O-015, O-007
+
+---
+
+## Tier 7 — Revolution & Extrusion (2D→3D)
+
+Revolution and Extrusion create 3D shapes by applying a 2D SDF primitive. These require a
+lightweight 2D SDF interface. This tier establishes that interface and two operations.
+
+### O-017: Create 2D SDF base class and circle primitive
+
+**File:** `core/frep/sdf2d/sdf2d_field.py` — create new file (also create `core/frep/sdf2d/__init__.py` as empty file)
+
+**What:** Abstract base class for 2D SDF fields used by Revolution and Extrusion. Provides
+`evaluate_2d(x, y) -> float` and `evaluate_2d_grid(points_2d) -> np.ndarray` where
+`points_2d` is an (N, 2) array. Also includes `Sdf2dCircle` as the first concrete 2D primitive.
+
+```python
+# core/frep/sdf2d/sdf2d_field.py
+import numpy as np
+import math
+
+
+class Sdf2dField:
+    """Abstract base for 2D SDF primitives used by Revolution/Extrusion."""
+    def evaluate_2d(self, x: float, y: float) -> float:
+        raise NotImplementedError
+
+    def evaluate_2d_grid(self, pts: np.ndarray) -> np.ndarray:
+        """Default: loop fallback. pts shape (N,2). Returns (N,) float32."""
+        return np.array([self.evaluate_2d(float(pts[i, 0]), float(pts[i, 1]))
+                         for i in range(len(pts))], dtype=np.float32)
+
+
+class Sdf2dCircle(Sdf2dField):
+    """Circle SDF in 2D. center=(cx,cy), radius=r."""
+    def __init__(self, cx: float, cy: float, radius: float):
+        self.cx = cx;  self.cy = cy;  self.radius = radius
+
+    def evaluate_2d(self, x: float, y: float) -> float:
+        return math.sqrt((x - self.cx)**2 + (y - self.cy)**2) - self.radius
+
+    def evaluate_2d_grid(self, pts: np.ndarray) -> np.ndarray:
+        d = np.sqrt((pts[:, 0] - self.cx)**2 + (pts[:, 1] - self.cy)**2)
+        return (d - self.radius).astype(np.float32)
+
+
+class Sdf2dBox(Sdf2dField):
+    """Axis-aligned box SDF in 2D. center=(cx,cy), half_size=(hx,hy)."""
+    def __init__(self, cx: float, cy: float, hx: float, hy: float):
+        self.cx = cx;  self.cy = cy;  self.hx = hx;  self.hy = hy
+
+    def evaluate_2d(self, x: float, y: float) -> float:
+        dx = abs(x - self.cx) - self.hx
+        dy = abs(y - self.cy) - self.hy
+        return math.sqrt(max(dx, 0)**2 + max(dy, 0)**2) + min(max(dx, dy), 0.0)
+
+    def evaluate_2d_grid(self, pts: np.ndarray) -> np.ndarray:
+        dx = np.abs(pts[:, 0] - self.cx) - self.hx
+        dy = np.abs(pts[:, 1] - self.cy) - self.hy
+        out = np.sqrt(np.maximum(dx, 0)**2 + np.maximum(dy, 0)**2)
+        return (out + np.minimum(np.maximum(dx, dy), 0.0)).astype(np.float32)
+```
+
+---
+
+### O-018: `RevolutionField` and `ExtrusionField`
+
+**File:** `core/frep/frep_revolution.py` — create new file
+
+**What:** Two fields that lift 2D SDFs into 3D.
+- `RevolutionField`: revolves a 2D SDF around the Y axis with offset `o`.
+  The 2D SDF is evaluated at `(sqrt(x²+z²) - o, y)`. Ref: `opRevolution()`.
+- `ExtrusionField`: extrudes a 2D SDF (in XZ plane) along Y with half-height `h`.
+  Ref: `opExtrusion()`.
+
+```python
+import numpy as np
+import FreeCAD
+import math
+from core.frep.frep_field import FRepField
+from core.frep.sdf2d.sdf2d_field import Sdf2dField
+
+
+class RevolutionField(FRepField):
+    """Revolves a 2D SDF around the Y axis with radial offset o. Ref: opRevolution() iq."""
+    def __init__(self, sdf2d: Sdf2dField, center: FreeCAD.Vector, offset: float):
+        self.sdf2d = sdf2d
+        self.center = center
+        self.offset = offset  # radial offset (shifts the 2D shape away from the axis)
+
+    def evaluate(self, point: FreeCAD.Vector) -> float:
+        p = point - self.center
+        qx = math.sqrt(p.x**2 + p.z**2) - self.offset
+        return self.sdf2d.evaluate_2d(qx, p.y)
+
+    def evaluate_grid(self, points: np.ndarray) -> np.ndarray:
+        c = np.array([self.center.x, self.center.y, self.center.z])
+        p = points - c
+        qx = np.sqrt(p[:, 0]**2 + p[:, 2]**2) - self.offset
+        pts2d = np.stack([qx, p[:, 1]], axis=1)
+        return self.sdf2d.evaluate_2d_grid(pts2d).astype(np.float32)
+
+    def bounding_box(self):
+        # Conservative: use a sphere of radius = 2D extent + offset
+        R = 50.0 + self.offset  # rough estimate; override per use-case if needed
+        v = FreeCAD.Vector(R, R, R)
+        return (self.center - v, self.center + v)
+
+
+class ExtrusionField(FRepField):
+    """Extrudes a 2D SDF (XZ plane) along Y axis with half-height h. Ref: opExtrusion() iq."""
+    def __init__(self, sdf2d: Sdf2dField, center: FreeCAD.Vector, half_height: float):
+        self.sdf2d = sdf2d
+        self.center = center
+        self.half_height = half_height
+
+    def evaluate(self, point: FreeCAD.Vector) -> float:
+        p = point - self.center
+        dx = self.sdf2d.evaluate_2d(p.x, p.z)
+        dy = abs(p.y) - self.half_height
+        return min(max(dx, dy), 0.0) + math.sqrt(max(dx, 0)**2 + max(dy, 0)**2)
+
+    def evaluate_grid(self, points: np.ndarray) -> np.ndarray:
+        c = np.array([self.center.x, self.center.y, self.center.z])
+        p = points - c
+        pts2d = np.stack([p[:, 0], p[:, 2]], axis=1)
+        dx = self.sdf2d.evaluate_2d_grid(pts2d).astype(np.float64)
+        dy = np.abs(p[:, 1]) - self.half_height
+        out = np.sqrt(np.maximum(dx, 0)**2 + np.maximum(dy, 0)**2)
+        return (out + np.minimum(np.maximum(dx, dy), 0.0)).astype(np.float32)
+
+    def bounding_box(self):
+        R = 50.0  # rough; conservative
+        v = FreeCAD.Vector(R, self.half_height, R)
+        return (self.center - v, self.center + v)
+```
+
+**Depends on:** O-017
+
+---
+
+### O-019: Icons and commands for Revolution & Extrusion
+
+**Files:** Create icons; add commands to a new `commands/cmd_revolution.py`
+
+**`Resources/icons/OpRevolution.svg`:**
+```xml
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" version="1.1">
+  <line x1="32" y1="4" x2="32" y2="60" style="stroke:#ffaa00;stroke-width:2;stroke-dasharray:4,4"/>
+  <path d="M 32 16 A 18 18 0 1 1 32 48" style="fill:#e0e0e0;stroke:#000000;stroke-width:2"/>
+  <path d="M 32 16 Q 56 32 32 48" style="fill:#e0e0e0;stroke:#000000;stroke-width:1;opacity:0.4"/>
+</svg>
+```
+
+**`Resources/icons/OpExtrusion.svg`:**
+```xml
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" version="1.1">
+  <ellipse cx="32" cy="52" rx="20" ry="6" style="fill:#e0e0e0;stroke:#000000;stroke-width:2"/>
+  <rect x="12" y="20" width="40" height="32" style="fill:#e0e0e0;stroke:none"/>
+  <line x1="12" y1="20" x2="12" y2="52" style="stroke:#000000;stroke-width:2"/>
+  <line x1="52" y1="20" x2="52" y2="52" style="stroke:#000000;stroke-width:2"/>
+  <ellipse cx="32" cy="20" rx="20" ry="6" style="fill:#ffffff;stroke:#000000;stroke-width:2"/>
+  <line x1="32" y1="4" x2="32" y2="14" style="stroke:#ffaa00;stroke-width:2"/>
+  <polygon points="32,2 29,8 35,8" style="fill:#ffaa00"/>
+</svg>
+```
+
+**`commands/cmd_revolution.py`** — create new file:
+```python
+import FreeCAD
+import FreeCADGui
+from core import dm_logger
+
+
+def _get_single_field(label):
+    sel = FreeCADGui.Selection.getSelection()
+    if len(sel) != 1:
+        dm_logger.error(f'{label}: select exactly one F-Rep object.'); return None, None
+    obj = sel[0]
+    proxy = getattr(obj, 'Proxy', None)
+    field = getattr(proxy, 'FRepField', None) if proxy else None
+    if field is None:
+        dm_logger.error(f'{label}: selected object has no FRepField.'); return None, None
+    return obj, field
+
+
+class CommandDMRevolution:
+    def GetResources(self):
+        return {'Pixmap': 'OpRevolution', 'MenuText': 'Revolve (Circle)',
+                'ToolTip': 'Revolve a 2D circle profile around the Y axis to create a torus-like shape.'}
+    def IsActive(self): return FreeCAD.activeDocument() is not None
+    def Activated(self):
+        from core.dm_object import create_dm_object
+        from core.frep.frep_revolution import RevolutionField
+        from core.frep.sdf2d.sdf2d_field import Sdf2dCircle
+        sdf2d = Sdf2dCircle(0.0, 0.0, 6.0)
+        field = RevolutionField(sdf2d, center=FreeCAD.Vector(0, 0, 0), offset=20.0)
+        obj = create_dm_object(name='Revolution', shape_type='frep')
+        obj.Proxy.FRepField = field
+        obj.touch();  FreeCAD.activeDocument().recompute()
+
+
+class CommandDMExtrusion:
+    def GetResources(self):
+        return {'Pixmap': 'OpExtrusion', 'MenuText': 'Extrude (Circle)',
+                'ToolTip': 'Extrude a 2D circle profile along the Y axis to create a cylinder.'}
+    def IsActive(self): return FreeCAD.activeDocument() is not None
+    def Activated(self):
+        from core.dm_object import create_dm_object
+        from core.frep.frep_revolution import ExtrusionField
+        from core.frep.sdf2d.sdf2d_field import Sdf2dCircle
+        sdf2d = Sdf2dCircle(0.0, 0.0, 12.0)
+        field = ExtrusionField(sdf2d, center=FreeCAD.Vector(0, 0, 0), half_height=20.0)
+        obj = create_dm_object(name='Extrusion', shape_type='frep')
+        obj.Proxy.FRepField = field
+        obj.touch();  FreeCAD.activeDocument().recompute()
+
+
+class DMRevolutionGroup:
+    def GetCommands(self): return ('DM_Revolution', 'DM_Extrusion')
+    def GetDefaultCommand(self): return 0
+    def GetResources(self):
+        return {'MenuText': '2D→3D', 'ToolTip': 'Create 3D shapes from 2D profiles'}
+    def IsActive(self): return FreeCAD.activeDocument() is not None
+
+
+FreeCADGui.addCommand('DM_Revolution',      CommandDMRevolution())
+FreeCADGui.addCommand('DM_Extrusion',       CommandDMExtrusion())
+FreeCADGui.addCommand('DM_RevolutionGroup', DMRevolutionGroup())
+```
+
+**Depends on:** O-017, O-018
+
+---
+
+### O-020: Final toolbar update — add 2D→3D group and Revolution imports
+
+**File:** `InitGui.py` — two edits
+
+**Edit 1 — add imports** after the `import commands.cmd_deform` line (added in O-004):
+```python
+import commands.cmd_revolution
+```
+
+**Edit 2 — add `DM_RevolutionGroup` to the "DM - Operations" toolbar** (after `DM_DeformGroup`):
+```python
+self.appendToolbar("DM - Operations", [
+    'DM_Translate',
+    'DM_SharpBooleanGroup',
+    'DM_SmoothBooleanGroup',
+    'DM_ModifierGroup',
+    'DM_SpatialGroup',
+    'DM_DeformGroup',
+    'DM_RevolutionGroup',      # ← add this line
+    'DM_SDFSlice',
+    'DM_SDFToShape',
+    'DM_OpenSketcher',
+])
+```
+
+**Edit 3 — add to menu** (append after the `'DM_Displace'` line in the menu operations section added in O-014):
+```python
+'Separator',
+'DM_Revolution', 'DM_Extrusion',
+```
+
+**Depends on:** O-019
