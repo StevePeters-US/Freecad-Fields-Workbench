@@ -86,7 +86,11 @@ class ViewProjector:
                         continue
 
                     # Fallback: ray-section in LOCAL object space (handles any Placement)
-                    face = obj.Shape.getElement(subname)
+                    try:
+                        face = obj.Shape.getElement(subname)
+                    except Exception:
+                        continue # Stale subname (e.g. Face1 on empty/different shape)
+
                     import Part
                     ray_p, ray_d = self._get_view_ray(pos[0], pos[1])
                     if ray_p and ray_d:
@@ -96,10 +100,13 @@ class ViewProjector:
                         local_near = gpl_inv.multVec(ray_p + ray_d * 1.0)
                         local_far  = gpl_inv.multVec(ray_p + ray_d * 100000.0)
                         ray_wire = Part.makeLine(tuple(local_near), tuple(local_far))
-                        inter = face.section(ray_wire)
-                        if inter.Vertexes:
-                            best_local = min(inter.Vertexes, key=lambda v: (v.Point - local_near).Length).Point
-                            return gpl.multVec(best_local)
+                        try:
+                            inter = face.section(ray_wire)
+                            if inter.Vertexes:
+                                best_local = min(inter.Vertexes, key=lambda v: (v.Point - local_near).Length).Point
+                                return gpl.multVec(best_local)
+                        except Exception:
+                            continue
                             
             return None
         except Exception as e:
@@ -288,45 +295,48 @@ class ViewProjector:
                 
                 subname = info["Component"]
                 if "Face" not in subname: continue
-                face = obj.Shape.getElement(subname)
+                try:
+                    face = obj.Shape.getElement(subname)
 
-                gpl = obj.getGlobalPlacement() if hasattr(obj, "getGlobalPlacement") else obj.Placement
-                gpl_inv = gpl.inverse()
+                    gpl = obj.getGlobalPlacement() if hasattr(obj, "getGlobalPlacement") else obj.Placement
+                    gpl_inv = gpl.inverse()
 
-                # 2. Hit position — prefer FreeCAD's pick coordinates (world space,
-                # always on the visible front surface). Fall back to ray-section.
-                if 'x' in info and 'y' in info and 'z' in info:
-                    world_hit = FreeCAD.Vector(info['x'], info['y'], info['z'])
-                    local_hit = gpl_inv.multVec(world_hit)
-                else:
-                    ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
-                    if not ray_p: continue
-                    local_near = gpl_inv.multVec(ray_p + ray_d * 1.0)
-                    local_far  = gpl_inv.multVec(ray_p + ray_d * 100000.0)
-                    ray_wire = Part.makeLine(tuple(local_near), tuple(local_far))
-                    inter = face.section(ray_wire)
-                    if not inter.Vertexes: continue
-                    local_hit = min(inter.Vertexes, key=lambda v: (v.Point - local_near).Length).Point
-                    world_hit = gpl.multVec(local_hit)
-                
-                # 3. Calculate Normal
-                dists = face.distToShape(Part.Vertex(local_hit))
-                local_n = None
-                if dists and len(dists) >= 3 and len(dists[2]) > 0:
-                    info_tuple = dists[2][0]
-                    if len(info_tuple) >= 3 and isinstance(info_tuple[2], (tuple, list)) and len(info_tuple[2]) == 2:
-                        u, v = info_tuple[2]
-                        local_n = face.Surface.normal(u, v)
-                
-                if not local_n: # Fallback parameter pick
-                    try:
-                        u, v = face.Surface.parameter(local_hit); local_n = face.Surface.normal(u, v)
-                    except: pass
-                
-                if local_n:
-                    if face.Orientation == "Reversed": local_n.multiply(-1.0)
-                    world_n = gpl.Rotation.multVec(local_n); world_n.normalize()
-                    return world_hit, world_n, obj, subname
+                    # 2. Hit position — prefer FreeCAD's pick coordinates (world space,
+                    # always on the visible front surface). Fall back to ray-section.
+                    if 'x' in info and 'y' in info and 'z' in info:
+                        world_hit = FreeCAD.Vector(info['x'], info['y'], info['z'])
+                        local_hit = gpl_inv.multVec(world_hit)
+                    else:
+                        ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
+                        if not ray_p: continue
+                        local_near = gpl_inv.multVec(ray_p + ray_d * 1.0)
+                        local_far  = gpl_inv.multVec(ray_p + ray_d * 100000.0)
+                        ray_wire = Part.makeLine(tuple(local_near), tuple(local_far))
+                        inter = face.section(ray_wire)
+                        if not inter.Vertexes: continue
+                        local_hit = min(inter.Vertexes, key=lambda v: (v.Point - local_near).Length).Point
+                        world_hit = gpl.multVec(local_hit)
+                    
+                    # 3. Calculate Normal
+                    dists = face.distToShape(Part.Vertex(local_hit))
+                    local_n = None
+                    if dists and len(dists) >= 3 and len(dists[2]) > 0:
+                        info_tuple = dists[2][0]
+                        if len(info_tuple) >= 3 and isinstance(info_tuple[2], (tuple, list)) and len(info_tuple[2]) == 2:
+                            u, v = info_tuple[2]
+                            local_n = face.Surface.normal(u, v)
+                    
+                    if not local_n: # Fallback parameter pick
+                        try:
+                            u, v = face.Surface.parameter(local_hit); local_n = face.Surface.normal(u, v)
+                        except: pass
+                    
+                    if local_n:
+                        if face.Orientation == "Reversed": local_n.multiply(-1.0)
+                        world_n = gpl.Rotation.multVec(local_n); world_n.normalize()
+                        return world_hit, world_n, obj, subname
+                except Exception:
+                    continue
                     
             return None
         except Exception as e:
