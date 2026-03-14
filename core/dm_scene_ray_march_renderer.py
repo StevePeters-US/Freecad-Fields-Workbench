@@ -257,56 +257,63 @@ void main() {
 """)
 
         # Uniforms
+        # Scene-level uniforms
         u_sdf_tex = coin.SoShaderParameter1i()
         u_sdf_tex.name.setValue("u_sdf_tex")
         u_sdf_tex.value.setValue(0)
 
-        self._u["u_nx"] = coin.SoShaderParameter1i()
-        self._u["u_nx"].name.setValue("u_nx")
-        self._u["u_nx"].value.setValue(0)
+        self._u["u_num_fields"] = coin.SoShaderParameter1i()
+        self._u["u_num_fields"].name.setValue("u_num_fields")
+        self._u["u_num_fields"].value.setValue(0)
 
-        self._u["u_ny"] = coin.SoShaderParameter1i()
-        self._u["u_ny"].name.setValue("u_ny")
-        self._u["u_ny"].value.setValue(0)
+        self._u["u_combined_atlas_w"] = coin.SoShaderParameter1f()
+        self._u["u_combined_atlas_w"].name.setValue("u_combined_atlas_w")
+        self._u["u_combined_atlas_w"].value.setValue(1.0)
 
-        self._u["u_nz"] = coin.SoShaderParameter1i()
-        self._u["u_nz"].name.setValue("u_nz")
-        self._u["u_nz"].value.setValue(0)
-
-        self._u["u_atz"] = coin.SoShaderParameter1i()
-        self._u["u_atz"].name.setValue("u_atz")
-        self._u["u_atz"].value.setValue(1)
-
-        self._u["u_atlas_w"] = coin.SoShaderParameter1f()
-        self._u["u_atlas_w"].name.setValue("u_atlas_w")
-        self._u["u_atlas_w"].value.setValue(1.0)
-
-        self._u["u_atlas_h"] = coin.SoShaderParameter1f()
-        self._u["u_atlas_h"].name.setValue("u_atlas_h")
-        self._u["u_atlas_h"].value.setValue(1.0)
-
-        self._u["u_bbox_min"] = coin.SoShaderParameter3f()
-        self._u["u_bbox_min"].name.setValue("u_bbox_min")
-        self._u["u_bbox_min"].value.setValue(coin.SbVec3f(0, 0, 0))
-
-        self._u["u_bbox_max"] = coin.SoShaderParameter3f()
-        self._u["u_bbox_max"].name.setValue("u_bbox_max")
-        self._u["u_bbox_max"].value.setValue(coin.SbVec3f(0, 0, 0))
-
-        self._u["u_max_dist"] = coin.SoShaderParameter1f()
-        self._u["u_max_dist"].name.setValue("u_max_dist")
-        self._u["u_max_dist"].value.setValue(1.0)
+        self._u["u_combined_atlas_h"] = coin.SoShaderParameter1f()
+        self._u["u_combined_atlas_h"].name.setValue("u_combined_atlas_h")
+        self._u["u_combined_atlas_h"].value.setValue(1.0)
 
         self._u["u_debug_mode"] = coin.SoShaderParameter1i()
         self._u["u_debug_mode"].name.setValue("u_debug_mode")
         self._u["u_debug_mode"].value.setValue(0)
 
+        # Per-field uniform arrays (Coin3D uses "u_nx[0]" naming for GLSL arrays)
+        per_field_scalar_i = ["u_nx", "u_ny", "u_nz", "u_atz", "u_row_offset"]
+        per_field_scalar_f = ["u_field_atlas_w", "u_field_atlas_h", "u_max_dist"]
+        per_field_vec3     = ["u_bbox_min", "u_bbox_max"]
+
+        for fi in range(self.MAX_FIELDS):
+            for name in per_field_scalar_i:
+                key = f"{name}[{fi}]"
+                node = coin.SoShaderParameter1i()
+                node.name.setValue(key)
+                node.value.setValue(0)
+                self._u[key] = node
+            for name in per_field_scalar_f:
+                key = f"{name}[{fi}]"
+                node = coin.SoShaderParameter1f()
+                node.name.setValue(key)
+                node.value.setValue(1.0)
+                self._u[key] = node
+            for name in per_field_vec3:
+                key = f"{name}[{fi}]"
+                node = coin.SoShaderParameter3f()
+                node.name.setValue(key)
+                node.value.setValue(coin.SbVec3f(0, 0, 0))
+                self._u[key] = node
+
+        # Register all uniforms with the fragment shader
         f_shader.parameter.setNum(0)
-        f_shader.parameter.set1Value(0, u_sdf_tex)
-        for i, name in enumerate(["u_nx", "u_ny", "u_nz", "u_atz", "u_atlas_w",
-                                   "u_atlas_h", "u_bbox_min", "u_bbox_max",
-                                   "u_max_dist", "u_debug_mode"]):
-            f_shader.parameter.set1Value(i + 1, self._u[name])
+        idx = 0
+        f_shader.parameter.set1Value(idx, u_sdf_tex); idx += 1
+        for key in ["u_num_fields", "u_combined_atlas_w", "u_combined_atlas_h",
+                    "u_debug_mode"]:
+            f_shader.parameter.set1Value(idx, self._u[key]); idx += 1
+        for fi in range(self.MAX_FIELDS):
+            for name in (per_field_scalar_i + per_field_scalar_f + per_field_vec3):
+                f_shader.parameter.set1Value(idx, self._u[f"{name}[{fi}]"]); idx += 1
+        f_shader.parameter.setNum(idx)
 
         shader.shaderObject.set1Value(0, v_shader)
         shader.shaderObject.set1Value(1, f_shader)
@@ -361,54 +368,90 @@ void main() {
         """Set debug colour mode: 0=normal, 1=SDF heat-map, 2=normals, 3=iterations."""
         self._u["u_debug_mode"].value.setValue(int(mode))
 
-    # -- Internal --
-
-    def _build_combined_field(self):
-        """Build a single FRepField tree from all visible fields."""
-        visible = [f for f, vis in self._fields.values() if vis and f is not None]
-        if not visible:
-            return None
-        result = visible[0]
-        for f in visible[1:]:
-            result = UnionField(result, f)
-        return result
+    MAX_FIELDS = 8
 
     def _rebuild(self):
-        """Re-bake combined SDF and upload texture + uniforms."""
+        """Bake each field independently and upload a stacked atlas."""
         from core.dm_object import get_meshing_cell_size
-        combined = self._build_combined_field()
-        if combined is None:
+        import numpy as np
+
+        visible = [(label, f) for label, (f, vis) in self._fields.items()
+                   if vis and f is not None]
+        if not visible:
             self._switch.whichChild = -1
             return
+        if len(visible) > self.MAX_FIELDS:
+            dm_logger.warning(f"SceneRayMarch: {len(visible)} fields exceeds "
+                              f"MAX_FIELDS={self.MAX_FIELDS}, truncating")
+            visible = visible[:self.MAX_FIELDS]
 
         cell_size = get_meshing_cell_size()
-        baked = bake_sdf_to_atlas(combined, cell_size)
 
-        # Texture upload (LUMINANCE_ALPHA, 2 channels)
+        # Bake each field independently
+        baked_list = [bake_sdf_to_atlas(f, cell_size) for _, f in visible]
+        n_fields = len(baked_list)
+
+        # Stacked atlas: each field occupies its own row-band
+        max_w = max(b["atlas_w"] for b in baked_list)
+        total_h = sum(b["atlas_h"] for b in baked_list)
+
+        combined = np.zeros((total_h, max_w, 2), dtype=np.uint8)
+        row_offsets = []
+        row = 0
+        for b in baked_list:
+            h, w = b["atlas_h"], b["atlas_w"]
+            # Reshape flat bytes back to (h, w, 2) and place in combined
+            tile = np.frombuffer(b["atlas_bytes"], dtype=np.uint8).reshape(h, w, 2)
+            combined[row:row + h, :w, :] = tile
+            row_offsets.append(row)
+            row += h
+
+        # Upload single combined texture
         self._tex.image.setValue(
-            coin.SbVec2s(baked["atlas_w"], baked["atlas_h"]),
-            2, baked["atlas_bytes"])
+            coin.SbVec2s(max_w, total_h), 2, combined.tobytes())
 
-        # Uniforms
-        self._u["u_nx"].value.setValue(int(baked["nx"]))
-        self._u["u_ny"].value.setValue(int(baked["ny"]))
-        self._u["u_nz"].value.setValue(int(baked["nz"]))
-        self._u["u_atz"].value.setValue(int(baked["atz"]))
-        self._u["u_atlas_w"].value.setValue(float(baked["atlas_w"]))
-        self._u["u_atlas_h"].value.setValue(float(baked["atlas_h"]))
-        mn, mx = baked["bbox_min"], baked["bbox_max"]
-        self._u["u_bbox_min"].value.setValue(coin.SbVec3f(mn.x, mn.y, mn.z))
-        self._u["u_bbox_max"].value.setValue(coin.SbVec3f(mx.x, mx.y, mx.z))
-        self._u["u_max_dist"].value.setValue(float(baked["max_dist"]))
+        # Per-field uniform arrays (indices 0..MAX_FIELDS-1)
+        for fi in range(self.MAX_FIELDS):
+            if fi < n_fields:
+                b = baked_list[fi]
+                mn, mx = b["bbox_min"], b["bbox_max"]
+                self._u[f"u_nx[{fi}]"].value.setValue(int(b["nx"]))
+                self._u[f"u_ny[{fi}]"].value.setValue(int(b["ny"]))
+                self._u[f"u_nz[{fi}]"].value.setValue(int(b["nz"]))
+                self._u[f"u_atz[{fi}]"].value.setValue(int(b["atz"]))
+                self._u[f"u_field_atlas_w[{fi}]"].value.setValue(float(b["atlas_w"]))
+                self._u[f"u_field_atlas_h[{fi}]"].value.setValue(float(b["atlas_h"]))
+                self._u[f"u_max_dist[{fi}]"].value.setValue(float(b["max_dist"]))
+                self._u[f"u_row_offset[{fi}]"].value.setValue(int(row_offsets[fi]))
+                self._u[f"u_bbox_min[{fi}]"].value.setValue(
+                    coin.SbVec3f(mn.x, mn.y, mn.z))
+                self._u[f"u_bbox_max[{fi}]"].value.setValue(
+                    coin.SbVec3f(mx.x, mx.y, mx.z))
+            else:
+                # Zero out unused slots so the shader skips them
+                self._u[f"u_nx[{fi}]"].value.setValue(0)
 
-        # Bbox proxy corners
+        self._u["u_num_fields"].value.setValue(n_fields)
+        self._u["u_combined_atlas_w"].value.setValue(float(max_w))
+        self._u["u_combined_atlas_h"].value.setValue(float(total_h))
+
+        # Combined bbox proxy (union of all visible fields' bboxes)
+        all_mn = [baked_list[i]["bbox_min"] for i in range(n_fields)]
+        all_mx = [baked_list[i]["bbox_max"] for i in range(n_fields)]
+        import FreeCAD
+        mn_all = FreeCAD.Vector(min(v.x for v in all_mn),
+                                min(v.y for v in all_mn),
+                                min(v.z for v in all_mn))
+        mx_all = FreeCAD.Vector(max(v.x for v in all_mx),
+                                max(v.y for v in all_mx),
+                                max(v.z for v in all_mx))
         self._bbox_coords.point.setValues(0, 8, [
-            (mn.x, mn.y, mn.z), (mx.x, mn.y, mn.z),
-            (mn.x, mx.y, mn.z), (mx.x, mx.y, mn.z),
-            (mn.x, mn.y, mx.z), (mx.x, mn.y, mx.z),
-            (mn.x, mx.y, mx.z), (mx.x, mx.y, mx.z)
+            (mn_all.x, mn_all.y, mn_all.z), (mx_all.x, mn_all.y, mn_all.z),
+            (mn_all.x, mx_all.y, mn_all.z), (mx_all.x, mx_all.y, mn_all.z),
+            (mn_all.x, mn_all.y, mx_all.z), (mx_all.x, mn_all.y, mx_all.z),
+            (mn_all.x, mx_all.y, mx_all.z), (mx_all.x, mx_all.y, mx_all.z)
         ])
 
         self._switch.whichChild = 0
-        dm_logger.debug(f"SceneRayMarch: rebuilt ({len(self._fields)} fields, "
-                        f"grid {baked['nx']}x{baked['ny']}x{baked['nz']})")
+        dm_logger.debug(f"SceneRayMarch: rebuilt ({n_fields} fields, "
+                        f"stacked atlas {max_w}x{total_h})")

@@ -1897,6 +1897,429 @@ The full `Deactivated()` method becomes:
 
 ---
 
+## Tier 10 — Per-Field Independent Rendering (No SDF Blending)
+
+> **Problem:** G-024's `_rebuild()` wraps all visible fields in `UnionField(a, b)`, which
+> evaluates `min(sdf_0(p), sdf_1(p))` at every grid point before baking. Two nearby
+> objects (e.g. sphere and box) produce a shared surface where their SDFs are close —
+> the classic SDF union "join". This is mathematically correct boolean union behaviour,
+> but the user wants independent objects that do not merge.
+>
+> **Solution:** Bake each field into its own rows in a single stacked atlas (no combining
+> at texture level). The shader evaluates each field's SDF independently at each march
+> step, using the minimum absolute value for the safe step size (necessary for correct
+> sphere tracing), but checking each field independently for a surface hit. The field
+> that provides the nearest hit wins — its normal and depth are used. No cross-field SDF
+> blending possible.
+>
+> **Constraint:** Maximum `MAX_FIELDS = 8` active fields. GLSL 1.20 uniform arrays are
+> used for per-field metadata. The single combined texture keeps one sampler unit.
+
+### G-028: Refactor `_rebuild()` to bake each field independently into a stacked atlas
+
+**File:** `core/dm_scene_ray_march_renderer.py` — replace `_build_combined_field()` and `_rebuild()` (currently at the bottom of the class)
+
+**What:** Remove `UnionField` combination entirely. Bake each visible field independently
+with `bake_sdf_to_atlas(field_i, cell_size)`. Stack the resulting atlases vertically into
+one combined image: combined width = max of all field atlas widths (padded with zeros),
+combined height = sum of all field atlas heights. Each field gets a `row_offset` (the
+pixel row where its tiles start). Upload one combined texture and set per-field uniform
+arrays.
+
+**Implementation:**
+
+Replace `_build_combined_field()` and `_rebuild()` with:
+
+```python
+    MAX_FIELDS = 8
+
+    def _rebuild(self):
+        """Bake each field independently and upload a stacked atlas."""
+        from core.dm_object import get_meshing_cell_size
+        import numpy as np
+
+        visible = [(label, f) for label, (f, vis) in self._fields.items()
+                   if vis and f is not None]
+        if not visible:
+            self._switch.whichChild = -1
+            return
+        if len(visible) > self.MAX_FIELDS:
+            dm_logger.warning(f"SceneRayMarch: {len(visible)} fields exceeds "
+                              f"MAX_FIELDS={self.MAX_FIELDS}, truncating")
+            visible = visible[:self.MAX_FIELDS]
+
+        cell_size = get_meshing_cell_size()
+
+        # Bake each field independently
+        baked_list = [bake_sdf_to_atlas(f, cell_size) for _, f in visible]
+        n_fields = len(baked_list)
+
+        # Stacked atlas: each field occupies its own row-band
+        max_w = max(b["atlas_w"] for b in baked_list)
+        total_h = sum(b["atlas_h"] for b in baked_list)
+
+        combined = np.zeros((total_h, max_w, 2), dtype=np.uint8)
+        row_offsets = []
+        row = 0
+        for b in baked_list:
+            h, w = b["atlas_h"], b["atlas_w"]
+            # Reshape flat bytes back to (h, w, 2) and place in combined
+            tile = np.frombuffer(b["atlas_bytes"], dtype=np.uint8).reshape(h, w, 2)
+            combined[row:row + h, :w, :] = tile
+            row_offsets.append(row)
+            row += h
+
+        # Upload single combined texture
+        self._tex.image.setValue(
+            coin.SbVec2s(max_w, total_h), 2, combined.tobytes())
+
+        # Per-field uniform arrays (indices 0..MAX_FIELDS-1)
+        for fi in range(self.MAX_FIELDS):
+            if fi < n_fields:
+                b = baked_list[fi]
+                mn, mx = b["bbox_min"], b["bbox_max"]
+                self._u[f"u_nx[{fi}]"].value.setValue(int(b["nx"]))
+                self._u[f"u_ny[{fi}]"].value.setValue(int(b["ny"]))
+                self._u[f"u_nz[{fi}]"].value.setValue(int(b["nz"]))
+                self._u[f"u_atz[{fi}]"].value.setValue(int(b["atz"]))
+                self._u[f"u_field_atlas_w[{fi}]"].value.setValue(float(b["atlas_w"]))
+                self._u[f"u_field_atlas_h[{fi}]"].value.setValue(float(b["atlas_h"]))
+                self._u[f"u_max_dist[{fi}]"].value.setValue(float(b["max_dist"]))
+                self._u[f"u_row_offset[{fi}]"].value.setValue(int(row_offsets[fi]))
+                self._u[f"u_bbox_min[{fi}]"].value.setValue(
+                    coin.SbVec3f(mn.x, mn.y, mn.z))
+                self._u[f"u_bbox_max[{fi}]"].value.setValue(
+                    coin.SbVec3f(mx.x, mx.y, mx.z))
+            else:
+                # Zero out unused slots so the shader skips them
+                self._u[f"u_nx[{fi}]"].value.setValue(0)
+
+        self._u["u_num_fields"].value.setValue(n_fields)
+        self._u["u_combined_atlas_w"].value.setValue(float(max_w))
+        self._u["u_combined_atlas_h"].value.setValue(float(total_h))
+
+        # Combined bbox proxy (union of all visible fields' bboxes)
+        all_mn = [baked_list[i]["bbox_min"] for i in range(n_fields)]
+        all_mx = [baked_list[i]["bbox_max"] for i in range(n_fields)]
+        import FreeCAD
+        mn_all = FreeCAD.Vector(min(v.x for v in all_mn),
+                                min(v.y for v in all_mn),
+                                min(v.z for v in all_mn))
+        mx_all = FreeCAD.Vector(max(v.x for v in all_mx),
+                                max(v.y for v in all_mx),
+                                max(v.z for v in all_mx))
+        self._bbox_coords.point.setValues(0, 8, [
+            (mn_all.x, mn_all.y, mn_all.z), (mx_all.x, mn_all.y, mn_all.z),
+            (mn_all.x, mx_all.y, mn_all.z), (mx_all.x, mx_all.y, mn_all.z),
+            (mn_all.x, mn_all.y, mx_all.z), (mx_all.x, mn_all.y, mx_all.z),
+            (mn_all.x, mx_all.y, mx_all.z), (mx_all.x, mx_all.y, mx_all.z)
+        ])
+
+        self._switch.whichChild = 0
+        dm_logger.debug(f"SceneRayMarch: rebuilt ({n_fields} fields, "
+                        f"stacked atlas {max_w}x{total_h})")
+```
+
+Also update `_setup_nodes()` to create the per-field uniform nodes. Replace the old uniform creation block (after the fragment shader string) with:
+
+```python
+        # Scene-level uniforms
+        u_sdf_tex = coin.SoShaderParameter1i()
+        u_sdf_tex.name.setValue("u_sdf_tex")
+        u_sdf_tex.value.setValue(0)
+
+        self._u["u_num_fields"] = coin.SoShaderParameter1i()
+        self._u["u_num_fields"].name.setValue("u_num_fields")
+        self._u["u_num_fields"].value.setValue(0)
+
+        self._u["u_combined_atlas_w"] = coin.SoShaderParameter1f()
+        self._u["u_combined_atlas_w"].name.setValue("u_combined_atlas_w")
+        self._u["u_combined_atlas_w"].value.setValue(1.0)
+
+        self._u["u_combined_atlas_h"] = coin.SoShaderParameter1f()
+        self._u["u_combined_atlas_h"].name.setValue("u_combined_atlas_h")
+        self._u["u_combined_atlas_h"].value.setValue(1.0)
+
+        self._u["u_debug_mode"] = coin.SoShaderParameter1i()
+        self._u["u_debug_mode"].name.setValue("u_debug_mode")
+        self._u["u_debug_mode"].value.setValue(0)
+
+        # Per-field uniform arrays (Coin3D uses "u_nx[0]" naming for GLSL arrays)
+        per_field_scalar_i = ["u_nx", "u_ny", "u_nz", "u_atz", "u_row_offset"]
+        per_field_scalar_f = ["u_field_atlas_w", "u_field_atlas_h", "u_max_dist"]
+        per_field_vec3     = ["u_bbox_min", "u_bbox_max"]
+
+        for fi in range(self.MAX_FIELDS):
+            for name in per_field_scalar_i:
+                key = f"{name}[{fi}]"
+                node = coin.SoShaderParameter1i()
+                node.name.setValue(key)
+                node.value.setValue(0)
+                self._u[key] = node
+            for name in per_field_scalar_f:
+                key = f"{name}[{fi}]"
+                node = coin.SoShaderParameter1f()
+                node.name.setValue(key)
+                node.value.setValue(1.0)
+                self._u[key] = node
+            for name in per_field_vec3:
+                key = f"{name}[{fi}]"
+                node = coin.SoShaderParameter3f()
+                node.name.setValue(key)
+                node.value.setValue(coin.SbVec3f(0, 0, 0))
+                self._u[key] = node
+
+        # Register all uniforms with the fragment shader
+        f_shader.parameter.setNum(0)
+        idx = 0
+        f_shader.parameter.set1Value(idx, u_sdf_tex); idx += 1
+        for key in ["u_num_fields", "u_combined_atlas_w", "u_combined_atlas_h",
+                    "u_debug_mode"]:
+            f_shader.parameter.set1Value(idx, self._u[key]); idx += 1
+        for fi in range(self.MAX_FIELDS):
+            for name in (per_field_scalar_i + per_field_scalar_f + per_field_vec3):
+                f_shader.parameter.set1Value(idx, self._u[f"{name}[{fi}]"]); idx += 1
+        f_shader.parameter.setNum(idx)
+```
+
+**Depends on:** G-027
+
+---
+
+### G-029: Replace fragment shader with per-field independent sphere tracer
+
+**File:** `core/dm_scene_ray_march_renderer.py` — replace `f_shader.sourceProgram.setValue(...)` in `_setup_nodes()` with the multi-field shader below
+
+**What:** The new shader evaluates all `u_num_fields` active fields independently at
+each march step. Step size = `min(|sdf_0|, |sdf_1|, ...)` (safe sphere-trace step).
+Hit = first step where ANY field's `|sdf_fi| < hit_thresh`. The winning field's
+texture is used for normal computation. No cross-field SDF blending.
+`sample_sdf_field(fi, p)` addresses each field's row-band in the stacked atlas using
+`u_row_offset[fi]` as the base row in the combined texture.
+
+> **GLSL 1.20 note:** Dynamic indexing of `uniform int u_nx[8]` with a variable `fi`
+> IS valid in GLSL 1.20. The single sampler `u_sdf_tex` samples the combined stacked
+> atlas; `u_row_offset[fi]` shifts the V coordinate into the correct band.
+
+**Implementation:**
+
+```python
+        f_shader.sourceProgram.setValue("""
+varying vec2  v_uv;
+uniform sampler2D u_sdf_tex;
+uniform int   u_num_fields;
+uniform float u_combined_atlas_w;
+uniform float u_combined_atlas_h;
+uniform int   u_debug_mode;
+
+uniform int   u_nx[8];
+uniform int   u_ny[8];
+uniform int   u_nz[8];
+uniform int   u_atz[8];
+uniform float u_field_atlas_w[8];
+uniform float u_field_atlas_h[8];
+uniform float u_max_dist[8];
+uniform int   u_row_offset[8];
+uniform vec3  u_bbox_min[8];
+uniform vec3  u_bbox_max[8];
+
+float sample_texel_field(int fi, float ix, float iy, float iz) {
+    float c = floor(mod(iz, float(u_atz[fi])));
+    float r = floor(iz / float(u_atz[fi]));
+    // atlas UV: x within this field's column layout, y offset by row_offset
+    float u = (c * (float(u_nx[fi]) + 1.0) + ix + 0.5) / u_combined_atlas_w;
+    float v = (float(u_row_offset[fi]) + r * (float(u_ny[fi]) + 1.0) + iy + 0.5)
+              / u_combined_atlas_h;
+    vec4 t = texture2D(u_sdf_tex, vec2(u, v));
+    return (t.r * 65280.0 + t.a * 255.0) / 65535.0;
+}
+
+float sample_sdf_field(int fi, vec3 p) {
+    // Outside this field's bbox → return max_dist (miss)
+    if (any(lessThan(p, u_bbox_min[fi])) || any(greaterThan(p, u_bbox_max[fi])))
+        return u_max_dist[fi];
+    vec3 uvw = (p - u_bbox_min[fi]) / (u_bbox_max[fi] - u_bbox_min[fi]);
+    float gx = clamp(uvw.x * float(u_nx[fi]), 0.0, float(u_nx[fi]));
+    float gy = clamp(uvw.y * float(u_ny[fi]), 0.0, float(u_ny[fi]));
+    float gz = clamp(uvw.z * float(u_nz[fi]), 0.0, float(u_nz[fi]));
+    float x0=floor(gx); float x1=min(x0+1.0,float(u_nx[fi]));
+    float y0=floor(gy); float y1=min(y0+1.0,float(u_ny[fi]));
+    float z0=floor(gz); float z1=min(z0+1.0,float(u_nz[fi]));
+    float fx=gx-x0; float fy=gy-y0; float fz=gz-z0;
+    float s = mix(
+        mix(mix(sample_texel_field(fi,x0,y0,z0),sample_texel_field(fi,x1,y0,z0),fx),
+            mix(sample_texel_field(fi,x0,y1,z0),sample_texel_field(fi,x1,y1,z0),fx),fy),
+        mix(mix(sample_texel_field(fi,x0,y0,z1),sample_texel_field(fi,x1,y0,z1),fx),
+            mix(sample_texel_field(fi,x0,y1,z1),sample_texel_field(fi,x1,y1,z1),fx),fy),
+        fz);
+    return (s * 2.0 - 1.0) * u_max_dist[fi];
+}
+
+vec3 sdf_normal_field(int fi, vec3 p) {
+    float cell = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
+    float h = cell * 0.5;
+    vec2 k = vec2(1.0, -1.0);
+    return normalize(
+        k.xyy * sample_sdf_field(fi, p + k.xyy*h) +
+        k.yyx * sample_sdf_field(fi, p + k.yyx*h) +
+        k.yxy * sample_sdf_field(fi, p + k.yxy*h) +
+        k.xxx * sample_sdf_field(fi, p + k.xxx*h));
+}
+
+// Combined AABB = union of all field AABBs (used for ray culling only)
+// Each field has its own AABB; we clip to each field's AABB during sampling.
+vec2 intersect_aabb(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
+    vec3 inv_rd = 1.0 / rd;
+    vec3 t1 = (bmin - ro) * inv_rd;
+    vec3 t2 = (bmax - ro) * inv_rd;
+    vec3 tmin = min(t1, t2);
+    vec3 tmax = max(t1, t2);
+    float tNear = max(max(tmin.x, tmin.y), tmin.z);
+    float tFar  = min(min(tmax.x, tmax.y), tmax.z);
+    return vec2(tNear, tFar);
+}
+
+void main() {
+    // 1. Unproject NDC to world-space ray
+    vec4 ndc_near = vec4(v_uv, -1.0, 1.0);
+    vec4 world_near = gl_ModelViewProjectionMatrixInverse * ndc_near;
+    world_near /= world_near.w;
+    vec4 ndc_far = vec4(v_uv, 1.0, 1.0);
+    vec4 world_far = gl_ModelViewProjectionMatrixInverse * ndc_far;
+    world_far /= world_far.w;
+    vec3 ro = world_near.xyz;
+    vec3 rd = normalize(world_far.xyz - world_near.xyz);
+    vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
+
+    // 2. Compute combined AABB for early ray cull (union of all field AABBs)
+    vec3 scene_min = u_bbox_min[0];
+    vec3 scene_max = u_bbox_max[0];
+    for (int fi = 1; fi < 8; fi++) {
+        if (fi >= u_num_fields) break;
+        scene_min = min(scene_min, u_bbox_min[fi]);
+        scene_max = max(scene_max, u_bbox_max[fi]);
+    }
+    vec2 tBox = intersect_aabb(ro, rd, scene_min, scene_max);
+    float tNear = max(tBox.x, 0.0);
+    float tFar  = tBox.y;
+    if (tNear > tFar) discard;
+
+    // 3. Multi-field sphere trace
+    // Step size = min(|sdf_0|, |sdf_1|, ...) — safe step that won't skip any surface.
+    // Hit check: first field with |sdf_fi| < hit_thresh wins (no cross-field blending).
+    float global_hit_thresh = 0.001;  // relative; refined per-field below
+    float t = tNear;
+    bool hit = false;
+    int hit_field = 0;
+    int march_iters = 0;
+
+    for (int i = 0; i < 256; i++) {
+        march_iters = i;
+        vec3 p = ro + t * rd;
+
+        float min_abs_sdf = 1.0e10;
+        for (int fi = 0; fi < 8; fi++) {
+            if (fi >= u_num_fields) break;
+            float d = sample_sdf_field(fi, p);
+            float thresh = u_max_dist[fi] * 0.001;
+            if (abs(d) < thresh) {
+                hit = true;
+                hit_field = fi;
+                break;
+            }
+            min_abs_sdf = min(min_abs_sdf, abs(d));
+        }
+        if (hit) break;
+
+        t += max(min_abs_sdf, 0.0001);
+        if (t > tFar) break;
+    }
+    if (!hit) discard;
+
+    // 4. Shade using hit field's normal
+    vec3 hp = ro + t * rd;
+    vec3 n  = sdf_normal_field(hit_field, hp);
+
+    vec4 light_eye = gl_LightSource[0].position;
+    vec3 ld;
+    if (light_eye.w < 0.5) {
+        ld = normalize((gl_ModelViewMatrixInverse * vec4(light_eye.xyz, 0.0)).xyz);
+    } else {
+        vec3 light_world = (gl_ModelViewMatrixInverse * light_eye).xyz;
+        ld = normalize(light_world - hp);
+    }
+    float diff = max(dot(n, ld), 0.0);
+    vec3 vd    = normalize(cam - hp);
+    float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
+    vec3 color = vec3(1.0,0.5,0.0)*(0.15 + 0.75*diff) + vec3(0.4)*spec;
+    gl_FragColor = vec4(color, 1.0);
+
+    // Debug overrides
+    if (u_debug_mode == 1) {
+        float v = sample_sdf_field(hit_field, hp) / u_max_dist[hit_field] * 0.5 + 0.5;
+        gl_FragColor = vec4(v, 0.0, 1.0 - v, 1.0);
+    } else if (u_debug_mode == 2) {
+        gl_FragColor = vec4(n * 0.5 + 0.5, 1.0);
+    } else if (u_debug_mode == 3) {
+        gl_FragColor = vec4(vec3(float(march_iters) / 256.0), 1.0);
+    }
+
+    // 5. Depth write
+    vec4 clip    = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
+    float ndc_z  = clip.z / clip.w;
+    gl_FragDepth = gl_DepthRange.near
+                 + gl_DepthRange.diff * (ndc_z * 0.5 + 0.5);
+}
+""")
+```
+
+**Depends on:** G-028
+
+---
+
+### G-030: Fix workplane depth occlusion against SDF renders
+
+**File:** `core/dm_workplane.py` — modify `ViewProviderDMWorkPlane.attach()` (line 79)
+
+**What:** The workplane's `grid_sep` has `transparency=0.7` but no `SoDepthBuffer` node.
+Coin3D's transparent rendering pass may not reliably enable depth testing against the
+opaque SDF quad's `gl_FragDepth` writes. Adding `SoDepthBuffer(test=True, write=False)`
+as the first child of `grid_sep` ensures the workplane face and grid lines are always
+depth-tested against the opaque SDF surface without competing with it for depth writes.
+
+> **Required reading:** `.agents/skills/dm_coin3d_depth_ordering/SKILL.md`
+
+**Implementation:** In `attach()`, immediately after `self.grid_sep = coin.SoSeparator()`
+(line 79), before the `plane_mat` is added, insert:
+
+```python
+        # Ensure transparent workplane geometry depth-tests against opaque SDF renders.
+        # test=True: discard fragments behind opaque surfaces (e.g. SDF quad).
+        # write=False: don't write depth — transparent objects must not occlude each other.
+        try:
+            wp_depth = coin.SoDepthBuffer()
+            wp_depth.test.setValue(True)
+            wp_depth.write.setValue(False)
+            self.grid_sep.addChild(wp_depth)
+        except AttributeError:
+            pass  # SoDepthBuffer not available in this Coin3D/pivy version
+```
+
+The resulting `grid_sep` children order becomes:
+```
+grid_sep (SoSeparator)
+├── SoDepthBuffer (test=True, write=False)   ← NEW
+├── SoMaterial (transparency=0.7)
+├── SoCoordinate3 (grid lines)
+├── SoLineSet
+├── SoCoordinate3 (face corners)
+└── SoFaceSet
+```
+
+**Depends on:** None (independent fix)
+
+---
+
 ## Agent Skills
 
 | Skill | Purpose |
