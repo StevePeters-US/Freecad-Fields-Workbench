@@ -2086,7 +2086,7 @@ Also update `_setup_nodes()` to create the per-field uniform nodes. Replace the 
 
 ---
 
-### G-029: Replace fragment shader with per-field independent sphere tracer
+### [x] G-029: Replace fragment shader with per-field independent sphere tracer
 
 **File:** `core/dm_scene_ray_march_renderer.py` — replace `f_shader.sourceProgram.setValue(...)` in `_setup_nodes()` with the multi-field shader below
 

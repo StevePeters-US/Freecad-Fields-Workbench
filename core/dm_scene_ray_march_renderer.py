@@ -131,59 +131,71 @@ void main() {
         f_shader.sourceProgram.setValue("""
 varying vec2  v_uv;
 uniform sampler2D u_sdf_tex;
-uniform int   u_nx;
-uniform int   u_ny;
-uniform int   u_nz;
-uniform int   u_atz;
-uniform float u_atlas_w;
-uniform float u_atlas_h;
-uniform vec3  u_bbox_min;
-uniform vec3  u_bbox_max;
-uniform float u_max_dist;
+uniform int   u_num_fields;
+uniform float u_combined_atlas_w;
+uniform float u_combined_atlas_h;
 uniform int   u_debug_mode;
 
-float sample_texel(float ix, float iy, float iz) {
-    float c = floor(mod(iz, float(u_atz)));
-    float r = floor(iz / float(u_atz));
-    float u = (c * (float(u_nx) + 1.0) + ix + 0.5) / u_atlas_w;
-    float v = (r * (float(u_ny) + 1.0) + iy + 0.5) / u_atlas_h;
+uniform int   u_nx[8];
+uniform int   u_ny[8];
+uniform int   u_nz[8];
+uniform int   u_atz[8];
+uniform float u_field_atlas_w[8];
+uniform float u_field_atlas_h[8];
+uniform float u_max_dist[8];
+uniform int   u_row_offset[8];
+uniform vec3  u_bbox_min[8];
+uniform vec3  u_bbox_max[8];
+
+float sample_texel_field(int fi, float ix, float iy, float iz) {
+    float c = floor(mod(iz, float(u_atz[fi])));
+    float r = floor(iz / float(u_atz[fi]));
+    // atlas UV: x within this field's column layout, y offset by row_offset
+    float u = (c * (float(u_nx[fi]) + 1.0) + ix + 0.5) / u_combined_atlas_w;
+    float v = (float(u_row_offset[fi]) + r * (float(u_ny[fi]) + 1.0) + iy + 0.5)
+              / u_combined_atlas_h;
     vec4 t = texture2D(u_sdf_tex, vec2(u, v));
     return (t.r * 65280.0 + t.a * 255.0) / 65535.0;
 }
 
-float sample_sdf(vec3 p) {
-    vec3 uvw = (p - u_bbox_min) / (u_bbox_max - u_bbox_min);
-    float gx = clamp(uvw.x * float(u_nx), 0.0, float(u_nx));
-    float gy = clamp(uvw.y * float(u_ny), 0.0, float(u_ny));
-    float gz = clamp(uvw.z * float(u_nz), 0.0, float(u_nz));
-    float x0=floor(gx); float x1=min(x0+1.0,float(u_nx));
-    float y0=floor(gy); float y1=min(y0+1.0,float(u_ny));
-    float z0=floor(gz); float z1=min(z0+1.0,float(u_nz));
+float sample_sdf_field(int fi, vec3 p) {
+    // Outside this field's bbox → return max_dist (miss)
+    if (any(lessThan(p, u_bbox_min[fi])) || any(greaterThan(p, u_bbox_max[fi])))
+        return u_max_dist[fi];
+    vec3 uvw = (p - u_bbox_min[fi]) / (u_bbox_max[fi] - u_bbox_min[fi]);
+    float gx = clamp(uvw.x * float(u_nx[fi]), 0.0, float(u_nx[fi]));
+    float gy = clamp(uvw.y * float(u_ny[fi]), 0.0, float(u_ny[fi]));
+    float gz = clamp(uvw.z * float(u_nz[fi]), 0.0, float(u_nz[fi]));
+    float x0=floor(gx); float x1=min(x0+1.0,float(u_nx[fi]));
+    float y0=floor(gy); float y1=min(y0+1.0,float(u_ny[fi]));
+    float z0=floor(gz); float z1=min(z0+1.0,float(u_nz[fi]));
     float fx=gx-x0; float fy=gy-y0; float fz=gz-z0;
     float s = mix(
-        mix(mix(sample_texel(x0,y0,z0),sample_texel(x1,y0,z0),fx),
-            mix(sample_texel(x0,y1,z0),sample_texel(x1,y1,z0),fx),fy),
-        mix(mix(sample_texel(x0,y0,z1),sample_texel(x1,y0,z1),fx),
-            mix(sample_texel(x0,y1,z1),sample_texel(x1,y1,z1),fx),fy),
+        mix(mix(sample_texel_field(fi,x0,y0,z0),sample_texel_field(fi,x1,y0,z0),fx),
+            mix(sample_texel_field(fi,x0,y1,z0),sample_texel_field(fi,x1,y1,z0),fx),fy),
+        mix(mix(sample_texel_field(fi,x0,y0,z1),sample_texel_field(fi,x1,y0,z1),fx),
+            mix(sample_texel_field(fi,x0,y1,z1),sample_texel_field(fi,x1,y1,z1),fx),fy),
         fz);
-    return (s * 2.0 - 1.0) * u_max_dist;
+    return (s * 2.0 - 1.0) * u_max_dist[fi];
 }
 
-vec3 sdf_normal(vec3 p) {
-    float cell = (u_bbox_max.x - u_bbox_min.x) / max(float(u_nx), 1.0);
+vec3 sdf_normal_field(int fi, vec3 p) {
+    float cell = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
     float h = cell * 0.5;
     vec2 k = vec2(1.0, -1.0);
     return normalize(
-        k.xyy * sample_sdf(p + k.xyy*h) +
-        k.yyx * sample_sdf(p + k.yyx*h) +
-        k.yxy * sample_sdf(p + k.yxy*h) +
-        k.xxx * sample_sdf(p + k.xxx*h));
+        k.xyy * sample_sdf_field(fi, p + k.xyy*h) +
+        k.yyx * sample_sdf_field(fi, p + k.yyx*h) +
+        k.yxy * sample_sdf_field(fi, p + k.yxy*h) +
+        k.xxx * sample_sdf_field(fi, p + k.xxx*h));
 }
 
-vec2 intersect_aabb(vec3 ro, vec3 rd) {
+// Combined AABB = union of all field AABBs (used for ray culling only)
+// Each field has its own AABB; we clip to each field's AABB during sampling.
+vec2 intersect_aabb(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
     vec3 inv_rd = 1.0 / rd;
-    vec3 t1 = (u_bbox_min - ro) * inv_rd;
-    vec3 t2 = (u_bbox_max - ro) * inv_rd;
+    vec3 t1 = (bmin - ro) * inv_rd;
+    vec3 t2 = (bmax - ro) * inv_rd;
     vec3 tmin = min(t1, t2);
     vec3 tmax = max(t1, t2);
     float tNear = max(max(tmin.x, tmin.y), tmin.z);
@@ -192,6 +204,7 @@ vec2 intersect_aabb(vec3 ro, vec3 rd) {
 }
 
 void main() {
+    // 1. Unproject NDC to world-space ray
     vec4 ndc_near = vec4(v_uv, -1.0, 1.0);
     vec4 world_near = gl_ModelViewProjectionMatrixInverse * ndc_near;
     world_near /= world_near.w;
@@ -202,30 +215,55 @@ void main() {
     vec3 rd = normalize(world_far.xyz - world_near.xyz);
     vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
 
-    vec2 tBox = intersect_aabb(ro, rd);
+    // 2. Compute combined AABB for early ray cull (union of all field AABBs)
+    vec3 scene_min = u_bbox_min[0];
+    vec3 scene_max = u_bbox_max[0];
+    for (int fi = 1; fi < 8; fi++) {
+        if (fi >= u_num_fields) break;
+        scene_min = min(scene_min, u_bbox_min[fi]);
+        scene_max = max(scene_max, u_bbox_max[fi]);
+    }
+    vec2 tBox = intersect_aabb(ro, rd, scene_min, scene_max);
     float tNear = max(tBox.x, 0.0);
     float tFar  = tBox.y;
     if (tNear > tFar) discard;
 
-    float hit_thresh = u_max_dist * 0.001;
-    float min_step   = hit_thresh;
+    // 3. Multi-field sphere trace
+    // Step size = min(|sdf_0|, |sdf_1|, ...) — safe step that won't skip any surface.
+    // Hit check: first field with |sdf_fi| < hit_thresh wins (no cross-field blending).
+    float global_hit_thresh = 0.001;  // relative; refined per-field below
     float t = tNear;
     bool hit = false;
-    float d;
+    int hit_field = 0;
     int march_iters = 0;
 
     for (int i = 0; i < 256; i++) {
         march_iters = i;
         vec3 p = ro + t * rd;
-        d = sample_sdf(p);
-        if (abs(d) < hit_thresh) { hit = true; break; }
-        t += max(abs(d), min_step);
+
+        float min_abs_sdf = 1.0e10;
+        for (int fi = 0; fi < 8; fi++) {
+            if (fi >= u_num_fields) break;
+            float d = sample_sdf_field(fi, p);
+            float thresh = u_max_dist[fi] * 0.001;
+            if (abs(d) < thresh) {
+                hit = true;
+                hit_field = fi;
+                break;
+            }
+            min_abs_sdf = min(min_abs_sdf, abs(d));
+        }
+        if (hit) break;
+
+        t += max(min_abs_sdf, 0.0001);
         if (t > tFar) break;
     }
     if (!hit) discard;
 
-    vec3 hp  = ro + t * rd;
-    vec3 n   = sdf_normal(hp);
+    // 4. Shade using hit field's normal
+    vec3 hp = ro + t * rd;
+    vec3 n  = sdf_normal_field(hit_field, hp);
+
     vec4 light_eye = gl_LightSource[0].position;
     vec3 ld;
     if (light_eye.w < 0.5) {
@@ -240,8 +278,9 @@ void main() {
     vec3 color = vec3(1.0,0.5,0.0)*(0.15 + 0.75*diff) + vec3(0.4)*spec;
     gl_FragColor = vec4(color, 1.0);
 
+    // Debug overrides
     if (u_debug_mode == 1) {
-        float v = sample_sdf(hp) / u_max_dist * 0.5 + 0.5;
+        float v = sample_sdf_field(hit_field, hp) / u_max_dist[hit_field] * 0.5 + 0.5;
         gl_FragColor = vec4(v, 0.0, 1.0 - v, 1.0);
     } else if (u_debug_mode == 2) {
         gl_FragColor = vec4(n * 0.5 + 0.5, 1.0);
@@ -249,10 +288,11 @@ void main() {
         gl_FragColor = vec4(vec3(float(march_iters) / 256.0), 1.0);
     }
 
-    vec4 clip     = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
-    float ndc_z   = clip.z / clip.w;
-    gl_FragDepth  = gl_DepthRange.near
-                  + gl_DepthRange.diff * (ndc_z * 0.5 + 0.5);
+    // 5. Depth write
+    vec4 clip    = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
+    float ndc_z  = clip.z / clip.w;
+    gl_FragDepth = gl_DepthRange.near
+                 + gl_DepthRange.diff * (ndc_z * 0.5 + 0.5);
 }
 """)
 
