@@ -4,6 +4,7 @@ from pivy import coin
 from core import dm_logger
 from core.input_manager import DMInputManager
 from core.dm_point import DMPoint
+from core.dm_line import DMLineSet
 from core.dm_object import create_dm_object, get_meshing_cell_size
 from core.dm_mesher import mesh_timer
 from tools.dm_base import DMBase
@@ -28,7 +29,12 @@ class PrimitiveCreatorBase(DMBase):
         self._update_pending = False  # Throttle rapid updates
         # Reset the shared timer so preview calls for this tool session are isolated
         mesh_timer.reset()
-        # allow default DMBase placing on geometry, since projection fallback is fixed
+
+        self.dm_points = []
+        self.dm_line_set = None
+        self.points_root = coin.SoSeparator()
+        if self.view and self.view.getSceneGraph():
+            self.view.getSceneGraph().addChild(self.points_root)
 
     def _get_preview_field(self):
         """Subclasses return the current field based on click state + current_point."""
@@ -58,6 +64,13 @@ class PrimitiveCreatorBase(DMBase):
         if not self._update_pending:
             self._update_pending = True
             QtCore.QTimer.singleShot(0, lambda: self._apply_preview_field(field))
+        
+        # Update ghost visuals (points and lines)
+        self._update_ghost_visuals()
+
+    def _update_ghost_visuals(self):
+        """Standard implementation for primitive tools to show points/edges."""
+        pass
 
     def _apply_preview_field(self, field):
         self._update_pending = False
@@ -142,11 +155,6 @@ class BoxCreator(PrimitiveCreatorBase):
         self.points = []
         self.current_point = None
         self._height_drag_base = None
-        self.dm_points = []
-        self.sg = self.view.getSceneGraph() if self.view else None
-        self.points_root = coin.SoSeparator()
-        if self.sg:
-            self.sg.addChild(self.points_root)
         # Pre-load a workplane for the initial preview, in priority order:
         #   1. Workplane detected from current selection (_detect_selected_workplane, set by super)
         #   2. Last workplane clicked during a previous box tool session
@@ -164,11 +172,13 @@ class BoxCreator(PrimitiveCreatorBase):
         for dm_pt in self.dm_points:
             dm_pt.undraw()
         self.dm_points.clear()
+        if self.dm_line_set:
+            self.dm_line_set.undraw()
         try:
-            if self.sg and self.points_root:
-                self.sg.removeChild(self.points_root)
+            if self.view and self.view.getSceneGraph() and self.points_root:
+                self.view.getSceneGraph().removeChild(self.points_root)
         except Exception as e:
-            dm_logger.debug(f"BoxCreator._do_terminate: {e}")
+            dm_logger.debug(f"PrimitiveCreatorBase._do_terminate: {e}")
         super()._do_terminate()
 
     def on_button1_down(self, event_dict):
@@ -225,9 +235,69 @@ class BoxCreator(PrimitiveCreatorBase):
             # Transition to a finalized state or finish tool
             self.state = 3
             self._finalize_object("Box")
-            # Note: Right click implicitly finishes the tool as handled by DMBase
 
         return True
+
+    def _update_ghost_visuals(self):
+        if not self.points or self.current_point is None:
+            return
+
+        # 1. Coordinate calculation
+        loc_p1 = self.to_local(self.points[0])
+        if len(self.points) == 1:
+            loc_cur = self.to_local(self.current_point)
+            loc_p2 = FreeCAD.Vector(loc_cur.x, loc_cur.y, loc_p1.z)
+            loc_p3 = loc_p1
+        else:
+            loc_p2 = self.to_local(self.points[1])
+            loc_p3 = self.to_local(self.current_point)
+
+        size_x = abs(loc_p2.x - loc_p1.x)
+        size_y = abs(loc_p2.y - loc_p1.y)
+        size_z = abs(loc_p3.z - loc_p1.z)
+        cx = (loc_p1.x + loc_p2.x) / 2.0
+        cy = (loc_p1.y + loc_p2.y) / 2.0
+        cz = (loc_p1.z + loc_p3.z) / 2.0
+
+        pts_local = [
+            FreeCAD.Vector(cx - size_x/2, cy - size_y/2, cz - size_z/2),
+            FreeCAD.Vector(cx + size_x/2, cy - size_y/2, cz - size_z/2),
+            FreeCAD.Vector(cx + size_x/2, cy + size_y/2, cz - size_z/2),
+            FreeCAD.Vector(cx - size_x/2, cy + size_y/2, cz - size_z/2),
+            FreeCAD.Vector(cx - size_x/2, cy - size_y/2, cz + size_z/2),
+            FreeCAD.Vector(cx + size_x/2, cy - size_y/2, cz + size_z/2),
+            FreeCAD.Vector(cx + size_x/2, cy + size_y/2, cz + size_z/2),
+            FreeCAD.Vector(cx - size_x/2, cy + size_y/2, cz + size_z/2),
+        ]
+        world_corners = [self.to_global(pt) for pt in pts_local]
+
+        # 2. Update lines
+        if self.dm_line_set is None:
+            self.dm_line_set = DMLineSet(self.points_root, color=(1.0, 0.6, 0.2), pattern=0x0F0F)
+        
+        # 12 edges of a box
+        edges = [
+            (0,1), (1,2), (2,3), (3,0), # Bottom
+            (4,5), (5,6), (6,7), (7,4), # Top
+            (0,4), (1,5), (2,6), (3,7)  # Verticals
+        ]
+        line_pts = []
+        for i, j in edges:
+            line_pts.extend([world_corners[i], world_corners[j]])
+        
+        self.dm_line_set.update_lines(line_pts, segments=[2]*12)
+
+        # 3. Update corner balls
+        while len(self.dm_points) < 8:
+            self.dm_points.append(DMPoint(world_corners[len(self.dm_points)]))
+        
+        r = self._compute_handle_radius(ref_pt=world_corners[0])
+        for i, pt in enumerate(world_corners):
+            self.dm_points[i].position = pt
+            if self.dm_points[i]._point_sep is None:
+                self.dm_points[i].draw_point(self.points_root, radius=r, color=(1.0, 0.5, 0.0))
+            else:
+                self.dm_points[i].update_draw(radius=r)
 
     def on_move_state_1(self, event_dict):
         self.current_point = self.get_mouse_plane_pt(event_dict)
@@ -318,11 +388,7 @@ class SphereCreator(PrimitiveCreatorBase):
         super().__init__()
         self.center = None
         self.current_point = None
-        self.dm_points = []
-        self.sg = self.view.getSceneGraph() if self.view else None
-        self.points_root = coin.SoSeparator()
-        if self.sg:
-            self.sg.addChild(self.points_root)
+        # Pre-load a workplane
 
         if not self.working_plane:
             if SphereCreator._last_working_plane is not None:
@@ -335,14 +401,6 @@ class SphereCreator(PrimitiveCreatorBase):
         dm_logger.info("Sphere Tool: Click center")
 
     def _do_terminate(self):
-        for dm_pt in self.dm_points:
-            dm_pt.undraw()
-        self.dm_points.clear()
-        try:
-            if self.sg and self.points_root:
-                self.sg.removeChild(self.points_root)
-        except Exception as e:
-            dm_logger.debug(f"SphereCreator._do_terminate: {e}")
         super()._do_terminate()
 
     def on_button1_down(self, event_dict):
@@ -377,16 +435,54 @@ class SphereCreator(PrimitiveCreatorBase):
 
             dm_logger.info("Sphere Tool: Click radius")
         elif self.state == 1:
-            self.current_point = pos
             self.state = 2
-
-            dm_pt = DMPoint(pos)
-            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
-            self.dm_points.append(dm_pt)
-
             self._finalize_object("Sphere")
 
         return True
+
+    def _update_ghost_visuals(self):
+        if self.center is None or self.current_point is None:
+            return
+
+        import math
+        loc_center = self.to_local(self.center)
+        loc_cur = self.to_local(self.current_point)
+        radius = (loc_cur - loc_center).Length
+        if radius < 0.1:
+            return
+
+        # Draw 3 orthogonal circles
+        segments = 32
+        line_pts = []
+        for axis in [0, 1, 2]: # X, Y, Z planes
+            circle_pts = []
+            for i in range(segments + 1):
+                angle = 2 * math.pi * i / segments
+                if axis == 0: # YZ plane
+                    p = FreeCAD.Vector(0, radius * math.cos(angle), radius * math.sin(angle))
+                elif axis == 1: # XZ plane
+                    p = FreeCAD.Vector(radius * math.cos(angle), 0, radius * math.sin(angle))
+                else: # XY plane
+                    p = FreeCAD.Vector(radius * math.cos(angle), radius * math.sin(angle), 0)
+                circle_pts.append(self.to_global(loc_center + p))
+            line_pts.extend(circle_pts)
+
+        if self.dm_line_set is None:
+            self.dm_line_set = DMLineSet(self.points_root, color=(1.0, 0.6, 0.2), pattern=0x0F0F)
+        self.dm_line_set.update_lines(line_pts, segments=[segments+1]*3)
+
+        # Update points (center and one radius point)
+        pts = [self.center, self.current_point]
+        while len(self.dm_points) < 2:
+            self.dm_points.append(DMPoint(pts[len(self.dm_points)]))
+        
+        r = self._compute_handle_radius(ref_pt=self.center)
+        for i, p in enumerate(pts):
+            self.dm_points[i].position = p
+            if self.dm_points[i]._point_sep is None:
+                self.dm_points[i].draw_point(self.points_root, radius=r, color=(1.0, 0.5, 0.0))
+            else:
+                self.dm_points[i].update_draw(radius=r)
 
     def on_move_state_1(self, event_dict):
         self.current_point = self.get_mouse_plane_pt(event_dict)
@@ -421,12 +517,8 @@ class CylinderCreator(PrimitiveCreatorBase):
         super().__init__()
         self.points = []
         self.current_point = None
-        self.dm_points = []
         self._height_drag_base = None
-        self.sg = self.view.getSceneGraph() if self.view else None
-        self.points_root = coin.SoSeparator()
-        if self.sg:
-            self.sg.addChild(self.points_root)
+        # Pre-load a workplane
 
         if not self.working_plane:
             if CylinderCreator._last_working_plane is not None:
@@ -439,14 +531,6 @@ class CylinderCreator(PrimitiveCreatorBase):
         dm_logger.info("Cylinder Tool: Click base center")
 
     def _do_terminate(self):
-        for dm_pt in self.dm_points:
-            dm_pt.undraw()
-        self.dm_points.clear()
-        try:
-            if self.sg and self.points_root:
-                self.sg.removeChild(self.points_root)
-        except Exception as e:
-            dm_logger.debug(f"CylinderCreator._do_terminate: {e}")
         super()._do_terminate()
 
     def on_button1_down(self, event_dict):
@@ -491,17 +575,67 @@ class CylinderCreator(PrimitiveCreatorBase):
 
             dm_logger.info("Cylinder Tool: Click height")
         elif self.state == 2:
-            self.points.append(self.current_point)
             self.state = 3
-
-            if self.current_point:
-                dm_pt = DMPoint(self.current_point)
-                dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=self.current_point))
-                self.dm_points.append(dm_pt)
-
             self._finalize_object("Cylinder")
 
         return True
+
+    def _update_ghost_visuals(self):
+        if not self.points or self.current_point is None:
+            return
+
+        import math
+        loc_base = self.to_local(self.points[0])
+        loc_cur = self.to_local(self.current_point)
+        
+        if self.state == 1:
+            radius = (loc_cur - loc_base).Length
+            height = 0.1
+        else:
+            loc_p1 = self.to_local(self.points[1])
+            radius = (loc_p1 - loc_base).Length
+            height = (loc_cur - loc_base).z
+
+        if radius < 0.1:
+            return
+
+        segments = 32
+        line_pts = []
+        counts = []
+        
+        # Base and Top circles
+        for z in [0, height]:
+            circle = []
+            for i in range(segments + 1):
+                angle = 2 * math.pi * i / segments
+                p = FreeCAD.Vector(radius * math.cos(angle), radius * math.sin(angle), z)
+                circle.append(self.to_global(loc_base + p))
+            line_pts.extend(circle)
+            counts.append(segments + 1)
+        
+        # 4 Vertical ribs
+        for angle in [0, math.pi/2, math.pi, 3*math.pi/2]:
+            p1 = FreeCAD.Vector(radius * math.cos(angle), radius * math.sin(angle), 0)
+            p2 = FreeCAD.Vector(radius * math.cos(angle), radius * math.sin(angle), height)
+            line_pts.extend([self.to_global(loc_base + p1), self.to_global(loc_base + p2)])
+            counts.append(2)
+
+        if self.dm_line_set is None:
+            self.dm_line_set = DMLineSet(self.points_root, color=(1.0, 0.6, 0.2), pattern=0x0F0F)
+        self.dm_line_set.update_lines(line_pts, segments=counts)
+
+        # Update points
+        pts = list(self.points) + [self.current_point]
+        while len(self.dm_points) < len(pts):
+            self.dm_points.append(DMPoint(pts[len(self.dm_points)]))
+        
+        r = self._compute_handle_radius(ref_pt=self.points[0])
+        for i, p in enumerate(pts):
+            self.dm_points[i].position = p
+            if self.dm_points[i]._point_sep is None:
+                self.dm_points[i].draw_point(self.points_root, radius=r, color=(1.0, 0.5, 0.0))
+            else:
+                self.dm_points[i].update_draw(radius=r)
 
     def on_move_state_1(self, event_dict):
         self.current_point = self.get_mouse_plane_pt(event_dict)
