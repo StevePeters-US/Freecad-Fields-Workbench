@@ -182,6 +182,29 @@ class WorkPlaneCreator(DMBase):
             )
             return FreeCAD.Placement(m)
 
+        # SDF surface snap — snap normal to SDF surface when no NURBS geometry is under mouse
+        skip = [self.preview_obj] if self.preview_obj else None
+        sdf_result = self.projector.get_sdf_hit(event_dict, skip_objects=skip)
+        if sdf_result:
+            world_hit, world_n, _sdf_obj = sdf_result
+            # Ensure normal faces toward viewer
+            vd = self.view.getViewDirection()
+            view_dir = FreeCAD.Vector(vd[0], vd[1], vd[2])
+            if world_n.dot(view_dir) > 0:
+                world_n = world_n.negative()
+            z_axis = world_n
+            global_z = FreeCAD.Vector(0, 0, 1)
+            x_axis = global_z.cross(z_axis) if abs(z_axis.dot(global_z)) < 0.99 else FreeCAD.Vector(1, 0, 0)
+            x_axis.normalize()
+            y_axis = z_axis.cross(x_axis); y_axis.normalize()
+            m = FreeCAD.Matrix(
+                x_axis.x, y_axis.x, z_axis.x, world_hit.x,
+                x_axis.y, y_axis.y, z_axis.y, world_hit.y,
+                x_axis.z, y_axis.z, z_axis.z, world_hit.z,
+                0.0,      0.0,      0.0,      1.0
+            )
+            return FreeCAD.Placement(m)
+
         # Fallback to current working plane or camera-facing plane
         try:
             # We want to use the active working plane if one exists, otherwise camera-facing

@@ -16,11 +16,35 @@ class ViewProjector:
     def _is_orthographic(self):
         """True if the active camera is orthographic (not perspective)."""
         try:
+            from pivy import coin
             cam = self.view.getCameraNode()
-            return "Orthographic" in cam.getTypeId().getName()
+            return cam.getTypeId() == coin.SoOrthographicCamera.getClassTypeId()
         except Exception as e:
             dm_logger.debug(f"Camera orthographic check failed: {e}")
-            return False
+            return True  # Default to True (most FreeCAD modeling uses orthographic)
+
+    def _get_vp_height(self):
+        """Get viewport pixel height via multiple fallbacks."""
+        try:
+            viewer = self.view.getViewer()
+            for method in ("getGlxSize", "getSize"):
+                if hasattr(viewer, method):
+                    try:
+                        sz = getattr(viewer, method)()
+                        h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
+                        if h > 0:
+                            return h
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        try:
+            h = float(self.view.height())
+            if h > 0:
+                return h
+        except Exception:
+            pass
+        return None
 
     def _cam_pos(self):
         """Camera world position as a FreeCAD.Vector (perspective only)."""
@@ -246,9 +270,19 @@ class ViewProjector:
                 if geom_pt is not None:
                     geom_t = (geom_pt - cam_pos).dot(ray_d)
 
-            # 3. Return closest of bounded wp and geometry.
-            if wp_pt is not None and wp_t <= geom_t:
+            # 2b. SDF surface hit (always tested — not gated by place_on_geometry).
+            sdf_pt = None
+            sdf_t = float('inf')
+            sdf_result = self.get_sdf_hit(event_dict, skip_objects=skip_objects)
+            if sdf_result is not None:
+                sdf_pt, _sdf_n, _sdf_obj = sdf_result
+                sdf_t = (sdf_pt - cam_pos).dot(ray_d)
+
+            # 3. Return closest of bounded workplane / SDF surface / NURBS geometry.
+            if wp_pt is not None and wp_t <= sdf_t and wp_t <= geom_t:
                 return wp_pt, wp_hit
+            if sdf_pt is not None and sdf_t <= geom_t:
+                return sdf_pt, None
             if geom_pt is not None:
                 return geom_pt
 
@@ -341,4 +375,113 @@ class ViewProjector:
             return None
         except Exception as e:
             dm_logger.debug(f"get_geometry_info failed: {e}")
+            return None
+
+    def get_sdf_hit(self, event_dict, skip_objects=None):
+        """
+        Ray-march against all visible F-Rep SDF objects in the scene.
+        Returns (hit_point, hit_normal, obj) for the closest hit, or None.
+        """
+        if not self.view:
+            return None
+        doc = FreeCAD.ActiveDocument
+        if not doc:
+            return None
+        skip_names = {o.Name for o in skip_objects} if skip_objects else set()
+        try:
+            pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
+            x, y_qt = int(pos[0]), int(pos[1])
+
+            # Build candidate rays to try, most-likely-correct first.
+            rays_to_try = []
+            vp_h = self._get_vp_height()
+
+            # Strategy 1: view.getPoint(x, H-y_qt) — y-from-bottom convention (most likely correct).
+            # Coin3D/OpenGL use y-from-bottom; view.getPoint() likely expects the same.
+            if vp_h:
+                try:
+                    y_gl = int(vp_h - y_qt)
+                    fp = self.view.getPoint(x, y_gl)
+                    vd = self.view.getViewDirection()
+                    if fp and vd:
+                        rd_n = FreeCAD.Vector(vd[0], vd[1], vd[2])
+                        rd_n.normalize()
+                        rays_to_try.append(("getPoint-yflip", FreeCAD.Vector(fp), rd_n))
+                except Exception:
+                    pass
+
+            # Strategy 2: get_ray() with y-flip (routes through DMInputManager fallbacks).
+            if vp_h:
+                try:
+                    y_gl = int(vp_h - y_qt)
+                    rp, rd = DMInputManager.get_instance().get_ray(
+                        self.view, {"QtPosition": (x, y_gl)}
+                    )
+                    if rp and rd:
+                        rd_n = FreeCAD.Vector(rd)
+                        rd_n.normalize()
+                        rays_to_try.append(("getRay-yflip", rp, rd_n))
+                except Exception:
+                    pass
+
+            # Strategy 3: view.getPoint(x, y_qt) — y-from-top convention.
+            try:
+                fp = self.view.getPoint(x, y_qt)
+                vd = self.view.getViewDirection()
+                if fp and vd:
+                    rd_n = FreeCAD.Vector(vd[0], vd[1], vd[2])
+                    rd_n.normalize()
+                    rays_to_try.append(("getPoint-qty", FreeCAD.Vector(fp), rd_n))
+            except Exception:
+                pass
+
+            # Strategy 4: get_ray() with Qt y (routes through DMInputManager fallbacks).
+            try:
+                rp, rd = DMInputManager.get_instance().get_ray(self.view, event_dict)
+                if rp and rd:
+                    rd_n = FreeCAD.Vector(rd)
+                    rd_n.normalize()
+                    rays_to_try.append(("getRay-qty", rp, rd_n))
+            except Exception:
+                pass
+
+            if not rays_to_try:
+                return None
+
+            # Collect visible SDF objects once.
+            sdf_objs = []
+            for obj in doc.Objects:
+                if obj.Name in skip_names:
+                    continue
+                if not hasattr(obj, 'Proxy') or not hasattr(obj.Proxy, 'FRepField'):
+                    continue
+                field = obj.Proxy.FRepField
+                if field is None:
+                    continue
+                try:
+                    if not obj.ViewObject.Visibility:
+                        continue
+                except Exception:
+                    pass
+                sdf_objs.append((obj, field))
+
+            # Try each ray strategy; return on first hit.
+            for strategy, rp, rd_n in rays_to_try:
+                best_t = float('inf')
+                best = None
+                for obj, field in sdf_objs:
+                    result = field.ray_march(rp, rd_n)
+                    if result is None:
+                        continue
+                    hit_pt, hit_normal = result
+                    t = (hit_pt - rp).dot(rd_n)
+                    if t < best_t:
+                        best_t = t
+                        best = (hit_pt, hit_normal, obj)
+                if best is not None:
+                    return best
+
+            return None
+        except Exception as e:
+            dm_logger.debug(f"get_sdf_hit failed: {e}")
             return None

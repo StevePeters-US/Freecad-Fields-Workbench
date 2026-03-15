@@ -51,6 +51,26 @@ class DMInputManager(QtCore.QObject):
                 elif event.button() == QtCore.Qt.MiddleButton:
                     self._middle_mouse_down = is_press
 
+            # SDF object selection on LMB press when no tool is active
+            if event.type() == QtCore.QEvent.MouseButtonPress and event.button() == QtCore.Qt.LeftButton:
+                from core.dm_tool_manager import DMToolManager
+                if not DMToolManager.get_instance().has_active_tool():
+                    try:
+                        view = FreeCADGui.ActiveDocument.ActiveView if FreeCADGui.ActiveDocument else None
+                        if view:
+                            from core.view_projector import ViewProjector
+                            proj = ViewProjector(view)
+                            sdf_result = proj.get_sdf_hit(
+                                {"QtPosition": (event.pos().x(), event.pos().y())}
+                            )
+                            if sdf_result:
+                                _, _, sdf_obj = sdf_result
+                                FreeCADGui.Selection.clearSelection()
+                                FreeCADGui.Selection.addSelection(sdf_obj)
+                    except Exception as e:
+                        dm_logger.debug(f"SDF LMB selection failed: {e}")
+                    # Do NOT return True — let FreeCAD's navigation also handle this click
+
             # [Event Owner: Qt Event Filter] Right-click suppression: when a tool is active, consume the right
             # mouse button press so FreeCAD's NavigationStyle never sees it (and
             # therefore never opens its context menu).  We replicate the finish
