@@ -168,28 +168,16 @@ vec2 intersect_aabb(vec3 ro, vec3 rd) {
 
 void main() {
     // 1. Unproject NDC to world-space ray
-    mat4 inv_mvp = inverse(gl_ModelViewProjectionMatrix);
-    mat4 inv_mv  = inverse(gl_ModelViewMatrix);
-
     vec4 ndc_near = vec4(v_uv, -1.0, 1.0);
-    vec4 world_near = inv_mvp * ndc_near;
+    vec4 world_near = gl_ModelViewProjectionMatrixInverse * ndc_near;
     world_near /= world_near.w;
-
     vec4 ndc_far = vec4(v_uv, 1.0, 1.0);
-    vec4 world_far = inv_mvp * ndc_far;
+    vec4 world_far = gl_ModelViewProjectionMatrixInverse * ndc_far;
     world_far /= world_far.w;
+    vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
 
-    vec3 cam = (inv_mv * vec4(0.0,0.0,0.0,1.0)).xyz;
-
-    vec3 ro, rd;
-    bool is_persp = (gl_ProjectionMatrix[3][3] < 0.5);
-    if (is_persp) {
-        ro = cam;
-        rd = normalize(world_near.xyz - cam);
-    } else {
-        ro = world_near.xyz;
-        rd = normalize(world_far.xyz - world_near.xyz);
-    }
+    vec3 ro = world_near.xyz;
+    vec3 rd = normalize(world_far.xyz - world_near.xyz);
 
     // 2. AABB-ray intersection
     vec2 tBox = intersect_aabb(ro, rd);
@@ -219,13 +207,17 @@ void main() {
     // 4. Shading
     vec3 hp = ro + t * rd;
     vec3 n  = sdf_normal(hp);
-    // Guard against zero-length normal (degenerate gradient)
-    if (dot(n, n) < 0.001) n = -rd;
 
-    // Headlight: use view direction for reliable lighting
-    vec3 vd = normalize(cam - hp);
-    vec3 ld = vd;
+    vec4 light_eye = gl_LightSource[0].position;
+    vec3 ld;
+    if (light_eye.w < 0.5) {
+        ld = normalize((gl_ModelViewMatrixInverse * vec4(light_eye.xyz, 0.0)).xyz);
+    } else {
+        vec3 light_world = (gl_ModelViewMatrixInverse * light_eye).xyz;
+        ld = normalize(light_world - hp);
+    }
     float diff = max(dot(n, ld), 0.0);
+    vec3 vd   = normalize(cam - hp);
     float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
     vec3 color = vec3(1.0,0.5,0.0)*(0.15 + 0.75*diff) + vec3(0.4)*spec;
 
@@ -300,20 +292,6 @@ void main() {
             (-1, -1, 0), ( 1, -1, 0), ( 1,  1, 0), (-1,  1, 0)
         ])
         self._shader_sep.addChild(self._coords)
-
-        # Invisible point set using points 0-7 to expand the separator's bbox
-        bbox_style = coin.SoDrawStyle()
-        bbox_style.style.setValue(coin.SoDrawStyle.INVISIBLE)
-        self._shader_sep.addChild(bbox_style)
-        
-        self._bbox_expansion = coin.SoPointSet()
-        self._bbox_expansion.numPoints.setValue(8) # First 8 points
-        self._shader_sep.addChild(self._bbox_expansion)
-        
-        # Reset draw style for the quad
-        quad_style = coin.SoDrawStyle()
-        quad_style.style.setValue(coin.SoDrawStyle.FILLED)
-        self._shader_sep.addChild(quad_style)
 
         faceset = coin.SoIndexedFaceSet()
         # Use indices 8-11 for the quad triangles, plus 8 degenerate triangles 

@@ -224,17 +224,18 @@ vec2 intersect_aabb(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
 }
 
 void main() {
-    mat4 inv_mvp = inverse(gl_ModelViewProjectionMatrix);
-    mat4 inv_mv  = inverse(gl_ModelViewMatrix);
-
     vec4 ndc_near = vec4(v_uv, -1.0, 1.0);
-    vec4 world_near = inv_mvp * ndc_near;
+    vec4 world_near = gl_ModelViewProjectionMatrixInverse * ndc_near;
     world_near /= world_near.w;
     vec4 ndc_far = vec4(v_uv, 1.0, 1.0);
-    vec4 world_far = inv_mvp * ndc_far;
+    vec4 world_far = gl_ModelViewProjectionMatrixInverse * ndc_far;
     world_far /= world_far.w;
-    vec3 cam = (inv_mv * vec4(0.0,0.0,0.0,1.0)).xyz;
+    vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
 
+    // Ray origin strategy to avoid near-plane clipping.
+    // Perspective: start at camera position, bypasses the near plane.
+    // Orthographic: world_near is per-pixel origin; tNear NOT clamped to 0
+    //   so march starts at actual AABB entry even when near plane is inside AABB.
     vec3 ro, rd;
     bool is_persp = (gl_ProjectionMatrix[3][3] < 0.5);
     if (is_persp) {
@@ -254,7 +255,7 @@ void main() {
         scene_max = max(scene_max, u_bbox_max[fi]);
     }
     vec2 tBox = intersect_aabb(ro, rd, scene_min, scene_max);
-    float tNear = max(tBox.x, 0.0);
+    float tNear = is_persp ? max(tBox.x, 0.0) : tBox.x;
     float tFar  = tBox.y;
     if (tNear > tFar) discard;
 
@@ -264,7 +265,7 @@ void main() {
     for (int fi = 0; fi < 8; fi++) {
         if (fi < u_num_fields) {
             vec2 fi_int = intersect_aabb(ro, rd, u_bbox_min[fi], u_bbox_max[fi]);
-            ftn[fi] = max(fi_int.x, 0.0);
+            ftn[fi] = is_persp ? max(fi_int.x, 0.0) : fi_int.x;
             ftf[fi] = fi_int.y;
         } else {
             ftn[fi] =  1.0e10;
@@ -313,13 +314,17 @@ void main() {
 
     vec3 hp = ro + t * rd;
     vec3 n  = sdf_normal_field(hit_field, hp);
-    // Guard against zero-length normal (degenerate gradient)
-    if (dot(n, n) < 0.001) n = -rd;
 
-    // Headlight: use view direction for reliable lighting
-    vec3 vd = normalize(cam - hp);
-    vec3 ld = vd;
+    vec4 light_eye = gl_LightSource[0].position;
+    vec3 ld;
+    if (light_eye.w < 0.5) {
+        ld = normalize((gl_ModelViewMatrixInverse * vec4(light_eye.xyz, 0.0)).xyz);
+    } else {
+        vec3 light_world = (gl_ModelViewMatrixInverse * light_eye).xyz;
+        ld = normalize(light_world - hp);
+    }
     float diff = max(dot(n, ld), 0.0);
+    vec3 vd = normalize(cam - hp);
     float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
     vec3 base_color = (u_is_subtractive[hit_field] == 1)
         ? vec3(0.3, 0.5, 1.0)
@@ -407,36 +412,19 @@ void main() {
         ])
         self._shader_sep.addChild(self._coords)
 
-        # Expansion points with INVISIBLE style to prevent culling without rendering dots
+        # Transparent material for expansion points to prevent culling
         bbox_mat = coin.SoMaterial()
         bbox_mat.transparency.setValue(1.0)
         self._shader_sep.addChild(bbox_mat)
 
-        bbox_style = coin.SoDrawStyle()
-        bbox_style.style.setValue(coin.SoDrawStyle.INVISIBLE)
-        self._shader_sep.addChild(bbox_style)
-        
-        self._bbox_expansion = coin.SoPointSet()
-        self._bbox_expansion.numPoints.setValue(8)
-        self._shader_sep.addChild(self._bbox_expansion)
-        
-        # Reset for quad
-        quad_style = coin.SoDrawStyle()
-        quad_style.style.setValue(coin.SoDrawStyle.FILLED)
-        self._shader_sep.addChild(quad_style)
-
-        # Force opaque material EXPLICITLY before the quad geometry.
-        # This prevents the transparent material from expansion points
-        # from leaking into the quad's state.
-        quad_mat = coin.SoMaterial()
-        quad_mat.transparency.setValue(0.0)
-        self._shader_sep.addChild(quad_mat)
-
         faceset = coin.SoIndexedFaceSet()
-        # Use indices 8-11 for the quad triangles.
-        # Points 0-7 are use by SoPointSet + SoDrawStyle(INVISIBLE) to expand the
-        # separator's bounding box and prevent culling.
-        indices = [8, 9, 10, -1, 10, 11, 8, -1]
+        # Use indices 8-11 for the quad triangles, plus 8 degenerate triangles
+        # (one for each corner 0-7) to force the shape's bbox to exactly include
+        # the entire scene bounding box. This prevents Coin3D from culling the quad
+        # when zooming into a part of the SDF while other parts are off-screen.
+        indices = [8, 9, 10, -1, 8, 10, 11, -1]
+        for i in range(8):
+            indices.extend([i, i, i, -1])
         faceset.coordIndex.setValues(0, len(indices), indices)
         self._shader_sep.addChild(faceset)
 
