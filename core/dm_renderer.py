@@ -21,17 +21,11 @@ class DMRenderer:
             self.vis_switch.whichChild = 0 if vobj.Visibility else -1
             vobj.RootNode.addChild(self.vis_switch)
 
-        # FRep specific nodes
-        self._frep_sep = None
-        self._frep_draw_style = None
-        self._frep_coords = None
-        self._frep_faces = None
-        
+        self._frep_debug_switch = None
         self._frep_wide_switch = None
         self._frep_wire_sep = None
         self._frep_wire_style = None
-        self._frep_wire_faces = None
-        
+
         self._frep_handle_coords = None
         self._frep_handle_lines = None
         self._frep_corner_xfs = []      # 8 SoTransform nodes for corner sphere positions
@@ -66,6 +60,10 @@ class DMRenderer:
         if self._style:
             self._style.lineWidth = lw
             
+        if self._frep_debug_switch:
+            from core.dm_object import get_render_debug_mode
+            self._frep_debug_switch.whichChild = 0 if get_render_debug_mode() else -1
+            
         try:
             if self.vobj:
                 self.vobj.LineWidth = lw
@@ -78,65 +76,10 @@ class DMRenderer:
     # -------------------------------------------------------------------------
 
     def setup_frep_mesh_nodes(self):
+        """Setup nodes for F-Rep bounding box and corner spheres (no mesh)."""
         if not coin: return
         try:
             sep = coin.SoSeparator()
-
-            # ── Mesh nodes ──
-            mesh_sep = coin.SoSeparator()
-            mat = coin.SoMaterial()
-            mat.diffuseColor.setValue(1.0, 0.5, 0.0)
-            mat.specularColor.setValue(0.3, 0.3, 0.3)
-            mat.shininess.setValue(0.3)
-            mesh_sep.addChild(mat)
-
-            hints = coin.SoShapeHints()
-            try:
-                hints.vertexOrdering = coin.SoShapeHints.COUNTER_CLOCKWISE
-            except AttributeError:
-                hints.vertexOrdering = 2
-            try:
-                hints.shapeType = coin.SoShapeHints.SOLID
-            except AttributeError:
-                hints.shapeType = 1
-            hints.creaseAngle = 0.5
-            mesh_sep.addChild(hints)
-
-            self._frep_draw_style = coin.SoDrawStyle()
-            try:
-                self._frep_draw_style.style = coin.SoDrawStyle.FILLED
-            except AttributeError:
-                self._frep_draw_style.style = 1 # FILLED
-            mesh_sep.addChild(self._frep_draw_style)
-
-            self._frep_coords = coin.SoCoordinate3()
-            mesh_sep.addChild(self._frep_coords)
-
-            self._frep_faces = coin.SoIndexedFaceSet()
-            mesh_sep.addChild(self._frep_faces)
-            sep.addChild(mesh_sep)
-
-            # ── Wireframe overlay nodes ──
-            self._frep_wide_switch = coin.SoSwitch()
-            self._frep_wire_sep = coin.SoSeparator()
-            self._frep_wide_switch.addChild(self._frep_wire_sep)
-
-            wire_mat = coin.SoMaterial()
-            wire_mat.diffuseColor.setValue(0.0, 0.0, 0.0)
-            self._frep_wire_sep.addChild(wire_mat)
-
-            self._frep_wire_style = coin.SoDrawStyle()
-            self._frep_wire_style.style = coin.SoDrawStyle.LINES
-            self._frep_wire_style.lineWidth = get_line_width()
-            self._frep_wire_sep.addChild(self._frep_wire_style)
-
-            self._frep_wire_sep.addChild(self._frep_coords)
-
-            self._frep_wire_faces = coin.SoIndexedFaceSet()
-            self._frep_wire_sep.addChild(self._frep_wire_faces)
-            
-            sep.addChild(self._frep_wide_switch)
-            self._frep_wide_switch.whichChild = 0 if get_show_wireframe() else -1
 
             # ── Corner sphere handles (8 corners) ──
             sphere_root = coin.SoSeparator()
@@ -179,36 +122,20 @@ class DMRenderer:
 
             sep.addChild(corner_sep)
 
-            self._frep_sep = sep
+            # Wrapper switch for debug visuals (bbox + corners)
+            from core.dm_object import get_render_debug_mode
+            self._frep_debug_switch = coin.SoSwitch()
+            self._frep_debug_switch.whichChild = 0 if get_render_debug_mode() else -1
+            self._frep_debug_switch.addChild(sep)
+
             if self.vis_switch:
-                self.vis_switch.addChild(sep)
+                self.vis_switch.addChild(self._frep_debug_switch)
             else:
-                self.vobj.RootNode.addChild(sep)
+                self.vobj.RootNode.addChild(self._frep_debug_switch)
                 
         except Exception as e:
             from core import dm_logger
             dm_logger.debug(f"DMRenderer.setup_frep_mesh_nodes failed: {e}")
-
-    def update_frep_mesh(self, verts, flat_idx):
-        from core import dm_logger
-        if not coin or not self._frep_coords:
-            return
-        try:
-            # Always clear first to prevent stale geometry accumulating on redraw
-            self._frep_coords.point.setNum(0)
-            self._frep_faces.coordIndex.setNum(0)
-            if self._frep_wire_faces:
-                self._frep_wire_faces.coordIndex.setNum(0)
-
-            if verts is None or flat_idx is None or len(verts) == 0:
-                return
-
-            self._frep_coords.point.setValues(verts)
-            self._frep_faces.coordIndex.setValues(flat_idx)
-            if self._frep_wire_faces:
-                self._frep_wire_faces.coordIndex.setValues(flat_idx)
-        except Exception as e:
-            dm_logger.info(f"DMRenderer.update_frep_mesh failed ({type(e).__name__}): {e}")
 
     def _corner_sphere_radius(self):
         """Compute sphere radius to appear ~8px on screen, matching DMBase._compute_handle_radius."""
@@ -296,18 +223,6 @@ class DMRenderer:
             from core import dm_logger
             dm_logger.debug(f"DMRenderer.update_frep_corners failed: {e}")
 
-    def set_frep_display_mode(self, mode):
-        if not self._frep_draw_style: return
-        if mode == "Wireframe":
-            try:
-                self._frep_draw_style.style = coin.SoDrawStyle.LINES
-            except AttributeError:
-                self._frep_draw_style.style = 2
-        else:
-            try:
-                self._frep_draw_style.style = coin.SoDrawStyle.FILLED
-            except AttributeError:
-                self._frep_draw_style.style = 1
 
     # -------------------------------------------------------------------------
     # Point Rendering

@@ -111,17 +111,6 @@ def get_decimate_enabled():
 def set_decimate_enabled(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetBool("DecimateEnabled", bool(val))
 
-RENDER_MODE_MESH        = 0
-RENDER_MODE_POINT_CLOUD = 1
-RENDER_MODE_RAY_MARCH   = 2
-
-def get_render_mode() -> int:
-    """Return the active F-Rep render mode (0=Mesh, 1=PointCloud, 2=RayMarch)."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("RenderMode", RENDER_MODE_MESH)
-
-def set_render_mode(val: int):
-    FreeCAD.ParamGet(_PARAM_PATH).SetInt("RenderMode", int(val))
-
 def get_deduplicate_enabled():
     """Return whether vertex deduplication is enabled."""
     return FreeCAD.ParamGet(_PARAM_PATH).GetBool("DeduplicateEnabled", True)
@@ -354,17 +343,6 @@ class DMObjectProxy:
             
             surf = DMSurface(grid)
             return surf.to_shape()
-        elif st == "frep":
-            if hasattr(self, "FRepField") and self.FRepField is not None:
-                from core.dm_mesher import get_active_mesher
-                m_type = getattr(fp, "MeshingType", None)
-                mesher = get_active_mesher(type_override=m_type)
-                # Favor object property over internal resolution override
-                res = float(getattr(fp, "MeshingCellSize", getattr(self, "_final_resolution", get_meshing_cell_size())))
-                return mesher.mesh(self.FRepField, cell_size=res)
-            return Part.Shape()
-            
-        return Part.Shape()
 
     def execute(self, fp):
         """Called by FreeCAD to recompute the object."""
@@ -373,28 +351,8 @@ class DMObjectProxy:
             st = fp.ShapeType if hasattr(fp, "ShapeType") else "nurbs"
 
             if st == "frep":
-                if hasattr(self, "FRepField") and self.FRepField is not None:
-                    render_mode = get_render_mode()
-                    if render_mode in (RENDER_MODE_MESH, RENDER_MODE_POINT_CLOUD):
-                        # Mesh mode: generate triangles for Coin3D rendering
-                        from core.dm_mesher import get_active_mesher
-                        m_type = getattr(fp, "MeshingType", None)
-                        mesher = get_active_mesher(type_override=m_type)
-                        res = float(getattr(fp, "MeshingCellSize",
-                                    getattr(self, "_final_resolution",
-                                            get_meshing_cell_size())))
-                        result = mesher.mesh(self.FRepField, cell_size=res)
-                        if result is not None:
-                            self._frep_verts, self._frep_idx = result
-                        else:
-                            self._frep_verts = self._frep_idx = None
-                    else:
-                        # GPU preview mode: skip meshing, renderer reads
-                        # field directly via proxy.FRepField
-                        self._frep_verts = self._frep_idx = None
-                self._frep_verts = self._frep_idx = None
-
-                # Setting fp.Shape triggers ViewProvider.updateData(fp, "Shape")
+                # F-Rep objects have no BRep shape — render via GPU ray march.
+                # Use SDF-to-Shape command for explicit meshing.
                 fp.Shape = Part.Shape()
                 return
 
@@ -407,6 +365,8 @@ class DMObjectProxy:
 
 
 
+
+
     def __setstate__(self, state):
         from . import dm_logger
         # dm_logger.debug(f"DMObjectProxy.__setstate__: {state}")
@@ -415,12 +375,8 @@ class DMObjectProxy:
 class DMViewProvider:
     """ViewProvider for DM objects. Shows an orange part icon."""
     def __init__(self, vobj):
-        # setup_view MUST run before vobj.Proxy = self.
-        # In FreeCAD, assigning Proxy triggers attach() synchronously,
-        # which sets _frep_coords etc. setup_view() must not overwrite them.
-        self._render_mode = None
-        self.setup_view(vobj)
         vobj.Proxy = self
+        self.setup_view(vobj)
 
     def setup_view(self, vobj):
         vobj.PointColor = (1.0, 0.5, 0.0)
@@ -456,26 +412,16 @@ class DMViewProvider:
         from . import dm_logger
         self.Object = vobj.Object
 
-
         if coin:
             from core.dm_renderer import DMRenderer
             self.renderer = DMRenderer(vobj)
 
-            # Setup renderer based on mode
-            mode = get_render_mode()
-            self._render_mode = mode
-            
             if hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "curve":
                 self.renderer.setup_coin_overlay()
                 self.renderer.rebuild_control_cage(self.Object)
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "frep":
-                if mode == RENDER_MODE_POINT_CLOUD:
-                    from core.dm_point_cloud_renderer import DMPointCloudRenderer
-                    self.point_cloud_renderer = DMPointCloudRenderer(vobj)
-                elif mode == RENDER_MODE_RAY_MARCH:
-                    self._scene_rm_label = vobj.Object.Label
-                else:
-                    self.renderer.setup_frep_mesh_nodes()
+                # Always use scene ray march renderer
+                self._scene_rm_label = vobj.Object.Label
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "point":
                 self.renderer.setup_point_marker_nodes()
                 self.renderer.update_point_marker(self.Object)
@@ -488,11 +434,6 @@ class DMViewProvider:
         if hasattr(self, "_scene_rm_label"):
             from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
             DMSceneRayMarchRenderer.get_instance().on_prefs_changed()
-
-        # Check for render mode changes
-        new_mode = get_render_mode()
-        if self._render_mode is not None and self._render_mode != new_mode:
-            self._swap_renderer(new_mode)
 
         # Generic FreeCAD ViewObject properties
         try:
@@ -510,24 +451,12 @@ class DMViewProvider:
             self.on_prefs_changed()
             
         if prop == "Shape" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":
-            # Called after execute() sets fp.Shape — safe to update Coin3D here
             proxy = getattr(fp, "Proxy", None)
             field = getattr(proxy, "FRepField", None) if proxy else None
-            pc    = getattr(self, "point_cloud_renderer", None)
-
-            if pc is not None and field is not None:
-                pc.update(field, get_meshing_cell_size())
-            elif hasattr(self, "_scene_rm_label") and field is not None:
+            if hasattr(self, "_scene_rm_label") and field is not None:
                 from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
                 sr = DMSceneRayMarchRenderer.get_instance()
                 sr.update_field(self._scene_rm_label, field)
-            elif proxy and self.renderer:
-                self.renderer.update_frep_mesh(
-                    getattr(proxy, "_frep_verts", None),
-                    getattr(proxy, "_frep_idx",   None),
-                )
-                if field:
-                    self.renderer.update_frep_corners(field)
         elif prop == "DisplayMode" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":
             # Toggle between shaded and wireframe rendering
             if self.renderer:
@@ -550,53 +479,6 @@ class DMViewProvider:
                 from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
                 sr = DMSceneRayMarchRenderer.get_instance()
                 sr.set_field_visible(self._scene_rm_label, vobj.Visibility)
-            pc = getattr(self, "point_cloud_renderer", None)
-            if pc and hasattr(pc, "set_visible"):
-                pc.set_visible(vobj.Visibility)
-
-    def _swap_renderer(self, new_mode):
-        """Cleanup current renderer and switch to a new one."""
-        from . import dm_logger
-        dm_logger.debug(f"DMViewProvider._swap_renderer: {self._render_mode} -> {new_mode}")
-        
-        # 1. Cleanup current state
-        if self._render_mode == RENDER_MODE_RAY_MARCH:
-            if hasattr(self, "_scene_rm_label"):
-                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
-                sr = DMSceneRayMarchRenderer.get_instance()
-                sr.unregister_field(self._scene_rm_label)
-                delattr(self, "_scene_rm_label")
-        elif self._render_mode == RENDER_MODE_POINT_CLOUD:
-            pc = getattr(self, "point_cloud_renderer", None)
-            if pc:
-                if hasattr(pc, "detach"):
-                    pc.detach()
-                self.point_cloud_renderer = None
-        else: # Mesh mode
-            if self.renderer and hasattr(self.renderer, "update_frep_mesh"):
-                self.renderer.update_frep_mesh(None, None)
-
-        self._render_mode = new_mode
-        vobj = self.Object.ViewObject
-        
-        # 2. Setup new state
-        if new_mode == RENDER_MODE_RAY_MARCH:
-            self._scene_rm_label = self.Object.Label
-            # Ensure a sensible default near clip distance to prevent hardware clipping
-            from .dm_object import get_near_clip_distance, set_near_clip_distance
-            if get_near_clip_distance() == 0.0:
-                set_near_clip_distance(1.0)
-        elif new_mode == RENDER_MODE_POINT_CLOUD:
-            from core.dm_point_cloud_renderer import DMPointCloudRenderer
-            self.point_cloud_renderer = DMPointCloudRenderer(vobj)
-        else: # Mesh mode
-            if self.renderer:
-                if not self.renderer._frep_coords:
-                    self.renderer.setup_frep_mesh_nodes()
-        
-        # 3. Trigger object execution to populate new renderer
-        self.Object.Proxy.execute(self.Object)
-        self.updateData(self.Object, "Shape")
 
     def onChanged(self, vobj, prop):
         """Called when a property of the ViewObject changes (e.g. Visibility)."""
@@ -607,9 +489,6 @@ class DMViewProvider:
                 from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
                 sr = DMSceneRayMarchRenderer.get_instance()
                 sr.set_field_visible(self._scene_rm_label, vobj.Visibility)
-            pc = getattr(self, "point_cloud_renderer", None)
-            if pc and hasattr(pc, "set_visible"):
-                pc.set_visible(vobj.Visibility)
 
         # Re-apply near clip override (FreeCAD navigation resets camera params)
         apply_near_clip_override()

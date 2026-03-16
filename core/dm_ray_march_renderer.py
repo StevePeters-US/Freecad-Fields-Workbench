@@ -7,7 +7,6 @@ Bakes the SDF to a 2D texture atlas and performs sphere tracing in a fragment sh
 
 import FreeCAD
 import pivy.coin as coin
-from core.frep.sdf_baker import bake_sdf_to_atlas
 
 
 
@@ -80,17 +79,18 @@ class DMRayMarchRenderer:
         except AttributeError:
             pass  # SoDepthBuffer not available in this Coin3D/pivy version
 
-        # 2a. Force GL_NEAREST filtering (shader does its own trilinear;
-        #     hardware bilinear bleeds across atlas tile boundaries)
-        complexity = coin.SoComplexity()
-        complexity.textureQuality.setValue(0.0)   # GL_NEAREST / GL_NEAREST
-        self._shader_sep.addChild(complexity)
-
-        # 2b. Texture Atlas
-        self._tex = coin.SoTexture2()
-        self._tex.model.setValue(coin.SoTexture2.REPLACE) # We use our own shading
-        self._tex.wrapS.setValue(coin.SoTexture2.CLAMP)
-        self._tex.wrapT.setValue(coin.SoTexture2.CLAMP)
+        # 2a. 3D Volume Texture (OpenGL 3.3: native GL_TEXTURE_3D)
+        # The texture stores raw float32 bytes reinterpreted as RGBA8.
+        # Hardware filtering (GL_LINEAR) would interpolate byte channels
+        # independently, corrupting float32 bit patterns. The shader uses
+        # texelFetch() for exact texel access and manual trilinear interpolation
+        # on the decoded float values.
+        self._tex = coin.SoTexture3()
+        self._tex.wrapR.setValue(coin.SoTexture3.CLAMP)
+        self._tex.wrapS.setValue(coin.SoTexture3.CLAMP)
+        self._tex.wrapT.setValue(coin.SoTexture3.CLAMP)
+        # NEAREST: shader does its own trilinear on float32 data
+        # Note: minFilter/magFilter not available on SoTexture3 in some Pivy versions
         self._shader_sep.addChild(self._tex)
 
         # 2c. Shader Program
@@ -101,7 +101,8 @@ class DMRayMarchRenderer:
         f_shader.sourceType.setValue(coin.SoShaderObject.GLSL_PROGRAM)
         
         v_shader.sourceProgram.setValue("""
-varying vec2 v_uv;
+#version 330 compatibility
+out vec2 v_uv;
 void main() {
     v_uv = gl_Vertex.xy;
     gl_Position = vec4(gl_Vertex.xy, 0.0, 1.0);
@@ -109,49 +110,49 @@ void main() {
 """)
         
         f_shader.sourceProgram.setValue("""
-varying vec2  v_uv;
-uniform sampler2D u_sdf_tex;
+#version 330 compatibility
+in vec2 v_uv;
+uniform sampler3D u_sdf_vol;
 uniform int   u_nx;
 uniform int   u_ny;
 uniform int   u_nz;
-uniform int   u_atz;
-uniform float u_atlas_w;
-uniform float u_atlas_h;
 uniform vec3  u_bbox_min;
 uniform vec3  u_bbox_max;
-uniform float u_max_dist;
 uniform int   u_debug_mode;
 
-float sample_texel(float ix, float iy, float iz) {
-    float c = floor(mod(iz, float(u_atz)));
-    float r = floor(iz / float(u_atz));
-    float u = (c * (float(u_nx) + 1.0) + ix + 0.5) / u_atlas_w;
-    float v = (r * (float(u_ny) + 1.0) + iy + 0.5) / u_atlas_h;
-    vec4 t = texture2D(u_sdf_tex, vec2(u, v));
-    // Mathematically exact uint16 reconstruction for OpenGL
-    return (t.r * 65280.0 + t.a * 255.0) / 65535.0;
+float decode_texel(ivec3 tc) {
+    vec4 c = texelFetch(u_sdf_vol, tc, 0);
+    uvec4 b = uvec4(round(c * 255.0));
+    uint bits = b.r | (b.g << 8u) | (b.b << 16u) | (b.a << 24u);
+    return uintBitsToFloat(bits);
 }
 
 float sample_sdf(vec3 p) {
     vec3 uvw = (p - u_bbox_min) / (u_bbox_max - u_bbox_min);
-    float gx = clamp(uvw.x * float(u_nx), 0.0, float(u_nx));
-    float gy = clamp(uvw.y * float(u_ny), 0.0, float(u_ny));
-    float gz = clamp(uvw.z * float(u_nz), 0.0, float(u_nz));
-    float x0=floor(gx); float x1=min(x0+1.0,float(u_nx));
-    float y0=floor(gy); float y1=min(y0+1.0,float(u_ny));
-    float z0=floor(gz); float z1=min(z0+1.0,float(u_nz));
-    float fx=gx-x0; float fy=gy-y0; float fz=gz-z0;
-    float s = mix(
-        mix(mix(sample_texel(x0,y0,z0),sample_texel(x1,y0,z0),fx),
-            mix(sample_texel(x0,y1,z0),sample_texel(x1,y1,z0),fx),fy),
-        mix(mix(sample_texel(x0,y0,z1),sample_texel(x1,y0,z1),fx),
-            mix(sample_texel(x0,y1,z1),sample_texel(x1,y1,z1),fx),fy),
-        fz);
-    return (s * 2.0 - 1.0) * u_max_dist;
+    ivec3 sz = textureSize(u_sdf_vol, 0);
+    vec3 tc = uvw * vec3(sz - 1);
+    tc = clamp(tc, vec3(0.0), vec3(sz - 1));
+    ivec3 c0 = ivec3(floor(tc));
+    ivec3 c1 = min(c0 + 1, sz - 1);
+    vec3 f = tc - vec3(c0);
+    float d000 = decode_texel(ivec3(c0.x, c0.y, c0.z));
+    float d100 = decode_texel(ivec3(c1.x, c0.y, c0.z));
+    float d010 = decode_texel(ivec3(c0.x, c1.y, c0.z));
+    float d110 = decode_texel(ivec3(c1.x, c1.y, c0.z));
+    float d001 = decode_texel(ivec3(c0.x, c0.y, c1.z));
+    float d101 = decode_texel(ivec3(c1.x, c0.y, c1.z));
+    float d011 = decode_texel(ivec3(c0.x, c1.y, c1.z));
+    float d111 = decode_texel(ivec3(c1.x, c1.y, c1.z));
+    float dx00 = mix(d000, d100, f.x);
+    float dx10 = mix(d010, d110, f.x);
+    float dx01 = mix(d001, d101, f.x);
+    float dx11 = mix(d011, d111, f.x);
+    float dxy0 = mix(dx00, dx10, f.y);
+    float dxy1 = mix(dx01, dx11, f.y);
+    return mix(dxy0, dxy1, f.z);
 }
 
 vec3 sdf_normal(vec3 p) {
-    // Scale epsilon with voxel size for stable normals
     float cell = (u_bbox_max.x - u_bbox_min.x) / max(float(u_nx), 1.0);
     float h = cell * 0.5;
     vec2 k = vec2(1.0, -1.0);
@@ -162,7 +163,6 @@ vec3 sdf_normal(vec3 p) {
         k.xxx * sample_sdf(p + k.xxx*h));
 }
 
-// AABB-ray intersection: returns (tNear, tFar).
 vec2 intersect_aabb(vec3 ro, vec3 rd) {
     vec3 t1 = (u_bbox_min - ro) / rd;
     vec3 t2 = (u_bbox_max - ro) / rd;
@@ -183,23 +183,32 @@ void main() {
     vec4 world_far = gl_ModelViewProjectionMatrixInverse * ndc_far;
     world_far /= world_far.w;
 
-    vec3 ro = world_near.xyz;
-    vec3 rd = normalize(world_far.xyz - world_near.xyz);
     vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
 
-    // 2. AABB-ray intersection — skip rays that miss the bounding box
-    vec2 tBox = intersect_aabb(ro, rd);
-    float tNear = max(tBox.x, 0.0);  // clamp to ray origin
-    float tFar  = tBox.y;
-    if (tNear > tFar) discard;        // ray misses box entirely
+    vec3 ro, rd;
+    bool is_persp = (gl_ProjectionMatrix[3][3] < 0.5);
+    if (is_persp) {
+        ro = cam;
+        rd = normalize(world_near.xyz - cam);
+    } else {
+        ro = world_near.xyz;
+        rd = normalize(world_far.xyz - world_near.xyz);
+    }
 
-    // 3. Sphere-trace from tNear to tFar
-    float hit_thresh = u_max_dist * 0.001;
-    float min_step   = hit_thresh;
+    // 2. AABB-ray intersection
+    vec2 tBox = intersect_aabb(ro, rd);
+    float tNear = is_persp ? max(tBox.x, 0.0) : tBox.x;
+    float tFar  = tBox.y;
+    if (tNear > tFar) discard;
+
+    // 3. Sphere-trace
     float t = tNear;
     bool hit = false;
     float d;
     int march_iters = 0;
+    float cell = (u_bbox_max.x - u_bbox_min.x) / max(float(u_nx), 1.0);
+    float hit_thresh = cell * 0.01;
+    float min_step = hit_thresh;
 
     for (int i = 0; i < 256; i++) {
         march_iters = i;
@@ -211,36 +220,30 @@ void main() {
     }
     if (!hit) discard;
 
+    // 4. Shading
+    vec3 hp = ro + t * rd;
+    vec3 n  = sdf_normal(hp);
 
-
-    // 5. Shading — transform light from eye space to world space
-    vec3 hp  = ro + t * rd;
-    vec3 n   = sdf_normal(hp);
-
-    // gl_LightSource[0].position is in EYE space (OpenGL convention).
-    // For directional lights (w==0), .xyz is the light direction in eye space.
-    // For positional lights (w==1), .xyz is the position in eye space.
     vec4 light_eye = gl_LightSource[0].position;
     vec3 ld;
     if (light_eye.w < 0.5) {
-        // Directional light: transform direction to world space
         ld = normalize((gl_ModelViewMatrixInverse * vec4(light_eye.xyz, 0.0)).xyz);
     } else {
-        // Positional light: transform position to world space, then direction
         vec3 light_world = (gl_ModelViewMatrixInverse * light_eye).xyz;
         ld = normalize(light_world - hp);
     }
 
     float diff = max(dot(n, ld), 0.0);
-    vec3 vd    = normalize(cam - hp);
+    vec3 vd   = normalize(cam - hp);
     float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
     vec3 color = vec3(1.0,0.5,0.0)*(0.15 + 0.75*diff) + vec3(0.4)*spec;
 
     gl_FragColor = vec4(color, 1.0);
 
-    // Debug colour overrides
+    // Debug overrides
     if (u_debug_mode == 1) {
-        float v = sample_sdf(hp) / u_max_dist * 0.5 + 0.5;
+        float max_dist = (u_bbox_max.x - u_bbox_min.x) * 0.5;
+        float v = sample_sdf(hp) / max_dist * 0.5 + 0.5;
         gl_FragColor = vec4(v, 0.0, 1.0 - v, 1.0);
     } else if (u_debug_mode == 2) {
         gl_FragColor = vec4(n * 0.5 + 0.5, 1.0);
@@ -248,64 +251,48 @@ void main() {
         gl_FragColor = vec4(vec3(float(march_iters) / 256.0), 1.0);
     }
 
-    // 6. Depth write — use gl_DepthRange for Coin3D compatibility
-    vec4 clip     = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
-    float ndc_z   = clip.z / clip.w;
-    gl_FragDepth  = gl_DepthRange.near
-                  + gl_DepthRange.diff * (ndc_z * 0.5 + 0.5);
+    // 5. Depth write
+    vec4 clip    = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
+    float ndc_z  = clip.z / clip.w;
+    gl_FragDepth = gl_DepthRange.near
+                 + gl_DepthRange.diff * (ndc_z * 0.5 + 0.5);
 }
 """)
         # 2d. Uniforms
-        u_sdf_tex = coin.SoShaderParameter1i()
-        u_sdf_tex.name.setValue("u_sdf_tex")
-        u_sdf_tex.value.setValue(0)
-        
+        u_sdf_vol = coin.SoShaderParameter1i()
+        u_sdf_vol.name.setValue("u_sdf_vol")
+        u_sdf_vol.value.setValue(0)
+
         self._u["u_nx"] = coin.SoShaderParameter1i()
         self._u["u_nx"].name.setValue("u_nx")
         self._u["u_nx"].value.setValue(0)
-        
+
         self._u["u_ny"] = coin.SoShaderParameter1i()
         self._u["u_ny"].name.setValue("u_ny")
         self._u["u_ny"].value.setValue(0)
-        
+
         self._u["u_nz"] = coin.SoShaderParameter1i()
         self._u["u_nz"].name.setValue("u_nz")
         self._u["u_nz"].value.setValue(0)
-        
-        self._u["u_atz"] = coin.SoShaderParameter1i()
-        self._u["u_atz"].name.setValue("u_atz")
-        self._u["u_atz"].value.setValue(1)
-        
-        self._u["u_atlas_w"] = coin.SoShaderParameter1f()
-        self._u["u_atlas_w"].name.setValue("u_atlas_w")
-        self._u["u_atlas_w"].value.setValue(1.0)
-        
-        self._u["u_atlas_h"] = coin.SoShaderParameter1f()
-        self._u["u_atlas_h"].name.setValue("u_atlas_h")
-        self._u["u_atlas_h"].value.setValue(1.0)
-        
+
         self._u["u_bbox_min"] = coin.SoShaderParameter3f()
         self._u["u_bbox_min"].name.setValue("u_bbox_min")
-        self._u["u_bbox_min"].value.setValue(coin.SbVec3f(0,0,0))
-        
+        self._u["u_bbox_min"].value.setValue(coin.SbVec3f(0, 0, 0))
+
         self._u["u_bbox_max"] = coin.SoShaderParameter3f()
         self._u["u_bbox_max"].name.setValue("u_bbox_max")
-        self._u["u_bbox_max"].value.setValue(coin.SbVec3f(0,0,0))
-        
-        self._u["u_max_dist"] = coin.SoShaderParameter1f()
-        self._u["u_max_dist"].name.setValue("u_max_dist")
-        self._u["u_max_dist"].value.setValue(1.0)
-        
-        f_shader.parameter.setNum(0)
-        f_shader.parameter.set1Value(0, u_sdf_tex)
+        self._u["u_bbox_max"].value.setValue(coin.SbVec3f(0, 0, 0))
+
         self._u["u_debug_mode"] = coin.SoShaderParameter1i()
         self._u["u_debug_mode"].name.setValue("u_debug_mode")
         self._u["u_debug_mode"].value.setValue(0)
 
-        for i, name in enumerate(["u_nx", "u_ny", "u_nz", "u_atz", "u_atlas_w", "u_atlas_h", 
-                                  "u_bbox_min", "u_bbox_max", "u_max_dist", "u_debug_mode"]):
+        f_shader.parameter.setNum(0)
+        f_shader.parameter.set1Value(0, u_sdf_vol)
+        for i, name in enumerate(["u_nx", "u_ny", "u_nz",
+                                   "u_bbox_min", "u_bbox_max", "u_debug_mode"]):
             f_shader.parameter.set1Value(i + 1, self._u[name])
-            
+
         shader.shaderObject.set1Value(0, v_shader)
         shader.shaderObject.set1Value(1, f_shader)
         self._shader_sep.addChild(shader)
@@ -352,33 +339,30 @@ void main() {
         self.root.addChild(self._shader_sep)
 
     def update(self, field, cell_size):
-        baked = bake_sdf_to_atlas(field, cell_size)
-        
-        # 1. Texture upload (LUMINANCE_ALPHA, 2 channels)
-        self._tex.image.setValue(coin.SbVec2s(baked["atlas_w"], baked["atlas_h"]), 2, baked["atlas_bytes"])
-        
+        from core.frep.sdf_baker import bake_sdf_to_volume
+        baked = bake_sdf_to_volume(field, cell_size)
+
+        # 1. Upload 3D texture (float32 as RGBA8, 4 channels)
+        nx, ny, nz = baked["nx"], baked["ny"], baked["nz"]
+        self._tex.images.setValue(
+            coin.SbVec3s(nx + 1, ny + 1, nz + 1), 4, baked["volume_bytes"])
+
         # 2. Update uniforms
-        self._u["u_nx"].value.setValue(int(baked["nx"]))
-        self._u["u_ny"].value.setValue(int(baked["ny"]))
-        self._u["u_nz"].value.setValue(int(baked["nz"]))
-        self._u["u_atz"].value.setValue(int(baked["atz"]))
-        self._u["u_atlas_w"].value.setValue(float(baked["atlas_w"]))
-        self._u["u_atlas_h"].value.setValue(float(baked["atlas_h"]))
-        
+        self._u["u_nx"].value.setValue(int(nx))
+        self._u["u_ny"].value.setValue(int(ny))
+        self._u["u_nz"].value.setValue(int(nz))
+
         mn, mx = baked["bbox_min"], baked["bbox_max"]
         self._u["u_bbox_min"].value.setValue(coin.SbVec3f(mn.x, mn.y, mn.z))
         self._u["u_bbox_max"].value.setValue(coin.SbVec3f(mx.x, mx.y, mx.z))
-        
+
+        # 3. Update bbox proxy + expansion points
         self._bbox_coords.point.setValues(0, 8, [
             (mn.x, mn.y, mn.z), (mx.x, mn.y, mn.z),
             (mn.x, mx.y, mn.z), (mx.x, mx.y, mn.z),
             (mn.x, mn.y, mx.z), (mx.x, mn.y, mx.z),
             (mn.x, mx.y, mx.z), (mx.x, mx.y, mx.z)
         ])
-        
-        self._u["u_max_dist"].value.setValue(float(baked["max_dist"]))
-        
-        # 3. Update expansion points in shader-sep to prevent culling
         self._coords.point.setValues(0, 8, [
             (mn.x, mn.y, mn.z), (mx.x, mn.y, mn.z),
             (mn.x, mx.y, mn.z), (mx.x, mx.y, mn.z),

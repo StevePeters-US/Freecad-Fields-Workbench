@@ -34,13 +34,6 @@ class _SettingsDialog(QtGui.QDialog):
         current_wire = get_show_wireframe()
         current_lw = get_line_width()
         current_ps = get_point_size()
-        from core.dm_object import (get_picking_radius, get_meshing_type, get_max_bounds, 
-                                    get_meshing_cell_size, get_curvature_threshold, get_decimate_enabled)
-        current_pr = get_picking_radius()
-        current_meshing = get_meshing_type()
-        current_res = get_meshing_cell_size()
-        current_mb = get_max_bounds()
-        current_curv = get_curvature_threshold()
         from core.dm_object import get_interactive_throttle_interval
 
         # Near Clip Distance spinbox
@@ -91,22 +84,6 @@ class _SettingsDialog(QtGui.QDialog):
         self._debug_check.setToolTip("Show SDF bounding boxes and enable shader debug views")
         layout.addRow("Render Debug Mode:", self._debug_check)
 
-        # F-Rep Renderer Selection
-        from core.dm_object import get_render_mode
-        self._render_mode_combo = QtGui.QComboBox()
-        self._render_mode_combo.addItems([
-            "Triangle Mesh",
-            "Point Cloud",
-            "Ray March (GPU)",
-        ])
-        self._render_mode_combo.setCurrentIndex(get_render_mode())
-        self._render_mode_combo.setToolTip(
-            "Triangle Mesh: CPU marching cubes — full quality.\n"
-            "Point Cloud: fast zero-crossing samples — good for interactive editing.\n"
-            "Ray March: GPU sphere tracing — no triangulation, smooth shading.\n"
-            "Changes take effect after document reload."
-        )
-        layout.addRow("F-Rep Renderer:", self._render_mode_combo)
 
         # Line Width spinbox
         self._lw_spin = QtGui.QDoubleSpinBox()
@@ -184,7 +161,7 @@ class _SettingsDialog(QtGui.QDialog):
         from core.dm_object import (set_show_wireframe, set_line_width, set_point_size,
                                     set_picking_radius, set_meshing_type, set_meshing_cell_size,
                                     set_max_bounds, set_perf_profiler_enabled, set_curvature_threshold,
-                                    set_decimate_enabled, set_render_mode, refresh_all_dm_objects,
+                                    set_decimate_enabled, refresh_all_dm_objects,
                                     set_near_clip_distance, apply_near_clip_override,
                                     set_render_debug_mode, set_interactive_throttle_interval)
         from core.dm_logger import set_enable_crash_log
@@ -206,7 +183,6 @@ class _SettingsDialog(QtGui.QDialog):
         set_max_bounds(mb)
         set_curvature_threshold(curv)
         set_decimate_enabled(self._decimate_check.isChecked())
-        set_render_mode(self._render_mode_combo.currentIndex())
         set_perf_profiler_enabled(self._perf_check.isChecked())
         set_render_debug_mode(self._debug_check.isChecked())
         set_interactive_throttle_interval(self._throttle_spin.value())

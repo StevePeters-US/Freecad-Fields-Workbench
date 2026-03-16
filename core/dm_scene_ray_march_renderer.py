@@ -9,7 +9,6 @@ import FreeCAD
 import FreeCADGui
 import pivy.coin as coin
 from core import dm_logger
-from core.frep.sdf_baker import bake_sdf_to_atlas
 
 
 
@@ -121,16 +120,13 @@ class DMSceneRayMarchRenderer:
         except AttributeError:
             pass
 
-        # GL_NEAREST filtering (shader does its own trilinear)
-        complexity = coin.SoComplexity()
-        complexity.textureQuality.setValue(0.0)
-        self._shader_sep.addChild(complexity)
-
-        # Texture Atlas
-        self._tex = coin.SoTexture2()
-        self._tex.model.setValue(coin.SoTexture2.REPLACE)
-        self._tex.wrapS.setValue(coin.SoTexture2.CLAMP)
-        self._tex.wrapT.setValue(coin.SoTexture2.CLAMP)
+        # Single combined 3D texture (all fields stacked along z-axis)
+        # The texture stores raw float32 bytes as RGBA8. The shader uses
+        # texelFetch() for exact texel access and manual trilinear on decoded floats.
+        self._tex = coin.SoTexture3()
+        self._tex.wrapR.setValue(coin.SoTexture3.CLAMP)
+        self._tex.wrapS.setValue(coin.SoTexture3.CLAMP)
+        self._tex.wrapT.setValue(coin.SoTexture3.CLAMP)
         self._shader_sep.addChild(self._tex)
 
         # Shader Program — identical vertex+fragment shader to DMRayMarchRenderer
@@ -141,63 +137,69 @@ class DMSceneRayMarchRenderer:
         f_shader.sourceType.setValue(coin.SoShaderObject.GLSL_PROGRAM)
 
         v_shader.sourceProgram.setValue("""
-varying vec2 v_uv;
+#version 330 compatibility
+out vec2 v_uv;
 void main() {
     v_uv = gl_Vertex.xy;
     gl_Position = vec4(gl_Vertex.xy, 0.0, 1.0);
 }
 """)
 
-        # Fragment shader: texture-only SDF sampling, no analytical primitive SDFs.
-        # Per-field AABB ray intervals drive stepping — the march only samples
-        # texture inside a field's bbox and steps toward the next field entry
         # when outside all active fields.
         f_shader.sourceProgram.setValue("""
-varying vec2  v_uv;
-uniform sampler2D u_sdf_tex;
+#version 330 compatibility
+in vec2 v_uv;
+uniform sampler3D u_sdf_vol;
 uniform int   u_num_fields;
-uniform float u_combined_atlas_w;
-uniform float u_combined_atlas_h;
 uniform int   u_debug_mode;
 
 uniform int   u_nx[8];
 uniform int   u_ny[8];
 uniform int   u_nz[8];
-uniform int   u_atz[8];
-uniform float u_field_atlas_w[8];
-uniform float u_field_atlas_h[8];
-uniform float u_max_dist[8];
-uniform int   u_row_offset[8];
+uniform int   u_z_offset[8];
+uniform int   u_z_total;
 uniform vec3  u_bbox_min[8];
 uniform vec3  u_bbox_max[8];
 
-float sample_texel_field(int fi, float ix, float iy, float iz) {
-    float c = floor(mod(iz, float(u_atz[fi])));
-    float r = floor(iz / float(u_atz[fi]));
-    float u = (c * (float(u_nx[fi]) + 1.0) + ix + 0.5) / u_combined_atlas_w;
-    float v = (float(u_row_offset[fi]) + r * (float(u_ny[fi]) + 1.0) + iy + 0.5)
-              / u_combined_atlas_h;
-    vec4 t = texture2D(u_sdf_tex, vec2(u, v));
-    return (t.r * 65280.0 + t.a * 255.0) / 65535.0;
+float decode_texel(ivec3 tc) {
+    vec4 c = texelFetch(u_sdf_vol, tc, 0);
+    uvec4 b = uvec4(round(c * 255.0));
+    uint bits = b.r | (b.g << 8u) | (b.b << 16u) | (b.a << 24u);
+    return uintBitsToFloat(bits);
 }
 
-// Pure texture trilinear lookup — no analytical primitive SDF.
 float sample_sdf_field(int fi, vec3 p) {
     vec3 uvw = (p - u_bbox_min[fi]) / (u_bbox_max[fi] - u_bbox_min[fi]);
-    float gx = clamp(uvw.x * float(u_nx[fi]), 0.0, float(u_nx[fi]));
-    float gy = clamp(uvw.y * float(u_ny[fi]), 0.0, float(u_ny[fi]));
-    float gz = clamp(uvw.z * float(u_nz[fi]), 0.0, float(u_nz[fi]));
-    float x0=floor(gx); float x1=min(x0+1.0,float(u_nx[fi]));
-    float y0=floor(gy); float y1=min(y0+1.0,float(u_ny[fi]));
-    float z0=floor(gz); float z1=min(z0+1.0,float(u_nz[fi]));
-    float fx=gx-x0; float fy=gy-y0; float fz=gz-z0;
-    float s = mix(
-        mix(mix(sample_texel_field(fi,x0,y0,z0),sample_texel_field(fi,x1,y0,z0),fx),
-            mix(sample_texel_field(fi,x0,y1,z0),sample_texel_field(fi,x1,y1,z0),fx),fy),
-        mix(mix(sample_texel_field(fi,x0,y0,z1),sample_texel_field(fi,x1,y0,z1),fx),
-            mix(sample_texel_field(fi,x0,y1,z1),sample_texel_field(fi,x1,y1,z1),fx),fy),
-        fz);
-    return (s * 2.0 - 1.0) * u_max_dist[fi];
+    uvw = clamp(uvw, vec3(0.0), vec3(1.0));
+    // Map field-local uvw to integer texel coords in combined volume
+    ivec3 sz = textureSize(u_sdf_vol, 0);
+    // Field spans [0, u_nx+1) texels in x, [0, u_ny+1) in y,
+    // [u_z_offset, u_z_offset + u_nz+1) in z within the combined volume.
+    vec3 tc = vec3(
+        uvw.x * float(u_nx[fi]),
+        uvw.y * float(u_ny[fi]),
+        float(u_z_offset[fi]) + uvw.z * float(u_nz[fi])
+    );
+    tc = clamp(tc, vec3(0.0), vec3(float(u_nx[fi]), float(u_ny[fi]),
+               float(u_z_offset[fi] + u_nz[fi])));
+    ivec3 c0 = ivec3(floor(tc));
+    ivec3 c1 = min(c0 + 1, ivec3(u_nx[fi], u_ny[fi], u_z_offset[fi] + u_nz[fi]));
+    vec3 f = tc - vec3(c0);
+    float d000 = decode_texel(ivec3(c0.x, c0.y, c0.z));
+    float d100 = decode_texel(ivec3(c1.x, c0.y, c0.z));
+    float d010 = decode_texel(ivec3(c0.x, c1.y, c0.z));
+    float d110 = decode_texel(ivec3(c1.x, c1.y, c0.z));
+    float d001 = decode_texel(ivec3(c0.x, c0.y, c1.z));
+    float d101 = decode_texel(ivec3(c1.x, c0.y, c1.z));
+    float d011 = decode_texel(ivec3(c0.x, c1.y, c1.z));
+    float d111 = decode_texel(ivec3(c1.x, c1.y, c1.z));
+    float dx00 = mix(d000, d100, f.x);
+    float dx10 = mix(d010, d110, f.x);
+    float dx01 = mix(d001, d101, f.x);
+    float dx11 = mix(d011, d111, f.x);
+    float dxy0 = mix(dx00, dx10, f.y);
+    float dxy1 = mix(dx01, dx11, f.y);
+    return mix(dxy0, dxy1, f.z);
 }
 
 vec3 sdf_normal_field(int fi, vec3 p) {
@@ -221,7 +223,6 @@ vec2 intersect_aabb(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
 }
 
 void main() {
-    // 1. Unproject NDC to world-space ray
     vec4 ndc_near = vec4(v_uv, -1.0, 1.0);
     vec4 world_near = gl_ModelViewProjectionMatrixInverse * ndc_near;
     world_near /= world_near.w;
@@ -230,15 +231,6 @@ void main() {
     world_far /= world_far.w;
     vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
 
-    // Ray origin strategy to avoid near-plane clipping.
-    // FreeCAD auto-adjusts nearDistance based on scene geometry. F-Rep objects
-    // have a null Part.Shape so the near plane can be pushed past the SDF surface.
-    //
-    // Perspective: start ray at camera position — completely bypasses the near
-    //   plane. tNear clamped to 0 for the camera-inside-AABB case.
-    // Orthographic: world_near is the correct per-pixel origin, but tNear is NOT
-    //   clamped to 0, so the march starts at the actual AABB entry even when
-    //   world_near has been pushed inside the AABB by FreeCAD's auto-clip.
     vec3 ro, rd;
     bool is_persp = (gl_ProjectionMatrix[3][3] < 0.5);
     if (is_persp) {
@@ -249,7 +241,7 @@ void main() {
         rd = normalize(world_far.xyz - world_near.xyz);
     }
 
-    // 2. Combined AABB for early discard
+    // Combined AABB early discard
     vec3 scene_min = u_bbox_min[0];
     vec3 scene_max = u_bbox_max[0];
     for (int fi = 1; fi < 8; fi++) {
@@ -262,10 +254,7 @@ void main() {
     float tFar  = tBox.y;
     if (tNear > tFar) discard;
 
-    // 3. Per-field AABB ray intervals — computed once, used in the march loop.
-    // When t is before a field's entry, we step toward it.
-    // When t is inside a field's range, we sample the texture SDF.
-    // No analytical primitive SDFs are used anywhere.
+    // Per-field AABB intervals
     float ftn[8];
     float ftf[8];
     for (int fi = 0; fi < 8; fi++) {
@@ -291,18 +280,15 @@ void main() {
 
         for (int fi = 0; fi < 8; fi++) {
             if (fi >= u_num_fields) break;
-            if (ftn[fi] > ftf[fi]) continue;   // ray misses this field entirely
-            if (t > ftf[fi])       continue;   // already past this field
+            if (ftn[fi] > ftf[fi]) continue;
+            if (t > ftf[fi])       continue;
             if (t < ftn[fi]) {
-                // Not yet inside this field — step toward its entry point
                 min_d = min(min_d, ftn[fi] - t);
                 continue;
             }
-            // Inside this field's bbox — texture-only sample.
-            // abs(d): valid sphere-trace step from both outside (d>0) and
-            // inside (d<0), and catches the surface in both directions.
             float d = sample_sdf_field(fi, p);
-            float thresh = u_max_dist[fi] * 0.001;
+            float cell = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
+            float thresh = cell * 0.01;
             if (abs(d) < thresh) { hit = true; hit_field = fi; break; }
             min_d = min(min_d, abs(d));
         }
@@ -313,7 +299,6 @@ void main() {
     }
     if (!hit) discard;
 
-    // 4. Shade using hit field's normal
     vec3 hp = ro + t * rd;
     vec3 n  = sdf_normal_field(hit_field, hp);
 
@@ -326,13 +311,14 @@ void main() {
         ld = normalize(light_world - hp);
     }
     float diff = max(dot(n, ld), 0.0);
-    vec3 vd    = normalize(cam - hp);
+    vec3 vd   = normalize(cam - hp);
     float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
     vec3 color = vec3(1.0,0.5,0.0)*(0.15 + 0.75*diff) + vec3(0.4)*spec;
     gl_FragColor = vec4(color, 1.0);
 
     if (u_debug_mode == 1) {
-        float v = sample_sdf_field(hit_field, hp) / u_max_dist[hit_field] * 0.5 + 0.5;
+        float max_dist = (u_bbox_max[hit_field].x - u_bbox_min[hit_field].x) * 0.5;
+        float v = sample_sdf_field(hit_field, hp) / max_dist * 0.5 + 0.5;
         gl_FragColor = vec4(v, 0.0, 1.0 - v, 1.0);
     } else if (u_debug_mode == 2) {
         gl_FragColor = vec4(n * 0.5 + 0.5, 1.0);
@@ -340,7 +326,6 @@ void main() {
         gl_FragColor = vec4(vec3(float(march_iters) / 256.0), 1.0);
     }
 
-    // 5. Depth write
     vec4 clip    = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
     float ndc_z  = clip.z / clip.w;
     gl_FragDepth = gl_DepthRange.near
@@ -349,44 +334,32 @@ void main() {
 """)
 
         # Uniforms
-        # Scene-level uniforms
-        u_sdf_tex = coin.SoShaderParameter1i()
-        u_sdf_tex.name.setValue("u_sdf_tex")
-        u_sdf_tex.value.setValue(0)
+        u_sdf_vol = coin.SoShaderParameter1i()
+        u_sdf_vol.name.setValue("u_sdf_vol")
+        u_sdf_vol.value.setValue(0)
 
         self._u["u_num_fields"] = coin.SoShaderParameter1i()
         self._u["u_num_fields"].name.setValue("u_num_fields")
         self._u["u_num_fields"].value.setValue(0)
 
-        self._u["u_combined_atlas_w"] = coin.SoShaderParameter1f()
-        self._u["u_combined_atlas_w"].name.setValue("u_combined_atlas_w")
-        self._u["u_combined_atlas_w"].value.setValue(1.0)
-
-        self._u["u_combined_atlas_h"] = coin.SoShaderParameter1f()
-        self._u["u_combined_atlas_h"].name.setValue("u_combined_atlas_h")
-        self._u["u_combined_atlas_h"].value.setValue(1.0)
-
         self._u["u_debug_mode"] = coin.SoShaderParameter1i()
         self._u["u_debug_mode"].name.setValue("u_debug_mode")
         self._u["u_debug_mode"].value.setValue(0)
 
-        # Per-field uniform arrays (Coin3D uses "u_nx[0]" naming for GLSL arrays)
-        per_field_scalar_i = ["u_nx", "u_ny", "u_nz", "u_atz", "u_row_offset"]
-        per_field_scalar_f = ["u_field_atlas_w", "u_field_atlas_h", "u_max_dist"]
-        per_field_vec3     = ["u_bbox_min", "u_bbox_max"]
+        self._u["u_z_total"] = coin.SoShaderParameter1i()
+        self._u["u_z_total"].name.setValue("u_z_total")
+        self._u["u_z_total"].value.setValue(1)
+
+        # Per-field uniform arrays
+        per_field_int  = ["u_nx", "u_ny", "u_nz", "u_z_offset"]
+        per_field_vec3 = ["u_bbox_min", "u_bbox_max"]
 
         for fi in range(self.MAX_FIELDS):
-            for name in per_field_scalar_i:
+            for name in per_field_int:
                 key = f"{name}[{fi}]"
                 node = coin.SoShaderParameter1i()
                 node.name.setValue(key)
                 node.value.setValue(0)
-                self._u[key] = node
-            for name in per_field_scalar_f:
-                key = f"{name}[{fi}]"
-                node = coin.SoShaderParameter1f()
-                node.name.setValue(key)
-                node.value.setValue(1.0)
                 self._u[key] = node
             for name in per_field_vec3:
                 key = f"{name}[{fi}]"
@@ -395,15 +368,14 @@ void main() {
                 node.value.setValue(coin.SbVec3f(0, 0, 0))
                 self._u[key] = node
 
-        # Register all uniforms with the fragment shader
+        # Register all uniforms with fragment shader
         f_shader.parameter.setNum(0)
         idx = 0
-        f_shader.parameter.set1Value(idx, u_sdf_tex); idx += 1
-        for key in ["u_num_fields", "u_combined_atlas_w", "u_combined_atlas_h",
-                    "u_debug_mode"]:
+        f_shader.parameter.set1Value(idx, u_sdf_vol); idx += 1
+        for key in ["u_num_fields", "u_debug_mode", "u_z_total"]:
             f_shader.parameter.set1Value(idx, self._u[key]); idx += 1
         for fi in range(self.MAX_FIELDS):
-            for name in (per_field_scalar_i + per_field_scalar_f + per_field_vec3):
+            for name in (per_field_int + per_field_vec3):
                 f_shader.parameter.set1Value(idx, self._u[f"{name}[{fi}]"]); idx += 1
         f_shader.parameter.setNum(idx)
 
@@ -424,10 +396,14 @@ void main() {
         ])
         self._shader_sep.addChild(self._coords)
 
-        # Transparent material for expansion points to prevent culling
+        # Expansion points with INVISIBLE style to prevent culling without rendering dots
         bbox_mat = coin.SoMaterial()
         bbox_mat.transparency.setValue(1.0)
         self._shader_sep.addChild(bbox_mat)
+
+        bbox_style = coin.SoDrawStyle()
+        bbox_style.style.setValue(coin.SoDrawStyle.INVISIBLE)
+        self._shader_sep.addChild(bbox_style)
         
         self._bbox_expansion = coin.SoPointSet()
         self._bbox_expansion.numPoints.setValue(8)
@@ -446,14 +422,10 @@ void main() {
         self._shader_sep.addChild(quad_mat)
 
         faceset = coin.SoIndexedFaceSet()
-        # Use indices 8-11 for the quad triangles, plus 8 degenerate triangles 
-        # (one for each corner 0-7) to force the shape's bbox to exactly include
-        # the entire scene bounding box. This prevents Coin3D from culling the quad
-        # when zooming into a part of the SDF while other parts (or the origin) 
-        # are off-screen.
-        indices = [8, 9, 10, -1, 8, 10, 11, -1]
-        for i in range(8):
-            indices.extend([i, i, i, -1])
+        # Use indices 8-11 for the quad triangles.
+        # Points 0-7 are use by SoPointSet + SoDrawStyle(INVISIBLE) to expand the
+        # separator's bounding box and prevent culling.
+        indices = [8, 9, 10, -1, 10, 11, 8, -1]
         faceset.coordIndex.setValues(0, len(indices), indices)
         self._shader_sep.addChild(faceset)
 
@@ -506,8 +478,9 @@ void main() {
     MAX_FIELDS = 8
 
     def _rebuild(self):
-        """Bake each field independently and upload a stacked atlas."""
+        """Bake each field independently and upload a stacked 3D volume."""
         from core.dm_object import get_meshing_cell_size
+        from core.frep.sdf_baker import bake_sdf_to_volume
         import numpy as np
 
         visible = [(label, f) for label, (f, vis) in self._fields.items()
@@ -522,30 +495,34 @@ void main() {
 
         cell_size = get_meshing_cell_size()
 
-        # Bake each field independently
-        baked_list = [bake_sdf_to_atlas(f, cell_size) for _, f in visible]
+        # Bake each field to a 3D float32 volume
+        baked_list = [bake_sdf_to_volume(f, cell_size) for _, f in visible]
         n_fields = len(baked_list)
 
-        # Stacked atlas: each field occupies its own row-band
-        max_w = max(b["atlas_w"] for b in baked_list)
-        total_h = sum(b["atlas_h"] for b in baked_list)
+        # Stack volumes along z-axis into one combined 3D texture.
+        # All fields are padded to the max x/y dimensions.
+        max_nx = max(b["nx"] for b in baked_list) + 1  # +1 for sample points
+        max_ny = max(b["ny"] for b in baked_list) + 1
+        total_nz = sum(b["nz"] + 1 for b in baked_list)
 
-        combined = np.zeros((total_h, max_w, 2), dtype=np.uint8)
-        row_offsets = []
-        row = 0
+        # Build combined volume (float32, then reinterpret as RGBA8)
+        combined = np.zeros((total_nz, max_ny, max_nx), dtype=np.float32)
+        z_offsets = []
+        z_cursor = 0
         for b in baked_list:
-            h, w = b["atlas_h"], b["atlas_w"]
-            # Reshape flat bytes back to (h, w, 2) and place in combined
-            tile = np.frombuffer(b["atlas_bytes"], dtype=np.uint8).reshape(h, w, 2)
-            combined[row:row + h, :w, :] = tile
-            row_offsets.append(row)
-            row += h
+            nx1, ny1, nz1 = b["nx"] + 1, b["ny"] + 1, b["nz"] + 1
+            # bake_sdf_to_volume returns bytes in (nz+1, ny+1, nx+1) order
+            vol = np.frombuffer(b["volume_bytes"], dtype=np.float32).reshape(nz1, ny1, nx1)
+            combined[z_cursor:z_cursor + nz1, :ny1, :nx1] = vol
+            z_offsets.append(z_cursor)
+            z_cursor += nz1
 
-        # Upload single combined texture
-        self._tex.image.setValue(
-            coin.SbVec2s(max_w, total_h), 2, combined.tobytes())
+        # Upload as RGBA8 (float32 reinterpreted as 4×uint8)
+        volume_bytes = combined.astype(np.float32).tobytes()
+        self._tex.images.setValue(
+            coin.SbVec3s(max_nx, max_ny, total_nz), 4, volume_bytes)
 
-        # Per-field uniform arrays (indices 0..MAX_FIELDS-1)
+        # Update per-field uniforms
         for fi in range(self.MAX_FIELDS):
             if fi < n_fields:
                 b = baked_list[fi]
@@ -553,27 +530,21 @@ void main() {
                 self._u[f"u_nx[{fi}]"].value.setValue(int(b["nx"]))
                 self._u[f"u_ny[{fi}]"].value.setValue(int(b["ny"]))
                 self._u[f"u_nz[{fi}]"].value.setValue(int(b["nz"]))
-                self._u[f"u_atz[{fi}]"].value.setValue(int(b["atz"]))
-                self._u[f"u_field_atlas_w[{fi}]"].value.setValue(float(b["atlas_w"]))
-                self._u[f"u_field_atlas_h[{fi}]"].value.setValue(float(b["atlas_h"]))
-                self._u[f"u_max_dist[{fi}]"].value.setValue(float(b["max_dist"]))
-                self._u[f"u_row_offset[{fi}]"].value.setValue(int(row_offsets[fi]))
+                self._u[f"u_z_offset[{fi}]"].value.setValue(int(z_offsets[fi]))
                 self._u[f"u_bbox_min[{fi}]"].value.setValue(
                     coin.SbVec3f(mn.x, mn.y, mn.z))
                 self._u[f"u_bbox_max[{fi}]"].value.setValue(
                     coin.SbVec3f(mx.x, mx.y, mx.z))
             else:
-                # Zero out unused slots so the shader skips them
                 self._u[f"u_nx[{fi}]"].value.setValue(0)
 
         self._u["u_num_fields"].value.setValue(n_fields)
-        self._u["u_combined_atlas_w"].value.setValue(float(max_w))
-        self._u["u_combined_atlas_h"].value.setValue(float(total_h))
+        self._u["u_z_total"].value.setValue(int(total_nz))
 
-        # Combined bbox proxy (union of all visible fields' bboxes)
-        all_mn = [baked_list[i]["bbox_min"] for i in range(n_fields)]
-        all_mx = [baked_list[i]["bbox_max"] for i in range(n_fields)]
+        # Combined bbox proxy
         import FreeCAD
+        all_mn = [b["bbox_min"] for b in baked_list]
+        all_mx = [b["bbox_max"] for b in baked_list]
         mn_all = FreeCAD.Vector(min(v.x for v in all_mn),
                                 min(v.y for v in all_mn),
                                 min(v.z for v in all_mn))
