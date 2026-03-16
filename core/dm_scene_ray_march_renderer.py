@@ -206,11 +206,12 @@ vec3 sdf_normal_field(int fi, vec3 p) {
     float cell = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
     float h = cell * 0.5;
     vec2 k = vec2(1.0, -1.0);
-    return normalize(
-        k.xyy * sample_sdf_field(fi, p + k.xyy*h) +
-        k.yyx * sample_sdf_field(fi, p + k.yyx*h) +
-        k.yxy * sample_sdf_field(fi, p + k.yxy*h) +
-        k.xxx * sample_sdf_field(fi, p + k.xxx*h));
+    vec3 g = k.xyy * sample_sdf_field(fi, p + k.xyy*h) +
+             k.yyx * sample_sdf_field(fi, p + k.yyx*h) +
+             k.yxy * sample_sdf_field(fi, p + k.yxy*h) +
+             k.xxx * sample_sdf_field(fi, p + k.xxx*h);
+    float len2 = dot(g, g);
+    return (len2 > 1e-10) ? g * inversesqrt(len2) : vec3(0.0, 1.0, 0.0);
 }
 
 vec2 intersect_aabb(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
@@ -312,17 +313,13 @@ void main() {
 
     vec3 hp = ro + t * rd;
     vec3 n  = sdf_normal_field(hit_field, hp);
+    // Guard against zero-length normal (degenerate gradient)
+    if (dot(n, n) < 0.001) n = -rd;
 
-    vec4 light_eye = gl_LightSource[0].position;
-    vec3 ld;
-    if (light_eye.w < 0.5) {
-        ld = normalize((inv_mv * vec4(light_eye.xyz, 0.0)).xyz);
-    } else {
-        vec3 light_world = (inv_mv * light_eye).xyz;
-        ld = normalize(light_world - hp);
-    }
+    // Headlight: use view direction for reliable lighting
+    vec3 vd = normalize(cam - hp);
+    vec3 ld = vd;
     float diff = max(dot(n, ld), 0.0);
-    vec3 vd   = normalize(cam - hp);
     float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
     vec3 base_color = (u_is_subtractive[hit_field] == 1)
         ? vec3(0.3, 0.5, 1.0)
