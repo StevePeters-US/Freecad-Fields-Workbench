@@ -158,6 +158,7 @@ uniform int   u_ny[8];
 uniform int   u_nz[8];
 uniform int   u_z_offset[8];
 uniform int   u_z_total;
+uniform int   u_is_subtractive[8];
 uniform vec3  u_bbox_min[8];
 uniform vec3  u_bbox_max[8];
 
@@ -313,7 +314,10 @@ void main() {
     float diff = max(dot(n, ld), 0.0);
     vec3 vd   = normalize(cam - hp);
     float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
-    vec3 color = vec3(1.0,0.5,0.0)*(0.15 + 0.75*diff) + vec3(0.4)*spec;
+    vec3 base_color = (u_is_subtractive[hit_field] == 1)
+        ? vec3(0.3, 0.5, 1.0)
+        : vec3(1.0, 0.5, 0.0);
+    vec3 color = base_color * (0.15 + 0.75 * diff) + vec3(0.4) * spec;
     gl_FragColor = vec4(color, 1.0);
 
     if (u_debug_mode == 1) {
@@ -351,7 +355,7 @@ void main() {
         self._u["u_z_total"].value.setValue(1)
 
         # Per-field uniform arrays
-        per_field_int  = ["u_nx", "u_ny", "u_nz", "u_z_offset"]
+        per_field_int  = ["u_nx", "u_ny", "u_nz", "u_z_offset", "u_is_subtractive"]
         per_field_vec3 = ["u_bbox_min", "u_bbox_max"]
 
         for fi in range(self.MAX_FIELDS):
@@ -474,6 +478,10 @@ void main() {
         # Also sync shader debug mode if we're in debug
         self.set_debug_mode(3 if debug else 0) # Use iterations mode by default for debug
         
+        # Rebuild to pick up any per-field property changes (e.g. IsSubtractive)
+        if self._fields:
+            self._rebuild()
+        
 
     MAX_FIELDS = 8
 
@@ -535,6 +543,13 @@ void main() {
                     coin.SbVec3f(mn.x, mn.y, mn.z))
                 self._u[f"u_bbox_max[{fi}]"].value.setValue(
                     coin.SbVec3f(mx.x, mx.y, mx.z))
+
+                # Per-field subtractive flag
+                label = visible[fi][0]
+                doc = FreeCAD.activeDocument()
+                field_obj = doc.getObject(label) if doc else None
+                is_sub = getattr(field_obj, "IsSubtractive", False) if field_obj else False
+                self._u[f"u_is_subtractive[{fi}]"].value.setValue(1 if is_sub else 0)
             else:
                 self._u[f"u_nx[{fi}]"].value.setValue(0)
 
@@ -542,7 +557,6 @@ void main() {
         self._u["u_z_total"].value.setValue(int(total_nz))
 
         # Combined bbox proxy
-        import FreeCAD
         all_mn = [b["bbox_min"] for b in baked_list]
         all_mx = [b["bbox_max"] for b in baked_list]
         mn_all = FreeCAD.Vector(min(v.x for v in all_mn),

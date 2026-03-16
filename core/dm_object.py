@@ -267,6 +267,10 @@ class DMObjectProxy:
             if not hasattr(obj, "DeduplicateEnabled"):
                 obj.addProperty("App::PropertyBool", "DeduplicateEnabled", "FRep", "Enable vertex deduplication")
                 obj.DeduplicateEnabled = get_deduplicate_enabled()
+            if not hasattr(obj, "IsSubtractive"):
+                obj.addProperty("App::PropertyBool", "IsSubtractive", "FRep",
+                                "If True, this primitive subtracts material (rendered blue)")
+                obj.IsSubtractive = False
 
     def build_shape(self, fp):
         """Return a Part.Shape based on the object's properties."""
@@ -447,8 +451,17 @@ class DMViewProvider:
     def updateData(self, fp, prop):
         from . import dm_logger
         
-        if prop in ["ShowWireframe", "MeshingCellSize"]:
+        if prop in ["ShowWireframe", "MeshingCellSize", "IsSubtractive"]:
             self.on_prefs_changed()
+        
+        if prop == "IsSubtractive" and hasattr(fp, "IsSubtractive"):
+            try:
+                if fp.IsSubtractive:
+                    fp.ViewObject.ShapeColor = (0.3, 0.5, 1.0)
+                else:
+                    fp.ViewObject.ShapeColor = (1.0, 0.5, 0.0)
+            except Exception:
+                pass
             
         if prop == "Shape" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":
             proxy = getattr(fp, "Proxy", None)
@@ -594,7 +607,11 @@ def create_dm_object(name, shape_type, params=None, placement=None):
         
         dm_logger.debug(f"create_dm_object: {name} created successfully")
         if hasattr(obj, "ViewObject") and obj.ViewObject:
-            obj.ViewObject.ShapeColor = (1.0, 0.5, 0.0)
+            is_sub = getattr(obj, "IsSubtractive", False)
+            if is_sub:
+                obj.ViewObject.ShapeColor = (0.3, 0.5, 1.0)
+            else:
+                obj.ViewObject.ShapeColor = (1.0, 0.5, 0.0)
             obj.ViewObject.LineWidth = get_line_width()
             obj.ViewObject.PointSize = get_point_size()
             # Disable wireframe for F-Rep mesh objects - reduces render overhead

@@ -63,6 +63,23 @@ class DMInputManager(QtCore.QObject):
                     )
                     # Do NOT return True — let FreeCAD's navigation also handle this click
 
+            # [Event Owner: Qt Event Filter] Double-click to edit SDF object
+            if event.type() == QtCore.QEvent.MouseButtonDblClick and event.button() == QtCore.Qt.LeftButton:
+                from core.dm_tool_manager import DMToolManager
+                if not DMToolManager.get_instance().has_active_tool():
+                    from core.dm_selection_manager import DMSelectionManager
+                    sel_mgr = DMSelectionManager.get_instance()
+                    sel_mgr.try_sdf_selection((event.pos().x(), event.pos().y()))
+                    sel = FreeCADGui.Selection.getSelection()
+                    if sel:
+                        obj = sel[0]
+                        proxy_name = getattr(getattr(obj, "Proxy", None), "__class__", type(None)).__name__
+                        if proxy_name == "DMObjectProxy" and getattr(obj, "ShapeType", "") == "frep":
+                            from tools.edit_tool import FRepEditTool
+                            tool = FRepEditTool()
+                            tool.activate()
+                            return True
+
             # [Event Owner: Qt Event Filter] Right-click suppression: when a tool is active,
             # consume the right mouse button press so FreeCAD's NavigationStyle never opens
             # its context menu.  Delegate finish logic to tool's on_button3_down (Coin3D path).

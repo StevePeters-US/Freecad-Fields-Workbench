@@ -81,6 +81,12 @@ class PrimitiveCreatorBase(DMBase):
             if proxy is None:
                 return
             proxy.FRepField = field
+            
+            # Sync additive/subtractive mode with Ctrl key
+            im = DMInputManager.get_instance()
+            if hasattr(self._preview_obj, "IsSubtractive"):
+                self._preview_obj.IsSubtractive = im.is_ctrl_down()
+
             self._preview_obj.touch()
             # Only recompute this one object for speed
             self._preview_obj.Document.recompute([self._preview_obj])
@@ -149,6 +155,20 @@ class PrimitiveCreatorBase(DMBase):
         return obj
 
 
+    def _do_terminate(self):
+        for dm_pt in self.dm_points:
+            dm_pt.undraw()
+        self.dm_points.clear()
+        if self.dm_line_set:
+            self.dm_line_set.undraw()
+        try:
+            if self.view and self.view.getSceneGraph() and self.points_root:
+                self.view.getSceneGraph().removeChild(self.points_root)
+        except Exception as e:
+            dm_logger.debug(f"PrimitiveCreatorBase._do_terminate: {e}")
+        super()._do_terminate()
+
+
 class BoxCreator(PrimitiveCreatorBase):
     _last_working_plane = None  # Persists across instances; set on first click
 
@@ -170,18 +190,6 @@ class BoxCreator(PrimitiveCreatorBase):
                     self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
         dm_logger.info("Box Tool: Click 1st corner")
 
-    def _do_terminate(self):
-        for dm_pt in self.dm_points:
-            dm_pt.undraw()
-        self.dm_points.clear()
-        if self.dm_line_set:
-            self.dm_line_set.undraw()
-        try:
-            if self.view and self.view.getSceneGraph() and self.points_root:
-                self.view.getSceneGraph().removeChild(self.points_root)
-        except Exception as e:
-            dm_logger.debug(f"PrimitiveCreatorBase._do_terminate: {e}")
-        super()._do_terminate()
 
     def on_button1_down(self, event_dict):
         # Call projector directly so we can capture which workplane was hit.
@@ -402,8 +410,6 @@ class SphereCreator(PrimitiveCreatorBase):
 
         dm_logger.info("Sphere Tool: Click center")
 
-    def _do_terminate(self):
-        super()._do_terminate()
 
     def on_button1_down(self, event_dict):
         result = self.projector.get_mouse_plane_pt(
@@ -532,8 +538,6 @@ class CylinderCreator(PrimitiveCreatorBase):
 
         dm_logger.info("Cylinder Tool: Click base center")
 
-    def _do_terminate(self):
-        super()._do_terminate()
 
     def on_button1_down(self, event_dict):
         result = self.projector.get_mouse_plane_pt(
