@@ -41,6 +41,7 @@ class _SettingsDialog(QtGui.QDialog):
         current_res = get_meshing_cell_size()
         current_mb = get_max_bounds()
         current_curv = get_curvature_threshold()
+        from core.dm_object import get_interactive_throttle_interval
 
         # Near Clip Distance spinbox
         from core.dm_object import get_near_clip_distance
@@ -160,6 +161,15 @@ class _SettingsDialog(QtGui.QDialog):
         self._curv_spin.setToolTip("Adaptive MC curvature threshold (lower = more detail on edges)")
         layout.addRow("Curvature Threshold:", self._curv_spin)
 
+        # Interactive Throttle spinbox
+        self._throttle_spin = QtGui.QDoubleSpinBox()
+        self._throttle_spin.setRange(0.0, 1.0)
+        self._throttle_spin.setSingleStep(0.005)
+        self._throttle_spin.setDecimals(3)
+        self._throttle_spin.setValue(get_interactive_throttle_interval())
+        self._throttle_spin.setToolTip("Interactive update throttle interval in seconds (lower = more frequent updates but higher CPU)")
+        layout.addRow("Interactive Throttle (s):", self._throttle_spin)
+
         layout.addRow("Near Clip Distance (mm):", self._near_clip_spin)
 
         # Buttons
@@ -176,7 +186,7 @@ class _SettingsDialog(QtGui.QDialog):
                                     set_max_bounds, set_perf_profiler_enabled, set_curvature_threshold,
                                     set_decimate_enabled, set_render_mode, refresh_all_dm_objects,
                                     set_near_clip_distance, apply_near_clip_override,
-                                    set_render_debug_mode)
+                                    set_render_debug_mode, set_interactive_throttle_interval)
         from core.dm_logger import set_enable_crash_log
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
@@ -199,6 +209,7 @@ class _SettingsDialog(QtGui.QDialog):
         set_render_mode(self._render_mode_combo.currentIndex())
         set_perf_profiler_enabled(self._perf_check.isChecked())
         set_render_debug_mode(self._debug_check.isChecked())
+        set_interactive_throttle_interval(self._throttle_spin.value())
 
         
         set_enable_crash_log(self._log_check.isChecked())

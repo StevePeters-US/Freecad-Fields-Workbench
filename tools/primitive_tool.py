@@ -5,7 +5,7 @@ from core import dm_logger
 from core.input_manager import DMInputManager
 from core.dm_point import DMPoint
 from core.dm_line import DMLineSet
-from core.dm_object import create_dm_object, get_meshing_cell_size
+from core.dm_object import create_dm_object, get_meshing_cell_size, get_interactive_throttle_interval
 from core.dm_mesher import mesh_timer
 from tools.dm_base import DMBase
 
@@ -61,9 +61,10 @@ class PrimitiveCreatorBase(DMBase):
             self._preview_obj = create_dm_object(name=name, shape_type="frep")
 
         # Throttle: only queue one update per frame
+        interval_ms = int(get_interactive_throttle_interval() * 1000)
         if not self._update_pending:
             self._update_pending = True
-            QtCore.QTimer.singleShot(0, lambda: self._apply_preview_field(field))
+            QtCore.QTimer.singleShot(interval_ms, lambda: self._apply_preview_field(field))
         
         # Update ghost visuals (points and lines)
         self._update_ghost_visuals()
@@ -73,7 +74,6 @@ class PrimitiveCreatorBase(DMBase):
         pass
 
     def _apply_preview_field(self, field):
-        self._update_pending = False
         if self._preview_obj is None or not self._preview_obj.Document:
             return
         try:
@@ -86,6 +86,8 @@ class PrimitiveCreatorBase(DMBase):
             self._preview_obj.Document.recompute([self._preview_obj])
         except Exception as e:
             dm_logger.debug(f"PrimitiveCreatorBase preview update error: {e}")
+        finally:
+            self._update_pending = False
 
     def _finalize_object(self, name):
         """Commit the preview object as the final result, upgrading its mesh resolution."""

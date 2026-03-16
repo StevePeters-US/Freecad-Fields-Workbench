@@ -166,10 +166,11 @@ class EditTool(DMBase):
         return True
 
     def _start_drag_timer(self):
+        from core.dm_object import get_interactive_throttle_interval
         self._stop_drag_timer()
         self._drag_timer = QtCore.QTimer()
         self._drag_timer.timeout.connect(self._drag_update)
-        self._drag_timer.start(16)
+        self._drag_timer.start(50)
 
     def _stop_drag_timer(self):
         if self._drag_timer:
@@ -624,6 +625,7 @@ class FRepEditTool(DMBase):
     # ------------------------------------------------------------------
 
     def _start_drag(self, idx):
+        from core.dm_object import get_interactive_throttle_interval
         self._dragging_idx = idx
         self._fixed_world = self._world_corners[_FREP_OPPOSITE[idx]]
         # Drag plane: camera-facing plane through the grabbed corner
@@ -635,7 +637,8 @@ class FRepEditTool(DMBase):
         # Start polling timer
         self._drag_timer = QtCore.QTimer()
         self._drag_timer.timeout.connect(self._drag_update)
-        self._drag_timer.start(16)
+        interval_ms = int(get_interactive_throttle_interval() * 1000)
+        self._drag_timer.start(interval_ms)
 
     def _stop_drag_timer(self):
         if self._drag_timer:

@@ -247,10 +247,12 @@ class TranslateTool(DMBase):
         return True
 
     def _start_drag_timer(self):
+        from core.dm_object import get_interactive_throttle_interval
         self._stop_drag_timer()
         self._drag_timer = QtCore.QTimer()
         self._drag_timer.timeout.connect(self._drag_update)
-        self._drag_timer.start(16)
+        interval_ms = int(get_interactive_throttle_interval() * 1000)
+        self._drag_timer.start(interval_ms)
 
     def _stop_drag_timer(self):
         if getattr(self, "_drag_timer", None):

@@ -18,6 +18,7 @@ class CurveCreator(NURBSPrimitiveCreator):
         self._drag_start_pos = None
 
         self._hovered_idx = -1
+        self._update_pending = False
         self._cursor_active = False
 
         self.sg = self.view.getSceneGraph() if self.view else None
@@ -213,6 +214,17 @@ class CurveCreator(NURBSPrimitiveCreator):
         return h_in, h_out
 
     def update_preview(self, drag_pt=None):
+        if self._update_pending:
+            return
+        self._update_pending = True
+        from core.dm_object import get_interactive_throttle_interval
+        interval_ms = int(get_interactive_throttle_interval() * 1000)
+        QtCore.QTimer.singleShot(interval_ms, lambda: self._do_update_preview())
+
+    def _do_update_preview(self):
+        self._update_pending = False
+        if self._terminated:
+            return
         if not self.points:
             return
         pts = list(self.points)

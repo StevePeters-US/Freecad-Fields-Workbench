@@ -161,6 +161,13 @@ def apply_near_clip_override():
     except Exception:
         pass
 
+def get_interactive_throttle_interval():
+    """Return the interactive remeshing/update throttle interval in seconds."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("InteractiveThrottleInterval", 0.025)
+
+def set_interactive_throttle_interval(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("InteractiveThrottleInterval", float(val))
+
 
 
 
