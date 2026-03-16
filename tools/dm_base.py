@@ -1,4 +1,14 @@
-"""Base classes for DM primitive creators."""
+"""Base classes for DM primitive creators.
+
+Event Ownership Contract
+========================
+- Qt filter (DMInputManager): state tracking, FreeCAD suppression, global hotkeys.
+  Never calls tool methods except via synthetic event_dict to on_button3_down.
+- Coin3D callback (event_cb): ALL tool logic — clicks, moves, keyboard, finish.
+- Modifiers: always read from DMInputManager (is_shift_down, is_ctrl_down, etc.).
+- Drag: QTimer polls DMInputManager._last_qt_pos. Coin3D location events are
+  suppressed during LMB hold, so always use the timer pattern.
+"""
 
 import FreeCAD
 import FreeCADGui
@@ -118,6 +128,7 @@ class DMBase:
         tool_mgr = DMToolManager.get_instance()
         if tool_mgr.get_active_tool() is self:
             tool_mgr.set_active_tool(None)
+        self._finish_scheduled = False
         self._terminated = True
         try:
             if self.callback:
@@ -206,13 +217,8 @@ class DMBase:
         return False
 
     def on_button3_down(self, event_dict):
-        # Query global event filter since Coin3D sometimes translates Middle Mouse to BUTTON3
-        global_middle_down = DMInputManager.get_instance()._middle_mouse_down
-            
-        is_middle_down = getattr(self, "_middle_mouse_down", False) or global_middle_down
-        
         # If Middle Mouse or Shift is held, it's likely a view rotation chord. Do not finish!
-        if is_middle_down or event_dict.get("ShiftDown", False):
+        if DMInputManager.get_instance()._middle_mouse_down or DMInputManager.get_instance().is_shift_down():
             return False
             
         if hasattr(self, 'on_tool_menu') and self.on_tool_menu():
@@ -241,16 +247,12 @@ class DMBase:
                 state = event_dict.get("State", "None")
                 
                 if state == "DOWN":
-                    if btn == "BUTTON2": self._middle_mouse_down = True
-                    
                     if btn == "BUTTON1": return self.on_button1_down(event_dict)
                     elif btn == "BUTTON2": return self.on_button2_down(event_dict)
                     elif btn == "BUTTON3": return self.on_button3_down(event_dict)
                     return False
                 
                 elif state == "UP":
-                    if btn == "BUTTON2": self._middle_mouse_down = False
-                    
                     if btn == "BUTTON1": return self.on_button1_up(event_dict)
                     elif btn == "BUTTON2": return self.on_button2_up(event_dict)
                     elif btn == "BUTTON3": return self.on_button3_up(event_dict)
@@ -411,14 +413,6 @@ class DMBase:
             btn = event_dict.get("Button")
             dm_logger.debug(f"DEBUG: handle_click: State={self.state}, Button={btn}")
             
-            # Right-click (BUTTON3) to finish or drop
-            if btn == "BUTTON3":
-                if self.state > 1:
-                    self.finish()
-                else:
-                    self.terminate()
-                return True
-
             if btn != "BUTTON1":
                 return False
 
@@ -663,6 +657,8 @@ class NURBSPrimitiveCreator(DMBase):
 
     def finish(self):
         """Schedule the finalization to happen safely outside the event loop."""
+        if self._finished:
+            return
         QtCore.QTimer.singleShot(0, self._do_finish)
 
 

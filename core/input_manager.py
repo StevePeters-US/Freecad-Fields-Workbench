@@ -34,16 +34,18 @@ class DMInputManager(QtCore.QObject):
                 if event.type() in (QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease, QtCore.QEvent.ShortcutOverride):
                     return True
 
-            # 1. Coordinate tracking & Modifier state
+            # [Event Owner: Qt Event Filter] Coordinate tracking
             if event.type() in [QtCore.QEvent.MouseMove, QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
                 self._last_qt_pos = (event.pos().x(), event.pos().y())
             
+            # [Event Owner: Qt Event Filter] Modifier state
             if event.type() in [QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease]:
                 if event.key() == QtCore.Qt.Key_Shift:
                     self._shift_down = (event.type() == QtCore.QEvent.KeyPress)
                 elif event.key() == QtCore.Qt.Key_Control:
                     self._control_down = (event.type() == QtCore.QEvent.KeyPress)
 
+            # [Event Owner: Qt Event Filter] Button state tracking
             if event.type() in [QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
                 is_press = (event.type() == QtCore.QEvent.MouseButtonPress)
                 if event.button() == QtCore.Qt.LeftButton:
@@ -51,43 +53,33 @@ class DMInputManager(QtCore.QObject):
                 elif event.button() == QtCore.Qt.MiddleButton:
                     self._middle_mouse_down = is_press
 
-            # SDF object selection on LMB press when no tool is active
+            # [Event Owner: DMSelectionManager] SDF object selection on LMB press when no tool is active
             if event.type() == QtCore.QEvent.MouseButtonPress and event.button() == QtCore.Qt.LeftButton:
                 from core.dm_tool_manager import DMToolManager
                 if not DMToolManager.get_instance().has_active_tool():
-                    try:
-                        view = FreeCADGui.ActiveDocument.ActiveView if FreeCADGui.ActiveDocument else None
-                        if view:
-                            from core.view_projector import ViewProjector
-                            proj = ViewProjector(view)
-                            sdf_result = proj.get_sdf_hit(
-                                {"QtPosition": (event.pos().x(), event.pos().y())}
-                            )
-                            if sdf_result:
-                                _, _, sdf_obj = sdf_result
-                                FreeCADGui.Selection.clearSelection()
-                                FreeCADGui.Selection.addSelection(sdf_obj)
-                    except Exception as e:
-                        dm_logger.debug(f"SDF LMB selection failed: {e}")
+                    from core.dm_selection_manager import DMSelectionManager
+                    DMSelectionManager.get_instance().try_sdf_selection(
+                        (event.pos().x(), event.pos().y())
+                    )
                     # Do NOT return True — let FreeCAD's navigation also handle this click
 
-            # [Event Owner: Qt Event Filter] Right-click suppression: when a tool is active, consume the right
-            # mouse button press so FreeCAD's NavigationStyle never sees it (and
-            # therefore never opens its context menu).  We replicate the finish
-            # logic from on_button3_down here because Coin3D won't fire that
-            # handler once we return True.
+            # [Event Owner: Qt Event Filter] Right-click suppression: when a tool is active,
+            # consume the right mouse button press so FreeCAD's NavigationStyle never opens
+            # its context menu.  Delegate finish logic to tool's on_button3_down (Coin3D path).
             if event.type() == QtCore.QEvent.MouseButtonPress:
                 if event.button() == QtCore.Qt.RightButton:
                     from core.dm_tool_manager import DMToolManager
                     tool = DMToolManager.get_instance().get_active_tool()
                     if tool and not self._middle_mouse_down:
-                        shift = bool(event.modifiers() & QtCore.Qt.ShiftModifier)
-                        if not shift:
-                            if not (hasattr(tool, 'on_tool_menu') and tool.on_tool_menu()):
-                                if not getattr(tool, '_finish_scheduled', False):
-                                    tool._finish_scheduled = True
-                                    QtCore.QTimer.singleShot(0, tool.finish)
-                        return True  # always consume right-click when tool active
+                        # Build a synthetic event_dict so on_button3_down has full context
+                        synthetic = {
+                            "Button": "BUTTON3",
+                            "State": "DOWN",
+                            "QtPosition": (event.pos().x(), event.pos().y()),
+                            "ShiftDown": bool(event.modifiers() & QtCore.Qt.ShiftModifier),
+                        }
+                        tool.on_button3_down(synthetic)
+                        return True  # suppress FreeCAD context menu
 
             # 2. ShortcutOverride: claim 'S', 'D', and 'E' so FreeCAD menus don't
             #    consume them before Coin3D gets the KeyPress.
@@ -202,6 +194,22 @@ class DMInputManager(QtCore.QObject):
     def get_qt_cursor_pos(self, view=None):
         """Returns the current mouse position in Top-Left coordinates."""
         return self._last_qt_pos
+
+    def is_shift_down(self):
+        """Single source of truth for Shift key state."""
+        return self._shift_down
+
+    def is_ctrl_down(self):
+        """Single source of truth for Control key state."""
+        return self._control_down
+
+    def is_left_mouse_down(self):
+        """Single source of truth for left mouse button state."""
+        return self._left_mouse_down
+
+    def is_middle_mouse_down(self):
+        """Single source of truth for middle mouse button state."""
+        return self._middle_mouse_down
 
     def get_ray(self, view, event_dict=None):
         """Centralized ray generation from screen coordinates."""
