@@ -192,7 +192,7 @@ void main() {
 
     // 2. AABB-ray intersection
     vec2 tBox = intersect_aabb(ro, rd);
-    float tNear = is_persp ? max(tBox.x, 0.0) : tBox.x;
+    float tNear = max(tBox.x, 0.0);
     float tFar  = tBox.y;
     if (tNear > tFar) discard;
 
@@ -202,8 +202,8 @@ void main() {
     float d;
     int march_iters = 0;
     float cell = (u_bbox_max.x - u_bbox_min.x) / max(float(u_nx), 1.0);
-    float hit_thresh = cell * 0.05;
-    float min_step = cell * 0.25;
+    float hit_thresh = cell * 0.1;
+    float min_step = cell * 0.05;
 
     for (int i = 0; i < 256; i++) {
         march_iters = i;

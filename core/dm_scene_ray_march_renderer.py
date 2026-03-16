@@ -253,7 +253,7 @@ void main() {
         scene_max = max(scene_max, u_bbox_max[fi]);
     }
     vec2 tBox = intersect_aabb(ro, rd, scene_min, scene_max);
-    float tNear = is_persp ? max(tBox.x, 0.0) : tBox.x;
+    float tNear = max(tBox.x, 0.0);
     float tFar  = tBox.y;
     if (tNear > tFar) discard;
 
@@ -263,7 +263,7 @@ void main() {
     for (int fi = 0; fi < 8; fi++) {
         if (fi < u_num_fields) {
             vec2 fi_int = intersect_aabb(ro, rd, u_bbox_min[fi], u_bbox_max[fi]);
-            ftn[fi] = is_persp ? max(fi_int.x, 0.0) : fi_int.x;
+            ftn[fi] = max(fi_int.x, 0.0);
             ftf[fi] = fi_int.y;
         } else {
             ftn[fi] =  1.0e10;
@@ -276,7 +276,7 @@ void main() {
     for (int fi = 0; fi < 8; fi++) {
         if (fi >= u_num_fields) break;
         float c = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
-        global_min_step = min(global_min_step, c * 0.25);
+        global_min_step = min(global_min_step, c * 0.05);
     }
 
     float t = tNear;
@@ -299,7 +299,7 @@ void main() {
             }
             float d = sample_sdf_field(fi, p);
             float cell = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
-            float thresh = cell * 0.05;
+            float thresh = cell * 0.1;
             if (abs(d) < thresh) { hit = true; hit_field = fi; break; }
             min_d = min(min_d, abs(d));
         }
