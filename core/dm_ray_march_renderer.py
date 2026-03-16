@@ -7,6 +7,7 @@ Bakes the SDF to a 2D texture atlas and performs sphere tracing in a fragment sh
 
 import FreeCAD
 import pivy.coin as coin
+from core.gl_texture3d import GLTexture3D
 
 
 
@@ -18,7 +19,7 @@ class DMRayMarchRenderer:
         self._switch.addChild(self.root)
         self._switch.whichChild = 0 if vobj.Visibility else -1  # respect initial visibility
         self._u = {}      # Uniform nodes
-        self._tex = None
+        self._gl_tex = GLTexture3D()
         self._coords = None
         self._setup_nodes()
         vobj.RootNode.addChild(self._switch)
@@ -79,19 +80,10 @@ class DMRayMarchRenderer:
         except AttributeError:
             pass  # SoDepthBuffer not available in this Coin3D/pivy version
 
-        # 2a. 3D Volume Texture (OpenGL 3.3: native GL_TEXTURE_3D)
-        # The texture stores raw float32 bytes reinterpreted as RGBA8.
-        # Hardware filtering (GL_LINEAR) would interpolate byte channels
-        # independently, corrupting float32 bit patterns. The shader uses
-        # texelFetch() for exact texel access and manual trilinear interpolation
-        # on the decoded float values.
-        self._tex = coin.SoTexture3()
-        self._tex.wrapR.setValue(coin.SoTexture3.CLAMP)
-        self._tex.wrapS.setValue(coin.SoTexture3.CLAMP)
-        self._tex.wrapT.setValue(coin.SoTexture3.CLAMP)
-        # NEAREST: shader does its own trilinear on float32 data
-        # Note: minFilter/magFilter not available on SoTexture3 in some Pivy versions
-        self._shader_sep.addChild(self._tex)
+        # 2a. 3D Volume Texture via direct OpenGL (bypasses Pivy SoSFImage3 bug
+        # where only the first row of data is uploaded to GL_TEXTURE_3D).
+        # The SoCallback binds the texture to unit 0 before each render pass.
+        self._shader_sep.addChild(self._gl_tex.callback_node)
 
         # 2c. Shader Program
         shader = coin.SoShaderProgram()
@@ -129,11 +121,11 @@ float decode_texel(ivec3 tc) {
 
 float sample_sdf(vec3 p) {
     vec3 uvw = (p - u_bbox_min) / (u_bbox_max - u_bbox_min);
-    ivec3 sz = textureSize(u_sdf_vol, 0);
-    vec3 tc = uvw * vec3(sz - 1);
-    tc = clamp(tc, vec3(0.0), vec3(sz - 1));
+    // Use known uniforms directly — avoids any textureSize() axis-order ambiguity.
+    vec3 tc = uvw * vec3(u_nx, u_ny, u_nz);
+    tc = clamp(tc, vec3(0.0), vec3(u_nx, u_ny, u_nz));
     ivec3 c0 = ivec3(floor(tc));
-    ivec3 c1 = min(c0 + 1, sz - 1);
+    ivec3 c1 = min(c0 + 1, ivec3(u_nx, u_ny, u_nz));
     vec3 f = tc - vec3(c0);
     float d000 = decode_texel(ivec3(c0.x, c0.y, c0.z));
     float d100 = decode_texel(ivec3(c1.x, c0.y, c0.z));
@@ -175,15 +167,18 @@ vec2 intersect_aabb(vec3 ro, vec3 rd) {
 
 void main() {
     // 1. Unproject NDC to world-space ray
+    mat4 inv_mvp = inverse(gl_ModelViewProjectionMatrix);
+    mat4 inv_mv  = inverse(gl_ModelViewMatrix);
+
     vec4 ndc_near = vec4(v_uv, -1.0, 1.0);
-    vec4 world_near = gl_ModelViewProjectionMatrixInverse * ndc_near;
+    vec4 world_near = inv_mvp * ndc_near;
     world_near /= world_near.w;
 
     vec4 ndc_far = vec4(v_uv, 1.0, 1.0);
-    vec4 world_far = gl_ModelViewProjectionMatrixInverse * ndc_far;
+    vec4 world_far = inv_mvp * ndc_far;
     world_far /= world_far.w;
 
-    vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
+    vec3 cam = (inv_mv * vec4(0.0,0.0,0.0,1.0)).xyz;
 
     vec3 ro, rd;
     bool is_persp = (gl_ProjectionMatrix[3][3] < 0.5);
@@ -207,8 +202,8 @@ void main() {
     float d;
     int march_iters = 0;
     float cell = (u_bbox_max.x - u_bbox_min.x) / max(float(u_nx), 1.0);
-    float hit_thresh = cell * 0.01;
-    float min_step = hit_thresh;
+    float hit_thresh = cell * 0.05;
+    float min_step = cell * 0.25;
 
     for (int i = 0; i < 256; i++) {
         march_iters = i;
@@ -227,9 +222,9 @@ void main() {
     vec4 light_eye = gl_LightSource[0].position;
     vec3 ld;
     if (light_eye.w < 0.5) {
-        ld = normalize((gl_ModelViewMatrixInverse * vec4(light_eye.xyz, 0.0)).xyz);
+        ld = normalize((inv_mv * vec4(light_eye.xyz, 0.0)).xyz);
     } else {
-        vec3 light_world = (gl_ModelViewMatrixInverse * light_eye).xyz;
+        vec3 light_world = (inv_mv * light_eye).xyz;
         ld = normalize(light_world - hp);
     }
 
@@ -342,10 +337,9 @@ void main() {
         from core.frep.sdf_baker import bake_sdf_to_volume
         baked = bake_sdf_to_volume(field, cell_size)
 
-        # 1. Upload 3D texture (float32 as RGBA8, 4 channels)
+        # 1. Upload 3D texture via direct OpenGL (float32 as RGBA8, 4 channels)
         nx, ny, nz = baked["nx"], baked["ny"], baked["nz"]
-        self._tex.images.setValue(
-            coin.SbVec3s(nx + 1, ny + 1, nz + 1), 4, baked["volume_bytes"])
+        self._gl_tex.upload(nx + 1, ny + 1, nz + 1, baked["volume_bytes"])
 
         # 2. Update uniforms
         self._u["u_nx"].value.setValue(int(nx))

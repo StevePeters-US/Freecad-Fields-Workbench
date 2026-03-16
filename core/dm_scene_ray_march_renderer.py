@@ -9,6 +9,7 @@ import FreeCAD
 import FreeCADGui
 import pivy.coin as coin
 from core import dm_logger
+from core.gl_texture3d import GLTexture3D
 
 
 
@@ -32,7 +33,7 @@ class DMSceneRayMarchRenderer:
         self._fields = {}          # label -> (field, visible)
         self._attached = False
         self._u = {}               # uniform nodes
-        self._tex = None
+        self._gl_tex = GLTexture3D()
         self._bbox_coords = None
         self._root = coin.SoSeparator()
         # Disable frustum culling and caching. renderCulling is the key one:
@@ -68,6 +69,7 @@ class DMSceneRayMarchRenderer:
             sg.removeChild(self._switch)
         except Exception:
             pass
+        self._gl_tex.destroy()
         self._attached = False
 
     def _setup_nodes(self):
@@ -123,11 +125,8 @@ class DMSceneRayMarchRenderer:
         # Single combined 3D texture (all fields stacked along z-axis)
         # The texture stores raw float32 bytes as RGBA8. The shader uses
         # texelFetch() for exact texel access and manual trilinear on decoded floats.
-        self._tex = coin.SoTexture3()
-        self._tex.wrapR.setValue(coin.SoTexture3.CLAMP)
-        self._tex.wrapS.setValue(coin.SoTexture3.CLAMP)
-        self._tex.wrapT.setValue(coin.SoTexture3.CLAMP)
-        self._shader_sep.addChild(self._tex)
+        # Uses GLTexture3D (direct OpenGL via ctypes) to bypass broken Pivy SoSFImage3.
+        self._shader_sep.addChild(self._gl_tex.callback_node)
 
         # Shader Program — identical vertex+fragment shader to DMRayMarchRenderer
         shader = coin.SoShaderProgram()
@@ -172,8 +171,8 @@ float decode_texel(ivec3 tc) {
 float sample_sdf_field(int fi, vec3 p) {
     vec3 uvw = (p - u_bbox_min[fi]) / (u_bbox_max[fi] - u_bbox_min[fi]);
     uvw = clamp(uvw, vec3(0.0), vec3(1.0));
-    // Map field-local uvw to integer texel coords in combined volume
-    ivec3 sz = textureSize(u_sdf_vol, 0);
+    // Map field-local uvw to integer texel coords in combined volume.
+    // Use known uniforms directly — avoids any textureSize() axis-order ambiguity.
     // Field spans [0, u_nx+1) texels in x, [0, u_ny+1) in y,
     // [u_z_offset, u_z_offset + u_nz+1) in z within the combined volume.
     vec3 tc = vec3(
@@ -224,13 +223,16 @@ vec2 intersect_aabb(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
 }
 
 void main() {
+    mat4 inv_mvp = inverse(gl_ModelViewProjectionMatrix);
+    mat4 inv_mv  = inverse(gl_ModelViewMatrix);
+
     vec4 ndc_near = vec4(v_uv, -1.0, 1.0);
-    vec4 world_near = gl_ModelViewProjectionMatrixInverse * ndc_near;
+    vec4 world_near = inv_mvp * ndc_near;
     world_near /= world_near.w;
     vec4 ndc_far = vec4(v_uv, 1.0, 1.0);
-    vec4 world_far = gl_ModelViewProjectionMatrixInverse * ndc_far;
+    vec4 world_far = inv_mvp * ndc_far;
     world_far /= world_far.w;
-    vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
+    vec3 cam = (inv_mv * vec4(0.0,0.0,0.0,1.0)).xyz;
 
     vec3 ro, rd;
     bool is_persp = (gl_ProjectionMatrix[3][3] < 0.5);
@@ -269,6 +271,14 @@ void main() {
         }
     }
 
+    // Compute a representative cell size for min_step across all fields
+    float global_min_step = 1.0;
+    for (int fi = 0; fi < 8; fi++) {
+        if (fi >= u_num_fields) break;
+        float c = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
+        global_min_step = min(global_min_step, c * 0.25);
+    }
+
     float t = tNear;
     bool hit = false;
     int hit_field = 0;
@@ -289,13 +299,13 @@ void main() {
             }
             float d = sample_sdf_field(fi, p);
             float cell = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
-            float thresh = cell * 0.01;
+            float thresh = cell * 0.05;
             if (abs(d) < thresh) { hit = true; hit_field = fi; break; }
             min_d = min(min_d, abs(d));
         }
         if (hit) break;
 
-        t += max(min_d, 0.0001);
+        t += max(min_d, global_min_step);
         if (t > tFar) break;
     }
     if (!hit) discard;
@@ -306,9 +316,9 @@ void main() {
     vec4 light_eye = gl_LightSource[0].position;
     vec3 ld;
     if (light_eye.w < 0.5) {
-        ld = normalize((gl_ModelViewMatrixInverse * vec4(light_eye.xyz, 0.0)).xyz);
+        ld = normalize((inv_mv * vec4(light_eye.xyz, 0.0)).xyz);
     } else {
-        vec3 light_world = (gl_ModelViewMatrixInverse * light_eye).xyz;
+        vec3 light_world = (inv_mv * light_eye).xyz;
         ld = normalize(light_world - hp);
     }
     float diff = max(dot(n, ld), 0.0);
@@ -527,8 +537,7 @@ void main() {
 
         # Upload as RGBA8 (float32 reinterpreted as 4×uint8)
         volume_bytes = combined.astype(np.float32).tobytes()
-        self._tex.images.setValue(
-            coin.SbVec3s(max_nx, max_ny, total_nz), 4, volume_bytes)
+        self._gl_tex.upload(max_nx, max_ny, total_nz, volume_bytes)
 
         # Update per-field uniforms
         for fi in range(self.MAX_FIELDS):

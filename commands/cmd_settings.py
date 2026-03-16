@@ -30,11 +30,17 @@ class _SettingsDialog(QtGui.QDialog):
         self.setWindowTitle("Direct Modeling Settings")
         self.setMinimumWidth(320)
 
-        from core.dm_object import get_show_wireframe, get_line_width, get_point_size
+        from core.dm_object import (get_show_wireframe, get_line_width, get_point_size,
+                                    get_interactive_throttle_interval, get_meshing_type,
+                                    get_meshing_cell_size, get_picking_radius, get_max_bounds,
+                                    get_curvature_threshold, get_decimate_enabled)
         current_wire = get_show_wireframe()
         current_lw = get_line_width()
         current_ps = get_point_size()
-        from core.dm_object import get_interactive_throttle_interval
+        current_meshing = get_meshing_type()
+        current_pr = get_picking_radius()
+        current_mb = get_max_bounds()
+        current_curv = get_curvature_threshold()
 
         # Near Clip Distance spinbox
         from core.dm_object import get_near_clip_distance
