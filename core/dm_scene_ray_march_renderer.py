@@ -122,10 +122,8 @@ class DMSceneRayMarchRenderer:
         except AttributeError:
             pass
 
-        # Single combined 3D texture (all fields stacked along z-axis)
-        # The texture stores raw float32 bytes as RGBA8. The shader uses
-        # texelFetch() for exact texel access and manual trilinear on decoded floats.
-        # Uses GLTexture3D (direct OpenGL via ctypes) to bypass broken Pivy SoSFImage3.
+        # 3D texture via direct OpenGL (bypasses broken Pivy SoSFImage3).
+        # SoCallback binds our GL_TEXTURE_3D to unit 0 before each render.
         self._shader_sep.addChild(self._gl_tex.callback_node)
 
         # Shader Program — identical vertex+fragment shader to DMRayMarchRenderer
@@ -171,10 +169,6 @@ float decode_texel(ivec3 tc) {
 float sample_sdf_field(int fi, vec3 p) {
     vec3 uvw = (p - u_bbox_min[fi]) / (u_bbox_max[fi] - u_bbox_min[fi]);
     uvw = clamp(uvw, vec3(0.0), vec3(1.0));
-    // Map field-local uvw to integer texel coords in combined volume.
-    // Use known uniforms directly — avoids any textureSize() axis-order ambiguity.
-    // Field spans [0, u_nx+1) texels in x, [0, u_ny+1) in y,
-    // [u_z_offset, u_z_offset + u_nz+1) in z within the combined volume.
     vec3 tc = vec3(
         uvw.x * float(u_nx[fi]),
         uvw.y * float(u_ny[fi]),
@@ -232,10 +226,6 @@ void main() {
     world_far /= world_far.w;
     vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
 
-    // Ray origin strategy to avoid near-plane clipping.
-    // Perspective: start at camera position, bypasses the near plane.
-    // Orthographic: world_near is per-pixel origin; tNear NOT clamped to 0
-    //   so march starts at actual AABB entry even when near plane is inside AABB.
     vec3 ro, rd;
     bool is_persp = (gl_ProjectionMatrix[3][3] < 0.5);
     if (is_persp) {
@@ -273,7 +263,6 @@ void main() {
         }
     }
 
-    // Compute a representative cell size for min_step across all fields
     float global_min_step = 1.0;
     for (int fi = 0; fi < 8; fi++) {
         if (fi >= u_num_fields) break;
@@ -315,17 +304,11 @@ void main() {
     vec3 hp = ro + t * rd;
     vec3 n  = sdf_normal_field(hit_field, hp);
 
-    vec4 light_eye = gl_LightSource[0].position;
-    vec3 ld;
-    if (light_eye.w < 0.5) {
-        ld = normalize((gl_ModelViewMatrixInverse * vec4(light_eye.xyz, 0.0)).xyz);
-    } else {
-        vec3 light_world = (gl_ModelViewMatrixInverse * light_eye).xyz;
-        ld = normalize(light_world - hp);
-    }
+    vec3 vd = -rd;
+    vec3 ld = vd;
     float diff = max(dot(n, ld), 0.0);
-    vec3 vd = normalize(cam - hp);
-    float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
+    float spec = pow(max(dot(reflect(rd, n), vd), 0.0), 32.0);
+
     vec3 base_color = (u_is_subtractive[hit_field] == 1)
         ? vec3(0.3, 0.5, 1.0)
         : vec3(1.0, 0.5, 0.0);
@@ -411,11 +394,6 @@ void main() {
             (-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)
         ])
         self._shader_sep.addChild(self._coords)
-
-        # Transparent material for expansion points to prevent culling
-        bbox_mat = coin.SoMaterial()
-        bbox_mat.transparency.setValue(1.0)
-        self._shader_sep.addChild(bbox_mat)
 
         faceset = coin.SoIndexedFaceSet()
         # Use indices 8-11 for the quad triangles, plus 8 degenerate triangles

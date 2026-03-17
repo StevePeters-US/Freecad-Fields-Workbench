@@ -80,8 +80,7 @@ class DMRayMarchRenderer:
         except AttributeError:
             pass  # SoDepthBuffer not available in this Coin3D/pivy version
 
-        # 2a. 3D Volume Texture via direct OpenGL (bypasses Pivy SoSFImage3 bug
-        # where only the first row of data is uploaded to GL_TEXTURE_3D).
+        # 3D Volume Texture via direct OpenGL (bypasses Pivy SoSFImage3 bug).
         # The SoCallback binds the texture to unit 0 before each render pass.
         self._shader_sep.addChild(self._gl_tex.callback_node)
 
@@ -208,19 +207,18 @@ void main() {
     vec3 hp = ro + t * rd;
     vec3 n  = sdf_normal(hp);
 
-    vec4 light_eye = gl_LightSource[0].position;
-    vec3 ld;
-    if (light_eye.w < 0.5) {
-        ld = normalize((gl_ModelViewMatrixInverse * vec4(light_eye.xyz, 0.0)).xyz);
-    } else {
-        vec3 light_world = (gl_ModelViewMatrixInverse * light_eye).xyz;
-        ld = normalize(light_world - hp);
-    }
+    // Shading: headlight and ambient
+    vec3 vd = -rd;             // view direction is reverse of ray direction
+    vec3 ld = vd;              // headlight follows camera
     float diff = max(dot(n, ld), 0.0);
-    vec3 vd   = normalize(cam - hp);
-    float spec = pow(max(dot(reflect(-ld, n), vd), 0.0), 32.0);
-    vec3 color = vec3(1.0,0.5,0.0)*(0.15 + 0.75*diff) + vec3(0.4)*spec;
-
+    vec3 refl = reflect(rd, n);
+    float spec = pow(max(dot(refl, vd), 0.0), 32.0);
+    
+    // Default orange color for single-object renderer
+    vec3 base_color = vec3(1.0, 0.5, 0.0);
+    
+    // Shading model: 15% ambient + 75% diffuse + specular
+    vec3 color = base_color * (0.15 + 0.75 * diff) + vec3(0.4) * spec;
     gl_FragColor = vec4(color, 1.0);
 
     // Debug overrides
