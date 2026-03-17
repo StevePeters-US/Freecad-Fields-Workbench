@@ -19,11 +19,12 @@ class CreateCurveCommand:
             sel = FreeCADGui.Selection.getSelection()
             if sel:
                 obj = sel[0]
-                if (hasattr(obj, "Proxy") and obj.Proxy.__class__.__name__ == "DMObjectProxy"
+                proxy = getattr(obj, "Proxy", None)
+                if (proxy is not None
+                        and proxy.__class__.__name__ == "DMObjectProxy"
                         and getattr(obj, "ShapeType", None) == "curve"):
-                    from PySide import QtCore
                     from tools import edit_tool
-                    QtCore.QTimer.singleShot(0, edit_tool.activate)
+                    edit_tool.activate()
                     return
             self.creator = primitive_creators.CurveCreator()
         except Exception as e:

@@ -235,7 +235,9 @@ class EditTool(DMBase):
             dm_logger.debug(f"Selected {elem_type} at index {idx}")
             return True
         else:
-            return True
+            # No hit — deselect and let FreeCAD handle the click
+            self._selected_element = None
+            return False
 
     def handle_move(self, event_dict):
         if self.state == 1 and self._selected_element:
@@ -258,18 +260,22 @@ class EditTool(DMBase):
                     QtGui.QApplication.restoreOverrideCursor()
                     self._cursor_active = False
 
-    def on_button1_down(self, event_dict):
-        return self.handle_click(event_dict)
+    # on_button1_down is defined above (line ~154) with drag timer support.
+    # Do NOT redefine it here — Python uses the last definition, which would
+    # shadow the drag timer logic.
 
     def on_button2_down(self, event_dict):
         # Allow middle mouse for view rotation
         return False
 
     def on_button3_down(self, event_dict):
-        # Right click finishes the tool normally, but user asked for overridable hook
-        # Let this also trigger the context menu as an option, or leave to finish
-        # For now, let's map Right Click to the context menu too, since `handle_right_click` implies so
-        return self.handle_right_click(event_dict)
+        # Right-click on a control point → context menu; otherwise finish editing
+        ray_p, ray_d = self._get_ray(event_dict)
+        hit = self._hit_test(ray_p, ray_d)
+        if hit:
+            return self.handle_right_click(event_dict)
+        # No hit → finish editing (same as other tools via DMBase)
+        return super().on_button3_down(event_dict)
 
     def _update_element(self, element, new_pos):
         idx, elem_type = element
@@ -386,11 +392,11 @@ class EditTool(DMBase):
         if hit:
             idx, elem_type = hit
             items = self.get_context_menu(event_dict)
-            DMInputManager.get_instance()._trigger_dynamic_menu(items)
+            from core.dm_menu import DMMenuManager
+            DMMenuManager.get_instance().trigger_dynamic_menu(items)
             return True # Consume click
         else:
-            # Consume click to prevent default context menus/selection
-            return True
+            return False
 
     def get_context_menu(self, event_dict=None):
         base_menu = super().get_context_menu(event_dict)

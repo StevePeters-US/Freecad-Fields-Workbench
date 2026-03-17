@@ -320,10 +320,12 @@ class DMRenderer:
         num_vertices = []
 
         for i, p in enumerate(pts):
-            # Control point sphere — always visible
-            dm_pt = DMPoint(p)
-            dm_pt.draw_point(self._spheres_sep, radius=r_knot, color=(1.0, 0.5, 0.0))
-            self._dm_point_spheres.append(dm_pt)
+            if edit_mode:
+                # Control point spheres only in edit mode; during creation the
+                # tool draws its own consistently-sized spheres.
+                dm_pt = DMPoint(p)
+                dm_pt.draw_point(self._spheres_sep, radius=r_knot, color=(1.0, 0.5, 0.0))
+                self._dm_point_spheres.append(dm_pt)
 
             if edit_mode:
                 # Handle arm lines + handle spheres

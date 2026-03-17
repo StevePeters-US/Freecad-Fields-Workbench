@@ -20,6 +20,7 @@ class CurveCreator(NURBSPrimitiveCreator):
         self._hovered_idx = -1
         self._update_pending = False
         self._cursor_active = False
+        self._cached_radius = None
 
         self.sg = self.view.getSceneGraph() if self.view else None
         self.points_root = coin.SoSeparator()
@@ -46,8 +47,12 @@ class CurveCreator(NURBSPrimitiveCreator):
 
     def _add_point_sphere(self, pt):
         """Create a DMPoint sphere for a newly committed point."""
+        # Lock the radius on the first point so all spheres stay the same size.
+        if self._cached_radius is None:
+            self._cached_radius = self._compute_handle_radius(ref_pt=pt)
+
         dm_pt = DMPoint(pt)
-        dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pt))
+        dm_pt.draw_point(self.points_root, self._cached_radius)
         self.dm_points.append(dm_pt)
 
     def _hit_test(self, ray_p, ray_d):
