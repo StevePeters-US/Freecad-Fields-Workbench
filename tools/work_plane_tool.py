@@ -339,11 +339,6 @@ class WorkPlaneCreator(DMBase):
     def handle_click(self, event_dict):
         try:
             btn = event_dict.get("Button")
-            
-            if btn == "BUTTON3":
-                self.terminate()
-                return True
-
             if btn != "BUTTON1":
                 return False
 

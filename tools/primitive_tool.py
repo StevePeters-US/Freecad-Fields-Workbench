@@ -60,14 +60,16 @@ class PrimitiveCreatorBase(DMBase):
             name = type(self).__name__.replace("Creator", "")
             self._preview_obj = create_dm_object(name=name, shape_type="frep")
 
-        # Throttle: only queue one update per frame
-        interval_ms = int(get_interactive_throttle_interval() * 1000)
-        if not self._update_pending:
-            self._update_pending = True
-            QtCore.QTimer.singleShot(interval_ms, lambda: self._apply_preview_field(field))
-        
-        # Update ghost visuals (points and lines)
+        self._schedule_update(lambda: self._do_full_preview_update(field))
+
+    def _do_full_preview_update(self, field):
+        """Throttled update of both the mesh and the ghost visuals."""
+        self._apply_preview_field(field)
         self._update_ghost_visuals()
+        if self.view:
+            self.view.redraw()
+        import FreeCADGui
+        FreeCADGui.updateGui()
 
     def _update_ghost_visuals(self):
         """Standard implementation for primitive tools to show points/edges."""
@@ -137,11 +139,21 @@ class PrimitiveCreatorBase(DMBase):
         
         obj.touch()
         obj.Document.recompute([obj])
+        self._on_committed(obj)
         # Print accumulated timer summary now that the tool is accepted
         mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_CELL_SIZE}mm) + final ({getattr(obj, 'MeshingCellSize', _get_final_cell_size()):.1f}mm)")
         self._preview_obj = None  # Severed; the object is now the user's
 
 
+
+    def finish(self):
+        """Standard 'Accept' behavior for primitives."""
+        # Trigger finalization if we have at least started (state > 0)
+        if self.state > 0:
+            name = type(self).__name__.replace("Creator", "")
+            self._finalize_object(name)
+        else:
+            self.terminate()
 
     def _create_frep_object(self, name, field, points=None):
         """Helper to create the FreeCAD object and assign the field (for 1-shot creation)."""
@@ -192,30 +204,13 @@ class BoxCreator(PrimitiveCreatorBase):
 
 
     def on_button1_down(self, event_dict):
-        # Call projector directly so we can capture which workplane was hit.
         skip = [self._preview_obj] if self._preview_obj else None
-        result = self.projector.get_mouse_plane_pt(
-            event_dict,
-            place_on_geometry=False,
-            working_plane=getattr(self, "working_plane", None),
-            skip_objects=skip
-        )
-        if isinstance(result, tuple):
-            pos, wp_hit = result
-        else:
-            pos, wp_hit = result, None
+        pos = self._resolve_wp_click(event_dict, skip_objects=skip)
 
         if pos is None:
             return True
 
         if self.state == 0:
-            # Lock onto the workplane that was actually clicked.
-            if wp_hit is not None:
-                self.working_plane = (
-                    wp_hit.getGlobalPlacement()
-                    if hasattr(wp_hit, "getGlobalPlacement")
-                    else wp_hit.Placement
-                )
             # Remember this workplane for the next invocation of the box tool.
             BoxCreator._last_working_plane = self.working_plane
             # 1st click - anchor the tool
@@ -342,8 +337,12 @@ class BoxCreator(PrimitiveCreatorBase):
         return None
 
     def _get_final_field(self):
-        if len(self.points) == 3:
-            return self._make_field(*self.points)
+        pts = list(self.points)
+        if self.current_point and len(pts) < 3:
+            while len(pts) < 3:
+                pts.append(self.current_point)
+        if len(pts) == 3:
+            return self._make_field(*pts)
         return None
 
     def _make_field(self, p1, p2, p3):
@@ -415,27 +414,12 @@ class SphereCreator(PrimitiveCreatorBase):
 
     def on_button1_down(self, event_dict):
         skip = [self._preview_obj] if self._preview_obj else None
-        result = self.projector.get_mouse_plane_pt(
-            event_dict,
-            place_on_geometry=False,
-            working_plane=getattr(self, "working_plane", None),
-            skip_objects=skip
-        )
-        if isinstance(result, tuple):
-            pos, wp_hit = result
-        else:
-            pos, wp_hit = result, None
+        pos = self._resolve_wp_click(event_dict, skip_objects=skip)
 
         if pos is None:
             return True
 
         if self.state == 0:
-            if wp_hit is not None:
-                self.working_plane = (
-                    wp_hit.getGlobalPlacement()
-                    if hasattr(wp_hit, "getGlobalPlacement")
-                    else wp_hit.Placement
-                )
             SphereCreator._last_working_plane = self.working_plane
 
             self.center = pos
@@ -545,27 +529,12 @@ class CylinderCreator(PrimitiveCreatorBase):
 
     def on_button1_down(self, event_dict):
         skip = [self._preview_obj] if self._preview_obj else None
-        result = self.projector.get_mouse_plane_pt(
-            event_dict,
-            place_on_geometry=False,
-            working_plane=getattr(self, "working_plane", None),
-            skip_objects=skip
-        )
-        if isinstance(result, tuple):
-            pos, wp_hit = result
-        else:
-            pos, wp_hit = result, None
+        pos = self._resolve_wp_click(event_dict, skip_objects=skip)
 
         if pos is None:
             return True
 
         if self.state == 0:
-            if wp_hit is not None:
-                self.working_plane = (
-                    wp_hit.getGlobalPlacement()
-                    if hasattr(wp_hit, "getGlobalPlacement")
-                    else wp_hit.Placement
-                )
             CylinderCreator._last_working_plane = self.working_plane
 
             self.points.append(pos)
@@ -690,13 +659,17 @@ class CylinderCreator(PrimitiveCreatorBase):
         return SdfCylinderField(loc_base, loc_axis, radius, max(abs(height), 0.01), placement=wp)
 
     def _get_final_field(self):
-        if len(self.points) < 3:
+        pts = list(self.points)
+        if self.current_point and len(pts) < 3:
+            while len(pts) < 3:
+                pts.append(self.current_point)
+        if len(pts) < 3:
             return None
             
         wp = getattr(self, "working_plane", None)
-        loc_base = self.to_local(self.points[0])
-        loc_p_rad = self.to_local(self.points[1])
-        loc_p_height = self.to_local(self.points[2])
+        loc_base = self.to_local(pts[0])
+        loc_p_rad = self.to_local(pts[1])
+        loc_p_height = self.to_local(pts[2])
         
         loc_axis = FreeCAD.Vector(0, 0, 1)
         radius = (loc_p_rad - loc_base).Length

@@ -148,10 +148,13 @@ class DMInputManager(QtCore.QObject):
                                 WorkPlaneCreator()
                                 return True
                             elif proxy_name == "DMObjectProxy":
-                                from tools.edit_tool import EditTool
-                                tool = EditTool()
-                                tool.activate()
-                                return True
+                                shape_type = getattr(obj, "ShapeType", "")
+                                if shape_type == "curve":
+                                    from tools.edit_tool import EditTool
+                                    tool = EditTool(); tool.activate(); return True
+                                elif shape_type == "frep":
+                                    from tools.edit_tool import FRepEditTool
+                                    tool = FRepEditTool(); tool.activate(); return True
 
             # [Event Owner: Qt Event Filter] Suppress FreeCAD context menu when a DM tool is active or a menu is open
             if event.type() == QtCore.QEvent.ContextMenu:

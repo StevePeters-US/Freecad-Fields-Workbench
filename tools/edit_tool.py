@@ -1,11 +1,12 @@
 import FreeCAD
 import FreeCADGui
+import Part
 from PySide import QtCore, QtGui
-from tools.dm_base import DMBase
+from tools.dm_base import DMBase, DragTimerMixin
 from core import dm_logger
 from core.input_manager import DMInputManager
 
-class EditTool(DMBase):
+class EditTool(DMBase, DragTimerMixin):
     """
     Interactive tool for editing lattice-driven SDF objects.
 
@@ -17,16 +18,14 @@ class EditTool(DMBase):
         super().__init__()
         self._target_obj = None
 
-        self._hovered_element = None # (index, type)
         self._selected_element = None # (index, type)
+        self._wp_drag_start = None
 
         # State
         self.drag_plane_n = None
         self.drag_plane_o = None
 
-        self._cursor_active = False
-        self._last_click_time = 0
-        self._drag_timer = None
+        self._selected_element = None # (index, type)
 
     def activate(self):
         sel = FreeCADGui.Selection.getSelection()
@@ -74,9 +73,6 @@ class EditTool(DMBase):
         h_in = getattr(self._target_obj, "HandleIn", [])
         h_out = getattr(self._target_obj, "HandleOut", [])
         
-        best_dist = float('inf')
-        best_elem = None
-        
         inv_plac = self._target_obj.Placement.inverse()
         local_ray_p = inv_plac.multVec(ray_p)
         local_ray_d = inv_plac.Rotation.multVec(ray_d)
@@ -87,50 +83,20 @@ class EditTool(DMBase):
             if i < len(h_in): elements.append((i, "HandleIn", h_in[i]))
             if i < len(h_out): elements.append((i, "HandleOut", h_out[i]))
             
-        for i, elem_type, pos in elements:
-            if not pos: continue
-            
-            v = pos - local_ray_p
-            dist = v.cross(local_ray_d).Length
-            cam_dist = v.dot(local_ray_d)
-            
-            if cam_dist < 0: continue
-            
-            # Approximate visual clicking tolerance
-            from core.dm_object import get_picking_radius
-            base_tolerance = get_picking_radius()
-            
-            try:
-                import math
-                cam = self.view.getCameraNode()
-                viewer = self.view.getViewer()
-                vp_h = float(viewer.getGlxSize()[1]) if hasattr(viewer, "getGlxSize") else 1000.0
+        points = [p[2] for p in elements if p[2] is not None]
+        idx, dist = self._hit_test_perp(local_ray_p, local_ray_d, points)
+        
+        if idx is not None:
+            # Re-map filtered points back to original elements list
+            valid_elements = [e for e in elements if e[2] is not None]
+            best_elem = (valid_elements[idx][0], valid_elements[idx][1])
+            return best_elem
                 
-                if hasattr(cam, "heightAngle"):
-                    global_pos = self._target_obj.Placement.multVec(pos)
-                    cam_pos = FreeCAD.Vector(*cam.position.getValue().getValue())
-                    depth = (global_pos - cam_pos).Length
-                    half_h = depth * math.tan(cam.heightAngle.getValue() / 2.0)
-                else:
-                    half_h = cam.height.getValue() / 2.0
-                    
-                px_to_world = (half_h * 2.0) / vp_h
-                # Guarantee at least a 15 pixel selection radius
-                dynamic_tol = 15.0 * px_to_world
-                tolerance = max(base_tolerance, dynamic_tol)
-            except Exception as e:
-                dm_logger.debug(f"Dynamic tolerance failed: {e}")
-                tolerance = base_tolerance
-            
-            # Hit test against the line (dist)
-            if dist < tolerance and dist < best_dist:
-                best_dist = dist
-                best_elem = (i, elem_type)
-                
-        return best_elem
+        return None
 
-    def _hit_test_edge(self, ray_p, ray_d):
+    def _hit_test_edge(self, event_dict):
         """Hit test against the curve edge itself."""
+        ray_p, ray_d = self._get_ray(event_dict)
         if not self._target_obj or not ray_p or not ray_d: return None
         
         shape = self._target_obj.Shape
@@ -160,38 +126,25 @@ class EditTool(DMBase):
 
     def on_button1_down(self, event_dict):
         result = self.handle_click(event_dict)
-        if self.state == 1:
+        if self.state in [1, 2]:
             self._start_drag_timer()
         return result
 
     def on_button1_up(self, _event_dict):
         self._stop_drag_timer()
-        if self.state == 1:
+        if self.state in [1, 2]:
             self.state = 0
             self._selected_element = None
-            dm_logger.debug("Dropped element")
+            self._wp_drag_start = None
+            dm_logger.debug("Released drag")
         return True
 
-    def _start_drag_timer(self):
-        from core.dm_object import get_interactive_throttle_interval
-        self._stop_drag_timer()
-        self._drag_timer = QtCore.QTimer()
-        self._drag_timer.timeout.connect(self._drag_update)
-        self._drag_timer.start(50)
-
-    def _stop_drag_timer(self):
-        if self._drag_timer:
-            self._drag_timer.stop()
-            self._drag_timer = None
 
     def _drag_update(self):
-        # Self-terminate if LMB was released (handles cases where on_button1_up is intercepted)
-        if not DMInputManager.get_instance()._left_mouse_down:
-            self._stop_drag_timer()
-            self.state = 0
-            self._selected_element = None
+        if self._drag_check_lmb_released():
+            self._wp_drag_start = None
             return
-        if self.state != 1 or not self._selected_element:
+        if self.state not in [1, 2]:
             self._stop_drag_timer()
             return
         mouse_pos = DMInputManager.get_instance()._last_qt_pos
@@ -208,13 +161,26 @@ class EditTool(DMBase):
 
         # DOUBLE-CLICK to ADD point
         if click_count > 1:
-            hit_p = self._hit_test_edge(None, None) # Uses current mouse pos internally
+            hit_p = self._hit_test_edge(event_dict) # Uses current mouse pos internally
             if hit_p:
                 self._insert_point(hit_p)
                 return True
 
         # SELECT logic
         ray_p, ray_d = self._get_ray(event_dict)
+
+        # Check for WorkPlane origin click (dragging the plane itself)
+        if self.working_plane:
+            wp_o = self.working_plane.Base
+            # 15px radius for WP origin handle
+            if self._hit_test_perp(ray_p, ray_d, [wp_o], tolerance=self._compute_handle_radius(wp_o))[0] is not None:
+                self._wp_drag_start = wp_o
+                self.drag_plane_n = FreeCAD.Vector(-self.view.getViewDirection())
+                self.drag_plane_o = wp_o
+                self.state = 2 # WP Dragging
+                self._set_cursor(QtCore.Qt.SizeAllCursor)
+                return True
+
         hit = self._hit_test(ray_p, ray_d)
         
         if hit:
@@ -241,6 +207,9 @@ class EditTool(DMBase):
             self.state = 1 # Dragging (Selecting -> Moving)
             dm_logger.debug(f"Selected {elem_type} at index {idx}")
             return True
+        elif self.state == 2:
+             # Already dragging WP?
+             return True
         else:
             # No hit — deselect current element but consume the click so
             # FreeCAD doesn't deselect the object and kill the edit tool.
@@ -249,24 +218,44 @@ class EditTool(DMBase):
 
     def handle_move(self, event_dict):
         if self.state == 1 and self._selected_element:
-            # Dragging
-            pt_global = self.get_mouse_world_pos(event_dict, self.drag_plane_n, self.drag_plane_o)
+            # Point/Handle dragging
+            pt_global = self.projector.get_mouse_world_pos(
+                event_dict, self.drag_plane_n, self.drag_plane_o,
+                place_on_geometry=False
+            )
             if not pt_global: return
             
             pt_local = self._target_obj.Placement.inverse().multVec(pt_global)
             self._update_element(self._selected_element, pt_local)
+        elif self.state == 2:
+            # WorkPlane dragging
+            pt_global = self.projector.get_mouse_world_pos(
+                event_dict, self.drag_plane_n, self.drag_plane_o,
+                place_on_geometry=False
+            )
+            if pt_global:
+                delta = pt_global - self._wp_drag_start
+                self.working_plane.Base += delta
+                self._wp_drag_start = pt_global
+                # If we have a WorkPlane object in selection, we should probably update its property too
+                # for now just the tool's working_plane.
         else:
             # Hover check
             ray_p, ray_d = self._get_ray(event_dict)
+
+            # Hover WP origin?
+            if self.working_plane:
+                if self._hit_test_perp(ray_p, ray_d, [self.working_plane.Base])[0] is not None:
+                     self._set_cursor(QtCore.Qt.SizeAllCursor)
+                     return
+
             hit = self._hit_test(ray_p, ray_d)
             if hit != self._hovered_element:
                 self._hovered_element = hit
                 if hit:
-                    QtGui.QApplication.setOverrideCursor(QtCore.Qt.PointingHandCursor)
-                    self._cursor_active = True
+                    self._set_cursor(QtCore.Qt.PointingHandCursor)
                 else:
-                    QtGui.QApplication.restoreOverrideCursor()
-                    self._cursor_active = False
+                    self._restore_cursor()
 
     # on_button1_down is defined above (line ~154) with drag timer support.
     # Do NOT redefine it here — Python uses the last definition, which would
@@ -471,21 +460,13 @@ class EditTool(DMBase):
         return False
 
     def finish(self):
-        self._stop_drag_timer()
         if self._target_obj:
             self._target_obj.EditMode = False
-        if self._cursor_active:
-            QtGui.QApplication.restoreOverrideCursor()
-            self._cursor_active = False
         super().finish()
 
     def _do_terminate(self):
-        self._stop_drag_timer()
         if self._target_obj:
             self._target_obj.EditMode = False
-        if self._cursor_active:
-            QtGui.QApplication.restoreOverrideCursor()
-            self._cursor_active = False
         super()._do_terminate()
 
 
@@ -494,7 +475,7 @@ class EditTool(DMBase):
 _FREP_OPPOSITE = {0: 6, 1: 7, 2: 4, 3: 5, 4: 2, 5: 3, 6: 0, 7: 1}
 
 
-class FRepEditTool(DMBase):
+class FRepEditTool(DMBase, DragTimerMixin):
     """
     Edit tool for F-Rep (SDF) box primitives.
     Drag one of the 8 rendered corner handles to reshape the box.
@@ -507,12 +488,6 @@ class FRepEditTool(DMBase):
         self._field = None             # current SdfBoxField
         self._placement = None         # field placement (may be None)
         self._world_corners = []       # 8 FreeCAD.Vector in world space
-        self._dragging_idx = None      # index of corner being dragged
-        self._fixed_world = None       # world pos of opposite (fixed) corner
-        self._drag_plane_n = None
-        self._drag_plane_o = None
-        self._drag_timer = None
-        self._cursor_active = False
         self._hovered_idx = None
 
     def activate(self):
@@ -576,43 +551,8 @@ class FRepEditTool(DMBase):
 
     def _hit_test_corners(self, event_dict):
         """Return index of hit corner sphere or None."""
-        if not self._world_corners:
-            return None
-        im = DMInputManager.get_instance()
-        ray_p, ray_d = im.get_ray(self.view, event_dict)
-        if not ray_p or not ray_d:
-            return None
-
-        # Dynamic tolerance: ~15 screen pixels in world units
-        try:
-            cam = self.view.getCameraNode()
-            viewer = self.view.getViewer()
-            vp_h = 800.0
-            try:
-                if hasattr(viewer, "getGlxSize"):
-                    vp_h = float(viewer.getGlxSize()[1])
-                elif hasattr(viewer, "getSize"):
-                    sz = viewer.getSize()
-                    vp_h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
-            except Exception:
-                pass
-            half_world_h = cam.height.getValue() / 2.0 if hasattr(cam, "height") else 100.0
-            px_per_world = (vp_h / 2.0) / max(half_world_h, 1e-6)
-            tolerance = max(5.0, 15.0 / px_per_world)
-        except Exception:
-            tolerance = 5.0
-
-        best_dist = float("inf")
-        best_idx = None
-        for i, corner in enumerate(self._world_corners):
-            v = corner - ray_p
-            cam_dist = v.dot(ray_d)
-            if cam_dist < 0:
-                continue
-            dist = v.cross(ray_d).Length
-            if dist < tolerance and dist < best_dist:
-                best_dist = dist
-                best_idx = i
+        ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
+        best_idx, _ = self._hit_test_perp(ray_p, ray_d, self._world_corners)
         return best_idx
 
     def _field_from_corners(self, dragged_world, fixed_world):
@@ -660,8 +600,7 @@ class FRepEditTool(DMBase):
             self._drag_timer = None
 
     def _drag_update(self):
-        # Self-terminate if LMB was released (handles FreeCAD nav interception)
-        if not DMInputManager.get_instance()._left_mouse_down:
+        if self._drag_check_lmb_released():
             self._finish_drag()
             return
         if self._dragging_idx is None:
@@ -732,11 +671,9 @@ class FRepEditTool(DMBase):
         if idx != self._hovered_idx:
             self._hovered_idx = idx
             if idx is not None:
-                QtGui.QApplication.setOverrideCursor(QtCore.Qt.PointingHandCursor)
-                self._cursor_active = True
+                self._set_cursor(QtCore.Qt.PointingHandCursor)
             else:
-                QtGui.QApplication.restoreOverrideCursor()
-                self._cursor_active = False
+                self._restore_cursor()
 
     def handle_keyboard(self, event_dict):
         key = str(event_dict.get("Key", "None")).upper()
@@ -746,10 +683,6 @@ class FRepEditTool(DMBase):
         return False
 
     def _do_terminate(self):
-        self._stop_drag_timer()
-        if self._cursor_active:
-            QtGui.QApplication.restoreOverrideCursor()
-            self._cursor_active = False
         super()._do_terminate()
 
 

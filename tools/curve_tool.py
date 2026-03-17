@@ -18,8 +18,6 @@ class CurveCreator(NURBSPrimitiveCreator):
         self._drag_start_pos = None
 
         self._hovered_idx = -1
-        self._update_pending = False
-        self._cursor_active = False
         self._cached_radius = None
 
         self.sg = self.view.getSceneGraph() if self.view else None
@@ -28,9 +26,6 @@ class CurveCreator(NURBSPrimitiveCreator):
             self.sg.addChild(self.points_root)
 
     def _do_terminate(self):
-        if getattr(self, "_cursor_active", False):
-            QtGui.QApplication.restoreOverrideCursor()
-            self._cursor_active = False
         for dm_pt in self.dm_points:
             dm_pt.undraw()
         self.dm_points.clear()
@@ -56,26 +51,8 @@ class CurveCreator(NURBSPrimitiveCreator):
         self.dm_points.append(dm_pt)
 
     def _hit_test(self, ray_p, ray_d):
-        """
-        Perpendicular distance hit test against placed control point spheres.
-
-        Uses perpendicular distance from the ray to each sphere centre (world
-        space). Depth-independent — works for both perspective and orthographic
-        cameras (orthographic get_ray() returns focal-plane origin, not camera).
-        """
-        if not self.points or ray_p is None or ray_d is None:
-            return -1, float('inf')
-        radius = self._compute_handle_radius(ref_pt=self.points[0] if self.points else None)
-        best_dist = float('inf')
-        best_idx = -1
-        for i, center in enumerate(self.points):
-            v = center - ray_p
-            proj = v.dot(ray_d)
-            perp = (ray_p + ray_d * proj - center).Length
-            if perp < radius and perp < best_dist:
-                best_dist = perp
-                best_idx = i
-        return best_idx, best_dist
+        """Perpendicular distance hit test against placed control point spheres."""
+        return self._hit_test_perp(ray_p, ray_d, self.points)
 
     def _set_hover(self, idx):
         """Recolour point spheres and update OS cursor for hovered index (-1 = none)."""
@@ -84,16 +61,12 @@ class CurveCreator(NURBSPrimitiveCreator):
         if self._hovered_idx != -1 and self._hovered_idx < len(self.dm_points):
             self.dm_points[self._hovered_idx].set_color((1, 0.5, 0))
         self._hovered_idx = idx
-        if idx == -1:
-            if self._cursor_active:
-                QtGui.QApplication.restoreOverrideCursor()
-                self._cursor_active = False
+        if idx == -1 or idx is None:
+            self._restore_cursor()
         else:
             if idx < len(self.dm_points):
                 self.dm_points[idx].set_color((0.3, 1.0, 0.3))
-            if not self._cursor_active:
-                QtGui.QApplication.setOverrideCursor(QtCore.Qt.CrossCursor)
-                self._cursor_active = True
+            self._set_cursor(QtCore.Qt.CrossCursor)
 
     def on_button1_up(self, event_dict):
         for dm_pt in self.dm_points:
@@ -107,25 +80,19 @@ class CurveCreator(NURBSPrimitiveCreator):
 
     def handle_click(self, event_dict):
         try:
-            # Call projector directly to capture wp_hit (DMBase wrapper discards it).
-            raw = self.projector.get_mouse_plane_pt(
-                event_dict,
-                place_on_geometry=self.place_on_geometry,
-                working_plane=self.working_plane,
-            )
-            pt, wp_hit = raw if isinstance(raw, tuple) else (raw, None)
+            pt = self._resolve_wp_click(event_dict)
 
             if pt is None:
                 return False
 
             if self.state == 0:
                 if not self.working_plane:
-                    if wp_hit is not None:
-                        self.working_plane = wp_hit.Placement
-                    else:
-                        n, _ = self.get_base_plane()
-                        rot = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), n)
-                        self.working_plane = FreeCAD.Placement(pt, rot)
+                    # _resolve_wp_click already set it
+                    pass
+                else:
+                    n, _ = self.get_base_plane()
+                    rot = FreeCAD.Rotation(FreeCAD.Vector(0, 0, 1), n)
+                    self.working_plane = FreeCAD.Placement(pt, rot)
                     # Re-project onto the locked plane for exact alignment.
                     pt = self.get_mouse_plane_pt(event_dict)
                     if pt is None:
@@ -219,12 +186,7 @@ class CurveCreator(NURBSPrimitiveCreator):
         return h_in, h_out
 
     def update_preview(self, drag_pt=None):
-        if self._update_pending:
-            return
-        self._update_pending = True
-        from core.dm_object import get_interactive_throttle_interval
-        interval_ms = int(get_interactive_throttle_interval() * 1000)
-        QtCore.QTimer.singleShot(interval_ms, lambda: self._do_update_preview())
+        self._schedule_update(self._do_update_preview)
 
     def _do_update_preview(self):
         self._update_pending = False
@@ -265,6 +227,7 @@ class CurveCreator(NURBSPrimitiveCreator):
         self.current_point = None
         self._update_pending = False
         self._do_update_preview()
+        self._on_committed(self._active_obj)
         self._finished = True
         self._active_obj = None
         self.terminate()

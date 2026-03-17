@@ -22,12 +22,50 @@ from core.view_projector import ViewProjector
 from core.input_manager import DMInputManager
 
 # ─────────────────────────────────────────────────────────────────────────────
+# DragTimerMixin
+# ─────────────────────────────────────────────────────────────────────────────
+
+class DragTimerMixin:
+    """Consolidated QTimer-based polling for tool dragging."""
+    def _start_drag_timer(self, interval_ms=16):
+        self._stop_drag_timer()
+        self._drag_timer = QtCore.QTimer()
+        self._drag_timer.timeout.connect(self._drag_update)
+        self._drag_timer.start(interval_ms)
+
+    def _stop_drag_timer(self):
+        if hasattr(self, "_drag_timer") and self._drag_timer:
+            self._drag_timer.stop()
+            self._drag_timer = None
+
+    def _drag_update(self):
+        """Override in subclasses."""
+        pass
+
+    def _drag_check_lmb_released(self):
+        """Returns True if LMB was released, stopping the timer and resetting state."""
+        if not DMInputManager.get_instance().is_left_mouse_down():
+            self._stop_drag_timer()
+            self.state = 0
+            if hasattr(self, "_selected_element"): self._selected_element = None
+            if hasattr(self, "_dragging_idx"): self._dragging_idx = None
+            return True
+        return False
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PrimitiveCreatorBase
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Tool States
+STATE_IDLE = 0
+STATE_ACTIVE = 1
+STATE_DRAGGING = 2
+STATE_FINALIZED = 3
 
 class DMBase:
     # Class-level reference to the currently active tool to allow 
     place_on_geometry = True
+    _last_btn3_time = 0.0 # Instance variable per tool
 
     def __init__(self):
         from core.dm_tool_manager import DMToolManager
@@ -82,8 +120,90 @@ class DMBase:
         self.locked_width = None
         self.locked_height = None
 
+        self._cursor_active = False
+        self._last_btn3_time = 0.0
+        self._update_pending = False
+
         # Check for selected WorkPlane
         self._detect_selected_workplane()
+
+    def _set_cursor(self, cursor):
+        """Set override cursor, tracking state."""
+        if not getattr(self, "_cursor_active", False):
+            from PySide import QtGui
+            QtGui.QApplication.setOverrideCursor(cursor)
+            self._cursor_active = True
+
+    def _restore_cursor(self):
+        """Restore cursor if we set it."""
+        if getattr(self, "_cursor_active", False):
+            from PySide import QtGui
+            QtGui.QApplication.restoreOverrideCursor()
+            self._cursor_active = False
+
+    def _hit_test_perp(self, ray_p, ray_d, points, tolerance=None):
+        """
+        Returns (best_idx, best_perp_dist) for list of FreeCAD.Vector points.
+        Uses perpendicular distance (depth-independent, correct for ortho cameras).
+        tolerance defaults to _compute_handle_radius() if None.
+        """
+        if not ray_p or not ray_d or not points:
+            return None, float('inf')
+        
+        if tolerance is None:
+            tolerance = self._compute_handle_radius()
+            
+        best_idx = None
+        best_perp = float('inf')
+        
+        for i, pt in enumerate(points):
+            if pt is None: continue
+            v = pt - ray_p
+            proj = v.dot(ray_d)
+            if proj < 0: continue
+            
+            # Perpendicular distance to ray
+            perp = (ray_p + ray_d * proj - pt).Length
+            if perp < tolerance and perp < best_perp:
+                best_perp = perp
+                best_idx = i
+                
+        return best_idx, best_perp
+
+    def _resolve_wp_click(self, event_dict, skip_objects=None):
+        """
+        Call get_mouse_plane_pt, update self.working_plane from wp_hit 
+        if in state 0 (Idle) or if not already set.
+        """
+        result = self.get_mouse_plane_pt(event_dict)
+        if isinstance(result, tuple):
+            pos, wp_hit = result
+        else:
+            pos, wp_hit = result, None
+            
+        if wp_hit is not None:
+            # Update plane if one isn't set, or if we are in the initial 'Idle' state
+            # where we want to snap to whatever surface is under the first click.
+            if self.working_plane is None or getattr(self, "state", 1) == 0:
+                self.working_plane = wp_hit.getGlobalPlacement() if hasattr(wp_hit, "getGlobalPlacement") else wp_hit.Placement
+            
+        return pos
+
+    def _schedule_update(self, callback, interval_ms=None):
+        """Throttled single-shot update. Drops duplicate calls within the interval."""
+        if getattr(self, "_update_pending", False):
+            return
+        if interval_ms is None:
+            from core.dm_object import get_interactive_throttle_interval
+            interval_ms = int(get_interactive_throttle_interval() * 1000)
+        self._update_pending = True
+        QtCore.QTimer.singleShot(interval_ms, callback)
+
+    def _on_committed(self, obj):
+        """Called after a tool successfully commits its object. Override to customize."""
+        if obj:
+            FreeCADGui.Selection.clearSelection()
+            FreeCADGui.Selection.addSelection(obj.Document.Name, obj.Name)
 
     def _detect_selected_workplane(self):
         """Checks if a DM_WorkPlane is selected and sets it as the active working plane."""
@@ -124,10 +244,20 @@ class DMBase:
         QtCore.QTimer.singleShot(0, self._do_terminate)
 
     def _do_terminate(self):
+        """
+        Standard cleanup for all DM tools.
+        Call chain: Subclass cleanup -> super()._do_terminate()
+        """
         from core.dm_tool_manager import DMToolManager
         tool_mgr = DMToolManager.get_instance()
         if tool_mgr.get_active_tool() is self:
             tool_mgr.set_active_tool(None)
+        
+        if hasattr(self, "_stop_drag_timer"):
+            self._stop_drag_timer()
+            
+        self._restore_cursor()
+        
         self._finish_scheduled = False
         self._terminated = True
         try:
@@ -148,10 +278,15 @@ class DMBase:
                     doc = obj_to_remove.Document or self.doc or FreeCAD.ActiveDocument
                     if doc and doc.getObject(obj_to_remove.Name):
                         dm_logger.debug(f"DMBase._do_terminate: Removing unfinished object {obj_to_remove.Name}")
-                        doc.removeObject(obj_to_remove.Name)
-                        doc.recompute()
+                        import FreeCADGui
+                        FreeCADGui.updateGui()
                     if hasattr(self, "_preview_obj"): self._preview_obj = None
                     if hasattr(self, "_active_obj"): self._active_obj = None
+
+            if self.view:
+                self.view.redraw()
+            import FreeCADGui
+            FreeCADGui.updateGui()
 
         except Exception as e:
             dm_logger.debug(f"DMBase._do_terminate: Cleanup failed: {e}")
@@ -229,6 +364,13 @@ class DMBase:
         return False
 
     def on_button3_down(self, event_dict):
+        # Double-fire guard: Right-click arrives via both Qt and Coin3D.
+        import time
+        now = time.monotonic()
+        if now - getattr(self, "_last_btn3_time", 0.0) < 0.05:
+            return True # Duplicate fire, consume silently
+        self._last_btn3_time = now
+
         # If Middle Mouse or Shift is held, it's likely a view rotation chord. Do not finish!
         if DMInputManager.get_instance()._middle_mouse_down or DMInputManager.get_instance().is_shift_down():
             return False
@@ -466,9 +608,8 @@ class DMBase:
 
     def handle_move(self, event_dict):
         if getattr(self, "state", 0) == 0:
-            n, o = self.get_base_plane()
-            pt = self.get_mouse_world_pos(event_dict, n, o)
-            self.current_point = pt
+            # Idle hover: dynamic snapping to surfaces/planes
+            self.current_point = self._resolve_wp_click(event_dict)
             self.on_move_state_0(event_dict)
             self.update_preview()
             self.update_ui()
