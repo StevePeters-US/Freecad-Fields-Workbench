@@ -51,13 +51,14 @@ class EditTool(DMBase):
             
         dm_logger.info(f"EditTool activated for {self._target_obj.Label}")
 
-        # Toggle EditMode ON and force the control cage to rebuild.
-        # Setting the property alone may not trigger updateData reliably,
-        # so we also call rebuild_control_cage directly.
+        # Toggle EditMode ON and force the control cage to rebuild directly —
+        # updateData may not fire reliably for the EditMode property change.
         self._target_obj.EditMode = True
         vp = self._target_obj.ViewObject
-        if hasattr(vp, "Proxy") and hasattr(vp.Proxy, "renderer") and vp.Proxy.renderer:
-            vp.Proxy.renderer.rebuild_control_cage(self._target_obj)
+        vp_proxy = getattr(vp, "Proxy", None)
+        renderer = getattr(vp_proxy, "renderer", None) if vp_proxy else None
+        if renderer:
+            renderer.rebuild_control_cage(self._target_obj)
         vp.show()
         if self._target_obj.Document:
             self._target_obj.Document.recompute()
@@ -241,9 +242,10 @@ class EditTool(DMBase):
             dm_logger.debug(f"Selected {elem_type} at index {idx}")
             return True
         else:
-            # No hit — deselect and let FreeCAD handle the click
+            # No hit — deselect current element but consume the click so
+            # FreeCAD doesn't deselect the object and kill the edit tool.
             self._selected_element = None
-            return False
+            return True
 
     def handle_move(self, event_dict):
         if self.state == 1 and self._selected_element:
@@ -761,7 +763,6 @@ def activate():
     proxy = getattr(obj, "Proxy", None)
     proxy_name = proxy.__class__.__name__ if proxy is not None else "None"
     shape_type = getattr(obj, "ShapeType", None)
-    dm_logger.info(f"edit_tool.activate: obj={obj.Label}, proxy={proxy_name}, ShapeType={shape_type}")
 
     if proxy is not None and proxy_name == "DMObjectProxy":
         if shape_type == "frep":

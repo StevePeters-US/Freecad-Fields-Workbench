@@ -316,9 +316,7 @@ class DMRenderer:
         h_out = list(fp.HandleOut) if hasattr(fp, "HandleOut") else []
         edit_mode = getattr(fp, "EditMode", False)
 
-        print(f"[DM_CAGE] rebuild: {len(pts)} pts, edit_mode={edit_mode}, "
-              f"h_in={len(h_in)}, h_out={len(h_out)}, "
-              f"vis_switch.whichChild={self.vis_switch.whichChild.getValue() if self.vis_switch else 'N/A'}")
+
 
         # Sphere radius: scale with bounding box span so spheres look consistent
         xs = [p.x for p in pts]; ys = [p.y for p in pts]; zs = [p.z for p in pts]

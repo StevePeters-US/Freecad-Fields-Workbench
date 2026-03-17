@@ -626,11 +626,18 @@ class NURBSPrimitiveCreator(DMBase):
 
         # Create or update
         if self._active_obj is None:
-            from core.dm_object import create_dm_object
-            self._active_obj = create_dm_object("DMObject", shape_type, local_params, placement=active_placement)
-            # Set initial label if possible
-            if self._active_obj:
-                self._active_obj.Label = shape_type.capitalize()
+            # Guard against re-entrant calls (can happen if FreeCADGui.updateGui()
+            # inside create_dm_object processes Qt events that fire our timer again).
+            if getattr(self, "_creating_obj", False):
+                return
+            self._creating_obj = True
+            try:
+                from core.dm_object import create_dm_object
+                self._active_obj = create_dm_object("DMObject", shape_type, local_params, placement=active_placement)
+                if self._active_obj:
+                    self._active_obj.Label = shape_type.capitalize()
+            finally:
+                self._creating_obj = False
         else:
             # Update properties
             for k, v in local_params.items():

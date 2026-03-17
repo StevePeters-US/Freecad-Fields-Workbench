@@ -379,8 +379,12 @@ class DMObjectProxy:
 class DMViewProvider:
     """ViewProvider for DM objects. Shows an orange part icon."""
     def __init__(self, vobj):
-        vobj.Proxy = self
+        # setup_view MUST run before vobj.Proxy = self.
+        # Assigning vobj.Proxy triggers attach() synchronously in FreeCAD,
+        # which creates the DMRenderer. If setup_view ran after, it would
+        # overwrite renderer=None and destroy the renderer reference.
         self.setup_view(vobj)
+        vobj.Proxy = self
 
     def setup_view(self, vobj):
         vobj.PointColor = (1.0, 0.5, 0.0)
@@ -415,7 +419,6 @@ class DMViewProvider:
     def attach(self, vobj):
         from . import dm_logger
         self.Object = vobj.Object
-
         if coin:
             from core.dm_renderer import DMRenderer
             self.renderer = DMRenderer(vobj)
