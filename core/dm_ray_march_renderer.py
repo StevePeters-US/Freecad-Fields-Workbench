@@ -109,7 +109,6 @@ uniform int   u_ny;
 uniform int   u_nz;
 uniform vec3  u_bbox_min;
 uniform vec3  u_bbox_max;
-uniform int   u_debug_mode;
 
 float decode_texel(ivec3 tc) {
     vec4 c = texelFetch(u_sdf_vol, tc, 0);
@@ -188,13 +187,11 @@ void main() {
     float t = tNear;
     bool hit = false;
     float d;
-    int march_iters = 0;
     float cell = (u_bbox_max.x - u_bbox_min.x) / max(float(u_nx), 1.0);
     float hit_thresh = cell * 0.1;
     float min_step = cell * 0.05;
 
     for (int i = 0; i < 256; i++) {
-        march_iters = i;
         vec3 p = ro + t * rd;
         d = sample_sdf(p);
         if (abs(d) < hit_thresh) { hit = true; break; }
@@ -220,17 +217,6 @@ void main() {
     // Shading model: 15% ambient + 75% diffuse + specular
     vec3 color = base_color * (0.15 + 0.75 * diff) + vec3(0.4) * spec;
     gl_FragColor = vec4(color, 1.0);
-
-    // Debug overrides
-    if (u_debug_mode == 1) {
-        float max_dist = (u_bbox_max.x - u_bbox_min.x) * 0.5;
-        float v = sample_sdf(hp) / max_dist * 0.5 + 0.5;
-        gl_FragColor = vec4(v, 0.0, 1.0 - v, 1.0);
-    } else if (u_debug_mode == 2) {
-        gl_FragColor = vec4(n * 0.5 + 0.5, 1.0);
-    } else if (u_debug_mode == 3) {
-        gl_FragColor = vec4(vec3(float(march_iters) / 256.0), 1.0);
-    }
 
     // 5. Depth write
     vec4 clip    = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
@@ -264,14 +250,10 @@ void main() {
         self._u["u_bbox_max"].name.setValue("u_bbox_max")
         self._u["u_bbox_max"].value.setValue(coin.SbVec3f(0, 0, 0))
 
-        self._u["u_debug_mode"] = coin.SoShaderParameter1i()
-        self._u["u_debug_mode"].name.setValue("u_debug_mode")
-        self._u["u_debug_mode"].value.setValue(0)
-
         f_shader.parameter.setNum(0)
         f_shader.parameter.set1Value(0, u_sdf_vol)
         for i, name in enumerate(["u_nx", "u_ny", "u_nz",
-                                   "u_bbox_min", "u_bbox_max", "u_debug_mode"]):
+                                   "u_bbox_min", "u_bbox_max"]):
             f_shader.parameter.set1Value(i + 1, self._u[name])
 
         shader.shaderObject.set1Value(0, v_shader)
@@ -341,14 +323,9 @@ void main() {
         if hasattr(self, "_switch"):
             self._switch.whichChild = 0 if visible else -1
 
-    def set_debug_mode(self, mode):
-        """Set debug colour mode: 0=normal, 1=SDF heat-map, 2=normals, 3=iterations."""
-        self._u["u_debug_mode"].value.setValue(int(mode))
-
     def on_prefs_changed(self):
         """Update renderer based on global prefs."""
         from core.dm_object import get_render_debug_mode
         debug = get_render_debug_mode()
         self._bbox_switch.whichChild = 0 if debug else -1
-        self.set_debug_mode(3 if debug else 0)
 

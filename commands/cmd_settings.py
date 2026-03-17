@@ -83,14 +83,6 @@ class _SettingsDialog(QtGui.QDialog):
         self._decimate_check.setToolTip("Remove redundant triangles from flat faces")
         layout.addRow("Enable Decimation:", self._decimate_check)
 
-        # Render Debug Mode
-        from core.dm_object import get_render_debug_mode
-        self._debug_check = QtGui.QCheckBox()
-        self._debug_check.setChecked(get_render_debug_mode())
-        self._debug_check.setToolTip("Show SDF bounding boxes and enable shader debug views")
-        layout.addRow("Render Debug Mode:", self._debug_check)
-
-
         # Line Width spinbox
         self._lw_spin = QtGui.QDoubleSpinBox()
         self._lw_spin.setRange(0.5, 20.0)
@@ -169,7 +161,7 @@ class _SettingsDialog(QtGui.QDialog):
                                     set_max_bounds, set_perf_profiler_enabled, set_curvature_threshold,
                                     set_decimate_enabled, refresh_all_dm_objects,
                                     set_near_clip_distance, apply_near_clip_override,
-                                    set_render_debug_mode, set_interactive_throttle_interval)
+                                    set_interactive_throttle_interval)
         from core.dm_logger import set_enable_crash_log
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
@@ -190,7 +182,6 @@ class _SettingsDialog(QtGui.QDialog):
         set_curvature_threshold(curv)
         set_decimate_enabled(self._decimate_check.isChecked())
         set_perf_profiler_enabled(self._perf_check.isChecked())
-        set_render_debug_mode(self._debug_check.isChecked())
         set_interactive_throttle_interval(self._throttle_spin.value())
 
         

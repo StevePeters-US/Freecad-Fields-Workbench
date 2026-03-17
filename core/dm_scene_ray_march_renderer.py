@@ -148,7 +148,6 @@ void main() {
 in vec2 v_uv;
 uniform sampler3D u_sdf_vol;
 uniform int   u_num_fields;
-uniform int   u_debug_mode;
 
 uniform int   u_nx[8];
 uniform int   u_ny[8];
@@ -273,10 +272,8 @@ void main() {
     float t = tNear;
     bool hit = false;
     int hit_field = 0;
-    int march_iters = 0;
 
     for (int i = 0; i < 256; i++) {
-        march_iters = i;
         vec3 p = ro + t * rd;
         float min_d = 1.0e10;
 
@@ -315,16 +312,6 @@ void main() {
     vec3 color = base_color * (0.15 + 0.75 * diff) + vec3(0.4) * spec;
     gl_FragColor = vec4(color, 1.0);
 
-    if (u_debug_mode == 1) {
-        float max_dist = (u_bbox_max[hit_field].x - u_bbox_min[hit_field].x) * 0.5;
-        float v = sample_sdf_field(hit_field, hp) / max_dist * 0.5 + 0.5;
-        gl_FragColor = vec4(v, 0.0, 1.0 - v, 1.0);
-    } else if (u_debug_mode == 2) {
-        gl_FragColor = vec4(n * 0.5 + 0.5, 1.0);
-    } else if (u_debug_mode == 3) {
-        gl_FragColor = vec4(vec3(float(march_iters) / 256.0), 1.0);
-    }
-
     vec4 clip    = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
     float ndc_z  = clip.z / clip.w;
     gl_FragDepth = gl_DepthRange.near
@@ -340,10 +327,6 @@ void main() {
         self._u["u_num_fields"] = coin.SoShaderParameter1i()
         self._u["u_num_fields"].name.setValue("u_num_fields")
         self._u["u_num_fields"].value.setValue(0)
-
-        self._u["u_debug_mode"] = coin.SoShaderParameter1i()
-        self._u["u_debug_mode"].name.setValue("u_debug_mode")
-        self._u["u_debug_mode"].value.setValue(0)
 
         self._u["u_z_total"] = coin.SoShaderParameter1i()
         self._u["u_z_total"].name.setValue("u_z_total")
@@ -371,7 +354,7 @@ void main() {
         f_shader.parameter.setNum(0)
         idx = 0
         f_shader.parameter.set1Value(idx, u_sdf_vol); idx += 1
-        for key in ["u_num_fields", "u_debug_mode", "u_z_total"]:
+        for key in ["u_num_fields", "u_z_total"]:
             f_shader.parameter.set1Value(idx, self._u[key]); idx += 1
         for fi in range(self.MAX_FIELDS):
             for name in (per_field_int + per_field_vec3):
@@ -439,17 +422,11 @@ void main() {
             self._attach()
         self._rebuild()
 
-    def set_debug_mode(self, mode):
-        """Set debug colour mode: 0=normal, 1=SDF heat-map, 2=normals, 3=iterations."""
-        self._u["u_debug_mode"].value.setValue(int(mode))
-
     def on_prefs_changed(self):
         """Update renderer based on global prefs."""
         from core.dm_object import get_render_debug_mode
         debug = get_render_debug_mode()
         self._bbox_switch.whichChild = 0 if debug else -1
-        # Also sync shader debug mode if we're in debug
-        self.set_debug_mode(3 if debug else 0) # Use iterations mode by default for debug
         
         # Rebuild to pick up any per-field property changes (e.g. IsSubtractive)
         if self._fields:
