@@ -193,10 +193,12 @@ class BoxCreator(PrimitiveCreatorBase):
 
     def on_button1_down(self, event_dict):
         # Call projector directly so we can capture which workplane was hit.
+        skip = [self._preview_obj] if self._preview_obj else None
         result = self.projector.get_mouse_plane_pt(
             event_dict,
             place_on_geometry=False,
-            working_plane=getattr(self, "working_plane", None)
+            working_plane=getattr(self, "working_plane", None),
+            skip_objects=skip
         )
         if isinstance(result, tuple):
             pos, wp_hit = result
@@ -412,10 +414,12 @@ class SphereCreator(PrimitiveCreatorBase):
 
 
     def on_button1_down(self, event_dict):
+        skip = [self._preview_obj] if self._preview_obj else None
         result = self.projector.get_mouse_plane_pt(
             event_dict,
             place_on_geometry=False,
-            working_plane=getattr(self, "working_plane", None)
+            working_plane=getattr(self, "working_plane", None),
+            skip_objects=skip
         )
         if isinstance(result, tuple):
             pos, wp_hit = result
@@ -540,10 +544,12 @@ class CylinderCreator(PrimitiveCreatorBase):
 
 
     def on_button1_down(self, event_dict):
+        skip = [self._preview_obj] if self._preview_obj else None
         result = self.projector.get_mouse_plane_pt(
             event_dict,
             place_on_geometry=False,
-            working_plane=getattr(self, "working_plane", None)
+            working_plane=getattr(self, "working_plane", None),
+            skip_objects=skip
         )
         if isinstance(result, tuple):
             pos, wp_hit = result

@@ -193,11 +193,23 @@ class DMBase:
         return self.projector.get_base_plane(wp_obj)
 
     def get_mouse_plane_pt(self, event_dict):
-        """Delegated to ViewProjector (which uses DMInputManager for rays)."""
+        """Delegated to ViewProjector (which uses DMInputManager for rays).
+
+        Automatically excludes any preview/active object from SDF hit testing
+        so that creation tools don't hit-test against themselves.
+        """
+        # Build skip list from preview/active objects to avoid self-intersection
+        skip = []
+        for attr in ("_preview_obj", "_active_obj"):
+            obj = getattr(self, attr, None)
+            if obj is not None:
+                skip.append(obj)
+
         result = self.projector.get_mouse_plane_pt(
-            event_dict, 
+            event_dict,
             place_on_geometry=getattr(self, "place_on_geometry", False),
-            working_plane=getattr(self, "working_plane", None)
+            working_plane=getattr(self, "working_plane", None),
+            skip_objects=skip or None
         )
         if isinstance(result, tuple):
             pt, wp = result

@@ -32,6 +32,38 @@ world origin with default dimensions; the user moves/scales via the DM Translate
 | `DMObjectProxy.FRepField` | `core/dm_object.py` | Where SDF field is stored on proxy |
 | `appendToolbar` | `InitGui.py:72` | Toolbar registration |
 
+### Tool Creation Pattern — SDF Self-Intersection Guard
+
+**CRITICAL**: All primitive creator tools must skip their own preview object during SDF
+hit-testing, or the tool will hit-test against itself (confirmed bug in SphereCreator —
+dragging inward snapped to the sphere surface, preventing shrinking).
+
+**How it works**: `ViewProjector.get_mouse_plane_pt()` always ray-marches against visible
+SDF objects (line 273–279 of `view_projector.py`), even when `place_on_geometry=False`.
+This is by design (SDF objects should occlude workplanes), but during creation the preview
+must be excluded.
+
+**Pattern for all new tools**:
+
+1. **`on_move_state_N`** — Call `self.get_mouse_plane_pt(event_dict)`. The base class
+   (`DMBase.get_mouse_plane_pt`) automatically passes `skip_objects=[self._preview_obj]`
+   to the projector.
+
+2. **`on_button1_down`** — When calling `self.projector.get_mouse_plane_pt()` directly
+   (to capture `wp_hit`), always pass `skip_objects`:
+   ```python
+   skip = [self._preview_obj] if self._preview_obj else None
+   result = self.projector.get_mouse_plane_pt(
+       event_dict,
+       place_on_geometry=False,
+       working_plane=getattr(self, "working_plane", None),
+       skip_objects=skip
+   )
+   ```
+
+3. **Height/axis drags** — Use `DMInputManager.get_instance().get_axis_point()` for
+   constrained axis drags (e.g., box/cylinder height). This bypasses SDF entirely.
+
 ---
 
 ## Agent Skills
