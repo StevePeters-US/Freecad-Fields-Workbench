@@ -18,7 +18,8 @@ class DMRenderer:
         self.vis_switch = None
         if coin:
             self.vis_switch = coin.SoSwitch()
-            self.vis_switch.whichChild = 0 if vobj.Visibility else -1
+            # SO_SWITCH_ALL (-3) shows all children; -1 hides all.
+            self.vis_switch.whichChild = -3 if vobj.Visibility else -1
             vobj.RootNode.addChild(self.vis_switch)
 
         self._frep_debug_switch = None
@@ -44,7 +45,7 @@ class DMRenderer:
 
     def update_visibility(self, is_visible):
         if self.vis_switch:
-            self.vis_switch.whichChild = 0 if is_visible else -1
+            self.vis_switch.whichChild = -3 if is_visible else -1
 
     def on_prefs_changed(self, obj):
         if not coin: return
@@ -263,6 +264,8 @@ class DMRenderer:
 
         self._ctrl_cage_sep = coin.SoSeparator()
         if self.vis_switch:
+            # For curves, this is the first (and only) child of vis_switch,
+            # so whichChild=0 keeps it visible.
             self.vis_switch.addChild(self._ctrl_cage_sep)
         else:
             self.vobj.RootNode.addChild(self._ctrl_cage_sep)
@@ -283,7 +286,10 @@ class DMRenderer:
         self._spheres_sep = coin.SoSeparator()
         self._ctrl_cage_sep.addChild(self._spheres_sep)
 
-        self.vobj.addDisplayMode(self._ctrl_cage_sep, "ControlCage")
+        # Note: do NOT call addDisplayMode here — it would add _ctrl_cage_sep
+        # to FreeCAD's internal display-mode switch, which may hide it unless
+        # the user explicitly selects "ControlCage" as the display mode.
+        # The control cage is always managed by vis_switch + edit_mode gating.
 
     def rebuild_control_cage(self, fp):
         if not coin: return
@@ -310,6 +316,10 @@ class DMRenderer:
         h_out = list(fp.HandleOut) if hasattr(fp, "HandleOut") else []
         edit_mode = getattr(fp, "EditMode", False)
 
+        print(f"[DM_CAGE] rebuild: {len(pts)} pts, edit_mode={edit_mode}, "
+              f"h_in={len(h_in)}, h_out={len(h_out)}, "
+              f"vis_switch.whichChild={self.vis_switch.whichChild.getValue() if self.vis_switch else 'N/A'}")
+
         # Sphere radius: scale with bounding box span so spheres look consistent
         xs = [p.x for p in pts]; ys = [p.y for p in pts]; zs = [p.z for p in pts]
         span = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs), 1.0)
@@ -320,30 +330,30 @@ class DMRenderer:
         num_vertices = []
 
         for i, p in enumerate(pts):
-            if edit_mode:
-                # Control point spheres only in edit mode; during creation the
-                # tool draws its own consistently-sized spheres.
-                dm_pt = DMPoint(p)
-                dm_pt.draw_point(self._spheres_sep, radius=r_knot, color=(1.0, 0.5, 0.0))
-                self._dm_point_spheres.append(dm_pt)
+            if not edit_mode:
+                continue
 
-            if edit_mode:
-                # Handle arm lines + handle spheres
-                if i < len(h_in) and h_in[i] is not None and (h_in[i] - p).Length > 1e-4:
-                    line_coords.append(coin.SbVec3f(p.x, p.y, p.z))
-                    line_coords.append(coin.SbVec3f(h_in[i].x, h_in[i].y, h_in[i].z))
-                    num_vertices.append(2)
-                    dm_h = DMPoint(h_in[i])
-                    dm_h.draw_point(self._spheres_sep, radius=r_handle, color=(0.2, 0.7, 1.0))
-                    self._dm_point_spheres.append(dm_h)
+            # Control point sphere
+            dm_pt = DMPoint(p)
+            dm_pt.draw_point(self._spheres_sep, radius=r_knot, color=(1.0, 0.5, 0.0))
+            self._dm_point_spheres.append(dm_pt)
 
-                if i < len(h_out) and h_out[i] is not None and (h_out[i] - p).Length > 1e-4:
-                    line_coords.append(coin.SbVec3f(p.x, p.y, p.z))
-                    line_coords.append(coin.SbVec3f(h_out[i].x, h_out[i].y, h_out[i].z))
-                    num_vertices.append(2)
-                    dm_h = DMPoint(h_out[i])
-                    dm_h.draw_point(self._spheres_sep, radius=r_handle, color=(0.2, 0.7, 1.0))
-                    self._dm_point_spheres.append(dm_h)
+            # Handle arm lines + handle spheres
+            if i < len(h_in) and h_in[i] is not None and (h_in[i] - p).Length > 1e-4:
+                line_coords.append(coin.SbVec3f(p.x, p.y, p.z))
+                line_coords.append(coin.SbVec3f(h_in[i].x, h_in[i].y, h_in[i].z))
+                num_vertices.append(2)
+                dm_h = DMPoint(h_in[i])
+                dm_h.draw_point(self._spheres_sep, radius=r_handle, color=(0.2, 0.7, 1.0))
+                self._dm_point_spheres.append(dm_h)
+
+            if i < len(h_out) and h_out[i] is not None and (h_out[i] - p).Length > 1e-4:
+                line_coords.append(coin.SbVec3f(p.x, p.y, p.z))
+                line_coords.append(coin.SbVec3f(h_out[i].x, h_out[i].y, h_out[i].z))
+                num_vertices.append(2)
+                dm_h = DMPoint(h_out[i])
+                dm_h.draw_point(self._spheres_sep, radius=r_handle, color=(0.2, 0.7, 1.0))
+                self._dm_point_spheres.append(dm_h)
 
         self._ctrl_coords.point.setNum(len(line_coords))
         if line_coords:

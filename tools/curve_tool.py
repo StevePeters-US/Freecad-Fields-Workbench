@@ -259,8 +259,12 @@ class CurveCreator(NURBSPrimitiveCreator):
         if len(self.points) < 2:
             self.terminate()
             return
+        # Drop the trailing mouse-follow point and do a synchronous final
+        # update (bypass the throttle) so the object is correct before we
+        # release ownership.
         self.current_point = None
-        self.update_preview()
+        self._update_pending = False
+        self._do_update_preview()
         self._finished = True
         self._active_obj = None
         self.terminate()

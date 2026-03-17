@@ -36,7 +36,8 @@ class EditTool(DMBase):
             return
 
         obj = sel[0]
-        if hasattr(obj, "Proxy") and obj.Proxy.__class__.__name__ == "DMObjectProxy":
+        proxy = getattr(obj, "Proxy", None)
+        if proxy is not None and proxy.__class__.__name__ == "DMObjectProxy":
             if hasattr(obj, "ShapeType") and obj.ShapeType == "curve":
                 self._target_obj = obj
             else:
@@ -49,10 +50,15 @@ class EditTool(DMBase):
             return
             
         dm_logger.info(f"EditTool activated for {self._target_obj.Label}")
-        
-        # Toggle EditMode ON
+
+        # Toggle EditMode ON and force the control cage to rebuild.
+        # Setting the property alone may not trigger updateData reliably,
+        # so we also call rebuild_control_cage directly.
         self._target_obj.EditMode = True
-        self._target_obj.ViewObject.show() # Ensure overlay is updated
+        vp = self._target_obj.ViewObject
+        if hasattr(vp, "Proxy") and hasattr(vp.Proxy, "renderer") and vp.Proxy.renderer:
+            vp.Proxy.renderer.rebuild_control_cage(self._target_obj)
+        vp.show()
         if self._target_obj.Document:
             self._target_obj.Document.recompute()
 
@@ -748,12 +754,16 @@ class FRepEditTool(DMBase):
 def activate():
     sel = FreeCADGui.Selection.getSelection()
     if not sel:
-        dm_logger.error("No object selected.")
+        dm_logger.error("edit_tool.activate: No object selected.")
         return
 
     obj = sel[0]
-    if hasattr(obj, "Proxy") and obj.Proxy.__class__.__name__ == "DMObjectProxy":
-        shape_type = getattr(obj, "ShapeType", None)
+    proxy = getattr(obj, "Proxy", None)
+    proxy_name = proxy.__class__.__name__ if proxy is not None else "None"
+    shape_type = getattr(obj, "ShapeType", None)
+    dm_logger.info(f"edit_tool.activate: obj={obj.Label}, proxy={proxy_name}, ShapeType={shape_type}")
+
+    if proxy is not None and proxy_name == "DMObjectProxy":
         if shape_type == "frep":
             tool = FRepEditTool()
             tool.activate()
@@ -763,4 +773,4 @@ def activate():
             tool.activate()
             return
 
-    dm_logger.error("Selected object is not editable (needs ShapeType 'frep' or 'curve').")
+    dm_logger.error(f"edit_tool.activate: Not editable (proxy={proxy_name}, ShapeType={shape_type}).")
