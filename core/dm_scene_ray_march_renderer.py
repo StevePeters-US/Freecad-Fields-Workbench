@@ -413,10 +413,13 @@ void main() {
         else:
             self._rebuild()
             
-        # Redraw ALL active views to ensure ghost is cleared everywhere
-        for doc in FreeCADGui.listDocuments().values():
-            for view in doc.listViews():
-                view.redraw()
+        # Redraw active view to ensure ghost is cleared everywhere
+        try:
+            active_view = FreeCADGui.ActiveDocument.ActiveView
+            if active_view:
+                active_view.redraw()
+        except Exception as e:
+            dm_logger.debug(f"DMSceneRayMarchRenderer: Failed to redraw view: {e}")
 
     def set_field_visible(self, label, visible):
         """Toggle a field's visibility. Triggers combined re-bake."""
@@ -459,10 +462,13 @@ void main() {
             for label in to_remove:
                 self._fields.pop(label, None)
             self._rebuild()
-            # Redraw ALL active views
-            for doc in FreeCADGui.listDocuments().values():
-                for view in doc.listViews():
-                    view.redraw()
+            # Redraw active view
+            try:
+                active_view = FreeCADGui.ActiveDocument.ActiveView
+                if active_view:
+                    active_view.redraw()
+            except Exception as e:
+                dm_logger.debug(f"DMSceneRayMarchRenderer: Failed to redraw view: {e}")
 
     def on_prefs_changed(self):
         """Update renderer based on global prefs."""

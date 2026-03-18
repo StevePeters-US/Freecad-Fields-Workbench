@@ -13,6 +13,75 @@ class DMInputManager(QtCore.QObject):
             cls._instance = DMInputManager()
         return cls._instance
 
+    def so_event_to_dict(self, event):
+        """
+        Converts a Pivy SoEvent (MouseButton, Location2, Keyboard) into a unified dictionary.
+        This restores the event contract for DM tools.
+        """
+        if event is None:
+            return {"Type": "Unknown"}
+
+        if isinstance(event, dict):
+            # Already a dict (likely from FreeCAD's native callback mapping)
+            # Normalize to ensure Button="BUTTON1" and State="DOWN"/"UP"
+            d = event.copy()
+            btn = d.get("Button")
+            if isinstance(btn, int):
+                if btn == 1: d["Button"] = "BUTTON1"
+                elif btn == 2: d["Button"] = "BUTTON2"
+                elif btn == 3: d["Button"] = "BUTTON3"
+            
+            st = d.get("State")
+            if isinstance(st, int):
+                if st == 0: d["State"] = "UP"
+                elif st == 1: d["State"] = "DOWN"
+            
+            return d
+
+        d = {}
+        
+        # 1. Basic Type
+        try:
+            type_name = event.getTypeId().getName()
+            d["Type"] = type_name
+        except Exception:
+            # Fallback for objects that might not have getTypeId but aren't dicts
+            d["Type"] = "Unknown"
+            return d
+            
+        # 2. Position (Coin3D coordinates, Y=0 at bottom)
+        pos = event.getPosition()
+        d["Position"] = (pos[0], pos[1])
+        
+        # 3. Specific Event Fields
+        from pivy import coin
+        
+        if type_name == "SoMouseButtonEvent":
+            btn = event.getButton()
+            if btn == coin.SoMouseButtonEvent.BUTTON1: d["Button"] = "BUTTON1"
+            elif btn == coin.SoMouseButtonEvent.BUTTON2: d["Button"] = "BUTTON2"
+            elif btn == coin.SoMouseButtonEvent.BUTTON3: d["Button"] = "BUTTON3"
+            else: d["Button"] = str(btn)
+            
+            st = event.getState()
+            if st == coin.SoMouseButtonEvent.DOWN: d["State"] = "DOWN"
+            elif st == coin.SoMouseButtonEvent.UP: d["State"] = "UP"
+            else: d["State"] = str(st)
+            
+        elif type_name == "SoKeyboardEvent":
+            key = event.getKey()
+            d["Key"] = coin.SoKeyboardEvent.getName(key)
+            
+            st = event.getState()
+            if st == coin.SoKeyboardEvent.DOWN: d["State"] = "DOWN"
+            elif st == coin.SoKeyboardEvent.UP: d["State"] = "UP"
+            
+        elif type_name == "SoLocation2Event":
+            # Already handled by position
+            pass
+
+        return d
+
     def __init__(self):
         super().__init__()
         self._left_mouse_down = False

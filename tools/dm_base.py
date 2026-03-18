@@ -96,6 +96,7 @@ class DMBase:
         tool_mgr.set_active_tool(self)
         self.projector = ViewProjector(self.view)
         self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
+        dm_logger.debug(f"DMBase: Callback registered: {self.callback is not None}")
 
         self.start_point   = None
         self.current_point = None
@@ -125,12 +126,18 @@ class DMBase:
         self._last_btn3_time = 0.0
         self._update_pending = False
 
+        self._is_editing = False
+
         # Unified object selection detection for edit mode
         # Defer calling to ensure subclass __init__ is finished
         from PySide import QtCore
-        QtCore.QTimer.singleShot(0, self._detect_selected_object)
-        
-        # Force UI update for icon highlighting
+        QtCore.QTimer.singleShot(0, self._post_init)
+
+    def _post_init(self):
+        """Final initialization after tool is fully constructed."""
+        if getattr(self, "_terminated", False):
+            return
+        self._detect_selected_object()
         FreeCADGui.updateGui()
 
     def _set_cursor(self, cursor):
@@ -203,25 +210,25 @@ class DMBase:
             pos, wp_hit = result, None
             
         if wp_hit is not None:
-            # Update plane if one isn't set, or if we are in the initial 'Idle' state
+            # Update plane if we are in the initial 'Idle' state (state 0)
             # where we want to snap to whatever surface is under the first click.
-            if self.working_plane is None or getattr(self, "state", 1) == 0:
-                dm_logger.debug(f"DEBUG _resolve_wp_click: HIT on {type(wp_hit)}. state={getattr(self, 'state', None)}")
-                
-                # Determine if this is a "real" persistent WorkPlane object
-                is_real_wp = False
-                if hasattr(wp_hit, "Proxy") and wp_hit.Proxy.__class__.__name__ == "DMWorkPlane":
-                    is_real_wp = True
-                
-                if hasattr(wp_hit, "getGlobalPlacement"):
-                    self.working_plane = wp_hit.getGlobalPlacement()
-                elif hasattr(wp_hit, "Placement"):
-                    self.working_plane = wp_hit.Placement
-                else:
-                    # Assume it's already a FreeCAD.Placement or None
-                    self.working_plane = wp_hit
-                
-                self._working_plane_is_fallback = not is_real_wp
+            # Once drawing has started (state > 0), we lock the plane.
+            if getattr(self, "state", 0) != 0:
+                 return pos
+
+            is_real_wp = False
+            if hasattr(wp_hit, "Proxy") and wp_hit.Proxy.__class__.__name__ == "DMWorkPlane":
+                is_real_wp = True
+            
+            if hasattr(wp_hit, "getGlobalPlacement"):
+                self.working_plane = wp_hit.getGlobalPlacement()
+            elif hasattr(wp_hit, "Placement"):
+                self.working_plane = wp_hit.Placement
+            else:
+                # Assume it's already a FreeCAD.Placement or None
+                self.working_plane = wp_hit
+            
+            self._working_plane_is_fallback = not is_real_wp
         elif self.working_plane is None and getattr(self, "state", 1) == 0:
             # If no hit, and no current plane, use the class-level fallback if available.
             # We look for _last_working_plane on the subclass.
@@ -262,7 +269,7 @@ class DMBase:
             
         try:
             selection = FreeCADGui.Selection.getSelection()
-            # dm_logger.debug(f"Selection: {[o.Label for o in selection]}")
+            dm_logger.debug(f"{self.__class__.__name__} selection: {[o.Label for o in selection]}")
             if not selection:
                 FreeCADGui.updateGui()
                 return
@@ -274,8 +281,11 @@ class DMBase:
                     st = str(obj.ShapeType)
                 elif hasattr(obj, "Proxy") and hasattr(obj.Proxy, "ShapeType"):
                     st = str(obj.Proxy.ShapeType)
+                dm_logger.debug(f"Checking {obj.Label}: ShapeType='{st}' (handled: {handled_types})")
                 
                 if st and st in handled_types:
+                    dm_logger.debug(f"{self.__class__.__name__}: Detected compatible ShapeType '{st}'. Entering edit mode.")
+                    self._is_editing = True
                     self.edit_object(obj)
                     FreeCADGui.updateGui()
                     return
@@ -284,6 +294,7 @@ class DMBase:
                 proxy = getattr(obj, "Proxy", None)
                 proxy_name = proxy.__class__.__name__ if proxy else None
                 if proxy_name in handled_types:
+                    self._is_editing = True
                     self.edit_object(obj)
                     FreeCADGui.updateGui()
                     return
@@ -300,14 +311,13 @@ class DMBase:
 
     def edit_object(self, obj):
         """Load an existing object into the tool for editing. Override in subclasses."""
-        pass
+        self._is_editing = True
 
     def _detect_selected_workplane(self):
         """Checks if a DM_WorkPlane is selected and sets it as the active working plane."""
         try:
             selection = FreeCADGui.Selection.getSelection()
             if not selection:
-                # dm_logger.debug("DEBUG: Selection is empty")
                 return
                 
             for obj in selection:
@@ -317,8 +327,6 @@ class DMBase:
                     proxy_name = obj.Proxy.__class__.__name__
                     if proxy_name == "DMWorkPlane":
                         is_wp = True
-                
-                # dm_logger.debug(f"DEBUG: Checking selection: {obj.Label}, Proxy: {proxy_name}")
                 
                 # 2. Check for specific properties if proxy check is brittle
                 if not is_wp and hasattr(obj, "Proxy") and hasattr(obj.Proxy, "execute") and hasattr(obj, "Length") and hasattr(obj, "Width"):
@@ -391,6 +399,13 @@ class DMBase:
 
                 for attr_name, obj in objs_to_clear:
                     try:
+                        # Skip deleting the object if we are editing it!
+                        is_active = (obj == getattr(self, "_active_obj", None))
+                        is_preview = (obj == getattr(self, "_preview_obj", None))
+                        if self._is_editing and (is_active or is_preview):
+                            dm_logger.debug(f"DMBase._do_terminate: Skipping deletion of edited object {obj.Label}")
+                            continue
+
                         # Use the object's own document if available, fallback to tool's doc
                         obj_doc = getattr(obj, "Document", None) or self.doc or FreeCAD.ActiveDocument
                         if obj_doc and hasattr(obj, "Name") and obj_doc.getObject(obj.Name):
@@ -417,10 +432,13 @@ class DMBase:
                         setattr(self, attr_name, None)
 
             if self.view:
-                # Redraw all active views to ensure renderer is updated everywhere
-                for doc in FreeCADGui.listDocuments().values():
-                    for view in doc.listViews():
-                        view.redraw()
+                # Redraw active view to ensure renderer is updated
+                try:
+                    active_view = FreeCADGui.ActiveDocument.ActiveView
+                    if active_view:
+                        active_view.redraw()
+                except Exception as e:
+                    dm_logger.debug(f"DMBase._do_terminate: Failed to redraw view: {e}")
                         
             # Final prune of orphaned fields
             try:
@@ -552,8 +570,10 @@ class DMBase:
     def on_button3_up(self, event_dict):
         return True # Consume release to suppress FreeCAD context menu
 
-    def event_cb(self, event_dict):
+    def event_cb(self, event):
         try:
+            # 0. Convert raw Pivy SoEvent to unified dictionary
+            event_dict = DMInputManager.get_instance().so_event_to_dict(event)
             event_type = event_dict.get("Type", "Unknown")
 
             if event_type == "SoMouseButtonEvent":
@@ -726,7 +746,6 @@ class DMBase:
     def handle_click(self, event_dict):
         try:
             btn = event_dict.get("Button")
-            dm_logger.debug(f"DEBUG: handle_click: State={self.state}, Button={btn}")
             
             if btn != "BUTTON1":
                 return False
@@ -739,10 +758,9 @@ class DMBase:
                 pt, wp_hit = result, None
 
             if pt is None:
-                dm_logger.warn("DEBUG: handle_click: pt is None!")
+
                 return False
                 
-            dm_logger.debug(f"DEBUG: handle_click: Mouse World Pos: {pt.x:.2f}, {pt.y:.2f}, {pt.z:.2f}")
 
             if getattr(self, "state", 0) == 0:
                 self.state = 1 # Force state 1 if inadvertently set to 0.
@@ -767,12 +785,10 @@ class DMBase:
                     self.working_plane = FreeCAD.Placement(pt, rot)
                 
                 self.state = 2
-                dm_logger.debug(f"DEBUG: handle_click: Moving to State 2. Start point: {self.start_point}")
                 self.on_state_change(self.state)
                 self.update_preview()
             elif self.state == 2:
                 # Pin 3: Finish
-                dm_logger.debug("DEBUG: handle_click: State 2 -> Finish")
                 self.finish()
             
             if self.current_point:
@@ -961,10 +977,7 @@ class NURBSPrimitiveCreator(DMBase):
                     try:
                         setattr(self._active_obj, k, v)
                     except Exception as e:
-                        if 'dm_logger' in globals() or 'dm_logger' in locals():
-                            dm_logger.debug(f"DEBUG: Failed to update property {k}: {e}")
-                        else:
-                            print(f"DEBUG: Failed to update property {k}: {e}")
+                        dm_logger.debug(f"DEBUG: Failed to update property {k}: {e}")
                 elif k == "Position" and placement is None:
                     self._active_obj.Placement.Base = v
             

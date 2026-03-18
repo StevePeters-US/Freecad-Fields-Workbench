@@ -1,4 +1,5 @@
 import FreeCAD
+import FreeCADGui
 import math
 from PySide import QtCore
 from pivy import coin
@@ -49,6 +50,7 @@ class PrimitiveCreatorBase(DMBase):
 
     def edit_object(self, obj):
         """Load an existing F-Rep object into the tool for editing."""
+        super().edit_object(obj)
         dm_logger.debug(f"{type(self).__name__}: Editing existing object {obj.Label}")
         self._preview_obj = obj
         
@@ -126,7 +128,7 @@ class PrimitiveCreatorBase(DMBase):
         self._update_ghost_visuals()
         if self.view:
             self.view.redraw()
-        import FreeCADGui
+        # Force UI update for icon highlighting
         FreeCADGui.updateGui()
 
     def _update_ghost_visuals(self):

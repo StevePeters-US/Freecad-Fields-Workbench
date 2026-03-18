@@ -647,7 +647,6 @@ def create_dm_object(name, shape_type, params=None, placement=None):
 
 def refresh_all_dm_objects():
     """Update LineWidth and PointSize of all DM objects in the active document."""
-    import FreeCAD
     doc = FreeCAD.activeDocument()
     if not doc:
         return
@@ -679,7 +678,6 @@ def refresh_all_dm_objects():
                 proxy.on_prefs_changed()
             obj.ViewObject.PointSize = ps
     
-    import FreeCADGui
     if FreeCAD.GuiUp:
         FreeCADGui.updateGui()
 

@@ -30,6 +30,7 @@ class CurveCreator(NURBSPrimitiveCreator):
 
     def edit_object(self, obj):
         """Load an existing curve into the tool for editing."""
+        super().edit_object(obj)
         dm_logger.debug(f"CurveCreator: Editing existing object {obj.Label}")
         self._active_obj = obj
         
