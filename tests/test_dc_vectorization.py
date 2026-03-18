@@ -28,10 +28,7 @@ sys.modules["Part"] = part
 # Add the project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Mock preferences
-import core.dm_object
-core.dm_object.get_decimate_enabled = lambda: False
-core.dm_object.get_deduplicate_enabled = lambda: False
+# (Monkeypatching removed as mesher now takes local arguments)
 
 from core.dm_mesher import DualContouringMesher, mesh_timer
 from core.frep.frep_field import FRepField
@@ -57,7 +54,8 @@ def run_benchmark():
         print(f"\nResolution: {res}")
         start_time = time.time()
         mesh_timer.tick()
-        result = mesher.mesh(field, res)
+        # Run meshing (decimate/deduplicate are False by default for benchmark parity)
+        result = mesher.mesh(field, res, decimate=False, deduplicate=False)
         end_time = time.time()
         
         if result:

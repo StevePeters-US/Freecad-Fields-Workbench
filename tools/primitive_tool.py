@@ -7,7 +7,7 @@ from core import dm_logger
 from core.input_manager import DMInputManager
 from core.dm_point import DMPoint
 from core.dm_line import DMLineSet
-from core.dm_object import create_dm_object, get_meshing_cell_size, get_interactive_throttle_interval
+from core.dm_object import create_dm_object, get_interactive_throttle_interval
 from core.dm_mesher import mesh_timer
 from tools.dm_base import DMBase, DragTimerMixin, STATE_IDLE, STATE_DRAGGING
 
@@ -21,9 +21,7 @@ _PREVIEW_CELL_SIZE = 20.0
 
 # Opposite corner index for box corners 0..7 (see _get_final_points ordering)
 _BOX_OPPOSITE = {0: 6, 1: 7, 2: 4, 3: 5, 4: 2, 5: 3, 6: 0, 7: 1}
-# Cell size for final committed mesh (smaller = more detail)
-def _get_final_cell_size():
-    return get_meshing_cell_size()
+
 
 
 class PrimitiveCreatorBase(DMBase, DragTimerMixin):
@@ -284,20 +282,15 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             except Exception:
                 pass
 
-        # Upgrade resolution for final mesh
-        primitive_name = type(self).__name__.replace("Creator", "")
+        # Resolution is now handled globally by the GPU renderer settings.
         proxy = obj.Proxy
         proxy.FRepField = field
-        
-        # Set per-object properties
-        if hasattr(obj, "MeshingCellSize"):
-            obj.MeshingCellSize = float(_get_final_cell_size())
         
         obj.touch()
         obj.Document.recompute([obj])
         self._on_committed(obj)
         # Print accumulated timer summary now that the tool is accepted
-        mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_CELL_SIZE}mm) + final ({getattr(obj, 'MeshingCellSize', _get_final_cell_size()):.1f}mm)")
+        mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_CELL_SIZE}mm)")
         self._preview_obj = None  # Severed; the object is now the user's
 
     def _commit_and_enter_edit(self, name):
@@ -338,11 +331,9 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
         primitive_name = type(self).__name__.replace("Creator", "")
         obj.Proxy.FRepField = field
-        if hasattr(obj, "MeshingCellSize"):
-            obj.MeshingCellSize = float(_get_final_cell_size())
         obj.touch()
         obj.Document.recompute([obj])
-        mesh_timer.summary(f"{primitive_name} ({_get_final_cell_size():.1f}mm) → edit mode")
+        mesh_timer.summary(f"{primitive_name} → edit mode")
 
         # Clear creation visuals before entering edit mode
         for dm_pt in self.dm_points:

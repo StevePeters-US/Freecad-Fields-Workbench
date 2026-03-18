@@ -41,8 +41,8 @@ def test_sn_relaxation_quality():
     mesher = SurfaceNetsMesher()
     cell_size = 1.0
     
-    # Run meshing
-    verts, idx = mesher.mesh(field, cell_size)
+    # Run meshing (decimate/deduplicate are False by default in this test)
+    verts, idx = mesher.mesh(field, cell_size, decimate=False, deduplicate=False)
     
     print(f"Generated {len(verts)} vertices, {len(idx)//4} triangles", flush=True)
     
@@ -63,10 +63,7 @@ def test_sn_relaxation_quality():
 
 if __name__ == "__main__":
     try:
-        # Mock preferences
-        import core.dm_object
-        core.dm_object.get_decimate_enabled = lambda: False
-        core.dm_object.get_deduplicate_enabled = lambda: False
+        # (Monkeypatching removed as mesher now takes local arguments)
         
         test_sn_relaxation_quality()
         print("\nSurfaceNets relaxation test passed!", flush=True)

@@ -20,8 +20,8 @@ class SDFSliceTaskPanel:
         self.base_origin = base_origin
         self.base_normal = base_normal
         
-        from core.dm_object import get_meshing_cell_size
-        self.resolution = get_meshing_cell_size()
+        from core.dm_object import get_ray_march_cell_size
+        self.resolution = get_ray_march_cell_size()
         
         self.form = QtGui.QWidget()
         self.setup_ui()

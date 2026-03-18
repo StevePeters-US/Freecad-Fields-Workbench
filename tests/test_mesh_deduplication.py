@@ -18,9 +18,7 @@ sys.modules["Part"] = part
 # Add the project root to sys.path to allow importing from core
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Mock dm_object preferences
-import core.dm_object
-core.dm_object.get_deduplicate_enabled = lambda: True
+# deduplicate_verts is a utility that doesn't depend on global prefs now.
 
 from core.dm_mesher import deduplicate_verts
 

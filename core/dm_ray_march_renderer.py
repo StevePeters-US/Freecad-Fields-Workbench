@@ -144,7 +144,7 @@ float sample_sdf(vec3 p) {
 
 vec3 sdf_normal(vec3 p) {
     float cell = (u_bbox_max.x - u_bbox_min.x) / max(float(u_nx), 1.0);
-    float h = cell * 0.5;
+    float h = cell * 2.0;
     vec2 k = vec2(1.0, -1.0);
     vec3 g = k.xyy * sample_sdf(p + k.xyy*h) +
              k.yyx * sample_sdf(p + k.yyx*h) +
@@ -189,13 +189,12 @@ void main() {
     float d;
     float cell = (u_bbox_max.x - u_bbox_min.x) / max(float(u_nx), 1.0);
     float hit_thresh = cell * 0.1;
-    float min_step = cell * 0.05;
 
-    for (int i = 0; i < 256; i++) {
+    for (int i = 0; i < 512; i++) {
         vec3 p = ro + t * rd;
         d = sample_sdf(p);
         if (abs(d) < hit_thresh) { hit = true; break; }
-        t += max(abs(d), min_step);
+        t += max(abs(d) * 0.9, hit_thresh * 0.5);
         if (t > tFar) break;
     }
     if (!hit) discard;

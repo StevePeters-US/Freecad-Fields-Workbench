@@ -1,7 +1,6 @@
 import FreeCAD
 import FreeCADGui
 from core import dm_logger
-from core.dm_object import get_frep_storage_type
 
 class CommandDMCreation:
     _ICONS = {

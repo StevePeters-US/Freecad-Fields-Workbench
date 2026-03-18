@@ -48,32 +48,6 @@ def get_point_size():
 def set_point_size(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetFloat("PointSize", float(val))
 
-def get_meshing_type():
-    """
-    Return the meshing approach:
-    0: Marching Cubes (Standard SDF)
-    1: Adaptive Marching Cubes
-    2: Surface Nets
-    3: Dual Contouring
-    """
-    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("MeshingType", 0)
-
-def set_meshing_type(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetInt("MeshingType", int(val))
-
-def get_meshing_cell_size():
-    """Return the global meshing cell size in mm (defaults to 10.0)."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("MeshingCellSize", 10.0)
-
-def set_meshing_cell_size(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("MeshingCellSize", float(val))
-
-def get_frep_storage_type(): # Deprecated alias
-    return get_meshing_type()
-
-def set_frep_storage_type(val): # Deprecated alias
-    set_meshing_type(val)
-
 def get_picking_radius():
     """Return the picking radius in mm."""
     return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("PickingRadius", 5.0)
@@ -98,28 +72,6 @@ def set_perf_profiler_enabled(val):
     except:
         pass
 
-def get_curvature_threshold():
-    """Return the curvature threshold for adaptive meshing."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("CurvatureThreshold", 0.1)
-
-def set_curvature_threshold(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("CurvatureThreshold", float(val))
-
-def get_decimate_enabled():
-    """Return whether flat-triangle decimation is enabled."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("DecimateEnabled", True)
-
-def set_decimate_enabled(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetBool("DecimateEnabled", bool(val))
-
-def get_deduplicate_enabled():
-    """Return whether vertex deduplication is enabled."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("DeduplicateEnabled", True)
-
-def set_deduplicate_enabled(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetBool("DeduplicateEnabled", bool(val))
-
-
 def get_render_debug_mode():
     """Return whether render debug mode is enabled."""
     return FreeCAD.ParamGet(_PARAM_PATH).GetBool("RenderDebugMode", False)
@@ -134,6 +86,20 @@ def get_near_clip_distance():
 
 def set_near_clip_distance(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetFloat("NearClipDistance", float(val))
+
+def get_ray_march_cell_size():
+    """Return the SDF baking cell size for GPU ray march renderer in mm (default 2.0)."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("RayMarchCellSize", 2.0)
+
+def set_ray_march_cell_size(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("RayMarchCellSize", float(val))
+
+def get_rm_texels_per_field():
+    """Target texel count along the longest axis for screen-space LOD (default 64)."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("RMTexelsPerField", 64)
+
+def set_rm_texels_per_field(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetInt("RMTexelsPerField", int(val))
 
 def apply_near_clip_override():
     """Apply near clip distance override to the active camera, if set."""
@@ -246,27 +212,9 @@ class DMObjectProxy:
                 obj.ControlGrid = flat_list
 
         if shape_type == "frep":
-            if not hasattr(obj, "MeshingCellSize"):
-                obj.addProperty("App::PropertyFloat", "MeshingCellSize", "FRep", "Meshing cell size in mm (smaller = more detail)")
-                obj.MeshingCellSize = get_meshing_cell_size()
             if not hasattr(obj, "ShowWireframe"):
                 obj.addProperty("App::PropertyBool", "ShowWireframe", "FRep", "Show triangle wireframe")
                 obj.ShowWireframe = get_show_wireframe()
-            if not hasattr(obj, "MeshingType"):
-                obj.addProperty("App::PropertyEnumeration", "MeshingType", "FRep", "Meshing algorithm")
-                obj.MeshingType = [
-                    "Marching Cubes (Standard SDF)",
-                    "Adaptive Marching Cubes",
-                    "Surface Nets",
-                    "Dual Contouring"
-                ]
-                obj.MeshingType = get_meshing_type()
-            if not hasattr(obj, "DecimateEnabled"):
-                obj.addProperty("App::PropertyBool", "DecimateEnabled", "FRep", "Enable flat-triangle decimation")
-                obj.DecimateEnabled = get_decimate_enabled()
-            if not hasattr(obj, "DeduplicateEnabled"):
-                obj.addProperty("App::PropertyBool", "DeduplicateEnabled", "FRep", "Enable vertex deduplication")
-                obj.DeduplicateEnabled = get_deduplicate_enabled()
             if not hasattr(obj, "IsSubtractive"):
                 obj.addProperty("App::PropertyBool", "IsSubtractive", "FRep",
                                 "If True, this primitive subtracts material (rendered blue)")
@@ -454,7 +402,7 @@ class DMViewProvider:
     def updateData(self, fp, prop):
         from . import dm_logger
         
-        if prop in ["ShowWireframe", "MeshingCellSize", "IsSubtractive"]:
+        if prop in ["ShowWireframe", "IsSubtractive"]:
             self.on_prefs_changed()
         
         if prop == "IsSubtractive" and hasattr(fp, "IsSubtractive"):
@@ -653,25 +601,15 @@ def refresh_all_dm_objects():
     
     lw = get_line_width()
     ps = get_point_size()
-    res = get_meshing_cell_size()
     show_wire = get_show_wireframe()
-    m_type = get_meshing_type()
     
     for obj in doc.Objects:
         if hasattr(obj, "ShapeType") and obj.ViewObject:
             # Native FreeCAD properties
             obj.ViewObject.LineWidth = lw
             # DM Proxy properties
-            if hasattr(obj, "MeshingCellSize"):
-                obj.MeshingCellSize = float(res)
             if hasattr(obj, "ShowWireframe"):
                 obj.ShowWireframe = bool(show_wire)
-            if hasattr(obj, "MeshingType"):
-                obj.MeshingType = int(m_type)
-            if hasattr(obj, "DecimateEnabled"):
-                obj.DecimateEnabled = bool(get_decimate_enabled())
-            if hasattr(obj, "DeduplicateEnabled"):
-                obj.DeduplicateEnabled = bool(get_deduplicate_enabled())
                 
             proxy = getattr(obj.ViewObject, "Proxy", None)
             if proxy and hasattr(proxy, "on_prefs_changed"):

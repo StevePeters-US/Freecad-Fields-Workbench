@@ -6,7 +6,7 @@ import numpy as np
 from core import dm_logger
 from core.frep.frep_field import FRepField
 from core.frep.marching_cubes.mc_tables import edgeTable, triTable
-from core.dm_object import get_meshing_type, get_decimate_enabled, get_deduplicate_enabled
+from core.dm_object import get_perf_profiler_enabled
 
 # Pre-convert lookup tables to numpy arrays for fast indexing
 _EDGE_TABLE = np.array(edgeTable, dtype=np.int32)
@@ -60,7 +60,6 @@ class MeshTimer:
 
     def summary(self, label: str = "DM Mesh"):
         """Emit one INFO log with totals and per-call averages, then reset."""
-        from core.dm_object import get_perf_profiler_enabled
         if not get_perf_profiler_enabled():
             self.reset()
             return
@@ -91,7 +90,7 @@ mesh_timer = MeshTimer()
 
 class DMMesher:
     """Abstract base class for all Direct Modeling SDF meshers."""
-    def mesh(self, field: FRepField, cell_size: float) -> tuple:
+    def mesh(self, field: FRepField, cell_size: float, decimate=False, deduplicate=True, **kwargs) -> tuple:
         raise NotImplementedError("mesher must implement mesh()")
 
 
@@ -111,7 +110,7 @@ class MarchingCubesMesher(DMMesher):
       6. Triangle extraction   — (M,5,3) reshape + np.where, no loop
       7. Mesh build            — flat (N,3,3) ndarray -> Coin3D arrays
     """
-    def mesh(self, field: FRepField, cell_size: float) -> tuple:
+    def mesh(self, field: FRepField, cell_size: float, decimate=False, deduplicate=True, **kwargs) -> tuple:
         min_b, max_b = field.bounding_box()
 
         def _pad(lo, hi):
@@ -237,12 +236,12 @@ class MarchingCubesMesher(DMMesher):
 
         mesh_timer.stop("mesh_build")
 
-        if get_decimate_enabled():
+        if decimate:
             mesh_timer.start("decimate")
             flat_verts, flat_idx = decimate_flat_tris(flat_verts, flat_idx)
             mesh_timer.stop("decimate")
 
-        if get_deduplicate_enabled():
+        if deduplicate:
             mesh_timer.start("deduplicate")
             flat_verts, flat_idx = deduplicate_verts(flat_verts, flat_idx)
             mesh_timer.stop("deduplicate")
@@ -257,7 +256,7 @@ class AdaptiveMCMesher(DMMesher):
     Subdivides cells recursively where curvature exceeds a threshold, 
     down to the target cell_size.
     """
-    def mesh(self, field: FRepField, cell_size: float) -> tuple:
+    def mesh(self, field: FRepField, cell_size: float, decimate=False, deduplicate=True, curvature_threshold=0.1, **kwargs) -> tuple:
         from core.dm_object import get_perf_profiler_enabled
         
         min_b, max_b = field.bounding_box()
@@ -294,13 +293,7 @@ class AdaptiveMCMesher(DMMesher):
         mesh_timer.start("amc_subdivide")
         leaf_cells = [] # List of (origin, size, corner_vals)
         
-        # Use a reasonable default threshold if preference system isn't there yet
-        threshold = 0.1
-        try:
-            from core.dm_object import get_curvature_threshold
-            threshold = get_curvature_threshold()
-        except:
-            pass
+        threshold = curvature_threshold
 
         def subdivide(origin, size, corner_vals):
             # Check if cell is active (contains surface)
@@ -470,7 +463,7 @@ class AdaptiveMCMesher(DMMesher):
         flat_idx = np.hstack([tri_idx, sentinel]).ravel()
         mesh_timer.stop("mesh_build")
         
-        if get_decimate_enabled():
+        if decimate:
             mesh_timer.start("decimate")
             flat_verts, flat_idx = decimate_flat_tris(flat_verts, flat_idx)
             mesh_timer.stop("decimate")
@@ -492,7 +485,7 @@ class SurfaceNetsMesher(DMMesher):
     4. Crossing point computation & averaging per cell
     5. Quad assembly for each sign-change edge
     """
-    def mesh(self, field: FRepField, cell_size: float) -> tuple:
+    def mesh(self, field: FRepField, cell_size: float, decimate=False, deduplicate=True, **kwargs) -> tuple:
         min_b, max_b = field.bounding_box()
 
         def _pad(lo, hi):
@@ -785,12 +778,12 @@ class SurfaceNetsMesher(DMMesher):
         flat_idx = np.hstack([tri_idx, sentinel]).ravel()
         mesh_timer.stop("mesh_build")
 
-        if get_decimate_enabled():
+        if decimate:
             mesh_timer.start("decimate")
             flat_verts, flat_idx = decimate_flat_tris(flat_verts, flat_idx)
             mesh_timer.stop("decimate")
 
-        if get_deduplicate_enabled():
+        if deduplicate:
             mesh_timer.start("deduplicate")
             flat_verts, flat_idx = deduplicate_verts(flat_verts, flat_idx)
             mesh_timer.stop("deduplicate")
@@ -813,7 +806,7 @@ class DualContouringMesher(DMMesher):
     5. Batch solve QEFs using SVD
     6. Assemble quads from dual vertices
     """
-    def mesh(self, field: FRepField, cell_size: float) -> tuple:
+    def mesh(self, field: FRepField, cell_size: float, decimate=False, deduplicate=True, **kwargs) -> tuple:
         min_b, max_b = field.bounding_box()
 
         def _pad(lo, hi):
@@ -1063,12 +1056,12 @@ class DualContouringMesher(DMMesher):
         flat_idx = np.hstack([tri_idx, sentinel]).ravel()
         mesh_timer.stop("mesh_build")
 
-        if get_decimate_enabled():
+        if decimate:
             mesh_timer.start("decimate")
             flat_verts, flat_idx = decimate_flat_tris(flat_verts, flat_idx)
             mesh_timer.stop("decimate")
 
-        if get_deduplicate_enabled():
+        if deduplicate:
             mesh_timer.start("deduplicate")
             flat_verts, flat_idx = deduplicate_verts(flat_verts, flat_idx)
             mesh_timer.stop("deduplicate")
@@ -1321,11 +1314,11 @@ def deduplicate_verts(flat_verts, flat_idx, tol=1e-5):
 
 
 def get_active_mesher(type_override=None) -> DMMesher:
-    """Return the active mesher based on global settings or a specific type override.
+    """Return the active mesher based on type override, defaulting to Marching Cubes (0).
     
     Handles both integer indices and string labels from FreeCAD's PropertyEnumeration.
     """
-    st = type_override if type_override is not None else get_meshing_type()
+    st = type_override if type_override is not None else 0
     
     # Map index or label to worker class
     # Order: 0: MC, 1: AMC, 2: SN, 3: DC

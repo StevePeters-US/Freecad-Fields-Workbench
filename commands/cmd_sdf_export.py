@@ -9,6 +9,7 @@ import FreeCADGui
 import Part
 import numpy as np
 from core import dm_logger
+from PySide import QtCore, QtGui
 
 
 class CommandSDFToShape:
@@ -21,9 +22,7 @@ class CommandSDFToShape:
             'ToolTip': (
                 'Generate a triangle mesh from the selected F-Rep object\n'
                 'and create a Part.Shape solid.\n\n'
-                'Resolution is controlled by the MeshingCellSize property\n'
-                'on the object (or the global setting if unset).\n'
-                'Use 0.1 mm for CNC-quality output.'
+                'Meshing parameters are configured locally in the export dialog.'
             ),
         }
 
@@ -43,27 +42,28 @@ class CommandSDFToShape:
         proxy = getattr(obj, "Proxy", None)
         field = getattr(proxy, "FRepField", None) if proxy else None
         if field is None:
-            dm_logger.error(
-                f"SDF to Shape: '{obj.Label}' has no FRepField."
-            )
+            dm_logger.error(f"SDF to Shape: '{obj.Label}' has no FRepField.")
             return
 
+        # Show local export dialog
+        from PySide import QtGui
+        dlg = _ExportDialog(FreeCADGui.getMainWindow(), obj.Label)
+        if not dlg.exec_():
+            return
+
+        params = dlg.get_params()
+        
         try:
-            from core.dm_object import get_meshing_cell_size
             from core.dm_mesher import get_active_mesher
 
-            # Use the object's own cell size if set, else global default
-            cell_size = float(
-                getattr(obj, "MeshingCellSize", get_meshing_cell_size())
-            )
-            m_type = getattr(obj, "MeshingType", None)
+            cell_size = params['cell_size']
+            m_type = params['meshing_type']
             mesher = get_active_mesher(type_override=m_type)
 
             dm_logger.info(
-                f"SDF to Shape: meshing '{obj.Label}' at "
-                f"{cell_size:.2f} mm..."
+                f"SDF to Shape: meshing '{obj.Label}' at {cell_size:.2f} mm..."
             )
-            result = mesher.mesh(field, cell_size=cell_size)
+            result = mesher.mesh(field, **params)
             if result is None:
                 dm_logger.error("SDF to Shape: mesher returned None.")
                 return
@@ -106,17 +106,78 @@ class CommandSDFToShape:
             traceback.print_exc()
 
 
+class _ExportDialog(QtGui.QDialog):
+    def __init__(self, parent, label):
+        super().__init__(parent)
+        self.setWindowTitle(f"Mesh Export: {label}")
+        self.setMinimumWidth(350)
+        
+        layout = QtGui.QFormLayout(self)
+        
+        # Meshing Type
+        self._type_combo = QtGui.QComboBox()
+        self._type_combo.addItems([
+            "Marching Cubes (Standard)",
+            "Adaptive Marching Cubes",
+            "Surface Nets",
+            "Dual Contouring"
+        ])
+        layout.addRow("Algorithm:", self._type_combo)
+        
+        # Resolution (Cell Size)
+        self._res_spin = QtGui.QDoubleSpinBox()
+        self._res_spin.setRange(0.01, 10.0)
+        self._res_spin.setSingleStep(0.1)
+        self._res_spin.setDecimals(2)
+        self._res_spin.setValue(1.0)
+        self._res_spin.setToolTip("Cell size in mm (smaller = more detail). 0.1mm is high quality.")
+        layout.addRow("Resolution (mm):", self._res_spin)
+        
+        # Curvature (for AMC)
+        self._curv_spin = QtGui.QDoubleSpinBox()
+        self._curv_spin.setRange(0.01, 1.0)
+        self._curv_spin.setSingleStep(0.05)
+        self._curv_spin.setValue(0.1)
+        self._curv_spin.setToolTip("Curvature threshold (AMC only). Lower = more detail on edges.")
+        layout.addRow("Curvature Threshold:", self._curv_spin)
+        
+        # Decimate
+        self._decimate_check = QtGui.QCheckBox()
+        self._decimate_check.setChecked(True)
+        self._decimate_check.setToolTip("Remove redundant triangles from flat areas.")
+        layout.addRow("Decimate Mesh:", self._decimate_check)
+
+        # Deduplicate 
+        self._dedup_check = QtGui.QCheckBox()
+        self._dedup_check.setChecked(True)
+        self._dedup_check.setToolTip("Merge coincidental vertices.")
+        layout.addRow("Deduplicate Vertices:", self._dedup_check)
+
+        # Buttons
+        btn_box = QtGui.QDialogButtonBox(
+            QtGui.QDialogButtonBox.Ok | QtGui.QDialogButtonBox.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addRow(btn_box)
+
+    def get_params(self):
+        return {
+            'meshing_type': self._type_combo.currentIndex(),
+            'cell_size': self._res_spin.value(),
+            'curvature_threshold': self._curv_spin.value(),
+            'decimate': self._decimate_check.isChecked(),
+            'deduplicate': self._dedup_check.isChecked()
+        }
+
+
 def _triangles_to_shape(flat_verts, flat_idx):
     """Convert Coin3D-format triangle arrays to a Part.Shape.
-
-    Args:
-        flat_verts: (N*3, 3) float32 — one row per triangle vertex
-        flat_idx:   (N*4,) int32 — [v0, v1, v2, -1, ...] sentinels
-
-    Returns:
-        Part.Shape (solid if possible, shell otherwise), or None on failure.
     """
     import Mesh
+
+    # ... remaining function is fine ...
+
 
     # Extract triangle vertex indices (skip -1 sentinels)
     idx = flat_idx.reshape(-1, 4)[:, :3]  # (N_tris, 3)

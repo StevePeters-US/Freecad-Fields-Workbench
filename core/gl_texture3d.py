@@ -70,6 +70,21 @@ _gl.glTexImage3D.argtypes = [
 ]
 _gl.glTexImage3D.restype = None
 
+_gl.glTexSubImage3D.argtypes = [
+    ctypes.c_uint,   # target
+    ctypes.c_int,    # level
+    ctypes.c_int,    # xoffset
+    ctypes.c_int,    # yoffset
+    ctypes.c_int,    # zoffset
+    ctypes.c_int,    # width
+    ctypes.c_int,    # height
+    ctypes.c_int,    # depth
+    ctypes.c_uint,   # format
+    ctypes.c_uint,   # type
+    ctypes.c_void_p, # pixels
+]
+_gl.glTexSubImage3D.restype = None
+
 _gl.glTexParameteri.argtypes = [ctypes.c_uint, ctypes.c_uint, ctypes.c_int]
 _gl.glTexParameteri.restype = None
 
@@ -87,6 +102,8 @@ class GLTexture3D:
         self._depth = 0
         self._data = None       # Keep a reference to prevent GC
         self._needs_upload = False
+        self._pending_slice = None   # (z_offset, width, height, depth, data) or None
+        self._needs_partial  = False
 
         # SoCallback node — add this to the scene graph BEFORE the shader.
         # On each render traversal it binds the texture to unit 0.
@@ -104,6 +121,21 @@ class GLTexture3D:
         else:
             self._data = (ctypes.c_ubyte * len(rgba_bytes)).from_buffer_copy(bytes(rgba_bytes))
         self._needs_upload = True
+        self._needs_partial = False # Full upload supercedes partial
+
+    def update_slice(self, z_offset, width, height, depth, rgba_bytes):
+        """Queue a partial z-slice update via glTexSubImage3D.
+
+        The texture must already exist (upload() must have been called at least once
+        with the full dimensions). width/height must not exceed the current texture
+        width/height.
+        """
+        if isinstance(rgba_bytes, (bytes, bytearray)):
+            data = (ctypes.c_ubyte * len(rgba_bytes)).from_buffer_copy(rgba_bytes)
+        else:
+            data = (ctypes.c_ubyte * len(rgba_bytes)).from_buffer_copy(bytes(rgba_bytes))
+        self._pending_slice = (z_offset, width, height, depth, data)
+        self._needs_partial = True
 
     def _gl_callback(self, userdata, action):
         """Called by Coin3D during scene graph traversal."""
@@ -146,6 +178,22 @@ class GLTexture3D:
             _gl.glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
             _gl.glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE)
             self._needs_upload = False
+            self._needs_partial = False
+        
+        elif self._needs_partial and self._pending_slice is not None and self._tex_id != 0:
+            z_off, w, h, d, data = self._pending_slice
+            _gl.glPixelStorei(GL_UNPACK_ALIGNMENT, 1)
+            _gl.glTexSubImage3D(
+                GL_TEXTURE_3D,
+                0,          # level
+                0, 0, z_off,   # xoffset, yoffset, zoffset
+                w, h, d,    # width, height, depth of the sub-region
+                GL_RGBA,
+                GL_UNSIGNED_BYTE,
+                ctypes.cast(data, ctypes.c_void_p),
+            )
+            self._pending_slice = None
+            self._needs_partial = False
 
     def destroy(self):
         """Delete the GL texture."""
