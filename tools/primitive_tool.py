@@ -25,6 +25,7 @@ class PrimitiveCreatorBase(DMBase):
     """Base class for F-Rep primitive creator tools with live mesh preview."""
     
     _last_working_plane = None  # Shared across all primitive tools
+    _last_wp_is_fallback = True
 
     def __init__(self):
         super().__init__()
@@ -42,16 +43,22 @@ class PrimitiveCreatorBase(DMBase):
         # Unified workplane pre-load logic
         self._init_working_plane()
 
+    def is_in_progress(self):
+        """Returns True if we have started clicking (state > 0)."""
+        return getattr(self, "state", 0) > 0
+
     def _init_working_plane(self):
         """Pre-load a workplane if one isn't already detected from selection."""
         if not self.working_plane:
             if PrimitiveCreatorBase._last_working_plane is not None:
                 self.working_plane = PrimitiveCreatorBase._last_working_plane
+                self._working_plane_is_fallback = PrimitiveCreatorBase._last_wp_is_fallback
             else:
                 visible_wps = self.get_visible_workplanes()
                 if visible_wps:
                     wp = visible_wps[0]
                     self.working_plane = wp.getGlobalPlacement() if hasattr(wp, "getGlobalPlacement") else wp.Placement
+                    self._working_plane_is_fallback = False
 
     def _get_preview_field(self):
         """Subclasses return the current field based on click state + current_point."""
@@ -114,15 +121,21 @@ class PrimitiveCreatorBase(DMBase):
         finally:
             self._update_pending = False
 
-    def _finalize_object(self, name):
+    def _finalize_object(self, name, terminate=True):
         """Commit the preview object as the final result, upgrading its mesh resolution."""
         field = self._get_final_field()
         points = self._get_final_points()
         if field is None:
+            if terminate: self.terminate()
             return
-        self._finished = True  # Prevent _do_terminate from cleaning up the committed object
+        
+        # We don't set self._finished = True here if we want to repeat, 
+        # because _finished prevents _do_terminate from cleaning up.
+        # But we DO want to sever the preview object.
         QtCore.QTimer.singleShot(0, lambda: self.__do_commit(name, field, points))
-        self.terminate()
+        if terminate:
+            self._finished = True
+            self.terminate()
 
     def __do_commit(self, name, field, points):
         obj = self._preview_obj
@@ -164,13 +177,28 @@ class PrimitiveCreatorBase(DMBase):
 
 
     def finish(self):
-        """Standard 'Accept' behavior for primitives."""
-        # Trigger finalization if we have at least started (state > 0)
-        if self.state > 0:
+        """Standard 'Accept' behavior for primitives. Finishes object and resets tool."""
+        if self.is_in_progress():
             name = type(self).__name__.replace("Creator", "")
-            self._finalize_object(name)
+            # Finalize but DO NOT terminate the tool session
+            self._finalize_object(name, terminate=False)
+            # Reset for next placement (clears points and visuals)
+            self.reset_state()
+            dm_logger.info(f"{name} accepted. Tool remains active.")
         else:
             self.terminate()
+
+    def reset_state(self):
+        """Override to clear internal primitive state (points, visuals)."""
+        super().reset_state()
+        self.points = []
+        for dm_pt in self.dm_points:
+            dm_pt.undraw()
+        self.dm_points.clear()
+        if self.dm_line_set:
+            self.dm_line_set.undraw()
+            self.dm_line_set = None
+        self.view.redraw()
 
     def _create_frep_object(self, name, field, points=None):
         """Helper to create the FreeCAD object and assign the field (for 1-shot creation)."""
@@ -219,6 +247,7 @@ class BoxCreator(PrimitiveCreatorBase):
         if self.state == 0:
             # Remember this workplane for future primitive tool sessions.
             PrimitiveCreatorBase._last_working_plane = self.working_plane
+            PrimitiveCreatorBase._last_wp_is_fallback = self._working_plane_is_fallback
             # 1st click - anchor the tool
             self.points.append(pos)
             self.state = 1
@@ -417,6 +446,7 @@ class SphereCreator(PrimitiveCreatorBase):
 
         if self.state == 0:
             PrimitiveCreatorBase._last_working_plane = self.working_plane
+            PrimitiveCreatorBase._last_wp_is_fallback = self._working_plane_is_fallback
 
             self.center = pos
             self.state = 1
@@ -522,6 +552,7 @@ class CylinderCreator(PrimitiveCreatorBase):
 
         if self.state == 0:
             PrimitiveCreatorBase._last_working_plane = self.working_plane
+            PrimitiveCreatorBase._last_wp_is_fallback = self._working_plane_is_fallback
 
             self.points.append(pos)
             self.state = 1
@@ -632,17 +663,22 @@ class CylinderCreator(PrimitiveCreatorBase):
         loc_axis = FreeCAD.Vector(0, 0, 1)
         
         if self.state == 1:
-            radius = (loc_current - loc_base).Length
+            # Radius is distance in local XY plane
+            radius = math.sqrt((loc_current.x - loc_base.x)**2 + (loc_current.y - loc_base.y)**2)
             height = 1.0  # minimal placeholder
         else:
             loc_p1 = self.to_local(self.points[1])
-            radius = (loc_p1 - loc_base).Length
+            radius = math.sqrt((loc_p1.x - loc_base.x)**2 + (loc_p1.y - loc_base.y)**2)
             height = (loc_current - loc_base).z # Project onto local Z
             
         if radius < 0.01:
             return None
             
-        return SdfCylinderField(loc_base, loc_axis, radius, max(abs(height), 0.01), placement=wp)
+        # Ensure height isn't exactly zero to avoid SDF singularities
+        if abs(height) < 0.01:
+            height = 0.01 if height >= 0 else -0.01
+            
+        return SdfCylinderField(loc_base, loc_axis, radius, height, placement=wp)
 
     def _get_final_field(self):
         pts = list(self.points)
@@ -658,10 +694,13 @@ class CylinderCreator(PrimitiveCreatorBase):
         loc_p_height = self.to_local(pts[2])
         
         loc_axis = FreeCAD.Vector(0, 0, 1)
-        radius = (loc_p_rad - loc_base).Length
+        radius = math.sqrt((loc_p_rad - loc_base).x**2 + (loc_p_rad - loc_base).y**2)
         height = (loc_p_height - loc_base).z
         
-        return SdfCylinderField(loc_base, loc_axis, radius, abs(height), placement=wp)
+        if abs(height) < 0.01:
+            height = 0.01 if height >= 0 else -0.01
+            
+        return SdfCylinderField(loc_base, loc_axis, radius, height, placement=wp)
 
     def _get_final_points(self):
         if len(self.points) < 3:

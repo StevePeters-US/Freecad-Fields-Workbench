@@ -103,6 +103,7 @@ class DMBase:
         self.state         = 0
         
         self.working_plane = None
+        self._working_plane_is_fallback = True  # Default to True until a real WP is hit
         self.snap_face = None
         self.snap_enabled = False
         self.snap_type = "Workplane Grid"
@@ -200,8 +201,13 @@ class DMBase:
             # Update plane if one isn't set, or if we are in the initial 'Idle' state
             # where we want to snap to whatever surface is under the first click.
             if self.working_plane is None or getattr(self, "state", 1) == 0:
-                dm_logger.info(f"DEBUG _resolve_wp_click: HIT on {type(wp_hit)}. state={getattr(self, 'state', None)}")
-                old_rot = self.working_plane.Rotation if self.working_plane else None
+                dm_logger.debug(f"DEBUG _resolve_wp_click: HIT on {type(wp_hit)}. state={getattr(self, 'state', None)}")
+                
+                # Determine if this is a "real" persistent WorkPlane object
+                is_real_wp = False
+                if hasattr(wp_hit, "Proxy") and wp_hit.Proxy.__class__.__name__ == "DMWorkPlane":
+                    is_real_wp = True
+                
                 if hasattr(wp_hit, "getGlobalPlacement"):
                     self.working_plane = wp_hit.getGlobalPlacement()
                 elif hasattr(wp_hit, "Placement"):
@@ -209,8 +215,8 @@ class DMBase:
                 else:
                     # Assume it's already a FreeCAD.Placement or None
                     self.working_plane = wp_hit
-                new_rot = self.working_plane.Rotation if self.working_plane else None
-                dm_logger.info(f"DEBUG _resolve_wp_click: updated working_plane. Old rot: {old_rot}, New rot: {new_rot}")
+                
+                self._working_plane_is_fallback = not is_real_wp
         elif self.working_plane is None and getattr(self, "state", 1) == 0:
             # If no hit, and no current plane, use the class-level fallback if available.
             # We look for _last_working_plane on the subclass.
@@ -324,7 +330,12 @@ class DMBase:
 
 
     def finish(self):
-        pass
+        """Standard 'Accept' behavior. Override in subclasses to commit and reset/terminate."""
+        self.terminate()
+
+    def is_in_progress(self):
+        """Returns True if the tool has active state/points that can be 'Accepted'."""
+        return False
 
     def set_panel(self, panel):
         self.panel = panel
@@ -371,10 +382,17 @@ class DMBase:
             if obj is not None:
                 skip.append(obj)
 
+        # If we are in state 0 (hovering) and the current plane is just a fallback 
+        # (like a previous face snap or viewport alignment), we ignore it so 
+        # that get_mouse_plane_pt can recalculate the best transient snap/alignment.
+        active_plane = getattr(self, "working_plane", None)
+        if getattr(self, "state", 0) == 0 and getattr(self, "_working_plane_is_fallback", True):
+            active_plane = None
+
         result = self.projector.get_mouse_plane_pt(
             event_dict,
             place_on_geometry=getattr(self, "place_on_geometry", False),
-            working_plane=getattr(self, "working_plane", None),
+            working_plane=active_plane,
             skip_objects=skip or None
         )
         if isinstance(result, tuple):
@@ -411,7 +429,12 @@ class DMBase:
             
         if not getattr(self, '_finish_scheduled', False):
             self._finish_scheduled = True
-            QtCore.QTimer.singleShot(0, self.finish)
+            if self.is_in_progress():
+                dm_logger.debug(f"{self.__class__.__name__}: RMB Accept (in-progress)")
+                QtCore.QTimer.singleShot(0, self.finish)
+            else:
+                dm_logger.debug(f"{self.__class__.__name__}: RMB Exit (idle)")
+                QtCore.QTimer.singleShot(0, self.terminate)
         return True # Consume Press
 
     def on_button1_up(self, event_dict):
@@ -549,11 +572,12 @@ class DMBase:
         ]
 
     def reset_state(self):
-        """Resets the tool to state 1."""
-        self.state = 1
+        """Resets the tool to its initial idle state (state 0)."""
+        self.state = 0
         self.start_point = None
         self.current_point = None
         self.height = 0.0
+        self._finish_scheduled = False
         self.on_state_change(self.state)
         self.view.redraw()
 
@@ -624,14 +648,12 @@ class DMBase:
                 
                 # Setup working_plane if we hit something or use fallback
                 if wp_hit:
-                    dm_logger.info(f"DEBUG handle_click: Extracted wp_hit of type {type(wp_hit)}")
                     if hasattr(wp_hit, "getGlobalPlacement"):
                         self.working_plane = wp_hit.getGlobalPlacement()
                     elif hasattr(wp_hit, "Placement"):
                         self.working_plane = wp_hit.Placement
                     else:
                         self.working_plane = wp_hit
-                    dm_logger.info(f"DEBUG handle_click: working_plane rot set to {self.working_plane.Rotation if self.working_plane else None}")
                 elif not self.working_plane:
                     # Fallback to camera facing if nothing hit and no plane set
                     n, o = self.get_base_plane()
@@ -865,6 +887,8 @@ class NURBSPrimitiveCreator(DMBase):
         """Schedule the finalization to happen safely outside the event loop."""
         if self._finished:
             return
+        # If we have an active object, finalize it but DON'T terminate yet if we want to repeat.
+        # Subclasses (like PointCreator) might override this to keep the tool active.
         QtCore.QTimer.singleShot(0, self._do_finish)
 
 

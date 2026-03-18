@@ -32,6 +32,10 @@ class PointCreator(NURBSPrimitiveCreator):
             dm_logger.debug(f"PointCreator._do_terminate: {e}")
         super()._do_terminate()
 
+    def is_in_progress(self):
+        """Points are committed instantly on L-click, so the tool is never 'in progress' for RMB accept."""
+        return False
+
     def handle_click(self, event_dict):
         try:
             if event_dict.get("Button") != "BUTTON1":
@@ -71,21 +75,7 @@ class PointCreator(NURBSPrimitiveCreator):
                 self._cursor_dm_pt.position = pt
                 self._cursor_dm_pt.update_draw(radius=self._compute_handle_radius(ref_pt=pt))
 
-    def _do_finish(self):
-        # Called when right clicking (i.e. accept and finish)
-        # We want to keep all points dropped by L-click, but discard the preview point floating at the cursor
-        if self._active_obj:
-            try:
-                doc = self.doc or FreeCAD.ActiveDocument
-                if doc:
-                    doc.removeObject(self._active_obj.Name)
-                    doc.recompute()
-            except Exception as e:
-                dm_logger.debug(f"PointCreator._do_finish: Failed to remove preview object: {e}")
-            self._active_obj = None
-            
-        self._finished = True
-        self.terminate()
+    # Use base class finish() / _do_finish() which calls terminate()
 
     def handle_keyboard(self, event_dict):
         key = str(event_dict.get("Key", "None")).upper()

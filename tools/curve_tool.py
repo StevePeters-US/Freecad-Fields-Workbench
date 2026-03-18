@@ -36,6 +36,10 @@ class CurveCreator(NURBSPrimitiveCreator):
             dm_logger.debug(f"CurveCreator._do_terminate: {e}")
         super()._do_terminate()
 
+    def is_in_progress(self):
+        """Returns True if the curve has at least one point."""
+        return len(self.points) > 0
+
     # ------------------------------------------------------------------
     # Sphere helpers
     # ------------------------------------------------------------------
@@ -217,10 +221,11 @@ class CurveCreator(NURBSPrimitiveCreator):
         pass
 
     def _do_finish(self):
-        """Finalize the curve."""
+        """Finalize the curve and reset tool for next curve."""
         if len(self.points) < 2:
             self.terminate()
             return
+
         # Drop the trailing mouse-follow point and do a synchronous final
         # update (bypass the throttle) so the object is correct before we
         # release ownership.
@@ -228,9 +233,22 @@ class CurveCreator(NURBSPrimitiveCreator):
         self._update_pending = False
         self._do_update_preview()
         self._on_committed(self._active_obj)
-        self._finished = True
+        
+        # Reset tool state for next curve
         self._active_obj = None
-        self.terminate()
+        self.reset_state()
+        dm_logger.info("Curve accepted. Tool remains active.")
+        self.view.redraw()
+
+    def reset_state(self):
+        """Override to clear internal curve state (points, visuals)."""
+        super().reset_state()
+        self.points = []
+        for dm_pt in self.dm_points:
+            dm_pt.undraw()
+        self.dm_points.clear()
+        self.is_closed = False
+        self.view.redraw()
 
     def on_tool_option_0(self):
         dm_logger.info("snapping curve tool")

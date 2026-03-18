@@ -34,7 +34,7 @@ class SdfCylinderField(SdfField):
         radial_vec = pa - self.axis * h
         d_radial = radial_vec.Length - self.radius
         h_center = h - (self.height / 2.0)
-        d_axial = abs(h_center) - (self.height / 2.0)
+        d_axial = abs(h_center) - (abs(self.height) / 2.0)
         out_dist = FreeCAD.Vector(max(d_radial, 0.0), max(d_axial, 0.0), 0).Length
         in_dist = min(max(d_radial, d_axial), 0.0)
         return out_dist + in_dist
@@ -57,7 +57,7 @@ class SdfCylinderField(SdfField):
         d_radial = np.linalg.norm(radial, axis=1) - self.radius  # (N,)
 
         h_center = h - self.height / 2.0
-        d_axial = np.abs(h_center) - self.height / 2.0            # (N,)
+        d_axial = np.abs(h_center) - np.abs(self.height) / 2.0            # (N,)
 
         d_r_pos = np.maximum(d_radial, 0.0)
         d_a_pos = np.maximum(d_axial, 0.0)

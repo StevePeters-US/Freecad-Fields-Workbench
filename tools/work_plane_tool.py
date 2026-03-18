@@ -101,6 +101,10 @@ class WorkPlaneCreator(DMBase):
 
         self.update_handles()
 
+    def is_in_progress(self):
+        """Returns True if a workplane has been dropped (state > 0)."""
+        return self.state > 0
+
     def _do_terminate(self):
         if hasattr(self, "_terminated") and self._terminated:
             return
@@ -144,15 +148,43 @@ class WorkPlaneCreator(DMBase):
         super()._do_terminate()
 
     def finish(self):
+        """Accept the current workplane and reset for another one."""
         self._finished = True
-        if getattr(self, "state", 0) == 0:
+        if self.state > 0:
             if self.preview_obj:
                 self.preview_obj.Label = "Work Plane"
                 self.target_wp = self.preview_obj
                 self.preview_obj = None
+            
+            if self.target_wp:
+                # Add to document properly if it's new
+                if getattr(self, "_is_new", False):
+                    # It's already in doc if created via create_dm_workplane
+                    pass
+                
+                dm_logger.info(f"WorkPlane accepted: {self.target_wp.Label}")
+                self._finished = False # Reset for next one
+                self._is_new = True # Next one will be new again
+                self.target_wp = None
+                self.reset_state()
+                # Create fresh preview for the next one
+                try:
+                    self.preview_obj = create_dm_workplane(name="DM_WorkPlane_Preview")
+                    self.preview_obj.Label = "Work Plane Preview"
+                except Exception as e:
+                    dm_logger.error(f"WorkPlaneCreator repeat preview error: {e}")
+                
                 if FreeCAD.ActiveDocument:
                     FreeCAD.ActiveDocument.recompute()
-        self.terminate()
+        else:
+            self.terminate()
+
+    def reset_state(self):
+        """Clear internal state for next workplane."""
+        super().reset_state()
+        self.active_corner_idx = -1
+        # Clear handles visuals if needed (they will be updated on next move)
+        self.update_handles()
 
     def get_camera_facing_placement(self, mouse_pt):
         """Delegated to DMInputManager."""
