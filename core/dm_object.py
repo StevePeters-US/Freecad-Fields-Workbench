@@ -13,6 +13,7 @@ generate the native BRep geometry.
 """
 
 import FreeCAD
+import FreeCADGui
 import Part
 try:
     from pivy import coin
@@ -140,7 +141,6 @@ def apply_near_clip_override():
     if dist <= 0.0:
         return  # auto mode
     try:
-        import FreeCADGui
         from . import dm_logger
         view = FreeCADGui.ActiveDocument.ActiveView
         if view:
@@ -605,7 +605,6 @@ def create_dm_object(name, shape_type, params=None, placement=None):
         obj.touch()
         doc.recompute()
         
-        import FreeCADGui
         if FreeCAD.GuiUp:
             try:
                 FreeCADGui.Selection.clearSelection()

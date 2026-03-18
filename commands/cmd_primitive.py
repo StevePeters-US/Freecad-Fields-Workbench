@@ -42,12 +42,10 @@ class CommandDMCreation:
     def getIsChecked(self):
         from core.dm_tool_manager import DMToolManager
         active_tool = DMToolManager.get_instance().get_active_tool()
-        # dm_logger.debug(f"getIsChecked for {self.c_type}: active_tool={active_tool}")
         if not active_tool:
             return False
         
         tool_name = active_tool.__class__.__name__
-        # dm_logger.debug(f"getIsChecked for {self.c_type}: tool_name={tool_name}")
         if self.c_type == "Box":
             return tool_name == "BoxCreator"
         if self.c_type == "Sphere":

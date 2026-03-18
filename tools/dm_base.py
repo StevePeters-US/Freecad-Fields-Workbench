@@ -126,7 +126,12 @@ class DMBase:
         self._update_pending = False
 
         # Unified object selection detection for edit mode
-        self._detect_selected_object()
+        # Defer calling to ensure subclass __init__ is finished
+        from PySide import QtCore
+        QtCore.QTimer.singleShot(0, self._detect_selected_object)
+        
+        # Force UI update for icon highlighting
+        FreeCADGui.updateGui()
 
     def _set_cursor(self, cursor):
         """Set override cursor, tracking state."""
@@ -245,41 +250,49 @@ class DMBase:
     def _detect_selected_object(self):
         """Checks if a compatible object is selected and enters edit mode."""
         handled_types = self.get_handled_types()
-        dm_logger.debug(f"{self.__class__.__name__} handled_types: {handled_types}")
+        # dm_logger.debug(f"{self.__class__.__name__} handled_types: {handled_types}")
         
         # Always allow WorkPlane selection even if not in handled_types 
         # (for tools that need a base plane but don't edit it).
         self._detect_selected_workplane()
         
         if not handled_types:
+            FreeCADGui.updateGui()
             return
             
         try:
             selection = FreeCADGui.Selection.getSelection()
-            dm_logger.debug(f"Selection: {[o.Label for o in selection]}")
+            # dm_logger.debug(f"Selection: {[o.Label for o in selection]}")
             if not selection:
+                FreeCADGui.updateGui()
                 return
                 
             for obj in selection:
-                # 1. Check ShapeType property
-                st = getattr(obj, "ShapeType", None)
-                dm_logger.debug(f"Checking object {obj.Label}: ShapeType={st}")
-                if st in handled_types:
-                    dm_logger.info(f"Entering edit mode for {obj.Label} (ShapeType match)")
+                # 1. Check ShapeType property (robustly)
+                st = None
+                if hasattr(obj, "ShapeType"):
+                    st = str(obj.ShapeType)
+                elif hasattr(obj, "Proxy") and hasattr(obj.Proxy, "ShapeType"):
+                    st = str(obj.Proxy.ShapeType)
+                
+                if st and st in handled_types:
                     self.edit_object(obj)
+                    FreeCADGui.updateGui()
                     return
                 
                 # 2. Check Proxy class name
                 proxy = getattr(obj, "Proxy", None)
                 proxy_name = proxy.__class__.__name__ if proxy else None
-                dm_logger.debug(f"Checking object {obj.Label}: Proxy={proxy_name}")
                 if proxy_name in handled_types:
-                    dm_logger.info(f"Entering edit mode for {obj.Label} (Proxy match)")
                     self.edit_object(obj)
+                    FreeCADGui.updateGui()
                     return
+            
+            FreeCADGui.updateGui()
                     
         except Exception as e:
             dm_logger.debug(f"Error detecting selected object: {e}")
+            FreeCADGui.updateGui()
 
     def get_handled_types(self):
         """Returns a list of ShapeType or Proxy class names handled by this tool."""
@@ -355,7 +368,6 @@ class DMBase:
             
             # Close task panel if open
             if getattr(self, "_dialog_open", False):
-                import FreeCADGui
                 FreeCADGui.Control.closeDialog()
                 self._dialog_open = False
             
@@ -417,7 +429,6 @@ class DMBase:
             except Exception:
                 pass
 
-            import FreeCADGui
             FreeCADGui.updateGui()
 
         except Exception as e:
@@ -804,6 +815,7 @@ class DMBase:
 
     def on_state_change(self, new_state):
         self.update_ui()
+        FreeCADGui.updateGui()
 
     def apply_height(self, height_delta):
         if hasattr(self, "height"):
