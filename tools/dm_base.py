@@ -172,10 +172,25 @@ class DMBase:
 
     def _resolve_wp_click(self, event_dict, skip_objects=None):
         """
-        Call get_mouse_plane_pt, update self.working_plane from wp_hit 
+        Call get_mouse_plane_pt, update self.working_plane from wp_hit
         if in state 0 (Idle) or if not already set.
         """
-        result = self.get_mouse_plane_pt(event_dict)
+        # Merge caller's skip list with own preview/active objects
+        all_skip = list(skip_objects) if skip_objects else []
+        for attr in ("_preview_obj", "_active_obj"):
+            obj = getattr(self, attr, None)
+            if obj is not None and obj not in all_skip:
+                all_skip.append(obj)
+
+        # Call projector directly to preserve the (pt, wp_hit) tuple.
+        # DMBase.get_mouse_plane_pt strips wp_hit before returning, so wp_hit
+        # would always be None and working_plane would never update on click.
+        result = self.projector.get_mouse_plane_pt(
+            event_dict,
+            place_on_geometry=getattr(self, "place_on_geometry", False),
+            working_plane=getattr(self, "working_plane", None),
+            skip_objects=all_skip or None
+        )
         if isinstance(result, tuple):
             pos, wp_hit = result
         else:
@@ -185,6 +200,8 @@ class DMBase:
             # Update plane if one isn't set, or if we are in the initial 'Idle' state
             # where we want to snap to whatever surface is under the first click.
             if self.working_plane is None or getattr(self, "state", 1) == 0:
+                dm_logger.info(f"DEBUG _resolve_wp_click: HIT on {type(wp_hit)}. state={getattr(self, 'state', None)}")
+                old_rot = self.working_plane.Rotation if self.working_plane else None
                 if hasattr(wp_hit, "getGlobalPlacement"):
                     self.working_plane = wp_hit.getGlobalPlacement()
                 elif hasattr(wp_hit, "Placement"):
@@ -192,6 +209,14 @@ class DMBase:
                 else:
                     # Assume it's already a FreeCAD.Placement or None
                     self.working_plane = wp_hit
+                new_rot = self.working_plane.Rotation if self.working_plane else None
+                dm_logger.info(f"DEBUG _resolve_wp_click: updated working_plane. Old rot: {old_rot}, New rot: {new_rot}")
+        elif self.working_plane is None and getattr(self, "state", 1) == 0:
+            # If no hit, and no current plane, use the class-level fallback if available.
+            # We look for _last_working_plane on the subclass.
+            last_wp = getattr(type(self), "_last_working_plane", None)
+            if last_wp:
+                self.working_plane = last_wp
             
         return pos
 
@@ -576,8 +601,13 @@ class DMBase:
             if btn != "BUTTON1":
                 return False
 
-            n, o = self.get_base_plane()
-            pt = self.get_mouse_world_pos(event_dict, n, o)
+            # Use get_mouse_plane_pt to respect workplanes and snapping
+            result = self.get_mouse_plane_pt(event_dict)
+            if isinstance(result, tuple):
+                pt, wp_hit = result
+            else:
+                pt, wp_hit = result, None
+
             if pt is None:
                 dm_logger.warn("DEBUG: handle_click: pt is None!")
                 return False
@@ -592,9 +622,21 @@ class DMBase:
                 self.start_point = pt
                 self.current_point = pt
                 
-                # Setup working_plane based on the base plane for local transformations
-                rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), n)
-                self.working_plane = FreeCAD.Placement(pt, rot)
+                # Setup working_plane if we hit something or use fallback
+                if wp_hit:
+                    dm_logger.info(f"DEBUG handle_click: Extracted wp_hit of type {type(wp_hit)}")
+                    if hasattr(wp_hit, "getGlobalPlacement"):
+                        self.working_plane = wp_hit.getGlobalPlacement()
+                    elif hasattr(wp_hit, "Placement"):
+                        self.working_plane = wp_hit.Placement
+                    else:
+                        self.working_plane = wp_hit
+                    dm_logger.info(f"DEBUG handle_click: working_plane rot set to {self.working_plane.Rotation if self.working_plane else None}")
+                elif not self.working_plane:
+                    # Fallback to camera facing if nothing hit and no plane set
+                    n, o = self.get_base_plane()
+                    rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), n)
+                    self.working_plane = FreeCAD.Placement(pt, rot)
                 
                 self.state = 2
                 dm_logger.debug(f"DEBUG: handle_click: Moving to State 2. Start point: {self.start_point}")
@@ -621,9 +663,7 @@ class DMBase:
             self.update_ui()
             
         elif self.state == 1:
-            n, o = self.get_base_plane()
-            pt = self.get_mouse_world_pos(event_dict, n, o)
-            self.current_point = pt
+            self.current_point = self.get_mouse_plane_pt(event_dict)
             self.on_move_state_1(event_dict)
             self.update_preview()
             self.update_ui()

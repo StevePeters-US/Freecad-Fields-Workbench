@@ -23,6 +23,9 @@ def _get_final_cell_size():
 
 class PrimitiveCreatorBase(DMBase):
     """Base class for F-Rep primitive creator tools with live mesh preview."""
+    
+    _last_working_plane = None  # Shared across all primitive tools
+
     def __init__(self):
         super().__init__()
         self._preview_obj = None     # Live FreeCAD object for preview
@@ -35,6 +38,20 @@ class PrimitiveCreatorBase(DMBase):
         self.points_root = coin.SoSeparator()
         if self.view and self.view.getSceneGraph():
             self.view.getSceneGraph().addChild(self.points_root)
+
+        # Unified workplane pre-load logic
+        self._init_working_plane()
+
+    def _init_working_plane(self):
+        """Pre-load a workplane if one isn't already detected from selection."""
+        if not self.working_plane:
+            if PrimitiveCreatorBase._last_working_plane is not None:
+                self.working_plane = PrimitiveCreatorBase._last_working_plane
+            else:
+                visible_wps = self.get_visible_workplanes()
+                if visible_wps:
+                    wp = visible_wps[0]
+                    self.working_plane = wp.getGlobalPlacement() if hasattr(wp, "getGlobalPlacement") else wp.Placement
 
     def _get_preview_field(self):
         """Subclasses return the current field based on click state + current_point."""
@@ -182,24 +199,13 @@ class PrimitiveCreatorBase(DMBase):
 
 
 class BoxCreator(PrimitiveCreatorBase):
-    _last_working_plane = None  # Persists across instances; set on first click
 
     def __init__(self):
         super().__init__()
         self.points = []
         self.current_point = None
         self._height_drag_base = None
-        # Pre-load a workplane for the initial preview, in priority order:
-        #   1. Workplane detected from current selection (_detect_selected_workplane, set by super)
-        #   2. Last workplane clicked during a previous box tool session
-        #   3. First visible workplane in document order (fallback)
-        if not self.working_plane:
-            if BoxCreator._last_working_plane is not None:
-                self.working_plane = BoxCreator._last_working_plane
-            else:
-                visible_wps = self.get_visible_workplanes()
-                if visible_wps:
-                    self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
+
         dm_logger.info("Box Tool: Click 1st corner")
 
 
@@ -211,8 +217,8 @@ class BoxCreator(PrimitiveCreatorBase):
             return True
 
         if self.state == 0:
-            # Remember this workplane for the next invocation of the box tool.
-            BoxCreator._last_working_plane = self.working_plane
+            # Remember this workplane for future primitive tool sessions.
+            PrimitiveCreatorBase._last_working_plane = self.working_plane
             # 1st click - anchor the tool
             self.points.append(pos)
             self.state = 1
@@ -393,21 +399,11 @@ class BoxCreator(PrimitiveCreatorBase):
 
 
 class SphereCreator(PrimitiveCreatorBase):
-    _last_working_plane = None
 
     def __init__(self):
         super().__init__()
         self.center = None
         self.current_point = None
-        # Pre-load a workplane
-
-        if not self.working_plane:
-            if SphereCreator._last_working_plane is not None:
-                self.working_plane = SphereCreator._last_working_plane
-            else:
-                visible_wps = self.get_visible_workplanes()
-                if visible_wps:
-                    self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
 
         dm_logger.info("Sphere Tool: Click center")
 
@@ -420,7 +416,7 @@ class SphereCreator(PrimitiveCreatorBase):
             return True
 
         if self.state == 0:
-            SphereCreator._last_working_plane = self.working_plane
+            PrimitiveCreatorBase._last_working_plane = self.working_plane
 
             self.center = pos
             self.state = 1
@@ -507,22 +503,12 @@ class SphereCreator(PrimitiveCreatorBase):
 
 
 class CylinderCreator(PrimitiveCreatorBase):
-    _last_working_plane = None
 
     def __init__(self):
         super().__init__()
         self.points = []
         self.current_point = None
         self._height_drag_base = None
-        # Pre-load a workplane
-
-        if not self.working_plane:
-            if CylinderCreator._last_working_plane is not None:
-                self.working_plane = CylinderCreator._last_working_plane
-            else:
-                visible_wps = self.get_visible_workplanes()
-                if visible_wps:
-                    self.working_plane = visible_wps[0].getGlobalPlacement() if hasattr(visible_wps[0], "getGlobalPlacement") else visible_wps[0].Placement
 
         dm_logger.info("Cylinder Tool: Click base center")
 
@@ -535,7 +521,7 @@ class CylinderCreator(PrimitiveCreatorBase):
             return True
 
         if self.state == 0:
-            CylinderCreator._last_working_plane = self.working_plane
+            PrimitiveCreatorBase._last_working_plane = self.working_plane
 
             self.points.append(pos)
             self.state = 1

@@ -180,8 +180,17 @@ class ViewProjector:
 
     def get_base_plane(self, wp_obj=None):
         """Returns (normal, origin) for a given workplane, or the default viewport plane."""
-        if wp_obj and hasattr(wp_obj, "Placement"):
-            wp_placement = wp_obj.Placement
+        wp_placement = None
+        if wp_obj:
+             # Prefer getGlobalPlacement to handle nested objects correctly
+             if hasattr(wp_obj, "getGlobalPlacement"):
+                 wp_placement = wp_obj.getGlobalPlacement()
+             elif hasattr(wp_obj, "Placement"):
+                 wp_placement = wp_obj.Placement
+             elif hasattr(wp_obj, "Base") and hasattr(wp_obj, "Rotation"):
+                 wp_placement = wp_obj
+        
+        if wp_placement:
             n = wp_placement.Rotation.multVec(FreeCAD.Vector(0,0,1))
             o = wp_placement.Base
             return n, o
@@ -247,7 +256,10 @@ class ViewProjector:
                 pt_candidate = ray_p + ray_d * t
                 if (pt_candidate - cam_pos).dot(ray_d) <= 0:
                     continue
-                wp_inv = wp.Placement.inverse()
+                
+                # Critical: Use GLOBAL placement for boundary check
+                gpl = wp.getGlobalPlacement() if hasattr(wp, "getGlobalPlacement") else wp.Placement
+                wp_inv = gpl.inverse()
                 local_pt = wp_inv.multVec(pt_candidate)
                 try:
                     l = float(wp.Length)
@@ -282,25 +294,52 @@ class ViewProjector:
             if wp_pt is not None and wp_t <= sdf_t and wp_t <= geom_t:
                 return wp_pt, wp_hit
             
+            # Rotation hint for synthesized placements
+            def synthesize_placement(pt, normal):
+                # Ensure normal faces toward viewer
+                vd = self.view.getViewDirection() if self.view else (0, 0, -1)
+                view_dir = FreeCAD.Vector(vd[0], vd[1], vd[2])
+                if normal.dot(view_dir) > 0:
+                    normal = normal.negative()
+                
+                # Standard global Z gravity
+                z_axis = normal
+                global_z = FreeCAD.Vector(0, 0, 1)
+                x_axis = global_z.cross(z_axis) if abs(z_axis.dot(global_z)) < 0.99 else FreeCAD.Vector(1, 0, 0)
+                x_axis.normalize()
+                y_axis = z_axis.cross(x_axis)
+                y_axis.normalize()
+                
+                m = FreeCAD.Matrix(
+                    x_axis.x, y_axis.x, z_axis.x, pt.x,
+                    x_axis.y, y_axis.y, z_axis.y, pt.y,
+                    x_axis.z, y_axis.z, z_axis.z, pt.z,
+                    0, 0, 0, 1
+                )
+                return FreeCAD.Placement(m)
+
             if sdf_pt is not None and sdf_t <= geom_t:
-                # Synthesize a placement from the SDF hit normal
                 _pt, world_n, _obj = sdf_result
-                rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), world_n)
-                return sdf_pt, FreeCAD.Placement(sdf_pt, rot)
+                return sdf_pt, synthesize_placement(sdf_pt, world_n)
                 
             if geom_pt is not None:
-                # We need the normal for geom_pt too. Re-fetch via get_geometry_info or fallback.
                 info = self.get_geometry_info(event_dict, skip_objects=skip_objects)
                 if info:
                     world_hit, world_n, _obj, _sub = info
-                    rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), world_n)
-                    return world_hit, FreeCAD.Placement(world_hit, rot)
+                    return world_hit, synthesize_placement(world_hit, world_n)
                 return geom_pt, None
 
             # 4. working_plane as infinite fallback (cursor outside all workplane bounds).
             if working_plane:
-                n = working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1))
-                o = working_plane.Base
+                if hasattr(working_plane, "getGlobalPlacement"):
+                    wp_p = working_plane.getGlobalPlacement()
+                elif hasattr(working_plane, "Placement"):
+                    wp_p = working_plane.Placement
+                else:
+                    wp_p = working_plane
+                
+                n = wp_p.Rotation.multVec(FreeCAD.Vector(0,0,1))
+                o = wp_p.Base
                 pt = self.get_mouse_world_pos(event_dict, n, o, place_on_geometry=False)
                 if pt:
                     return pt, None # Maintain existing orientation (resolved in _resolve_wp_click)
