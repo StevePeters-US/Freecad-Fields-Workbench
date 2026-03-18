@@ -36,4 +36,9 @@ class EditDMObjectCommand:
         # Defer execution to allow the UI to finish its current event loop
         QtCore.QTimer.singleShot(0, edit_tool.activate)
 
+    def getIsChecked(self):
+        from core.dm_tool_manager import DMToolManager
+        active_tool = DMToolManager.get_instance().get_active_tool()
+        return active_tool is not None and active_tool.__class__.__name__ in ["EditTool", "FRepEditTool"]
+
 FreeCADGui.addCommand('DM_EditObject', EditDMObjectCommand())

@@ -125,8 +125,8 @@ class DMBase:
         self._last_btn3_time = 0.0
         self._update_pending = False
 
-        # Check for selected WorkPlane
-        self._detect_selected_workplane()
+        # Unified object selection detection for edit mode
+        self._detect_selected_object()
 
     def _set_cursor(self, cursor):
         """Set override cursor, tracking state."""
@@ -242,6 +242,53 @@ class DMBase:
             FreeCADGui.Selection.clearSelection()
             FreeCADGui.Selection.addSelection(obj.Document.Name, obj.Name)
 
+    def _detect_selected_object(self):
+        """Checks if a compatible object is selected and enters edit mode."""
+        handled_types = self.get_handled_types()
+        dm_logger.debug(f"{self.__class__.__name__} handled_types: {handled_types}")
+        
+        # Always allow WorkPlane selection even if not in handled_types 
+        # (for tools that need a base plane but don't edit it).
+        self._detect_selected_workplane()
+        
+        if not handled_types:
+            return
+            
+        try:
+            selection = FreeCADGui.Selection.getSelection()
+            dm_logger.debug(f"Selection: {[o.Label for o in selection]}")
+            if not selection:
+                return
+                
+            for obj in selection:
+                # 1. Check ShapeType property
+                st = getattr(obj, "ShapeType", None)
+                dm_logger.debug(f"Checking object {obj.Label}: ShapeType={st}")
+                if st in handled_types:
+                    dm_logger.info(f"Entering edit mode for {obj.Label} (ShapeType match)")
+                    self.edit_object(obj)
+                    return
+                
+                # 2. Check Proxy class name
+                proxy = getattr(obj, "Proxy", None)
+                proxy_name = proxy.__class__.__name__ if proxy else None
+                dm_logger.debug(f"Checking object {obj.Label}: Proxy={proxy_name}")
+                if proxy_name in handled_types:
+                    dm_logger.info(f"Entering edit mode for {obj.Label} (Proxy match)")
+                    self.edit_object(obj)
+                    return
+                    
+        except Exception as e:
+            dm_logger.debug(f"Error detecting selected object: {e}")
+
+    def get_handled_types(self):
+        """Returns a list of ShapeType or Proxy class names handled by this tool."""
+        return []
+
+    def edit_object(self, obj):
+        """Load an existing object into the tool for editing. Override in subclasses."""
+        pass
+
     def _detect_selected_workplane(self):
         """Checks if a DM_WorkPlane is selected and sets it as the active working plane."""
         try:
@@ -335,8 +382,20 @@ class DMBase:
                         # Use the object's own document if available, fallback to tool's doc
                         obj_doc = getattr(obj, "Document", None) or self.doc or FreeCAD.ActiveDocument
                         if obj_doc and hasattr(obj, "Name") and obj_doc.getObject(obj.Name):
-                            dm_logger.debug(f"DMBase._do_terminate: Removing unfinished object {obj.Name} from doc {obj_doc.Name}")
-                            obj_doc.removeObject(obj.Name)
+                            obj_name = obj.Name
+                            doc_name = obj_doc.Name
+                            
+                            dm_logger.debug(f"DMBase._do_terminate: Removing unfinished object {obj_name} from doc {doc_name}")
+                            
+                            # Explicitly unregister from scene renderer to prevent ghosts
+                            try:
+                                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                                sr = DMSceneRayMarchRenderer.get_instance()
+                                sr.unregister_field(f"{doc_name}.{obj_name}")
+                            except Exception as e:
+                                dm_logger.debug(f"DMBase._do_terminate: Failed to unregister field: {e}")
+
+                            obj_doc.removeObject(obj_name)
                             obj_doc.recompute()
                     except Exception as e:
                         dm_logger.debug(f"DMBase._do_terminate: Failed to remove object {getattr(obj, 'Name', 'unknown')}: {e}")
@@ -346,7 +405,18 @@ class DMBase:
                         setattr(self, attr_name, None)
 
             if self.view:
-                self.view.redraw()
+                # Redraw all active views to ensure renderer is updated everywhere
+                for doc in FreeCADGui.listDocuments().values():
+                    for view in doc.listViews():
+                        view.redraw()
+                        
+            # Final prune of orphaned fields
+            try:
+                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                DMSceneRayMarchRenderer.get_instance().gc_fields()
+            except Exception:
+                pass
+
             import FreeCADGui
             FreeCADGui.updateGui()
 

@@ -517,13 +517,22 @@ class DMViewProvider:
 
     def onDelete(self, vobj, subelements):
         """Called when the object is about to be deleted."""
-        if hasattr(self, "_scene_rm_label"):
-            try:
+        try:
+            # Check for the label we registered
+            label = getattr(self, "_scene_rm_label", None)
+            if not label:
+                # Fallback: compute it just in case
+                if hasattr(self.Object, "Document") and self.Object.Document:
+                    label = f"{self.Object.Document.Name}.{self.Object.Name}"
+            
+            if label:
                 from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
                 sr = DMSceneRayMarchRenderer.get_instance()
-                sr.unregister_field(self._scene_rm_label)
-            except Exception:
-                pass
+                dm_logger.debug(f"DMObject: onDelete unregistering field '{label}'")
+                sr.unregister_field(label)
+        except Exception as e:
+            from core import dm_logger
+            dm_logger.debug(f"DMObject.onDelete error: {e}")
         return True
 
         

@@ -44,6 +44,37 @@ class PrimitiveCreatorBase(DMBase):
         # Unified workplane pre-load logic
         self._init_working_plane()
 
+    def get_handled_types(self):
+        return ["frep"]
+
+    def edit_object(self, obj):
+        """Load an existing F-Rep object into the tool for editing."""
+        dm_logger.debug(f"{type(self).__name__}: Editing existing object {obj.Label}")
+        self._preview_obj = obj
+        
+        # Load points if available
+        if hasattr(obj, "Points"):
+             self.points = list(obj.Points)
+        
+        # Set workplane from object placement
+        self.working_plane = obj.Placement
+        self._working_plane_is_fallback = False
+        
+        # Setup visuals for loaded points
+        if hasattr(self, "points") and self.points:
+            # Most primitive tools use self.points for their defining points
+            for pt in self.points:
+                from core.dm_point import DMPoint
+                dm_pt = DMPoint(pt)
+                dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pt))
+                self.dm_points.append(dm_pt)
+            
+            # Transition state based on number of points
+            self.state = len(self.points)
+        
+        self.update_preview()
+        self.update_ui()
+
     def is_in_progress(self):
         """Returns True if we have started clicking (state > 0)."""
         return getattr(self, "state", 0) > 0

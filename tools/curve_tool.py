@@ -25,6 +25,28 @@ class CurveCreator(NURBSPrimitiveCreator):
         if self.sg:
             self.sg.addChild(self.points_root)
 
+    def get_handled_types(self):
+        return ["curve"]
+
+    def edit_object(self, obj):
+        """Load an existing curve into the tool for editing."""
+        dm_logger.debug(f"CurveCreator: Editing existing object {obj.Label}")
+        self._active_obj = obj
+        
+        # Load properties
+        self.points = list(getattr(obj, "Points", []))
+        self.is_closed = getattr(obj, "Closed", False)
+        
+        # Setup visuals (spheres)
+        for pt in self.points:
+            self._add_point_sphere(pt)
+            
+        # Set workplane from object placement
+        self.working_plane = obj.Placement
+        
+        self.state = 1 # Active
+        self.update_ui()
+
     def _do_terminate(self):
         for dm_pt in self.dm_points:
             dm_pt.undraw()
@@ -220,7 +242,7 @@ class CurveCreator(NURBSPrimitiveCreator):
     def update_ui(self):
         pass
 
-    def _do_finish(self):
+    def finish(self):
         """Finalize the curve and reset tool for next curve."""
         if len(self.points) < 2:
             self.terminate()

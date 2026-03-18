@@ -16,19 +16,15 @@ class CreateCurveCommand:
 
     def Activated(self):
         try:
-            sel = FreeCADGui.Selection.getSelection()
-            if sel:
-                obj = sel[0]
-                proxy = getattr(obj, "Proxy", None)
-                if (proxy is not None
-                        and proxy.__class__.__name__ == "DMObjectProxy"
-                        and getattr(obj, "ShapeType", None) == "curve"):
-                    from tools import edit_tool
-                    edit_tool.activate()
-                    return
+            # DMBase now handles selection detection automatically in __init__
             self.creator = primitive_creators.CurveCreator()
         except Exception as e:
             dm_logger.error(f"CreateCurve: Error: {e}")
+
+    def getIsChecked(self):
+        from core.dm_tool_manager import DMToolManager
+        active_tool = DMToolManager.get_instance().get_active_tool()
+        return active_tool is not None and active_tool.__class__.__name__ == "CurveCreator"
 
     def IsActive(self):
         return FreeCAD.activeDocument() is not None

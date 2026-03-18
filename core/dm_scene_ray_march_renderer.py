@@ -412,8 +412,11 @@ void main() {
             self._switch.whichChild = -1
         else:
             self._rebuild()
-        if FreeCADGui.activeView():
-            FreeCADGui.activeView().redraw()
+            
+        # Redraw ALL active views to ensure ghost is cleared everywhere
+        for doc in FreeCADGui.listDocuments().values():
+            for view in doc.listViews():
+                view.redraw()
 
     def set_field_visible(self, label, visible):
         """Toggle a field's visibility. Triggers combined re-bake."""
@@ -431,6 +434,35 @@ void main() {
         self._rebuild()
         if FreeCADGui.activeView():
             FreeCADGui.activeView().redraw()
+
+    def gc_fields(self):
+        """Remove any fields whose objects no longer exist in the document."""
+        if not self._fields:
+            return
+            
+        to_remove = []
+        for label in self._fields:
+            try:
+                # Label is "DocName.ObjName"
+                parts = label.split(".")
+                if len(parts) != 2: continue
+                doc_name, obj_name = parts
+                
+                doc = FreeCAD.getDocument(doc_name)
+                if not doc or not doc.getObject(obj_name):
+                    to_remove.append(label)
+            except Exception:
+                pass
+                
+        if to_remove:
+            dm_logger.debug(f"SceneRayMarch: GC-ing orphaned fields: {to_remove}")
+            for label in to_remove:
+                self._fields.pop(label, None)
+            self._rebuild()
+            # Redraw ALL active views
+            for doc in FreeCADGui.listDocuments().values():
+                for view in doc.listViews():
+                    view.redraw()
 
     def on_prefs_changed(self):
         """Update renderer based on global prefs."""

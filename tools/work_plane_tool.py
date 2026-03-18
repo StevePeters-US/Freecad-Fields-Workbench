@@ -46,24 +46,14 @@ class WorkPlaneCreator(DMBase):
         self.active_corner_idx = -1
         self._cursor_active = False
 
-        # Check if an existing WP is selected
-        sel = FreeCADGui.Selection.getSelection()
-        for obj in sel:
-            if hasattr(obj, "Proxy") and getattr(obj.Proxy, "__class__", None).__name__ == "DMWorkPlane":
-                self._editing_obj = obj
-                self.state = 1
-                break
-        
-        self._is_new = False
-        if not self._editing_obj:
-            self._is_new = True
-            # Create preview object
-            try:
-                self._preview_obj = create_dm_workplane(name="DM_WorkPlane_Preview")
-                if self._preview_obj:
-                    self._preview_obj.Label = "Work Plane Preview"
-            except Exception as e:
-                dm_logger.error(f"WorkPlaneCreator preview creation error: {e}")
+        self._is_new = True
+        # Create preview object
+        try:
+            self._preview_obj = create_dm_workplane(name="DM_WorkPlane_Preview")
+            if self._preview_obj:
+                self._preview_obj.Label = "Work Plane Preview"
+        except Exception as e:
+            dm_logger.error(f"WorkPlaneCreator preview creation error: {e}")
 
         # Setup handles visual — one sphere per corner
         self.sg = self.view.getSceneGraph()
@@ -101,6 +91,20 @@ class WorkPlaneCreator(DMBase):
         self._dialog_open = True
 
         self.update_handles()
+
+    def get_handled_types(self):
+        return ["DMWorkPlane"]
+
+    def edit_object(self, obj):
+        """Load an existing workplane into the tool for editing."""
+        dm_logger.debug(f"WorkPlaneCreator: Editing existing object {obj.Label}")
+        self._editing_obj = obj
+        self.state = 1
+        self._is_new = False
+        # Remove the preview if we are editing
+        if self._preview_obj:
+            super()._do_terminate() # cleanup preview
+            self._preview_obj = None
 
     def is_in_progress(self):
         """Returns True if a workplane has been dropped (state > 0)."""
