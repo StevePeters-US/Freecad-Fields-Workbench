@@ -1,6 +1,6 @@
 import FreeCAD
 import numpy as np
-from core.frep.frep_field import FRepField
+from core.frep.frep_field import SdfField
 
 def _bbox_union(box_a, box_b):
     """Returns the spatial union of two bounding boxes (min_corner, max_corner)."""
@@ -24,11 +24,11 @@ def _bbox_intersection(box_a, box_b):
         
     return (overlap_min, overlap_max)
 
-class ComposerField(FRepField):
+class ComposerField(SdfField):
     """
     Abstract base class for boolean composition fields.
     """
-    def __init__(self, field_a: FRepField, field_b: FRepField):
+    def __init__(self, field_a: SdfField, field_b: SdfField):
         self.a = field_a
         self.b = field_b
 

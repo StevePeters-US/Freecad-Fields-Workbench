@@ -1,5 +1,5 @@
 import FreeCAD
-from core.frep.sdf.sdf_field import SdfField
+from core.frep.frep_field import SdfField
 
 class SdfPlaneField(SdfField):
     """A half-space field divided by an infinite plane."""

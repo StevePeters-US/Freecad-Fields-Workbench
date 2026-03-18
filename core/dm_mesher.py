@@ -4,7 +4,7 @@ import FreeCAD
 import numpy as np
 
 from core import dm_logger
-from core.frep.frep_field import FRepField
+from core.frep.frep_field import SdfField
 from core.frep.marching_cubes.mc_tables import edgeTable, triTable
 from core.dm_object import get_perf_profiler_enabled
 
@@ -90,7 +90,7 @@ mesh_timer = MeshTimer()
 
 class DMMesher:
     """Abstract base class for all Direct Modeling SDF meshers."""
-    def mesh(self, field: FRepField, cell_size: float, decimate=False, deduplicate=True, **kwargs) -> tuple:
+    def mesh(self, field: SdfField, cell_size: float, decimate=False, deduplicate=True, **kwargs) -> tuple:
         raise NotImplementedError("mesher must implement mesh()")
 
 
@@ -110,7 +110,7 @@ class MarchingCubesMesher(DMMesher):
       6. Triangle extraction   — (M,5,3) reshape + np.where, no loop
       7. Mesh build            — flat (N,3,3) ndarray -> Coin3D arrays
     """
-    def mesh(self, field: FRepField, cell_size: float, decimate=False, deduplicate=True, **kwargs) -> tuple:
+    def mesh(self, field: SdfField, cell_size: float, decimate=False, deduplicate=True, **kwargs) -> tuple:
         min_b, max_b = field.bounding_box()
 
         def _pad(lo, hi):
@@ -256,7 +256,7 @@ class AdaptiveMCMesher(DMMesher):
     Subdivides cells recursively where curvature exceeds a threshold, 
     down to the target cell_size.
     """
-    def mesh(self, field: FRepField, cell_size: float, decimate=False, deduplicate=True, curvature_threshold=0.1, **kwargs) -> tuple:
+    def mesh(self, field: SdfField, cell_size: float, decimate=False, deduplicate=True, curvature_threshold=0.1, **kwargs) -> tuple:
         from core.dm_object import get_perf_profiler_enabled
         
         min_b, max_b = field.bounding_box()
@@ -485,7 +485,7 @@ class SurfaceNetsMesher(DMMesher):
     4. Crossing point computation & averaging per cell
     5. Quad assembly for each sign-change edge
     """
-    def mesh(self, field: FRepField, cell_size: float, decimate=False, deduplicate=True, **kwargs) -> tuple:
+    def mesh(self, field: SdfField, cell_size: float, decimate=False, deduplicate=True, **kwargs) -> tuple:
         min_b, max_b = field.bounding_box()
 
         def _pad(lo, hi):
@@ -806,7 +806,7 @@ class DualContouringMesher(DMMesher):
     5. Batch solve QEFs using SVD
     6. Assemble quads from dual vertices
     """
-    def mesh(self, field: FRepField, cell_size: float, decimate=False, deduplicate=True, **kwargs) -> tuple:
+    def mesh(self, field: SdfField, cell_size: float, decimate=False, deduplicate=True, **kwargs) -> tuple:
         min_b, max_b = field.bounding_box()
 
         def _pad(lo, hi):

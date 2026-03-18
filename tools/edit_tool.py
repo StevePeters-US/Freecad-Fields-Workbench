@@ -508,9 +508,9 @@ class FRepEditTool(DMBase, DragTimerMixin):
             self.terminate()
             return
 
-        field = getattr(obj.Proxy, "FRepField", None)
+        field = getattr(obj.Proxy, "SdfField", None)
         if field is None:
-            dm_logger.error("F-Rep object has no FRepField.")
+            dm_logger.error("F-Rep object has no SdfField.")
             self.terminate()
             return
 
@@ -623,7 +623,7 @@ class FRepEditTool(DMBase, DragTimerMixin):
         if obj is None or not obj.Document:
             return
         try:
-            obj.Proxy.FRepField = new_field
+            obj.Proxy.SdfField = new_field
             obj.touch()
             obj.Document.recompute([obj])
         except Exception as e:

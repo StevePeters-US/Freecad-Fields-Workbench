@@ -1,6 +1,6 @@
 import numpy as np
 import FreeCAD
-from core.frep.sdf.sdf_field import SdfField
+from core.frep.frep_field import SdfField
 
 class SdfSphereField(SdfField):
     """An exact analytical sphere SDF."""

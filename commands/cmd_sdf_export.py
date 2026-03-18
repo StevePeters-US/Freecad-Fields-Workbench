@@ -40,9 +40,9 @@ class CommandSDFToShape:
 
         obj = sel[0]
         proxy = getattr(obj, "Proxy", None)
-        field = getattr(proxy, "FRepField", None) if proxy else None
+        field = getattr(proxy, "SdfField", None) if proxy else None
         if field is None:
-            dm_logger.error(f"SDF to Shape: '{obj.Label}' has no FRepField.")
+            dm_logger.error(f"SDF to Shape: '{obj.Label}' has no SdfField.")
             return
 
         # Show local export dialog

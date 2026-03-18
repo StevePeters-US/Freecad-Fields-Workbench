@@ -133,9 +133,9 @@ class SDFSliceCommand:
                 return
             obj = sel[0]
             proxy = getattr(obj, "Proxy", None)
-            field = getattr(proxy, "FRepField", None) if proxy else None
+            field = getattr(proxy, "SdfField", None) if proxy else None
             if field is None:
-                dm_logger.warn("SDFSlice: Selected object has no FRepField")
+                dm_logger.warn("SDFSlice: Selected object has no SdfField")
                 return
 
             # Get slice plane from active workplane or default to XY

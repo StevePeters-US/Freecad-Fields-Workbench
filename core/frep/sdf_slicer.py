@@ -36,7 +36,7 @@ def slice_sdf(field, origin, normal, resolution=1.0, extent=None):
     Extract zero-crossing contours of an SDF field on a plane.
 
     Args:
-        field:      Any FRepField subclass.
+        field:      Any SdfField subclass.
         origin:     FreeCAD.Vector — point on the slice plane.
         normal:     FreeCAD.Vector — plane normal (will be normalized).
         resolution: float — grid spacing in mm on the plane.

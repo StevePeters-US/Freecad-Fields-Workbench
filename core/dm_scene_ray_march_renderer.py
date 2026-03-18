@@ -1,9 +1,9 @@
 """
 core/dm_scene_ray_march_renderer.py
 
-Scene-level GPU ray march renderer. One full-screen quad renders ALL F-Rep
+Scene-level GPU ray march renderer. One full-screen quad renders ALL SDF
 fields combined via a single baked 3D texture atlas. Generic — works with any
-FRepField subclass via evaluate_grid(). No per-primitive GLSL formulas.
+SdfField subclass via evaluate_grid(). No per-primitive GLSL formulas.
 """
 import FreeCAD
 import FreeCADGui
@@ -441,7 +441,7 @@ void main() {
     # -- Public API --
 
     def register_field(self, label, field):
-        """Register a new F-Rep field. Triggers combined re-bake."""
+        """Register a new SDF field. Triggers combined re-bake."""
         dm_logger.debug(f"SceneRayMarch: Registering field '{label}'")
         self._fields[label] = (field, True)
         self._dirty_fields.add(label)   # ← only new field

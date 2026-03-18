@@ -46,7 +46,7 @@ class DragTimerMixin:
         """Returns True if LMB was released, stopping the timer and resetting state."""
         if not DMInputManager.get_instance().is_left_mouse_down():
             self._stop_drag_timer()
-            self.state = 0
+            self.state = ToolState.IDLE
             if hasattr(self, "_selected_element"): self._selected_element = None
             if hasattr(self, "_dragging_idx"): self._dragging_idx = None
             return True
@@ -56,7 +56,16 @@ class DragTimerMixin:
 # PrimitiveCreatorBase
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Tool States
+from enum import IntEnum
+
+class ToolState(IntEnum):
+    IDLE = 0
+    ACTIVE = 1
+    DRAGGING = 2
+    FINALIZED = 3
+    EDIT_MODE = 4
+
+# Tool States (Deprecated - use ToolState Enum)
 STATE_IDLE = 0
 STATE_ACTIVE = 1
 STATE_DRAGGING = 2
@@ -101,7 +110,7 @@ class DMBase:
         self.start_point   = None
         self.current_point = None
         self.center        = None # Legacy, use start_point
-        self.state         = 0
+        self.state         = ToolState.IDLE
         
         self.working_plane = None
         self._working_plane_is_fallback = True  # Default to True until a real WP is hit
@@ -213,7 +222,7 @@ class DMBase:
             # Update plane if we are in the initial 'Idle' state (state 0)
             # where we want to snap to whatever surface is under the first click.
             # Once drawing has started (state > 0), we lock the plane.
-            if getattr(self, "state", 0) != 0:
+            if getattr(self, "state", ToolState.IDLE) != ToolState.IDLE:
                  return pos
 
             is_real_wp = False
@@ -229,7 +238,7 @@ class DMBase:
                 self.working_plane = wp_hit
             
             self._working_plane_is_fallback = not is_real_wp
-        elif self.working_plane is None and getattr(self, "state", 1) == 0:
+        elif self.working_plane is None and getattr(self, "state", ToolState.ACTIVE) == ToolState.IDLE:
             # If no hit, and no current plane, use the class-level fallback if available.
             # We look for _last_working_plane on the subclass.
             last_wp = getattr(type(self), "_last_working_plane", None)
@@ -510,7 +519,7 @@ class DMBase:
         # (like a previous face snap or viewport alignment), we ignore it so 
         # that get_mouse_plane_pt can recalculate the best transient snap/alignment.
         active_plane = getattr(self, "working_plane", None)
-        if getattr(self, "state", 0) == 0 and getattr(self, "_working_plane_is_fallback", True):
+        if getattr(self, "state", ToolState.IDLE) == ToolState.IDLE and getattr(self, "_working_plane_is_fallback", True):
             active_plane = None
 
         result = self.projector.get_mouse_plane_pt(
@@ -597,7 +606,7 @@ class DMBase:
                     return self.handle_keyboard(event_dict)
             else:
                 # For tools that need to update on camera move (like WorkPlaneCreator preview)
-                if self.state == 1:
+                if self.state == ToolState.ACTIVE:
                     # We only care about this if it's NOT a mouse click (handled above)
                     # and we want to refresh the orientation/position
                     try:
@@ -699,7 +708,7 @@ class DMBase:
 
     def reset_state(self):
         """Resets the tool to its initial idle state (state 0)."""
-        self.state = 0
+        self.state = ToolState.IDLE
         self.start_point = None
         self.current_point = None
         self.height = 0.0
@@ -762,8 +771,8 @@ class DMBase:
                 return False
                 
 
-            if getattr(self, "state", 0) == 0:
-                self.state = 1 # Force state 1 if inadvertently set to 0.
+            if getattr(self, "state", ToolState.IDLE) == ToolState.IDLE:
+                self.state = ToolState.ACTIVE # Force state 1 if inadvertently set to 0.
                 
             if self.state == 1:
                 # Pin 1: Fix the starting point and move to State 2
@@ -784,7 +793,7 @@ class DMBase:
                     rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), n)
                     self.working_plane = FreeCAD.Placement(pt, rot)
                 
-                self.state = 2
+                self.state = ToolState.DRAGGING # Note: 2 corresponds to ACTIVE/DRAGGING in some tools
                 self.on_state_change(self.state)
                 self.update_preview()
             elif self.state == 2:

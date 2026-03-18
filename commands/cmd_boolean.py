@@ -39,18 +39,17 @@ class CommandDMBoolean:
             dm_logger.error(f"DM_{self.operation}: Select at least two objects.")
             return
 
-        # Check if all objects are F-Rep
-        all_frep = all(
+        all_sdf = all(
             getattr(obj, "ShapeType", None) == "frep" for obj in sel
         )
 
-        if all_frep:
-            self._frep_boolean(sel)
+        if all_sdf:
+            self._sdf_boolean(sel)
         else:
             self._brep_boolean(sel)
 
-    def _frep_boolean(self, sel):
-        """Compose FRepField trees for F-Rep objects."""
+    def _sdf_boolean(self, sel):
+        """Compose SdfField trees for SDF objects."""
         from core.frep.frep_composer import UnionField, SubtractionField, IntersectionField
         from core.dm_object import create_dm_object
 
@@ -65,10 +64,10 @@ class CommandDMBoolean:
             fields = []
             for obj in sel:
                 proxy = getattr(obj, "Proxy", None)
-                field = getattr(proxy, "FRepField", None) if proxy else None
+                field = getattr(proxy, "SdfField", None) if proxy else None
                 if field is None:
                     dm_logger.error(
-                        f"DM_{self.operation}: '{obj.Label}' has no FRepField."
+                        f"DM_{self.operation}: '{obj.Label}' has no SdfField."
                     )
                     return
                 fields.append(field)
@@ -82,7 +81,7 @@ class CommandDMBoolean:
             # Create new frep object with composed field
             new_name = f"{self.operation}"
             result = create_dm_object(name=new_name, shape_type="frep")
-            result.Proxy.FRepField = result_field
+            result.Proxy.SdfField = result_field
             result.touch()
 
             doc = FreeCAD.activeDocument()

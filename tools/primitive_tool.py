@@ -230,7 +230,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             proxy = self._preview_obj.Proxy
             if proxy is None:
                 return
-            proxy.FRepField = field
+            proxy.SdfField = field
             
             # Sync additive/subtractive mode with Ctrl key
             im = DMInputManager.get_instance()
@@ -284,7 +284,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
         # Resolution is now handled globally by the GPU renderer settings.
         proxy = obj.Proxy
-        proxy.FRepField = field
+        proxy.SdfField = field
         
         obj.touch()
         obj.Document.recompute([obj])
@@ -330,7 +330,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 pass
 
         primitive_name = type(self).__name__.replace("Creator", "")
-        obj.Proxy.FRepField = field
+        obj.Proxy.SdfField = field
         obj.touch()
         obj.Document.recompute([obj])
         mesh_timer.summary(f"{primitive_name} → edit mode")
@@ -365,7 +365,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     def _create_frep_object(self, name, field, points=None):
         """Helper to create the FreeCAD object and assign the field (for 1-shot creation)."""
         obj = create_dm_object(name=name, shape_type="frep")
-        obj.Proxy.FRepField = field
+        obj.Proxy.SdfField = field
         if points is not None:
             if not hasattr(obj, "Points"):
                 obj.addProperty("App::PropertyVectorList", "Points", "FRep", "Control Points")

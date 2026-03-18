@@ -1,7 +1,7 @@
 """
 core/frep/sdf_baker.py
 
-Bakes any FRepField to a 3D float32 volume for GPU ray marching.
+Bakes any SdfField to a 3D float32 volume for GPU ray marching.
 Uses field.evaluate_grid() and field.bounding_box() — no primitives.
 """
 import math
@@ -13,7 +13,7 @@ def bake_sdf_to_volume(field, cell_size: float, bbox_override=None) -> dict:
     Sample the SDF on a uniform grid and pack as a float32 RGBA8 3D volume.
 
     Args:
-        field:         Any FRepField subclass.
+        field:         Any SdfField subclass.
         cell_size:     Grid spacing in mm.
         bbox_override: Optional (min_vec, max_vec) to bake a sub-region of the field.
                        If None, uses field.bounding_box(). Must be within field bounds.

@@ -302,9 +302,9 @@ class DMObjectProxy:
             from . import dm_logger
             st = fp.ShapeType if hasattr(fp, "ShapeType") else "nurbs"
 
-            if st == "frep":
-                # F-Rep objects have no BRep shape — render via GPU ray march.
-                # Use SDF-to-Shape command for explicit meshing.
+            if st == "frep" or st == "curve":
+                # SDF objects and pure curves bypass native B-Rep meshing.
+                # Curves will eventually be extruded into SDFs in Phase 7.
                 fp.Shape = Part.Shape()
                 return
 
@@ -363,23 +363,22 @@ class DMViewProvider:
 
         # DMRenderer handles all Coin3D overlays (meshes, handles, etc)
         self.renderer = None
+        self._strategy = None
 
     def attach(self, vobj):
         from . import dm_logger
         self.Object = vobj.Object
         if coin:
-            from core.dm_renderer import DMRenderer
+            from core.dm_renderer import DMRenderer, SdfRendererStrategy, NURBSRendererStrategy
             self.renderer = DMRenderer(vobj)
 
-            if hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "curve":
-                self.renderer.setup_coin_overlay()
-                self.renderer.rebuild_control_cage(self.Object)
-            elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "frep":
-                # Always use scene ray march renderer. Use DocName.ObjName for uniqueness.
-                self._scene_rm_label = f"{self.Object.Document.Name}.{self.Object.Name}"
-            elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "point":
-                self.renderer.setup_point_marker_nodes()
-                self.renderer.update_point_marker(self.Object)
+            st = getattr(self.Object, "ShapeType", None)
+            self._strategy = SdfRendererStrategy() if st == "frep" else NURBSRendererStrategy()
+            self._strategy.setup(self.renderer, vobj)
+            
+            # Keep label for backward compatibility with other methods
+            if hasattr(self._strategy, "label"):
+                self._scene_rm_label = self._strategy.label
 
     def on_prefs_changed(self):
         """Update Coin3D styles and visibility based on global preferences."""
@@ -414,27 +413,10 @@ class DMViewProvider:
             except Exception:
                 pass
             
-        if prop == "Shape" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":
-            proxy = getattr(fp, "Proxy", None)
-            field = getattr(proxy, "FRepField", None) if proxy else None
-            if hasattr(self, "_scene_rm_label") and field is not None:
-                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
-                sr = DMSceneRayMarchRenderer.get_instance()
-                sr.update_field(self._scene_rm_label, field)
-                # Force view update for live preview
-                if FreeCADGui.activeView():
-                    FreeCADGui.activeView().redraw()
-        elif prop == "DisplayMode" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":
-            # Toggle between shaded and wireframe rendering
-            if self.renderer:
-                vobj = fp.ViewObject
-                self.renderer.set_frep_display_mode(vobj.DisplayMode)
-        elif prop == "Position" and hasattr(fp, "ShapeType") and fp.ShapeType == "point":
-            if self.renderer:
-                self.renderer.update_point_marker(fp)
-        elif not prop or prop in ["Points", "HandleIn", "HandleOut", "Closed", "EditMode"]:
-            if self.renderer:
-                self.renderer.rebuild_control_cage(fp)
+        if prop == "DisplayMode":
+            self._strategy.set_display_mode(self.renderer, fp.ViewObject.DisplayMode)
+            
+        self._strategy.update(self.renderer, fp, prop)
         
         if not prop:
             self.on_prefs_changed()

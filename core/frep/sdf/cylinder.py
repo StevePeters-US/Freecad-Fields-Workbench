@@ -1,7 +1,7 @@
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.frep.frep_field import SdfField
 
 class SdfCylinderField(SdfField):
     """A finite cylinder exact SDF."""

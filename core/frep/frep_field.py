@@ -1,8 +1,8 @@
 import FreeCAD
 import numpy as np
-class FRepField:
+class SdfField:
     """
-    Abstract base class for all F-Rep (Functional Representation) fields.
+    Abstract base class for all SDF (Signed Distance Field) fields.
     A field evaluates to a negative number inside the solid, positive outside, and 0 on the surface.
     """
     def evaluate(self, point: FreeCAD.Vector) -> float:
@@ -29,13 +29,11 @@ class FRepField:
     def evaluate_grid(self, points: np.ndarray) -> np.ndarray:
         """
         Evaluates the field over an (N, 3) numpy array of points.
-        Default implementation is a Python loop. Override for performance if possible.
+        The underlying evaluate() method must support duck-typed np.ndarray inputs.
         """
-        results = np.zeros(points.shape[0], dtype=np.float32)
-        for i in range(points.shape[0]):
-            pt = FreeCAD.Vector(points[i, 0], points[i, 1], points[i, 2])
-            results[i] = self.evaluate(pt)
-        return results
+        # Pass the raw Nx3 array directly to evaluate.
+        # Subclasses must implement evaluate() using ops that work on both FreeCAD.Vectors and ndarrays.
+        return self.evaluate(points)
 
     def gradient_grid(self, points: np.ndarray, h: float = 1e-4) -> np.ndarray:
         """Batch central-difference gradient over (N,3) points → (N,3) float64."""

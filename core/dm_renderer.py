@@ -359,4 +359,63 @@ class DMRenderer:
         self._ctrl_lines.numVertices.setNum(len(num_vertices))
         if num_vertices:
             self._ctrl_lines.numVertices.setValues(0, num_vertices)
-        self._ctrl_lines.startIndex.setValue(0)
+    def set_frep_display_mode(self, mode):
+        """Toggle between shaded and wireframe rendering."""
+        # TODO: Implement actual display mode switching for SDF objects.
+        pass
+
+class DMRendererStrategy:
+    def setup(self, renderer, vobj):
+        pass
+    def update(self, renderer, fp, prop):
+        pass
+    def set_display_mode(self, renderer, mode):
+        pass
+
+class NURBSRendererStrategy(DMRendererStrategy):
+    def setup(self, renderer, vobj):
+        st = getattr(vobj.Object, "ShapeType", None)
+        if st == "curve":
+            renderer.setup_coin_overlay()
+            renderer.rebuild_control_cage(vobj.Object)
+        elif st == "point":
+            renderer.setup_point_marker_nodes()
+            renderer.update_point_marker(vobj.Object)
+
+    def update(self, renderer, fp, prop):
+        st = getattr(fp, "ShapeType", None)
+        if st == "curve":
+            if not prop or prop in ["Points", "HandleIn", "HandleOut", "Closed", "EditMode"]:
+                renderer.rebuild_control_cage(fp)
+        elif st == "point":
+            if prop == "Position" or not prop:
+                renderer.update_point_marker(fp)
+        elif not prop:
+             renderer.rebuild_control_cage(fp)
+
+
+class SdfRendererStrategy(DMRendererStrategy):
+    def __init__(self):
+        self.label = None
+
+    def setup(self, renderer, vobj):
+        obj = vobj.Object
+        self.label = f"{obj.Document.Name}.{obj.Name}"
+
+    def update(self, renderer, fp, prop):
+        if prop == "Shape" or not prop:
+            proxy = getattr(fp, "Proxy", None)
+            # Support both names during transition (FRepField for old documents)
+            field = getattr(proxy, "SdfField", None) or getattr(proxy, "FRepField", None)
+            if self.label and field is not None:
+                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                sr = DMSceneRayMarchRenderer.get_instance()
+                sr.update_field(self.label, field)
+                import FreeCADGui
+                if FreeCADGui.activeView():
+                    FreeCADGui.activeView().redraw()
+
+    def set_display_mode(self, renderer, mode):
+        renderer.set_frep_display_mode(mode)
+
+
