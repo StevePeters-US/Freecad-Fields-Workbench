@@ -395,6 +395,7 @@ void main() {
 
     def register_field(self, label, field):
         """Register a new F-Rep field. Triggers combined re-bake."""
+        dm_logger.debug(f"SceneRayMarch: Registering field '{label}'")
         self._fields[label] = (field, True)
         self._attach()
         self._rebuild()
@@ -403,7 +404,10 @@ void main() {
 
     def unregister_field(self, label):
         """Remove a field. Hides renderer if no fields remain."""
-        self._fields.pop(label, None)
+        if label in self._fields:
+            dm_logger.debug(f"SceneRayMarch: Unregistering field '{label}'")
+            self._fields.pop(label)
+        
         if not self._fields:
             self._switch.whichChild = -1
         else:
@@ -449,18 +453,21 @@ void main() {
 
         visible = [(label, f) for label, (f, vis) in self._fields.items()
                    if vis and f is not None]
-        if not visible:
-            self._switch.whichChild = -1
-            return
-        if len(visible) > self.MAX_FIELDS:
-            dm_logger.warning(f"SceneRayMarch: {len(visible)} fields exceeds "
-                              f"MAX_FIELDS={self.MAX_FIELDS}, truncating")
-            visible = visible[:self.MAX_FIELDS]
-
         cell_size = get_meshing_cell_size()
 
         # Bake each field to a 3D float32 volume
-        baked_list = [bake_sdf_to_volume(f, cell_size) for _, f in visible]
+        baked_list = []
+        for label, f in visible:
+            try:
+                baked = bake_sdf_to_volume(f, cell_size)
+                baked_list.append(baked)
+            except Exception as e:
+                dm_logger.debug(f"SceneRayMarch: Failed to bake field '{label}': {e}")
+        
+        if not baked_list:
+            self._switch.whichChild = -1
+            return
+            
         n_fields = len(baked_list)
 
         # Stack volumes along z-axis into one combined 3D texture.

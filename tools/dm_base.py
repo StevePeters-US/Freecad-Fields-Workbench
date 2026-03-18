@@ -277,6 +277,10 @@ class DMBase:
             dm_logger.debug(f"Error detecting selected workplane: {e}")
 
     def terminate(self):
+        """Standard entry point for termination. Sets guard and schedules async cleanup."""
+        if getattr(self, "_terminated", False):
+            return
+        self._terminated = True
         from PySide import QtCore
         QtCore.QTimer.singleShot(0, self._do_terminate)
 
@@ -893,70 +897,6 @@ class NURBSPrimitiveCreator(DMBase):
         # more efficient Coin3D overlays or can be re-implemented as a pure 
         # view-side node if needed.
         pass
-
-    def terminate(self):
-        """Clean up: defer to DMBase._do_terminate."""
-        if self._terminated:
-            return
-        super().terminate()
-
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
-    def finish(self):
-        """Schedule the finalization to happen safely outside the event loop."""
-        if self._finished:
-            return
-        # If we have an active object, finalize it but DON'T terminate yet if we want to repeat.
-        # Subclasses (like PointCreator) might override this to keep the tool active.
-        QtCore.QTimer.singleShot(0, self._do_finish)
-
-
-    def _do_finish(self):
-        """Standard finalization for all DM primitives."""
-        if self._finished:
-            return
-            
-        try:
-            if self._active_obj:
-                dm_logger.debug(f"_do_finish: Finalizing active object {self._active_obj.Name}")
-                # Rename to its final type-based label if it still has the default
-                if "DMObject" in self._active_obj.Label:
-                    self._active_obj.Label = self._active_obj.ShapeType.capitalize()
-            else:
-                dm_logger.debug(f"_do_finish: No active object to finalize")
-        except Exception as e:
-            dm_logger.error(f"_do_finish error: {e}")
-
-        self._finished = True
-        self.terminate()
-
-
-
-    # ------------------------------------------------------------------
-    # Snapping
-    # ------------------------------------------------------------------
-
-    def on_tool_option_1(self):
-        """Ctrl key → cycle snapping type."""
-        self.toggle_snapping()
-
-    def set_snap_type(self, type_name):
-        self.snap_type = type_name
-        dm_logger.info(f"Snapping type set to {self.snap_type}")
-
-    def toggle_snapping(self):
-        self.snap_enabled = not self.snap_enabled
-        state = "enabled" if self.snap_enabled else "disabled"
-        dm_logger.info(f"Snapping is now {state} (Type: {self.snap_type})")
-
-    def get_snapping_menu(self):
-        return [
-            ("Workplane Grid", lambda: self.set_snap_type("Workplane Grid")),
-            ("Workplane Radius", lambda: self.set_snap_type("Workplane Radius")),
-            ("Vertex Snapping", lambda: self.set_snap_type("Vertex Snapping"))
-        ]
 
 
 

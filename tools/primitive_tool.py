@@ -75,6 +75,8 @@ class PrimitiveCreatorBase(DMBase):
 
     def update_preview(self):
         """Called on every mouse move by DMBase.handle_move. Updates the live mesh."""
+        if getattr(self, "_terminated", False):
+            return
         field = self._get_preview_field()
         if field is None:
             return

@@ -107,9 +107,6 @@ class WorkPlaneCreator(DMBase):
         return self.state > 0
 
     def _do_terminate(self):
-        if getattr(self, "_terminated", False):
-            return
-            
         self._restore_cursor()
             
         # Clean up handles (Coin3D)
@@ -342,6 +339,8 @@ class WorkPlaneCreator(DMBase):
         return False
 
     def handle_click(self, event_dict):
+        if getattr(self, "_terminated", False):
+            return
         try:
             btn = event_dict.get("Button")
             if btn != "BUTTON1":
@@ -414,6 +413,8 @@ class WorkPlaneCreator(DMBase):
                 self._cursor_active = True
 
     def handle_move(self, event_dict):
+        if getattr(self, "_terminated", False):
+            return
         try:
             if self.state == 0:
                 placement = self.get_snapped_placement(event_dict)

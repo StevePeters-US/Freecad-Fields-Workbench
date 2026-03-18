@@ -427,8 +427,8 @@ class DMViewProvider:
                 self.renderer.setup_coin_overlay()
                 self.renderer.rebuild_control_cage(self.Object)
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "frep":
-                # Always use scene ray march renderer. Use Name, not Label, as key.
-                self._scene_rm_label = vobj.Object.Name
+                # Always use scene ray march renderer. Use DocName.ObjName for uniqueness.
+                self._scene_rm_label = f"{self.Object.Document.Name}.{self.Object.Name}"
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "point":
                 self.renderer.setup_point_marker_nodes()
                 self.renderer.update_point_marker(self.Object)
@@ -473,6 +473,9 @@ class DMViewProvider:
                 from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
                 sr = DMSceneRayMarchRenderer.get_instance()
                 sr.update_field(self._scene_rm_label, field)
+                # Force view update for live preview
+                if FreeCADGui.activeView():
+                    FreeCADGui.activeView().redraw()
         elif prop == "DisplayMode" and hasattr(fp, "ShapeType") and fp.ShapeType == "frep":
             # Toggle between shaded and wireframe rendering
             if self.renderer:
