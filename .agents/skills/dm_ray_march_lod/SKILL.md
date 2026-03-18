@@ -31,18 +31,32 @@ Each _rebuild():
 **Goal:** When a field is small on screen (zoomed out), use coarser cells (faster bake).
 When large on screen (zoomed in), use finer cells (sharper surface).
 
-**Formula:**
+**Formula (with sqrt power-law falloff):**
 ```python
-px_per_world = vp_height_px / cam_world_height
-field_screen_px = field_world_size * px_per_world   # pixels the field spans on screen
-cell_size = field_world_size / (field_screen_px / n_texels)
-          = cam_world_height * n_texels / vp_height_px   # simplifies to this
-cell_size = clamp(cell_size, base_cell, MAX_CELL)
+px_per_world    = vp_height_px / cam_world_height
+field_screen_px = field_world_size * px_per_world
+linear_cell     = field_world_size / max(field_screen_px / n_texels, 1.0)
+linear_ratio    = max(linear_cell / base_cell, 1.0)   # >= 1 (never finer than base)
+
+LOD_EXPONENT = 0.5   # sqrt — change to 1.0 for linear, 0.0 to disable LOD entirely
+MAX_RATIO    = 16.0  # hard cap: worst-case = base_cell * sqrt(16) = 4× base
+ratio        = min(linear_ratio, MAX_RATIO) ** LOD_EXPONENT
+cell_size    = base_cell * ratio
 ```
 
-**Key insight:** `RayMarchCellSize` is a quality **floor** (minimum cell size = maximum
-quality). The adaptive size only makes things *coarser* when zoomed out. It never
-goes finer than the user's quality setting.
+**Key insights:**
+- `RayMarchCellSize` is a quality **floor** — adaptive never goes finer than it.
+- Linear falloff (exponent=1.0) is too aggressive: 4× zoom-out → 4× cell size → visibly
+  flat shading. Sqrt (0.5) means 4× zoom-out → only 2× cell size.
+- `MAX_RATIO=16` caps at `base_cell * sqrt(16) = 4×` regardless of zoom level.
+
+**Zoom-out behaviour (base_cell = 2mm):**
+
+| Zoom-out | Linear (bad) | Sqrt (good) |
+|----------|-------------|-------------|
+| 2×       | 4mm         | 2.8mm       |
+| 4×       | 8mm         | 4mm         |
+| 16×+     | 20mm        | 8mm (cap)   |
 
 **Orthographic camera:** `cam_world_height = cam.height.getValue()`
 **Perspective camera:** `cam_world_height = 2 * dist * tan(cam.heightAngle / 2)`
@@ -69,19 +83,30 @@ This pattern is used throughout the codebase (input_manager.py, dm_renderer.py).
 
 ## Camera Sensor Pattern
 
-**Goal:** Trigger `_rebuild()` when the user zooms (but not on every pan/rotate frame).
+**Goal:** Trigger `_rebuild()` when the camera changes. With frustum-clipped baking
+(RO-014), pan and rotate also change the visible region, so use `SoNodeSensor` on the
+camera node (fires on any field change) rather than `SoFieldSensor` on `cam.height` only.
 
-**Coin3D `SoFieldSensor`:**
+**Coin3D `SoNodeSensor` (preferred — covers zoom + pan + rotate):**
+```python
+from pivy.coin import SoNodeSensor
+
+cam = view.getCameraNode()
+sensor = SoNodeSensor(callback_fn, userdata)
+sensor.attach(cam)   # fires on any camera field change
+# To detach: sensor.detach()
+```
+
+**`SoFieldSensor` (zoom-only — only if frustum clipping is NOT implemented):**
 ```python
 from pivy.coin import SoFieldSensor, SoOrthographicCamera
 
 cam = view.getCameraNode()
 is_ortho = cam.isOfType(SoOrthographicCamera.getClassTypeId())
-field = cam.height if is_ortho else cam.position  # zoom field
+field = cam.height if is_ortho else cam.position
 
 sensor = SoFieldSensor(callback_fn, userdata)
 sensor.attach(field)
-# To detach: sensor.detach()
 ```
 
 **Callback signature:**
@@ -147,6 +172,83 @@ for label, f in visible:
         self._baked_cache[label] = bake_sdf_to_volume(f, cell_size)
 self._dirty_fields.clear()
 ```
+
+---
+
+## Frustum-Clipped Bake Region
+
+**Core insight:** Adaptive cell size (LOD) still bakes the entire field. Zooming into a
+20mm corner of a 500mm sphere still bakes 500mm³ — a ~15,000× waste. Clip the bake region
+to the camera frustum AABB so only the visible subregion is evaluated.
+
+**Order of operations in `_rebuild()`:**
+1. Compute `frustum = _get_view_frustum_aabb(view)`
+2. For each field: `clip = intersect(field.bounding_box(), frustum)`
+3. If clip is empty → field off-screen, skip baking entirely
+4. Compute cell size using the **clip region** size (not full field size)
+5. Call `bake_sdf_to_volume(field, cell_size, bbox_override=clip)`
+
+**World-space frustum AABB from camera parameters:**
+```python
+import numpy as np, math
+
+rot = cam.orientation.getValue()
+right   = rot.multVec(coin.SbVec3f(1,  0,  0))
+up      = rot.multVec(coin.SbVec3f(0,  1,  0))
+forward = rot.multVec(coin.SbVec3f(0,  0, -1))   # -Z is forward in OpenGL
+
+r = np.array([right[0],   right[1],   right[2]])
+u = np.array([up[0],      up[1],      up[2]])
+f = np.array([forward[0], forward[1], forward[2]])
+p = np.array([cam.position.getValue()[0], ...])
+
+near, far = cam.nearDistance.getValue(), cam.farDistance.getValue()
+
+if is_ortho:
+    hh = cam.height.getValue() / 2.0
+    hw = hh * aspect
+    corners = np.array([
+        p + f*d + r*sx*hw + u*sy*hh
+        for sx in (-1,1) for sy in (-1,1) for d in (near, far)
+    ])
+else:
+    for d in (near, far):
+        hh = math.tan(cam.heightAngle.getValue()/2) * d
+        hw = hh * aspect
+        corners += [p + f*d + r*sx*hw + u*sy*hh for sx in (-1,1) for sy in (-1,1)]
+    corners = np.array(corners)
+
+aabb_min = FreeCAD.Vector(*corners.min(axis=0))
+aabb_max = FreeCAD.Vector(*corners.max(axis=0))
+```
+
+**AABB intersection:**
+```python
+clip_min = FreeCAD.Vector(max(f_min.x, fr_min.x), max(f_min.y, fr_min.y), max(f_min.z, fr_min.z))
+clip_max = FreeCAD.Vector(min(f_max.x, fr_max.x), min(f_max.y, fr_max.y), min(f_max.z, fr_max.z))
+visible = clip_min.x < clip_max.x and clip_min.y < clip_max.y and clip_min.z < clip_max.z
+```
+
+**`sdf_baker.py` change** — add `bbox_override` param:
+```python
+def bake_sdf_to_volume(field, cell_size, bbox_override=None):
+    if bbox_override is not None:
+        mn_raw, mx_raw = bbox_override
+    else:
+        mn_raw, mx_raw = field.bounding_box()
+    # rest unchanged
+```
+
+**Shader `u_bbox_min/max` uniforms** — always set to the baked region (already per-field),
+so the shader correctly clips ray-marching to the visible subregion. No shader changes needed.
+
+**Impact table (500mm sphere, 2mm base_cell, viewing 20mm region):**
+
+| Without frustum clip | With frustum clip |
+|---------------------|------------------|
+| Bake region: 500mm³ | Bake region: 20mm³ |
+| Grid: 250³ = 15.6M cells | Grid: 10³ = 1000 cells |
+| Bake cost: ~seconds | Bake cost: ~milliseconds |
 
 ---
 

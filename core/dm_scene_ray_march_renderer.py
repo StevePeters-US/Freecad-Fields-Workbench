@@ -84,16 +84,15 @@ class DMSceneRayMarchRenderer:
         self._attached = False
 
     def _attach_camera_sensor(self, view):
-        """Attach a SoFieldSensor to trigger a debounced rebuild when zoom changes."""
+        """Attach a SoNodeSensor to trigger debounced rebuild on any camera change."""
         try:
-            from pivy.coin import SoFieldSensor, SoOrthographicCamera
+            from pivy.coin import SoNodeSensor
             cam = view.getCameraNode()
             if cam is None:
                 return
-            is_ortho = cam.isOfType(SoOrthographicCamera.getClassTypeId())
-            field = cam.height if is_ortho else cam.position
-            self._cam_sensor = SoFieldSensor(self._on_camera_changed, None)
-            self._cam_sensor.attach(field)
+            # SoNodeSensor fires on any field change (height, position, orientation, etc.)
+            self._cam_sensor = SoNodeSensor(self._on_camera_changed, None)
+            self._cam_sensor.attach(cam)
         except Exception as e:
             dm_logger.debug(f"SceneRayMarch: Failed to attach camera sensor: {e}")
 
@@ -540,8 +539,6 @@ void main() {
 
         base_cell  = get_ray_march_cell_size()   # quality floor (user maximum quality)
         n_texels   = get_rm_texels_per_field()   # target texels along longest axis
-        MIN_CELL   = base_cell                   # never finer than the quality floor
-        MAX_CELL   = 20.0                        # coarsest allowed (mm)
 
         try:
             bb_min, bb_max = field.bounding_box()
@@ -576,15 +573,141 @@ void main() {
             px_per_world = vp_h / max(cam_world_h, 1e-3)
             field_screen_px = field_size * px_per_world
 
-            # cell_size so that n_texels fit across the field's screen extent
-            adaptive_cell = field_size / max(field_screen_px / n_texels, 1.0)
+            # Linear ratio: how many times coarser than base_cell would pure-linear LOD want?
+            linear_cell  = field_size / max(field_screen_px / n_texels, 1.0)
+            linear_ratio = max(linear_cell / base_cell, 1.0)   # >= 1.0 (never finer than base)
 
-            return max(MIN_CELL, min(MAX_CELL, adaptive_cell))
+            # Sqrt falloff + hard cap:
+            #   LOD_EXPONENT = 0.5 -> zoom-out 4x only doubles cell size (was 4x with linear)
+            #   MAX_RATIO    = 16  -> worst-case = base * sqrt(16) = 4x base_cell
+            LOD_EXPONENT = 0.5
+            MAX_RATIO    = 16.0
+            ratio = min(linear_ratio, MAX_RATIO) ** LOD_EXPONENT
+            return base_cell * ratio
 
         except Exception:
             return base_cell
 
     MAX_FIELDS = 8
+
+    def _get_view_frustum_aabb(self, view):
+        """Return (min_vec, max_vec) world-space AABB of the camera view frustum.
+
+        Returns None if computation fails (caller falls back to field.bounding_box()).
+        """
+        import numpy as np
+        import math
+        try:
+            cam = view.getCameraNode()
+
+            # Viewport aspect ratio
+            vp_w, vp_h = 1.0, 1.0
+            try:
+                viewer = view.getViewer()
+                for method in ("getGlxSize", "getSize"):
+                    if hasattr(viewer, method):
+                        sz = getattr(viewer, method)()
+                        vp_w = float(sz[0] if isinstance(sz, (list, tuple)) else sz.width())
+                        vp_h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
+                        break
+            except Exception:
+                pass
+            aspect = vp_w / max(vp_h, 1.0)
+
+            # Camera axes in world space via orientation quaternion
+            rot = cam.orientation.getValue()
+            right   = rot.multVec(coin.SbVec3f(1,  0,  0))
+            up      = rot.multVec(coin.SbVec3f(0,  1,  0))
+            forward = rot.multVec(coin.SbVec3f(0,  0, -1))  # -Z is forward in OpenGL
+
+            r = np.array([right[0],   right[1],   right[2]])
+            u = np.array([up[0],      up[1],      up[2]])
+            f = np.array([forward[0], forward[1], forward[2]])
+            p = np.array([cam.position.getValue()[0],
+                          cam.position.getValue()[1],
+                          cam.position.getValue()[2]])
+
+            near = cam.nearDistance.getValue()
+            far  = cam.farDistance.getValue()
+
+            is_ortho = cam.isOfType(coin.SoOrthographicCamera.getClassTypeId())
+            if is_ortho:
+                hh = cam.height.getValue() / 2.0
+                hw = hh * aspect
+                # 8 corners of the orthographic frustum box
+                corners = np.array([
+                    p + f*n + r*sx*hw + u*sy*hh
+                    for sx in (-1, 1) for sy in (-1, 1) for n in (near, far)
+                ])
+            else:
+                # Perspective: frustum is a pyramid
+                hh_near = math.tan(cam.heightAngle.getValue() / 2.0) * near
+                hw_near = hh_near * aspect
+                hh_far  = math.tan(cam.heightAngle.getValue() / 2.0) * far
+                hw_far  = hh_far  * aspect
+                corners = np.array([
+                    p + f*near + r*sx*hw_near + u*sy*hh_near
+                    for sx in (-1, 1) for sy in (-1, 1)
+                ] + [
+                    p + f*far  + r*sx*hw_far  + u*sy*hh_far
+                    for sx in (-1, 1) for sy in (-1, 1)
+                ])
+
+            aabb_min = corners.min(axis=0)
+            aabb_max = corners.max(axis=0)
+            import FreeCAD
+            return (
+                FreeCAD.Vector(float(aabb_min[0]), float(aabb_min[1]), float(aabb_min[2])),
+                FreeCAD.Vector(float(aabb_max[0]), float(aabb_max[1]), float(aabb_max[2])),
+            )
+        except Exception as e:
+            dm_logger.debug(f"SceneRayMarch: _get_view_frustum_aabb failed: {e}")
+            return None
+
+    def _compute_cell_size_for_region(self, bbox_override, view):
+        """Compute adaptive cell size for a pre-clipped (min, max) region."""
+        import math
+        from core.dm_object import get_ray_march_cell_size, get_rm_texels_per_field
+
+        base_cell = get_ray_march_cell_size()
+        n_texels  = get_rm_texels_per_field()
+        LOD_EXPONENT = 0.5
+        MAX_RATIO    = 16.0
+
+        try:
+            clip_min, clip_max = bbox_override
+            region_size = max(
+                abs(clip_max.x - clip_min.x),
+                abs(clip_max.y - clip_min.y),
+                abs(clip_max.z - clip_min.z),
+                1e-3
+            )
+            cam = view.getCameraNode()
+            vp_h = 800.0
+            try:
+                viewer = view.getViewer()
+                for method in ("getGlxSize", "getSize"):
+                    if hasattr(viewer, method):
+                        sz = getattr(viewer, method)()
+                        vp_h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
+                        break
+            except Exception:
+                pass
+            is_ortho = cam.isOfType(coin.SoOrthographicCamera.getClassTypeId())
+            if is_ortho:
+                cam_world_h = cam.height.getValue()
+            else:
+                dist = (cam.position.getValue() - coin.SbVec3f(0, 0, 0)).length()
+                cam_world_h = 2.0 * dist * math.tan(cam.heightAngle.getValue() / 2.0)
+
+            px_per_world  = vp_h / max(cam_world_h, 1e-3)
+            region_screen_px = region_size * px_per_world
+            linear_cell   = region_size / max(region_screen_px / n_texels, 1.0)
+            linear_ratio  = max(linear_cell / base_cell, 1.0)
+            ratio = min(linear_ratio, MAX_RATIO) ** LOD_EXPONENT
+            return base_cell * ratio
+        except Exception:
+            return get_ray_march_cell_size()
 
     def _get_is_subtractive(self, label):
         """Safely look up IsSubtractive from 'DocName.ObjName' label."""
@@ -617,13 +740,44 @@ void main() {
         except Exception:
             view = None
 
+        frustum = self._get_view_frustum_aabb(view) if view else None
+
         # --- Rebake only dirty fields ---
         for label, f in visible:
             if label in self._dirty_fields or label not in self._baked_cache:
                 try:
-                    cs = self._compute_cell_size(f, view) if view else get_ray_march_cell_size()
-                    self._baked_cache[label] = bake_sdf_to_volume(f, cs)
-                    dm_logger.debug(f"SceneRayMarch: Baked '{label}' (cell={cs:.2f}mm)")
+                    # Compute visible subregion
+                    bbox_override = None
+                    if frustum is not None:
+                        try:
+                            f_min, f_max = f.bounding_box()
+                            fr_min, fr_max = frustum
+                            clip_min = FreeCAD.Vector(
+                                max(f_min.x, fr_min.x),
+                                max(f_min.y, fr_min.y),
+                                max(f_min.z, fr_min.z),
+                            )
+                            clip_max = FreeCAD.Vector(
+                                min(f_max.x, fr_max.x),
+                                min(f_max.y, fr_max.y),
+                                min(f_max.z, fr_max.z),
+                            )
+                            # Non-empty intersection?
+                            if (clip_min.x < clip_max.x and
+                                clip_min.y < clip_max.y and
+                                clip_min.z < clip_max.z):
+                                bbox_override = (clip_min, clip_max)
+                            else:
+                                dm_logger.debug(f"SceneRayMarch: '{label}' off-screen, skipping bake")
+                                self._baked_cache.pop(label, None)
+                                continue   # skip — not visible
+                        except Exception:
+                            pass  # fall through to full-field bake
+
+                    # Cell size adapted to visible subregion (not full field)
+                    cs = self._compute_cell_size_for_region(bbox_override, view) if bbox_override else self._compute_cell_size(f, view)
+                    baked = bake_sdf_to_volume(f, cs, bbox_override=bbox_override)
+                    self._baked_cache[label] = baked
                 except Exception as e:
                     dm_logger.debug(f"SceneRayMarch: Bake failed for '{label}': {e}")
                     self._baked_cache.pop(label, None)

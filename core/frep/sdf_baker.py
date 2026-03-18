@@ -8,13 +8,15 @@ import math
 import numpy as np
 
 
-def bake_sdf_to_volume(field, cell_size: float) -> dict:
+def bake_sdf_to_volume(field, cell_size: float, bbox_override=None) -> dict:
     """
     Sample the SDF on a uniform grid and pack as a float32 RGBA8 3D volume.
 
     Args:
-        field:     Any FRepField subclass.
-        cell_size: Grid spacing in mm.
+        field:         Any FRepField subclass.
+        cell_size:     Grid spacing in mm.
+        bbox_override: Optional (min_vec, max_vec) to bake a sub-region of the field.
+                       If None, uses field.bounding_box(). Must be within field bounds.
 
     Returns dict with keys:
         volume_bytes : bytes          — float32 as RGBA8 bytes, (nz+1)*(ny+1)*(nx+1)*4
@@ -23,7 +25,10 @@ def bake_sdf_to_volume(field, cell_size: float) -> dict:
         bbox_max     : FreeCAD.Vector
         max_dist     : float          — informational (= cell_size * 8.0)
     """
-    mn, mx = field.bounding_box()
+    if bbox_override is not None:
+        mn, mx = bbox_override
+    else:
+        mn, mx = field.bounding_box()
 
     def _pad(lo, hi):
         if hi - lo < 1e-4:

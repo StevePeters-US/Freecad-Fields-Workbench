@@ -632,6 +632,342 @@ After all tasks:
 - [ ] `grep -n "min_step" core/dm_scene_ray_march_renderer.py` returns no results
 - [ ] `grep -n "min_step" core/dm_ray_march_renderer.py` returns no results
 
+---
+
+## Group F — LOD Falloff Tuning
+
+### RO-011: Soften adaptive cell size falloff in `_compute_cell_size()`
+
+**File:** `core/dm_scene_ray_march_renderer.py`
+
+**Problem:** The linear falloff in RO-003 is too aggressive. Shading visibly degrades
+at moderate zoom-out because `h = cell * 2.0` in the normal kernel also scales up,
+making lighting flatten quickly.
+
+**Root cause:** Linear LOD: zoom out 2× → cell size 2×. Zoom out 4× → cell size 4×.
+The surface patches get large quickly and each has nearly-constant normals → flat shading.
+
+**Fix:** Replace the linear `adaptive_cell` return with a **sqrt power-law** plus a
+**hard cap** on the maximum degradation ratio.
+
+In `_compute_cell_size()`, find the final return line:
+```python
+        # cell_size so that n_texels fit across the field's screen extent
+        adaptive_cell = field_size / max(field_screen_px / n_texels, 1.0)
+
+        return max(MIN_CELL, min(MAX_CELL, adaptive_cell))
+```
+
+Replace with:
+```python
+        # Linear ratio: how many times coarser than base_cell would pure-linear LOD want?
+        linear_cell  = field_size / max(field_screen_px / n_texels, 1.0)
+        linear_ratio = max(linear_cell / base_cell, 1.0)   # >= 1.0 (never finer than base)
+
+        # Sqrt falloff + hard cap:
+        #   LOD_EXPONENT = 0.5 → zoom-out 4× only doubles cell size (was 4× with linear)
+        #   MAX_RATIO    = 16  → worst-case = base * sqrt(16) = 4× base_cell
+        LOD_EXPONENT = 0.5
+        MAX_RATIO    = 16.0
+        ratio = min(linear_ratio, MAX_RATIO) ** LOD_EXPONENT
+        return base_cell * ratio
+```
+
+**Behaviour table (base_cell = 2mm):**
+
+| Zoom-out factor | Linear (old) | Sqrt (new) |
+|-----------------|-------------|------------|
+| 1×              | 2mm         | 2mm        |
+| 2×              | 4mm         | 2.8mm      |
+| 4×              | 8mm         | 4mm        |
+| 8×              | 16mm→10mm   | 5.7mm      |
+| 16×+            | 20mm (cap)  | 8mm (cap)  |
+
+The cap means even at extreme zoom-out, cells never exceed 4× base_cell (8mm at default 2mm).
+
+**Verify:** Remove the now-redundant `MAX_CELL = 20.0` constant if it appears — the cap
+is now enforced by `MAX_RATIO` instead.
+
+---
+
+---
+
+## Group G — Frustum-Clipped Bake Region
+
+The adaptive cell size (RO-003/011) still bakes the **entire field** even when only a
+small corner is visible. Zooming into a 20mm region of a 500mm sphere still bakes 500mm³
+of volume — a 15,625× waste. The real win is clipping the bake region to the view frustum.
+
+### RO-012: Add `bbox_override` to `core/frep/sdf_baker.py`
+
+**File:** `core/frep/sdf_baker.py`
+
+Currently `bake_sdf_to_volume(field, cell_size)` always uses `field.bounding_box()`.
+Add an optional `bbox_override` parameter to allow passing a pre-clipped region:
+
+```python
+def bake_sdf_to_volume(field, cell_size, bbox_override=None):
+    """Bake SDF to 3D float32 volume.
+
+    Args:
+        field:        FRepField subclass.
+        cell_size:    Grid spacing in mm.
+        bbox_override: Optional (min_vec, max_vec) to bake a sub-region of the field.
+                       If None, uses field.bounding_box(). Must be within field bounds.
+    """
+    if bbox_override is not None:
+        mn_raw, mx_raw = bbox_override
+    else:
+        mn_raw, mx_raw = field.bounding_box()
+
+    # rest of function unchanged — uses mn_raw, mx_raw as the bake region
+```
+
+The existing `_pad(lo, hi)` helper already adds a `cell_size` margin, so the bbox_override
+region will still be padded correctly. No other changes needed in this file.
+
+---
+
+### RO-013: Add `_get_view_frustum_aabb(view)` to scene renderer
+
+**File:** `core/dm_scene_ray_march_renderer.py`
+
+Add this method to `DMSceneRayMarchRenderer`. It computes a world-space axis-aligned
+bounding box for the camera frustum using camera parameters directly (no MVP matrix
+inversion needed).
+
+```python
+def _get_view_frustum_aabb(self, view):
+    """Return (min_vec, max_vec) world-space AABB of the camera view frustum.
+
+    Returns None if computation fails (caller falls back to field.bounding_box()).
+    """
+    import numpy as np
+    import math
+    try:
+        cam = view.getCameraNode()
+
+        # Viewport aspect ratio
+        vp_w, vp_h = 1.0, 1.0
+        try:
+            viewer = view.getViewer()
+            for method in ("getGlxSize", "getSize"):
+                if hasattr(viewer, method):
+                    sz = getattr(viewer, method)()
+                    vp_w = float(sz[0] if isinstance(sz, (list, tuple)) else sz.width())
+                    vp_h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
+                    break
+        except Exception:
+            pass
+        aspect = vp_w / max(vp_h, 1.0)
+
+        # Camera axes in world space via orientation quaternion
+        rot = cam.orientation.getValue()
+        right   = rot.multVec(coin.SbVec3f(1,  0,  0))
+        up      = rot.multVec(coin.SbVec3f(0,  1,  0))
+        forward = rot.multVec(coin.SbVec3f(0,  0, -1))  # -Z is forward in OpenGL
+
+        r = np.array([right[0],   right[1],   right[2]])
+        u = np.array([up[0],      up[1],      up[2]])
+        f = np.array([forward[0], forward[1], forward[2]])
+        p = np.array([cam.position.getValue()[0],
+                      cam.position.getValue()[1],
+                      cam.position.getValue()[2]])
+
+        near = cam.nearDistance.getValue()
+        far  = cam.farDistance.getValue()
+
+        is_ortho = cam.isOfType(coin.SoOrthographicCamera.getClassTypeId())
+        if is_ortho:
+            hh = cam.height.getValue() / 2.0
+            hw = hh * aspect
+            # 8 corners of the orthographic frustum box
+            corners = np.array([
+                p + f*near + r*sx*hw + u*sy*hh
+                for sx in (-1, 1) for sy in (-1, 1) for near in (near, far)
+            ])
+        else:
+            # Perspective: frustum is a pyramid
+            hh_near = math.tan(cam.heightAngle.getValue() / 2.0) * near
+            hw_near = hh_near * aspect
+            hh_far  = math.tan(cam.heightAngle.getValue() / 2.0) * far
+            hw_far  = hh_far  * aspect
+            corners = np.array([
+                p + f*near + r*sx*hw_near + u*sy*hh_near
+                for sx in (-1, 1) for sy in (-1, 1)
+            ] + [
+                p + f*far  + r*sx*hw_far  + u*sy*hh_far
+                for sx in (-1, 1) for sy in (-1, 1)
+            ])
+
+        aabb_min = corners.min(axis=0)
+        aabb_max = corners.max(axis=0)
+        return (
+            FreeCAD.Vector(float(aabb_min[0]), float(aabb_min[1]), float(aabb_min[2])),
+            FreeCAD.Vector(float(aabb_max[0]), float(aabb_max[1]), float(aabb_max[2])),
+        )
+    except Exception as e:
+        dm_logger.debug(f"SceneRayMarch: _get_view_frustum_aabb failed: {e}")
+        return None
+```
+
+---
+
+### RO-014: Clip bake region + adapt cell size to visible subregion in `_rebuild()`
+
+**File:** `core/dm_scene_ray_march_renderer.py`
+
+This is the core of the frustum-clipped baking. In `_rebuild()`, for each field:
+
+1. Get the view frustum AABB
+2. Intersect with the field's full AABB → visible subregion
+3. Skip baking if intersection is empty (field off-screen)
+4. Pass the subregion as `bbox_override` to `bake_sdf_to_volume`
+5. Adapt cell size to the **visible subregion** size (not the full field size)
+
+Replace the per-field bake block inside `_rebuild()`:
+
+```python
+frustum = self._get_view_frustum_aabb(view) if view else None
+
+baked_list = []
+for label, f in visible:
+    if label in self._dirty_fields or label not in self._baked_cache:
+        try:
+            # Compute visible subregion
+            bbox_override = None
+            if frustum is not None:
+                try:
+                    f_min, f_max = f.bounding_box()
+                    fr_min, fr_max = frustum
+                    clip_min = FreeCAD.Vector(
+                        max(f_min.x, fr_min.x),
+                        max(f_min.y, fr_min.y),
+                        max(f_min.z, fr_min.z),
+                    )
+                    clip_max = FreeCAD.Vector(
+                        min(f_max.x, fr_max.x),
+                        min(f_max.y, fr_max.y),
+                        min(f_max.z, fr_max.z),
+                    )
+                    # Non-empty intersection?
+                    if (clip_min.x < clip_max.x and
+                        clip_min.y < clip_max.y and
+                        clip_min.z < clip_max.z):
+                        bbox_override = (clip_min, clip_max)
+                    else:
+                        dm_logger.debug(f"SceneRayMarch: '{label}' off-screen, skipping bake")
+                        continue   # skip — not visible
+                except Exception:
+                    pass  # fall through to full-field bake
+
+            # Cell size adapted to visible subregion (not full field)
+            cs = self._compute_cell_size_for_region(bbox_override, view) if bbox_override else self._compute_cell_size(f, view)
+            baked = bake_sdf_to_volume(f, cs, bbox_override=bbox_override)
+            self._baked_cache[label] = baked
+            dm_logger.debug(
+                f"SceneRayMarch: Baked '{label}' "
+                f"({'frustum-clipped' if bbox_override else 'full'}, cell={cs:.2f}mm)"
+            )
+        except Exception as e:
+            dm_logger.debug(f"SceneRayMarch: Bake failed for '{label}': {e}")
+            self._baked_cache.pop(label, None)
+            continue
+    cached = self._baked_cache.get(label)
+    if cached is not None:
+        baked_list.append((label, cached))
+```
+
+Also add the helper `_compute_cell_size_for_region(bbox_override, view)` that takes the
+already-computed clip region instead of calling `field.bounding_box()` again:
+
+```python
+def _compute_cell_size_for_region(self, bbox_override, view):
+    """Compute adaptive cell size for a pre-clipped (min, max) region."""
+    import math
+    from core.dm_object import get_ray_march_cell_size, get_rm_texels_per_field
+
+    base_cell = get_ray_march_cell_size()
+    n_texels  = get_rm_texels_per_field()
+    LOD_EXPONENT = 0.5
+    MAX_RATIO    = 16.0
+
+    try:
+        clip_min, clip_max = bbox_override
+        region_size = max(
+            abs(clip_max.x - clip_min.x),
+            abs(clip_max.y - clip_min.y),
+            abs(clip_max.z - clip_min.z),
+            1e-3
+        )
+        cam = view.getCameraNode()
+        vp_h = 800.0
+        try:
+            viewer = view.getViewer()
+            for method in ("getGlxSize", "getSize"):
+                if hasattr(viewer, method):
+                    sz = getattr(viewer, method)()
+                    vp_h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
+                    break
+        except Exception:
+            pass
+        is_ortho = cam.isOfType(coin.SoOrthographicCamera.getClassTypeId())
+        if is_ortho:
+            cam_world_h = cam.height.getValue()
+        else:
+            dist = (cam.position.getValue() - coin.SbVec3f(0, 0, 0)).length()
+            cam_world_h = 2.0 * dist * math.tan(cam.heightAngle.getValue() / 2.0)
+
+        px_per_world  = vp_h / max(cam_world_h, 1e-3)
+        region_screen_px = region_size * px_per_world
+        linear_cell   = region_size / max(region_screen_px / n_texels, 1.0)
+        linear_ratio  = max(linear_cell / base_cell, 1.0)
+        ratio = min(linear_ratio, MAX_RATIO) ** LOD_EXPONENT
+        return base_cell * ratio
+    except Exception:
+        return get_ray_march_cell_size()
+```
+
+**Key behaviour:** If a 500mm sphere is visible only as a 20mm window in the viewport,
+the bake region is 20mm³ (not 500mm³) and the cell size adapts to that 20mm region.
+This is a ~15,000× reduction in bake volume for that scenario.
+
+---
+
+### RO-015: Extend camera sensor to cover pan and rotate
+
+**File:** `core/dm_scene_ray_march_renderer.py`
+
+RO-005 adds a `SoFieldSensor` on `cam.height` (zoom only). Frustum-clipped baking
+(RO-012/013/014) also needs to rebake on **pan** (`cam.position` changes) and **rotate**
+(`cam.orientation` changes), since the visible subregion changes whenever the camera moves.
+
+Replace the `SoFieldSensor` approach in `_attach_camera_sensor()` with a `SoNodeSensor`
+on the camera node itself. `SoNodeSensor` fires on any field change of the node.
+
+```python
+def _attach_camera_sensor(self, view):
+    """Attach a SoNodeSensor to trigger debounced rebuild on any camera change."""
+    try:
+        from pivy.coin import SoNodeSensor
+        cam = view.getCameraNode()
+        if cam is None:
+            return
+        # SoNodeSensor fires on any field change (height, position, orientation, etc.)
+        self._cam_sensor = SoNodeSensor(self._on_camera_changed, None)
+        self._cam_sensor.attach(cam)
+    except Exception as e:
+        dm_logger.debug(f"SceneRayMarch: Failed to attach camera sensor: {e}")
+```
+
+The `_on_camera_changed` debounce and `_on_zoom_settled` methods from RO-005 are unchanged.
+
+**Note on performance:** `SoNodeSensor` fires very frequently during orbit/pan. The 100ms
+debounce in `_on_camera_changed` (QTimer.singleShot) handles this — baking only triggers
+100ms after the last camera movement stops, not on every intermediate frame.
+
+---
+
 ## Task Dependencies
 
 ```
@@ -643,4 +979,8 @@ RO-007 → RO-008 (needs dirty flags infrastructure)
 RO-004, RO-007 → RO-008 (needs adaptive cell size + dirty flags)
 RO-010 (standalone — independent bug fix)
 RO-009 (standalone — shader string edit only)
+RO-003 → RO-011 (modifies _compute_cell_size added in RO-003)
+RO-012 (standalone — sdf_baker.py only, no other deps)
+RO-012, RO-013 → RO-014 (needs bbox_override in baker + frustum helper)
+RO-014 → RO-015 (frustum clipping needs pan/rotate sensor to stay current)
 ```
