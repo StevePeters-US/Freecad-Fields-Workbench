@@ -427,8 +427,8 @@ class DMViewProvider:
                 self.renderer.setup_coin_overlay()
                 self.renderer.rebuild_control_cage(self.Object)
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "frep":
-                # Always use scene ray march renderer
-                self._scene_rm_label = vobj.Object.Label
+                # Always use scene ray march renderer. Use Name, not Label, as key.
+                self._scene_rm_label = vobj.Object.Name
             elif hasattr(self.Object, "ShapeType") and self.Object.ShapeType == "point":
                 self.renderer.setup_point_marker_nodes()
                 self.renderer.update_point_marker(self.Object)
@@ -491,10 +491,13 @@ class DMViewProvider:
             vobj = fp.ViewObject
             if self.renderer:
                 self.renderer.update_visibility(vobj.Visibility)
+            
             if hasattr(self, "_scene_rm_label"):
                 from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
                 sr = DMSceneRayMarchRenderer.get_instance()
                 sr.set_field_visible(self._scene_rm_label, vobj.Visibility)
+                if FreeCADGui.activeView():
+                    FreeCADGui.activeView().redraw()
 
     def onChanged(self, vobj, prop):
         """Called when a property of the ViewObject changes (e.g. Visibility)."""

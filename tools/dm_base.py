@@ -310,15 +310,36 @@ class DMBase:
             
             # Clean up active/preview objects if not finished
             if not getattr(self, "_finished", False):
-                obj_to_remove = getattr(self, "_active_obj", None) or getattr(self, "_preview_obj", None)
-                if obj_to_remove:
-                    doc = obj_to_remove.Document or self.doc or FreeCAD.ActiveDocument
-                    if doc and doc.getObject(obj_to_remove.Name):
-                        dm_logger.debug(f"DMBase._do_terminate: Removing unfinished object {obj_to_remove.Name}")
-                        import FreeCADGui
-                        FreeCADGui.updateGui()
-                    if hasattr(self, "_preview_obj"): self._preview_obj = None
-                    if hasattr(self, "_active_obj"): self._active_obj = None
+                # Robustly collect objects to remove.
+                # Use a set to avoid clearing the same object twice.
+                objs_to_clear = []
+                
+                # Check known attributes
+                for attr_name in ["_active_obj", "_preview_obj", "_preview_cursor"]:
+                    obj = getattr(self, attr_name, None)
+                    if obj is not None and obj not in [o for name, o in objs_to_clear]:
+                        objs_to_clear.append((attr_name, obj))
+                
+                # Check generic temp object list if tool uses it
+                if hasattr(self, "_temp_objs") and self._temp_objs:
+                    for obj in self._temp_objs:
+                        if obj is not None and obj not in [o for name, o in objs_to_clear]:
+                            objs_to_clear.append((None, obj))
+
+                for attr_name, obj in objs_to_clear:
+                    try:
+                        # Use the object's own document if available, fallback to tool's doc
+                        obj_doc = getattr(obj, "Document", None) or self.doc or FreeCAD.ActiveDocument
+                        if obj_doc and hasattr(obj, "Name") and obj_doc.getObject(obj.Name):
+                            dm_logger.debug(f"DMBase._do_terminate: Removing unfinished object {obj.Name} from doc {obj_doc.Name}")
+                            obj_doc.removeObject(obj.Name)
+                            obj_doc.recompute()
+                    except Exception as e:
+                        dm_logger.debug(f"DMBase._do_terminate: Failed to remove object {getattr(obj, 'Name', 'unknown')}: {e}")
+                    
+                    # Clear the reference on the tool
+                    if attr_name:
+                        setattr(self, attr_name, None)
 
             if self.view:
                 self.view.redraw()

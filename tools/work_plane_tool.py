@@ -39,8 +39,9 @@ class WorkPlaneCreator(DMBase):
             self.wp_manager.hide()
             self.wp_manager = None
 
-        self.preview_obj = None
-        self.target_wp = None
+        self._preview_obj = None
+        self._active_obj = None
+        self._editing_obj = None # Existing WP being edited
         self.state = 0 # 0 = waiting for click, 1 = resizing/idle, 2 = dragging corner
         self.active_corner_idx = -1
         self._cursor_active = False
@@ -49,18 +50,18 @@ class WorkPlaneCreator(DMBase):
         sel = FreeCADGui.Selection.getSelection()
         for obj in sel:
             if hasattr(obj, "Proxy") and getattr(obj.Proxy, "__class__", None).__name__ == "DMWorkPlane":
-                self.target_wp = obj
+                self._editing_obj = obj
                 self.state = 1
                 break
         
         self._is_new = False
-        if not self.target_wp:
+        if not self._editing_obj:
             self._is_new = True
             # Create preview object
             try:
-                self.preview_obj = create_dm_workplane(name="DM_WorkPlane_Preview")
-                if self.preview_obj:
-                    self.preview_obj.Label = "Work Plane Preview"
+                self._preview_obj = create_dm_workplane(name="DM_WorkPlane_Preview")
+                if self._preview_obj:
+                    self._preview_obj.Label = "Work Plane Preview"
             except Exception as e:
                 dm_logger.error(f"WorkPlaneCreator preview creation error: {e}")
 
@@ -106,76 +107,47 @@ class WorkPlaneCreator(DMBase):
         return self.state > 0
 
     def _do_terminate(self):
-        if hasattr(self, "_terminated") and self._terminated:
+        if getattr(self, "_terminated", False):
             return
             
-        if getattr(self, "_cursor_active", False):
-            from PySide import QtGui
-            QtGui.QApplication.restoreOverrideCursor()
-            self._cursor_active = False
+        self._restore_cursor()
             
-        # Clean up handles
+        # Clean up handles (Coin3D)
         try:
             if self.sg and self.handles_root:
                 self.sg.removeChild(self.handles_root)
         except Exception as e:
-            dm_logger.debug(f"WorkPlaneCreator.terminate: Failed to remove handles: {e}")
+            dm_logger.debug(f"WorkPlaneCreator._do_terminate: Failed to remove handles: {e}")
             
-        # Clean up preview
-        if self.preview_obj:
-            try:
-                doc = FreeCAD.ActiveDocument
-                name = self.preview_obj.Name
-                self.preview_obj = None # Clear before deletion to avoid issues
-                if doc and doc.getObject(name):
-                    doc.removeObject(name)
-                    doc.recompute()
-            except Exception as e:
-                dm_logger.debug(f"Cleanup error: {e}")
-                
-        # Clean up target_wp if we created it but didn't finish
-        if getattr(self, "_is_new", False) and not getattr(self, "_finished", False) and self.target_wp is not None:
-            try:
-                doc = FreeCAD.ActiveDocument
-                name = self.target_wp.Name
-                self.target_wp = None
-                if doc and doc.getObject(name):
-                    doc.removeObject(name)
-                    doc.recompute()
-            except Exception as e:
-                dm_logger.debug(f"Cleanup error (target_wp): {e}")
-
+        # The rest of the object cleanup (for _preview_obj and _active_obj) 
+        # is now handled robustly by super()._do_terminate()
         super()._do_terminate()
 
     def finish(self):
         """Accept the current workplane and reset for another one."""
         self._finished = True
-        if self.state > 0:
-            if self.preview_obj:
-                self.preview_obj.Label = "Work Plane"
-                self.target_wp = self.preview_obj
-                self.preview_obj = None
+        obj = self._active_obj or self._preview_obj or self._editing_obj
+        if self.state > 0 and obj:
+            if self._is_new:
+                obj.Label = "Work Plane"
+                dm_logger.info(f"WorkPlane accepted: {obj.Label}")
             
-            if self.target_wp:
-                # Add to document properly if it's new
-                if getattr(self, "_is_new", False):
-                    # It's already in doc if created via create_dm_workplane
-                    pass
-                
-                dm_logger.info(f"WorkPlane accepted: {self.target_wp.Label}")
-                self._finished = False # Reset for next one
-                self._is_new = True # Next one will be new again
-                self.target_wp = None
-                self.reset_state()
-                # Create fresh preview for the next one
-                try:
-                    self.preview_obj = create_dm_workplane(name="DM_WorkPlane_Preview")
-                    self.preview_obj.Label = "Work Plane Preview"
-                except Exception as e:
-                    dm_logger.error(f"WorkPlaneCreator repeat preview error: {e}")
-                
-                if FreeCAD.ActiveDocument:
-                    FreeCAD.ActiveDocument.recompute()
+            self._finished = False # Reset for next one
+            self._active_obj = None
+            self._preview_obj = None
+            self._editing_obj = None
+            
+            self.reset_state()
+            # Create fresh preview for the next one
+            try:
+                self._preview_obj = create_dm_workplane(name="DM_WorkPlane_Preview")
+                self._preview_obj.Label = "Work Plane Preview"
+                self._is_new = True
+            except Exception as e:
+                dm_logger.error(f"WorkPlaneCreator repeat preview error: {e}")
+            
+            if FreeCAD.ActiveDocument:
+                FreeCAD.ActiveDocument.recompute()
         else:
             self.terminate()
 
@@ -192,7 +164,8 @@ class WorkPlaneCreator(DMBase):
 
     def get_snapped_placement(self, event_dict):
         """Delegated to ViewProjector."""
-        geo = self.projector.get_geometry_info(event_dict, skip_objects=[self.preview_obj] if self.preview_obj else None)
+        obj = self._active_obj or self._preview_obj or self._editing_obj
+        geo = self.projector.get_geometry_info(event_dict, skip_objects=[obj] if obj else None)
         if geo:
             world_hit, world_n, obj, subname = geo
             # Ensure the normal faces toward the viewer (not into the surface)
@@ -215,7 +188,7 @@ class WorkPlaneCreator(DMBase):
             return FreeCAD.Placement(m)
 
         # SDF surface snap — snap normal to SDF surface when no NURBS geometry is under mouse
-        skip = [self.preview_obj] if self.preview_obj else None
+        skip = [obj] if obj else None
         sdf_result = self.projector.get_sdf_hit(event_dict, skip_objects=skip)
         if sdf_result:
             world_hit, world_n, _sdf_obj = sdf_result
@@ -289,7 +262,7 @@ class WorkPlaneCreator(DMBase):
             return 100.0
 
     def update_handles(self):
-        obj = self.target_wp if self.target_wp else self.preview_obj
+        obj = self._active_obj or self._preview_obj or self._editing_obj
         if not obj or not hasattr(obj, "Length"):
             # Hide spheres by zeroing scale
             for xf in self.handle_transforms:
@@ -329,7 +302,7 @@ class WorkPlaneCreator(DMBase):
         pure ray-sphere intersection (requiring positive t) would miss.
         Perpendicular distance is depth-independent and always correct.
         """
-        obj = self.target_wp if self.target_wp else self.preview_obj
+        obj = self._active_obj or self._preview_obj or self._editing_obj
         if not obj or ray_p is None or ray_d is None:
             return -1, float('inf')
 
@@ -379,17 +352,17 @@ class WorkPlaneCreator(DMBase):
                 placement = self.get_snapped_placement(event_dict)
                 if placement:
                     size = self._get_initial_size(placement.Base)
-                    if self.preview_obj:
-                        self.preview_obj.Placement = placement
-                        self.preview_obj.Label = "Work Plane"
-                        self.preview_obj.Length = size
-                        self.preview_obj.Width = size
-                        self.target_wp = self.preview_obj
-                        self.preview_obj = None
+                    if self._preview_obj:
+                        self._preview_obj.Placement = placement
+                        self._preview_obj.Label = "Work Plane"
+                        self._preview_obj.Length = size
+                        self._preview_obj.Width = size
+                        self._active_obj = self._preview_obj
+                        self._preview_obj = None
                     else:
-                        self.target_wp = create_dm_workplane(placement=placement)
-                        self.target_wp.Length = size
-                        self.target_wp.Width = size
+                        self._active_obj = create_dm_workplane(placement=placement)
+                        self._active_obj.Length = size
+                        self._active_obj.Width = size
                         
                     if FreeCAD.ActiveDocument:
                         FreeCAD.ActiveDocument.recompute()
@@ -408,7 +381,8 @@ class WorkPlaneCreator(DMBase):
                     self.active_corner_idx = hit_idx
                     self.state = 2 # dragging
                     # Get drag plane normal and origin
-                    plc = self.target_wp.Placement
+                    obj = self._active_obj or self._preview_obj or self._editing_obj
+                    plc = obj.Placement
                     self.drag_plane_n = plc.Rotation.multVec(FreeCAD.Vector(0,0,1))
                     self.drag_plane_o = plc.Base
                     return True
@@ -443,11 +417,11 @@ class WorkPlaneCreator(DMBase):
         try:
             if self.state == 0:
                 placement = self.get_snapped_placement(event_dict)
-                if placement and self.preview_obj:
-                    self.preview_obj.Placement = placement
+                if placement and self._preview_obj:
+                    self._preview_obj.Placement = placement
                     size = self._get_initial_size(placement.Base)
-                    self.preview_obj.Length = size
-                    self.preview_obj.Width = size
+                    self._preview_obj.Length = size
+                    self._preview_obj.Width = size
                     if self.doc:
                         self.doc.recompute()
                     self.update_handles()
@@ -457,21 +431,23 @@ class WorkPlaneCreator(DMBase):
                 hit_idx, _ = self._hit_test(ray_p, ray_d)
                 self._set_hover(hit_idx)
 
-            elif self.state == 2 and self.target_wp:
-                # Bypass place_on_geometry — always intersect the workplane drag plane
-                pt_global = self.projector.get_mouse_world_pos(
-                    event_dict, self.drag_plane_n, self.drag_plane_o,
-                    place_on_geometry=False
-                )
-                if pt_global:
-                    pt_local = self.target_wp.Placement.inverse().multVec(pt_global)
-                    new_l = abs(pt_local.x) * 2.0
-                    new_w = abs(pt_local.y) * 2.0
-                    self.target_wp.Length = max(1.0, new_l)
-                    self.target_wp.Width = max(1.0, new_w)
-                    if self.doc:
-                        self.doc.recompute()
-                    self.update_handles()
+            elif self.state == 2:
+                obj = self._active_obj or self._editing_obj
+                if obj:
+                    # Bypass place_on_geometry — always intersect the workplane drag plane
+                    pt_global = self.projector.get_mouse_world_pos(
+                        event_dict, self.drag_plane_n, self.drag_plane_o,
+                        place_on_geometry=False
+                    )
+                    if pt_global:
+                        pt_local = obj.Placement.inverse().multVec(pt_global)
+                        new_l = abs(pt_local.x) * 2.0
+                        new_w = abs(pt_local.y) * 2.0
+                        obj.Length = max(1.0, new_l)
+                        obj.Width = max(1.0, new_w)
+                        if self.doc:
+                            self.doc.recompute()
+                        self.update_handles()
         except Exception as e:
             dm_logger.error(f"[handle_move] Exception: {e}")
             import traceback

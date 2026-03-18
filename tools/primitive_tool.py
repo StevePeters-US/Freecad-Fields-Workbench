@@ -1,4 +1,5 @@
 import FreeCAD
+import math
 from PySide import QtCore
 from pivy import coin
 from core import dm_logger
@@ -191,6 +192,7 @@ class PrimitiveCreatorBase(DMBase):
     def reset_state(self):
         """Override to clear internal primitive state (points, visuals)."""
         super().reset_state()
+        self.state = 0  # Re-enable dynamic snapping
         self.points = []
         for dm_pt in self.dm_points:
             dm_pt.undraw()
@@ -573,6 +575,8 @@ class CylinderCreator(PrimitiveCreatorBase):
 
             dm_logger.info("Cylinder Tool: Click height")
         elif self.state == 2:
+            # 3rd click - determines height. Finalize shape.
+            self.points.append(self.current_point)
             self.state = 3
             self._finalize_object("Cylinder")
 
@@ -587,11 +591,11 @@ class CylinderCreator(PrimitiveCreatorBase):
         loc_cur = self.to_local(self.current_point)
         
         if self.state == 1:
-            radius = (loc_cur - loc_base).Length
+            radius = math.sqrt((loc_cur.x - loc_base.x)**2 + (loc_cur.y - loc_base.y)**2)
             height = 0.1
         else:
             loc_p1 = self.to_local(self.points[1])
-            radius = (loc_p1 - loc_base).Length
+            radius = math.sqrt((loc_p1.x - loc_base.x)**2 + (loc_p1.y - loc_base.y)**2)
             height = (loc_cur - loc_base).z
 
         if radius < 0.1:

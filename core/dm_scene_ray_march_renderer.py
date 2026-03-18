@@ -398,6 +398,8 @@ void main() {
         self._fields[label] = (field, True)
         self._attach()
         self._rebuild()
+        if FreeCADGui.activeView():
+            FreeCADGui.activeView().redraw()
 
     def unregister_field(self, label):
         """Remove a field. Hides renderer if no fields remain."""
@@ -406,6 +408,8 @@ void main() {
             self._switch.whichChild = -1
         else:
             self._rebuild()
+        if FreeCADGui.activeView():
+            FreeCADGui.activeView().redraw()
 
     def set_field_visible(self, label, visible):
         """Toggle a field's visibility. Triggers combined re-bake."""
@@ -421,6 +425,8 @@ void main() {
         if not self._attached:
             self._attach()
         self._rebuild()
+        if FreeCADGui.activeView():
+            FreeCADGui.activeView().redraw()
 
     def on_prefs_changed(self):
         """Update renderer based on global prefs."""
