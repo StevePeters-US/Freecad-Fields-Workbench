@@ -185,7 +185,13 @@ class DMBase:
             # Update plane if one isn't set, or if we are in the initial 'Idle' state
             # where we want to snap to whatever surface is under the first click.
             if self.working_plane is None or getattr(self, "state", 1) == 0:
-                self.working_plane = wp_hit.getGlobalPlacement() if hasattr(wp_hit, "getGlobalPlacement") else wp_hit.Placement
+                if hasattr(wp_hit, "getGlobalPlacement"):
+                    self.working_plane = wp_hit.getGlobalPlacement()
+                elif hasattr(wp_hit, "Placement"):
+                    self.working_plane = wp_hit.Placement
+                else:
+                    # Assume it's already a FreeCAD.Placement or None
+                    self.working_plane = wp_hit
             
         return pos
 

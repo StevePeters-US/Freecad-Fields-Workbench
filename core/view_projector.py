@@ -281,10 +281,21 @@ class ViewProjector:
             # 3. Return closest of bounded workplane / SDF surface / NURBS geometry.
             if wp_pt is not None and wp_t <= sdf_t and wp_t <= geom_t:
                 return wp_pt, wp_hit
+            
             if sdf_pt is not None and sdf_t <= geom_t:
-                return sdf_pt, None
+                # Synthesize a placement from the SDF hit normal
+                _pt, world_n, _obj = sdf_result
+                rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), world_n)
+                return sdf_pt, FreeCAD.Placement(sdf_pt, rot)
+                
             if geom_pt is not None:
-                return geom_pt
+                # We need the normal for geom_pt too. Re-fetch via get_geometry_info or fallback.
+                info = self.get_geometry_info(event_dict, skip_objects=skip_objects)
+                if info:
+                    world_hit, world_n, _obj, _sub = info
+                    rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), world_n)
+                    return world_hit, FreeCAD.Placement(world_hit, rot)
+                return geom_pt, None
 
             # 4. working_plane as infinite fallback (cursor outside all workplane bounds).
             if working_plane:
@@ -292,14 +303,16 @@ class ViewProjector:
                 o = working_plane.Base
                 pt = self.get_mouse_world_pos(event_dict, n, o, place_on_geometry=False)
                 if pt:
-                    return pt, None
+                    return pt, None # Maintain existing orientation (resolved in _resolve_wp_click)
 
         except Exception as e:
             dm_logger.debug(f"get_mouse_plane_pt failed: {e}")
 
         # 5. Camera-facing plane.
-        n, o = self.get_base_plane(None)
-        return self.get_mouse_world_pos(event_dict, n, o), None
+        n_cam, o_cam = self.get_base_plane(None)
+        pt_cam = self.get_mouse_world_pos(event_dict, n_cam, o_cam)
+        rot_cam = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), n_cam)
+        return pt_cam, FreeCAD.Placement(pt_cam if pt_cam else FreeCAD.Vector(0,0,0), rot_cam)
 
     def get_geometry_info(self, event_dict, skip_objects=None):
         """
