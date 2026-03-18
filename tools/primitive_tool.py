@@ -9,7 +9,7 @@ from core.dm_point import DMPoint
 from core.dm_line import DMLineSet
 from core.dm_object import create_dm_object, get_meshing_cell_size, get_interactive_throttle_interval
 from core.dm_mesher import mesh_timer
-from tools.dm_base import DMBase
+from tools.dm_base import DMBase, DragTimerMixin, STATE_IDLE, STATE_DRAGGING
 
 # Ensure we import the right storage classes. For now, defaulting to MarchingCubes
 from core.frep.sdf.box import SdfBoxField
@@ -18,12 +18,15 @@ from core.frep.sdf.cylinder import SdfCylinderField
 
 # Cell size for interactive preview in mm (larger = faster updates)
 _PREVIEW_CELL_SIZE = 20.0
+
+# Opposite corner index for box corners 0..7 (see _get_final_points ordering)
+_BOX_OPPOSITE = {0: 6, 1: 7, 2: 4, 3: 5, 4: 2, 5: 3, 6: 0, 7: 1}
 # Cell size for final committed mesh (smaller = more detail)
 def _get_final_cell_size():
     return get_meshing_cell_size()
 
 
-class PrimitiveCreatorBase(DMBase):
+class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     """Base class for F-Rep primitive creator tools with live mesh preview."""
     
     _last_working_plane = None  # Shared across all primitive tools
@@ -42,6 +45,11 @@ class PrimitiveCreatorBase(DMBase):
         if self.view and self.view.getSceneGraph():
             self.view.getSceneGraph().addChild(self.points_root)
 
+        # Edit mode drag state
+        self._edit_sel_idx = None
+        self._edit_drag_n = None
+        self._edit_drag_o = None
+
         # Unified workplane pre-load logic
         self._init_working_plane()
 
@@ -49,33 +57,115 @@ class PrimitiveCreatorBase(DMBase):
         return ["frep"]
 
     def edit_object(self, obj):
-        """Load an existing F-Rep object into the tool for editing."""
+        """Load an existing F-Rep object into the tool for editing.
+
+        Base: sets preview obj, loads raw points, sets workplane.
+        Subclasses call super() then reconstruct their specific state and draw handles.
+        """
         super().edit_object(obj)
         dm_logger.debug(f"{type(self).__name__}: Editing existing object {obj.Label}")
         self._preview_obj = obj
-        
-        # Load points if available
+
         if hasattr(obj, "Points"):
-             self.points = list(obj.Points)
-        
-        # Set workplane from object placement
+            self.points = list(obj.Points)
+
         self.working_plane = obj.Placement
         self._working_plane_is_fallback = False
-        
-        # Setup visuals for loaded points
-        if hasattr(self, "points") and self.points:
-            # Most primitive tools use self.points for their defining points
-            for pt in self.points:
-                from core.dm_point import DMPoint
-                dm_pt = DMPoint(pt)
-                dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pt))
-                self.dm_points.append(dm_pt)
-            
-            # Transition state based on number of points
-            self.state = len(self.points)
-        
-        self.update_preview()
-        self.update_ui()
+
+    # ------------------------------------------------------------------
+    # Edit mode: hover, handle selection, drag
+    # ------------------------------------------------------------------
+
+    def handle_move(self, event_dict):
+        """Suppress creation logic during edit mode hover; normal creation otherwise."""
+        if self._is_editing:
+            if self.state != STATE_DRAGGING:
+                self._edit_hover(event_dict)
+            return  # Never propagate to DMBase.handle_move in edit mode
+        super().handle_move(event_dict)
+
+    def _edit_hover(self, event_dict):
+        """Update cursor when hovering over a handle in edit mode."""
+        ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
+        if not ray_p or not ray_d:
+            return
+        pts = [dm_pt.position for dm_pt in self.dm_points]
+        idx, _ = self._hit_test_perp(ray_p, ray_d, pts)
+        if idx is not None:
+            from PySide.QtCore import Qt
+            self._set_cursor(Qt.PointingHandCursor)
+        else:
+            self._restore_cursor()
+
+    def _edit_on_button1_down(self, event_dict):
+        """Hit-test handles and start drag timer in edit mode."""
+        ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
+        if not ray_p or not ray_d:
+            return True
+        pts = [dm_pt.position for dm_pt in self.dm_points]
+        idx, _ = self._hit_test_perp(ray_p, ray_d, pts)
+        if idx is not None:
+            self._edit_sel_idx = idx
+            vd = self.view.getViewDirection()
+            self._edit_drag_n = FreeCAD.Vector(-vd[0], -vd[1], -vd[2])
+            self._edit_drag_n.normalize()
+            self._edit_drag_o = pts[idx]
+            self.state = STATE_DRAGGING
+            self._start_drag_timer()
+            from PySide.QtCore import Qt
+            self._set_cursor(Qt.SizeAllCursor)
+        return True  # always consume click in edit mode
+
+    def _drag_update(self):
+        """QTimer callback: move the selected handle to the current mouse position."""
+        if self._drag_check_lmb_released():
+            self._edit_sel_idx = None
+            return
+        if self._edit_sel_idx is None:
+            self._stop_drag_timer()
+            return
+
+        mouse_pos = DMInputManager.get_instance()._last_qt_pos
+        new_pos = self.projector.get_mouse_world_pos(
+            {"QtPosition": mouse_pos},
+            self._edit_drag_n, self._edit_drag_o,
+            place_on_geometry=False
+        )
+        if new_pos is None:
+            return
+
+        self.dm_points[self._edit_sel_idx].position = new_pos
+        self.dm_points[self._edit_sel_idx].update_draw()
+
+        self._sync_edit_points()
+
+        field = self._get_edit_preview_field()
+        if field is not None and self._preview_obj:
+            self._apply_preview_field(field)
+            self._update_pending = False
+        if self.view:
+            self.view.redraw()
+
+    def _sync_edit_points(self):
+        """Sync dm_point positions back to tool-specific variables. Override in subclasses."""
+        pass
+
+    def _get_edit_preview_field(self):
+        """Return the SDF field for the current edit state. Defaults to _get_preview_field."""
+        return self._get_preview_field()
+
+    def finish(self):
+        """In edit mode, finish just terminates. Otherwise, standard creation finish."""
+        if self._is_editing:
+            self.terminate()
+            return
+        if self.is_in_progress():
+            name = type(self).__name__.replace("Creator", "")
+            self._finalize_object(name, terminate=False)
+            self.reset_state()
+            dm_logger.info(f"{name} accepted. Tool remains active.")
+        else:
+            self.terminate()
 
     def is_in_progress(self):
         """Returns True if we have started clicking (state > 0)."""
@@ -210,19 +300,63 @@ class PrimitiveCreatorBase(DMBase):
         mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_CELL_SIZE}mm) + final ({getattr(obj, 'MeshingCellSize', _get_final_cell_size()):.1f}mm)")
         self._preview_obj = None  # Severed; the object is now the user's
 
-
-
-    def finish(self):
-        """Standard 'Accept' behavior for primitives. Finishes object and resets tool."""
-        if self.is_in_progress():
-            name = type(self).__name__.replace("Creator", "")
-            # Finalize but DO NOT terminate the tool session
-            self._finalize_object(name, terminate=False)
-            # Reset for next placement (clears points and visuals)
-            self.reset_state()
-            dm_logger.info(f"{name} accepted. Tool remains active.")
-        else:
+    def _commit_and_enter_edit(self, name):
+        """Commit creation at full resolution, then immediately enter edit mode on the result."""
+        field = self._get_final_field()
+        points = self._get_final_points()
+        if field is None:
             self.terminate()
+            return
+
+        # Pre-enter edit state so handle_move doesn't clobber tool vars during async delay
+        self._is_editing = True
+        self.state = STATE_IDLE
+
+        QtCore.QTimer.singleShot(0, lambda: self._do_commit_and_edit(name, field, points))
+
+    def _do_commit_and_edit(self, name, field, points):
+        """Async: commit the object at full resolution then switch to edit mode on it."""
+        if getattr(self, "_terminated", False):
+            return
+
+        obj = self._preview_obj
+        if obj is None or not obj.Document:
+            obj = create_dm_object(name=name, shape_type="frep")
+
+        try:
+            obj.Label = name
+        except Exception:
+            pass
+
+        if points is not None:
+            try:
+                if not hasattr(obj, "Points"):
+                    obj.addProperty("App::PropertyVectorList", "Points", "FRep", "Control Points")
+                obj.Points = points
+            except Exception:
+                pass
+
+        primitive_name = type(self).__name__.replace("Creator", "")
+        obj.Proxy.FRepField = field
+        if hasattr(obj, "MeshingCellSize"):
+            obj.MeshingCellSize = float(_get_final_cell_size())
+        obj.touch()
+        obj.Document.recompute([obj])
+        mesh_timer.summary(f"{primitive_name} ({_get_final_cell_size():.1f}mm) → edit mode")
+
+        # Clear creation visuals before entering edit mode
+        for dm_pt in self.dm_points:
+            dm_pt.undraw()
+        self.dm_points.clear()
+        if self.dm_line_set:
+            self.dm_line_set.undraw()
+            self.dm_line_set = None
+
+        # Enter edit mode on the committed object
+        self.edit_object(obj)
+        FreeCADGui.updateGui()
+        if self.view:
+            self.view.redraw()
 
     def reset_state(self):
         """Override to clear internal primitive state (points, visuals)."""
@@ -273,8 +407,95 @@ class BoxCreator(PrimitiveCreatorBase):
 
         dm_logger.info("Box Tool: Click 1st corner")
 
+    def edit_object(self, obj):
+        super().edit_object(obj)  # loads self.points = 8 world corners
+        corners = list(getattr(self, "points", []))
+        if len(corners) != 8:
+            dm_logger.warning(f"BoxCreator.edit_object: expected 8 corners, got {len(corners)}")
+            return
+        self.points = corners  # keep all 8 for 8-handle drag
+        self.current_point = None
+        self.state = STATE_IDLE
+
+        r = self._compute_handle_radius()
+        for pt in corners:
+            dm_pt = DMPoint(pt)
+            dm_pt.draw_point(self.points_root, r, color=(1.0, 0.5, 0.0))
+            self.dm_points.append(dm_pt)
+        self.update_ui()
+
+    def _drag_update(self):
+        """8-corner drag: drag one corner while the opposite is fixed."""
+        if self._drag_check_lmb_released():
+            self._edit_sel_idx = None
+            return
+        if self._edit_sel_idx is None:
+            self._stop_drag_timer()
+            return
+
+        mouse_pos = DMInputManager.get_instance()._last_qt_pos
+        new_world = self.projector.get_mouse_world_pos(
+            {"QtPosition": mouse_pos},
+            self._edit_drag_n, self._edit_drag_o,
+            place_on_geometry=False
+        )
+        if new_world is None:
+            return
+
+        fixed_world = self.points[_BOX_OPPOSITE[self._edit_sel_idx]]
+        new_field = self._field_from_two_corners(new_world, fixed_world)
+        self._refresh_edit_corners(new_field)
+
+        r = self._compute_handle_radius()
+        for i, pt in enumerate(self.points):
+            self.dm_points[i].position = pt
+            self.dm_points[i].update_draw(radius=r)
+
+        self._apply_preview_field(new_field)
+        self._update_pending = False
+        if self.view:
+            self.view.redraw()
+
+    def _field_from_two_corners(self, corner_a_world, corner_b_world):
+        """Rebuild SdfBoxField from two opposite world corners."""
+        wp = self.working_plane
+        if wp:
+            inv = wp.inverse()
+            lc_a = inv.multVec(corner_a_world)
+            lc_b = inv.multVec(corner_b_world)
+        else:
+            lc_a, lc_b = corner_a_world, corner_b_world
+        cx = (lc_a.x + lc_b.x) / 2.0
+        cy = (lc_a.y + lc_b.y) / 2.0
+        cz = (lc_a.z + lc_b.z) / 2.0
+        sx = max(abs(lc_a.x - lc_b.x), 0.1)
+        sy = max(abs(lc_a.y - lc_b.y), 0.1)
+        sz = max(abs(lc_a.z - lc_b.z), 0.1)
+        return SdfBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(sx, sy, sz), placement=wp)
+
+    def _refresh_edit_corners(self, field):
+        """Update self.points (8 world corners) from a new SdfBoxField."""
+        c, h = field.center, field.half_size
+        wp = field.placement
+        pts_local = [
+            FreeCAD.Vector(c.x - h.x, c.y - h.y, c.z - h.z),
+            FreeCAD.Vector(c.x + h.x, c.y - h.y, c.z - h.z),
+            FreeCAD.Vector(c.x + h.x, c.y + h.y, c.z - h.z),
+            FreeCAD.Vector(c.x - h.x, c.y + h.y, c.z - h.z),
+            FreeCAD.Vector(c.x - h.x, c.y - h.y, c.z + h.z),
+            FreeCAD.Vector(c.x + h.x, c.y - h.y, c.z + h.z),
+            FreeCAD.Vector(c.x + h.x, c.y + h.y, c.z + h.z),
+            FreeCAD.Vector(c.x - h.x, c.y + h.y, c.z + h.z),
+        ]
+        if wp:
+            self.points = [wp.multVec(lc) for lc in pts_local]
+        else:
+            self.points = pts_local
 
     def on_button1_down(self, event_dict):
+        if self._is_editing:
+            return self._edit_on_button1_down(event_dict)
+
         skip = [self._preview_obj] if self._preview_obj else None
         pos = self._resolve_wp_click(event_dict, skip_objects=skip)
 
@@ -313,7 +534,7 @@ class BoxCreator(PrimitiveCreatorBase):
 
             # Transition to a finalized state or finish tool
             self.state = 3
-            self._finalize_object("Box")
+            self._commit_and_enter_edit("Box")
 
         return True
 
@@ -473,8 +694,33 @@ class SphereCreator(PrimitiveCreatorBase):
 
         dm_logger.info("Sphere Tool: Click center")
 
+    def edit_object(self, obj):
+        super().edit_object(obj)
+        pts = list(getattr(self, "points", []))
+        if pts:
+            self.center = pts[0]
+            self.current_point = pts[1] if len(pts) >= 2 else pts[0] + FreeCAD.Vector(10, 0, 0)
+        self.state = STATE_IDLE
+
+        r = self._compute_handle_radius()
+        for pt in [self.center, self.current_point]:
+            if pt is not None:
+                dm_pt = DMPoint(pt)
+                dm_pt.draw_point(self.points_root, r)
+                self.dm_points.append(dm_pt)
+        self.update_preview()
+        self.update_ui()
+
+    def _sync_edit_points(self):
+        if len(self.dm_points) >= 1:
+            self.center = self.dm_points[0].position
+        if len(self.dm_points) >= 2:
+            self.current_point = self.dm_points[1].position
 
     def on_button1_down(self, event_dict):
+        if self._is_editing:
+            return self._edit_on_button1_down(event_dict)
+
         skip = [self._preview_obj] if self._preview_obj else None
         pos = self._resolve_wp_click(event_dict, skip_objects=skip)
 
@@ -495,7 +741,7 @@ class SphereCreator(PrimitiveCreatorBase):
             dm_logger.info("Sphere Tool: Click radius")
         elif self.state == 1:
             self.state = 2
-            self._finalize_object("Sphere")
+            self._commit_and_enter_edit("Sphere")
 
         return True
 
@@ -579,8 +825,39 @@ class CylinderCreator(PrimitiveCreatorBase):
 
         dm_logger.info("Cylinder Tool: Click base center")
 
+    def edit_object(self, obj):
+        super().edit_object(obj)
+        # self.points from super() = [base_center, radius_pt, height_pt]
+        pts = list(getattr(self, "points", []))
+        if len(pts) >= 3:
+            self.current_point = pts[2]
+            self.points = pts[:2]
+        elif len(pts) >= 2:
+            self.current_point = pts[1]
+            self.points = pts[:1]
+        self.state = STATE_IDLE
+
+        r = self._compute_handle_radius()
+        all_pts = list(self.points) + ([self.current_point] if self.current_point else [])
+        for pt in all_pts:
+            dm_pt = DMPoint(pt)
+            dm_pt.draw_point(self.points_root, r)
+            self.dm_points.append(dm_pt)
+        self.update_preview()
+        self.update_ui()
+
+    def _sync_edit_points(self):
+        if len(self.dm_points) >= 1 and len(self.points) >= 1:
+            self.points[0] = self.dm_points[0].position
+        if len(self.dm_points) >= 2 and len(self.points) >= 2:
+            self.points[1] = self.dm_points[1].position
+        if len(self.dm_points) >= 3:
+            self.current_point = self.dm_points[2].position
 
     def on_button1_down(self, event_dict):
+        if self._is_editing:
+            return self._edit_on_button1_down(event_dict)
+
         skip = [self._preview_obj] if self._preview_obj else None
         pos = self._resolve_wp_click(event_dict, skip_objects=skip)
 
@@ -613,7 +890,7 @@ class CylinderCreator(PrimitiveCreatorBase):
             # 3rd click - determines height. Finalize shape.
             self.points.append(self.current_point)
             self.state = 3
-            self._finalize_object("Cylinder")
+            self._commit_and_enter_edit("Cylinder")
 
         return True
 
