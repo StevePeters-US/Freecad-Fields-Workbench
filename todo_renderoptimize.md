@@ -968,6 +968,95 @@ debounce in `_on_camera_changed` (QTimer.singleShot) handles this — baking onl
 
 ---
 
+## Group H — Edge-Sharpening Normals
+
+### RO-016: Adaptive normal kernel width near edges
+
+**File:** `core/dm_scene_ray_march_renderer.py` and `core/dm_ray_march_renderer.py`
+— fragment shader string in each file.
+
+**Problem:** The current normal kernel uses a fixed `h = cell * 2.0`. This is good for
+smooth surfaces (avoids C0 step artifacts), but it over-smooths normals at sharp edges —
+convex/concave corners of boxes, cylinders, blended primitives. Edge highlights look
+"mushy" when they should be crisp.
+
+**Root cause:** A large `h` averages the gradient across a wide neighbourhood. On a smooth
+surface this is fine. At a sharp edge (where the SDF surface curves within one `h` radius),
+the averaged gradient points away from the actual edge normal — the highlight shifts and
+blurs.
+
+**Fix: Curvature-guided adaptive `h`**
+
+The Laplacian of the SDF is a good curvature proxy — it is ~0 on flat surfaces and large
+near edges (sign-changes at concave/convex corners). Use it to blend `h` between coarse
+(smooth) and fine (sharp):
+
+```glsl
+vec3 sdf_normal_field(int fi, vec3 p) {
+    float cell = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
+
+    // Sample SDF at the hit point
+    float d0 = sample_sdf_field(fi, p);
+
+    // Coarse-scale Laplacian: estimates local curvature
+    // lap ≈ (d(p+h) + d(p-h) - 2*d) / h²  along each axis (summed → scalar)
+    float h_lap = cell * 1.0;
+    float lap = abs(
+        (sample_sdf_field(fi, p + vec3(h_lap, 0, 0)) +
+         sample_sdf_field(fi, p - vec3(h_lap, 0, 0)) - 2.0 * d0) +
+        (sample_sdf_field(fi, p + vec3(0, h_lap, 0)) +
+         sample_sdf_field(fi, p - vec3(0, h_lap, 0)) - 2.0 * d0) +
+        (sample_sdf_field(fi, p + vec3(0, 0, h_lap)) +
+         sample_sdf_field(fi, p - vec3(0, 0, h_lap)) - 2.0 * d0)
+    ) / (h_lap * h_lap);
+
+    // Edge strength: normalise by a threshold (~1/cell — sharp edge has lap ≈ 1/cell)
+    float edge = clamp(lap * cell * 2.0, 0.0, 1.0);
+
+    // Blend h: smooth surfaces → h_coarse; near edges → h_fine
+    float h_fine   = cell * 0.5;
+    float h_coarse = cell * 2.0;
+    float h = mix(h_coarse, h_fine, edge);
+
+    // Standard tetrahedral gradient (4 samples)
+    vec2 k = vec2(1.0, -1.0);
+    vec3 g = k.xyy * sample_sdf_field(fi, p + k.xyy*h) +
+             k.yyx * sample_sdf_field(fi, p + k.yyx*h) +
+             k.yxy * sample_sdf_field(fi, p + k.yxy*h) +
+             k.xxx * sample_sdf_field(fi, p + k.xxx*h);
+
+    float len2 = dot(g, g);
+    return (len2 > 1e-10) ? g * inversesqrt(len2) : vec3(0.0, 1.0, 0.0);
+}
+```
+
+**Cost:** 6 additional `sample_sdf_field` calls per shaded pixel (for the Laplacian).
+These are texture lookups only — no branching, GPU-friendly. At typical fragment counts
+this adds ~10–15% shader cost; the visual improvement on edges is significant.
+
+**Tuning knobs (adjust in shader source if needed):**
+
+| Constant | Value | Effect |
+|----------|-------|--------|
+| `h_lap = cell * 1.0` | 1× cell | Laplacian probe distance — increase for softer edge detection |
+| `edge = lap * cell * 2.0` | 2× | Edge sensitivity — increase to sharpen more aggressively |
+| `h_fine = cell * 0.5` | 0.5× | Normal kernel at full edge — decrease for crisper but noisier edges |
+| `h_coarse = cell * 2.0` | 2× | Normal kernel on flat surfaces — keep at 2.0 (C0 artifact avoidance) |
+
+**Why not just always use `h_fine`?** `h = cell * 0.5` samples within a single cell,
+where the baked SDF has C0 discontinuities at cell boundaries. On flat surfaces this
+produces faceted shading. The blend ensures flat areas stay smooth.
+
+**Apply to both shaders:**
+1. `core/dm_scene_ray_march_renderer.py` — scene renderer (multi-field)
+2. `core/dm_ray_march_renderer.py` — single-field renderer
+
+Search for `sdf_normal_field` in both files and replace the function body.
+
+**Independent — no other RO task required.**
+
+---
+
 ## Task Dependencies
 
 ```
@@ -983,4 +1072,5 @@ RO-003 → RO-011 (modifies _compute_cell_size added in RO-003)
 RO-012 (standalone — sdf_baker.py only, no other deps)
 RO-012, RO-013 → RO-014 (needs bbox_override in baker + frustum helper)
 RO-014 → RO-015 (frustum clipping needs pan/rotate sensor to stay current)
+RO-016 (standalone — shader string edit only, both renderers)
 ```

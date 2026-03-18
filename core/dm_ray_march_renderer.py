@@ -150,6 +150,7 @@ vec3 sdf_normal(vec3 p) {
              k.yyx * sample_sdf(p + k.yyx*h) +
              k.yxy * sample_sdf(p + k.yxy*h) +
              k.xxx * sample_sdf(p + k.xxx*h);
+
     float len2 = dot(g, g);
     return (len2 > 1e-10) ? g * inversesqrt(len2) : vec3(0.0, 1.0, 0.0);
 }
