@@ -17,6 +17,7 @@ class EditTool(DMBase, DragTimerMixin):
     def __init__(self):
         super().__init__()
         self._target_obj = None
+        self._is_editing = True
 
         self._selected_element = None # (index, type)
         self._wp_drag_start = None
@@ -462,7 +463,8 @@ class EditTool(DMBase, DragTimerMixin):
     def finish(self):
         if self._target_obj:
             self._target_obj.EditMode = False
-        super().finish()
+        self._is_editing = False
+        self.reset_state()
 
     def _do_terminate(self):
         if self._target_obj:
@@ -485,10 +487,12 @@ class FRepEditTool(DMBase, DragTimerMixin):
     def __init__(self):
         super().__init__()
         self._target_obj = None
+        self._is_editing = True
         self._field = None             # current SdfBoxField
         self._placement = None         # field placement (may be None)
         self._world_corners = []       # 8 FreeCAD.Vector in world space
         self._hovered_idx = None
+        self._is_editing = True
 
     def activate(self):
         sel = FreeCADGui.Selection.getSelection()
@@ -660,8 +664,22 @@ class FRepEditTool(DMBase, DragTimerMixin):
         return True
 
     def on_button3_down(self, event_dict):
-        self.terminate()
+        # Double-fire guard: Right-click arrives via both Qt and Coin3D.
+        import time
+        now = time.monotonic()
+        if now - getattr(self, "_last_btn3_time", 0.0) < 0.05:
+            return True
+        self._last_btn3_time = now
+
+        if self.is_in_progress():
+             self.finish()
+        else:
+             self.terminate()
         return True
+
+    def finish(self):
+        self._is_editing = False
+        self.reset_state()
 
     def handle_move(self, event_dict):
         if self.state == 1:

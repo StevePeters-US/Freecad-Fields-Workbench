@@ -33,8 +33,8 @@ class PointCreator(NURBSPrimitiveCreator):
         super()._do_terminate()
 
     def is_in_progress(self):
-        """Points are committed instantly on L-click, so the tool is never 'in progress' for RMB accept."""
-        return False
+        """Returns True if points have been created in this session."""
+        return len(self.created_points) > 0
 
     def handle_click(self, event_dict):
         try:

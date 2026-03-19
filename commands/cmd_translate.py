@@ -22,4 +22,9 @@ class CommandDMTranslate:
         # The tool handles its own selection logic
         TranslateTool()
 
+    def getIsChecked(self):
+        from core.dm_tool_manager import DMToolManager
+        active_tool = DMToolManager.get_instance().get_active_tool()
+        return active_tool is not None and active_tool.__class__.__name__ == "TranslateTool"
+
 FreeCADGui.addCommand('DM_Translate', CommandDMTranslate())

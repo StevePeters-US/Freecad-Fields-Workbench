@@ -467,8 +467,8 @@ class DMBase:
         self.terminate()
 
     def is_in_progress(self):
-        """Returns True if the tool has active state/points that can be 'Accepted'."""
-        return False
+        """Returns True if the tool has active state/points OR is in edit mode."""
+        return getattr(self, "state", 0) > 0 or getattr(self, "_is_editing", False)
 
     def set_panel(self, panel):
         self.panel = panel

@@ -117,6 +117,11 @@ class TranslateTool(DMBase):
         self.constraint_plane = None
         self.state = 0  # Waiting for LMB press to begin drag
         dm_logger.debug(f"TranslateTool started with {len(self.targets)} targets.")
+        self._is_editing = True # Mark as "in progress" for RMB finish
+
+    def is_in_progress(self):
+        """Returns True if there are active targets to move."""
+        return len(self.targets) > 0 or getattr(self, "_is_editing", False)
 
     def handle_keyboard(self, event_dict):
         key = str(event_dict.get("Key", "None")).upper()
@@ -243,7 +248,17 @@ class TranslateTool(DMBase):
         return True
 
     def on_button3_down(self, _event_dict):
-        self.cancel()
+        # Double-fire guard: Right-click arrives via both Qt and Coin3D.
+        import time
+        now = time.monotonic()
+        if now - getattr(self, "_last_btn3_time", 0.0) < 0.05:
+            return True
+        self._last_btn3_time = now
+
+        if self.is_in_progress():
+            self.finish()
+        else:
+            self.terminate()
         return True
 
     def _start_drag_timer(self):
@@ -301,7 +316,10 @@ class TranslateTool(DMBase):
 
     def finish(self):
         self._stop_drag_timer()
-        self.terminate()
+        dm_logger.debug("Translation accepted.")
+        self.targets = []
+        self._is_editing = False
+        self.reset_state() # Returns to idle
 
     def get_context_menu(self, event_dict=None):
         base_menu = super().get_context_menu(event_dict)

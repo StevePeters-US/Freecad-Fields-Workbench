@@ -81,8 +81,8 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         super()._do_terminate()
 
     def is_in_progress(self):
-        """Returns True if the curve has at least one point."""
-        return len(self.points) > 0
+        """Returns True if the curve has at least one point OR is in edit mode."""
+        return len(self.points) > 0 or getattr(self, "_is_editing", False)
 
     # ------------------------------------------------------------------
     # Sphere helpers
@@ -403,8 +403,10 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
 
     def finish(self):
         """Finalize the curve and enter edit mode."""
-        if self._is_editing:
-            self.terminate()
+        if getattr(self, "_is_editing", False):
+            self._is_editing = False
+            self._active_obj = None
+            self.reset_state()
             return
 
         if len(self.points) < 2:

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -E \"\\\\.\\(py|glsl|glf\\)$\")",
+      "Bash(grep -n \"cache\\\\|Cache\\\\|CACHE\" /d/Github/Freecad-Direct-Modeling/core/*.py)"
+    ]
+  }
+}

@@ -153,10 +153,13 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         return self._get_preview_field()
 
     def finish(self):
-        """In edit mode, finish just terminates. Otherwise, standard creation finish."""
-        if self._is_editing:
-            self.terminate()
+        """In edit mode, finish resets to idle. Otherwise, standard creation finish."""
+        if getattr(self, "_is_editing", False):
+            self._is_editing = False
+            self._preview_obj = None
+            self.reset_state()
             return
+
         if self.is_in_progress():
             name = type(self).__name__.replace("Creator", "")
             self._finalize_object(name, terminate=False)
@@ -165,9 +168,6 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         else:
             self.terminate()
 
-    def is_in_progress(self):
-        """Returns True if we have started clicking (state > 0)."""
-        return getattr(self, "state", 0) > 0
 
     def _init_working_plane(self):
         """Pre-load a workplane if one isn't already detected from selection."""
