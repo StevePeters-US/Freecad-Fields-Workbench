@@ -157,15 +157,8 @@ class DMInputManager(QtCore.QObject):
                     from core.dm_tool_manager import DMToolManager
                     tool = DMToolManager.get_instance().get_active_tool()
                     if tool and not self._middle_mouse_down:
-                        # Build a synthetic event_dict so on_button3_down has full context
-                        synthetic = {
-                            "Button": "BUTTON3",
-                            "State": "DOWN",
-                            "QtPosition": (event.pos().x(), event.pos().y()),
-                            "ShiftDown": bool(event.modifiers() & QtCore.Qt.ShiftModifier),
-                        }
-                        tool.on_button3_down(synthetic)
-                        return True  # suppress FreeCAD context menu
+                        event.accept()
+                        return False  # Let through to Coin3D - suppress FreeCAD context menu via ContextMenu event filter later
 
             # 2. ShortcutOverride: claim 'S', 'D', and 'E' so FreeCAD menus don't
             #    consume them before Coin3D gets the KeyPress.
@@ -175,10 +168,7 @@ class DMInputManager(QtCore.QObject):
                 from core.dm_tool_manager import DMToolManager
                 tool = DMToolManager.get_instance().get_active_tool()
                 if tool:
-                    if text == 's' and hasattr(tool, 'get_snapping_menu'):
-                        event.accept()
-                        return True
-                    if text == 'd' and (hasattr(tool, 'get_context_menu') or hasattr(tool, 'on_tool_menu')):
+                    if text in ['s', 'd', 'e']:
                         event.accept()
                         return True
                 if not tool and text == 'e':

@@ -27,8 +27,7 @@ _BOX_OPPOSITE = {0: 6, 1: 7, 2: 4, 3: 5, 4: 2, 5: 3, 6: 0, 7: 1}
 class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     """Base class for F-Rep primitive creator tools with live mesh preview."""
     
-    _last_working_plane = None  # Shared across all primitive tools
-    _last_wp_is_fallback = True
+
 
     def __init__(self):
         super().__init__()
@@ -172,15 +171,11 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     def _init_working_plane(self):
         """Pre-load a workplane if one isn't already detected from selection."""
         if not self.working_plane:
-            if PrimitiveCreatorBase._last_working_plane is not None:
-                self.working_plane = PrimitiveCreatorBase._last_working_plane
-                self._working_plane_is_fallback = PrimitiveCreatorBase._last_wp_is_fallback
-            else:
-                visible_wps = self.get_visible_workplanes()
-                if visible_wps:
-                    wp = visible_wps[0]
-                    self.working_plane = wp.getGlobalPlacement() if hasattr(wp, "getGlobalPlacement") else wp.Placement
-                    self._working_plane_is_fallback = False
+            visible_wps = self.get_visible_workplanes()
+            if visible_wps:
+                wp = visible_wps[0]
+                self.working_plane = wp.getGlobalPlacement() if hasattr(wp, "getGlobalPlacement") else wp.Placement
+                self._working_plane_is_fallback = False
 
     def _get_preview_field(self):
         """Subclasses return the current field based on click state + current_point."""
@@ -516,9 +511,6 @@ class BoxCreator(PrimitiveCreatorBase):
             return True
 
         if self.state == 0:
-            # Remember this workplane for future primitive tool sessions.
-            PrimitiveCreatorBase._last_working_plane = self.working_plane
-            PrimitiveCreatorBase._last_wp_is_fallback = self._working_plane_is_fallback
             # 1st click - anchor the tool
             self.points.append(pos)
             self.state = 1
@@ -753,9 +745,6 @@ class SphereCreator(PrimitiveCreatorBase):
             return True
 
         if self.state == 0:
-            PrimitiveCreatorBase._last_working_plane = self.working_plane
-            PrimitiveCreatorBase._last_wp_is_fallback = self._working_plane_is_fallback
-
             self.center = pos
             self.state = 1
 
