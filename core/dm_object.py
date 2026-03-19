@@ -300,6 +300,7 @@ class DMObjectProxy:
         """Called by FreeCAD to recompute the object."""
         try:
             from . import dm_logger
+            dm_logger.debug(f"DMObject.execute: {fp.Label}") # TEMP LOG FOR VERIFICATION
             st = fp.ShapeType if hasattr(fp, "ShapeType") else "nurbs"
 
             if st == "frep" or st == "curve":

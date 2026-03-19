@@ -216,8 +216,6 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self._update_ghost_visuals()
         if self.view:
             self.view.redraw()
-        # Force UI update for icon highlighting
-        FreeCADGui.updateGui()
 
     def _update_ghost_visuals(self):
         """Standard implementation for primitive tools to show points/edges."""
@@ -231,15 +229,15 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             if proxy is None:
                 return
             proxy.SdfField = field
-            
-            # Sync additive/subtractive mode with Ctrl key
+
             im = DMInputManager.get_instance()
             if hasattr(self._preview_obj, "IsSubtractive"):
                 self._preview_obj.IsSubtractive = im.is_ctrl_down()
 
-            self._preview_obj.touch()
-            # Only recompute this one object for speed
-            self._preview_obj.Document.recompute([self._preview_obj])
+            # Direct GPU update — skip FreeCAD recompute cycle
+            from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+            label = f"{self._preview_obj.Document.Name}.{self._preview_obj.Name}"
+            DMSceneRayMarchRenderer.get_instance().update_field(label, field)
         except Exception as e:
             dm_logger.debug(f"PrimitiveCreatorBase preview update error: {e}")
         finally:
@@ -506,11 +504,13 @@ class BoxCreator(PrimitiveCreatorBase):
             self.points = pts_local
 
     def on_button1_down(self, event_dict):
+        dm_logger.debug(f"BoxCreator.on_button1_down: state={self.state} editing={self._is_editing}")
         if self._is_editing:
             return self._edit_on_button1_down(event_dict)
 
         skip = [self._preview_obj] if self._preview_obj else None
         pos = self._resolve_wp_click(event_dict, skip_objects=skip)
+        dm_logger.debug(f"BoxCreator.on_button1_down: pos={pos}")
 
         if pos is None:
             return True

@@ -134,6 +134,7 @@ class DMBase:
         self._cursor_active = False
         self._last_btn3_time = 0.0
         self._update_pending = False
+        self._pending_callback = None
 
         self._is_editing = False
 
@@ -287,14 +288,22 @@ class DMBase:
         return pos
 
     def _schedule_update(self, callback, interval_ms=None):
-        """Throttled single-shot update. Drops duplicate calls within the interval."""
+        """Throttled single-shot update. Always uses the LATEST callback."""
+        self._pending_callback = callback  # Always overwrite with latest
         if getattr(self, "_update_pending", False):
-            return
+            return  # Timer already running, it will pick up _pending_callback
         if interval_ms is None:
             from core.dm_object import get_interactive_throttle_interval
             interval_ms = int(get_interactive_throttle_interval() * 1000)
         self._update_pending = True
-        QtCore.QTimer.singleShot(interval_ms, callback)
+        QtCore.QTimer.singleShot(interval_ms, self._fire_pending_update)
+
+    def _fire_pending_update(self):
+        """Fire the most recently scheduled callback."""
+        self._update_pending = False
+        cb = getattr(self, "_pending_callback", None)
+        if cb:
+            cb()
 
     def _on_committed(self, obj):
         """Called after a tool successfully commits its object. Override to customize."""

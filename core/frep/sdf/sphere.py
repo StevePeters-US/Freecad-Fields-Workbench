@@ -38,6 +38,16 @@ class SdfSphereField(SdfField):
         c = np.array([self.center.x, self.center.y, self.center.z])
         return (np.linalg.norm(local_pts - c, axis=1) - self.radius).astype(np.float32)
 
+    def to_glsl(self, ctx, point_var="p"):
+        ctx.need_helper("sdf_sphere")
+        c = ctx.uniform("vec3", (self.center.x, self.center.y, self.center.z))
+        r = ctx.uniform("float", self.radius)
+        if self.inv_matrix is not None:
+            ctx.need_helper("apply_inv_mat")
+            m = ctx.uniform("mat4", self.inv_matrix.tolist())
+            return f"sdf_sphere(apply_inv_mat({m}, {point_var}), {c}, {r})"
+        return f"sdf_sphere({point_var}, {c}, {r})"
+
     def gradient(self, point: FreeCAD.Vector, h: float = 1e-4) -> FreeCAD.Vector:
         # Note: analytical gradient for transformed field would need rotation
         # Defaulting to numerical gradient via base class for simplicity if transformed

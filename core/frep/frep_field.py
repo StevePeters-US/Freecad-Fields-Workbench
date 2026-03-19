@@ -26,6 +26,11 @@ class SdfField:
         if abs(v) <= tol: return 0
         return -1 if v < 0 else 1
 
+    def to_glsl(self, ctx, point_var="p"):
+        """Return GLSL expression evaluating this SDF at point_var.
+        Register uniforms in ctx (GlslContext). Override in subclasses."""
+        raise NotImplementedError("to_glsl() not implemented for GPU evaluation.")
+
     def evaluate_grid(self, points: np.ndarray) -> np.ndarray:
         """
         Evaluates the field over an (N, 3) numpy array of points.

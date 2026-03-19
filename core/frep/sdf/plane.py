@@ -11,6 +11,12 @@ class SdfPlaneField(SdfField):
     def evaluate(self, point: FreeCAD.Vector) -> float:
         return (point - self.origin).dot(self.normal)
 
+    def to_glsl(self, ctx, point_var="p"):
+        ctx.need_helper("sdf_plane")
+        o = ctx.uniform("vec3", (self.origin.x, self.origin.y, self.origin.z))
+        n = ctx.uniform("vec3", (self.normal.x, self.normal.y, self.normal.z))
+        return f"sdf_plane({point_var}, {o}, {n})"
+
     def gradient(self, point: FreeCAD.Vector, h: float = 1e-4) -> FreeCAD.Vector:
         return self.normal
 

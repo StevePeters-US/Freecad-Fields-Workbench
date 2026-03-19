@@ -52,6 +52,16 @@ class SdfBoxField(SdfField):
         in_dist = np.minimum(np.max(d, axis=1), 0.0)
         return (out_dist + in_dist).astype(np.float32)
 
+    def to_glsl(self, ctx, point_var="p"):
+        ctx.need_helper("sdf_box")
+        c = ctx.uniform("vec3", (self.center.x, self.center.y, self.center.z))
+        h = ctx.uniform("vec3", (self.half_size.x, self.half_size.y, self.half_size.z))
+        if self.inv_matrix is not None:
+            ctx.need_helper("apply_inv_mat")
+            m = ctx.uniform("mat4", self.inv_matrix.tolist())
+            return f"sdf_box(apply_inv_mat({m}, {point_var}), {c}, {h})"
+        return f"sdf_box({point_var}, {c}, {h})"
+
     def bounding_box(self):
         c = self.center
         h = self.half_size

@@ -65,6 +65,18 @@ class SdfCylinderField(SdfField):
         in_dist = np.minimum(np.maximum(d_radial, d_axial), 0.0)
         return (out_dist + in_dist).astype(np.float32)
 
+    def to_glsl(self, ctx, point_var="p"):
+        ctx.need_helper("sdf_cylinder")
+        c = ctx.uniform("vec3", (self.base_center.x, self.base_center.y, self.base_center.z))
+        ax = ctx.uniform("vec3", (self.axis.x, self.axis.y, self.axis.z))
+        r = ctx.uniform("float", self.radius)
+        h = ctx.uniform("float", self.height)
+        if self.inv_matrix is not None:
+            ctx.need_helper("apply_inv_mat")
+            m = ctx.uniform("mat4", self.inv_matrix.tolist())
+            return f"sdf_cylinder(apply_inv_mat({m}, {point_var}), {c}, {ax}, {r}, {h})"
+        return f"sdf_cylinder({point_var}, {c}, {ax}, {r}, {h})"
+
     def bounding_box(self):
         # Calculate tight AABB by transforming local corners of the cylinder's bounding box
         # Our cylinder extends along local Z axis from 0 to height (relative to base_center)

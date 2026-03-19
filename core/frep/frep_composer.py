@@ -34,6 +34,11 @@ class ComposerField(SdfField):
 
 class UnionField(ComposerField):
     """Min(a, b)"""
+    def to_glsl(self, ctx, point_var="p"):
+        a = self.a.to_glsl(ctx, point_var)
+        b = self.b.to_glsl(ctx, point_var)
+        return f"min({a}, {b})"
+
     def evaluate(self, point: FreeCAD.Vector) -> float:
         return min(self.a.evaluate(point), self.b.evaluate(point))
 
@@ -46,6 +51,11 @@ class UnionField(ComposerField):
 
 class IntersectionField(ComposerField):
     """Max(a, b)"""
+    def to_glsl(self, ctx, point_var="p"):
+        a = self.a.to_glsl(ctx, point_var)
+        b = self.b.to_glsl(ctx, point_var)
+        return f"max({a}, {b})"
+
     def evaluate(self, point: FreeCAD.Vector) -> float:
         return max(self.a.evaluate(point), self.b.evaluate(point))
 
@@ -58,6 +68,11 @@ class IntersectionField(ComposerField):
 
 class SubtractionField(ComposerField):
     """Max(a, -b). A - B"""
+    def to_glsl(self, ctx, point_var="p"):
+        a = self.a.to_glsl(ctx, point_var)
+        b = self.b.to_glsl(ctx, point_var)
+        return f"max({a}, -({b}))"
+
     def evaluate(self, point: FreeCAD.Vector) -> float:
         return max(self.a.evaluate(point), -self.b.evaluate(point))
 
