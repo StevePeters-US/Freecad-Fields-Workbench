@@ -769,7 +769,6 @@ void main() {
                                 clip_min.z < clip_max.z):
                                 bbox_override = (clip_min, clip_max)
                             else:
-                                dm_logger.debug(f"SceneRayMarch: '{label}' off-screen, skipping bake")
                                 self._baked_cache.pop(label, None)
                                 continue   # skip — not visible
                         except Exception:

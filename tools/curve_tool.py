@@ -8,6 +8,9 @@ from core.input_manager import DMInputManager
 
 class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
     """Tool to create a DMCurve object from clicked points."""
+    def get_command_id(self):
+        return "DM_CreateCurve"
+
     def __init__(self):
         super().__init__()
         self.points = []      # FreeCAD.Vector — committed curve point data

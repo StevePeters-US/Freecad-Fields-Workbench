@@ -286,10 +286,20 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         proxy = obj.Proxy
         proxy.SdfField = field
         
+        # Set placement to match the working plane so edit mode restores correctly
+        if self.working_plane:
+            if hasattr(self.working_plane, "getGlobalPlacement"):
+                obj.Placement = self.working_plane.getGlobalPlacement()
+            elif hasattr(self.working_plane, "Placement"):
+                obj.Placement = self.working_plane.Placement
+            else:
+                obj.Placement = self.working_plane
+        
         obj.touch()
         obj.Document.recompute([obj])
         self._on_committed(obj)
         # Print accumulated timer summary now that the tool is accepted
+        primitive_name = type(self).__name__.replace("Creator", "")
         mesh_timer.summary(f"{primitive_name} preview ({_PREVIEW_CELL_SIZE}mm)")
         self._preview_obj = None  # Severed; the object is now the user's
 
@@ -390,6 +400,9 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
 class BoxCreator(PrimitiveCreatorBase):
 
+    def get_command_id(self):
+        return "DM_CreateBox"
+
     def __init__(self):
         super().__init__()
         self.points = []
@@ -462,7 +475,16 @@ class BoxCreator(PrimitiveCreatorBase):
         sx = max(abs(lc_a.x - lc_b.x), 0.1)
         sy = max(abs(lc_a.y - lc_b.y), 0.1)
         sz = max(abs(lc_a.z - lc_b.z), 0.1)
-        return SdfBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(sx, sy, sz), placement=wp)
+        placement = None
+        if wp:
+            if hasattr(wp, "getGlobalPlacement"):
+                placement = wp.getGlobalPlacement()
+            elif hasattr(wp, "Placement"):
+                placement = wp.Placement
+            else:
+                placement = wp
+                
+        return SdfBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(sx, sy, sz), placement=placement)
 
     def _refresh_edit_corners(self, field):
         """Update self.points (8 world corners) from a new SdfBoxField."""
@@ -647,7 +669,16 @@ class BoxCreator(PrimitiveCreatorBase):
         cy = (loc_p1.y + loc_p2.y) / 2.0
         cz = (loc_p1.z + loc_p3.z) / 2.0
         
-        return SdfBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(size_x, size_y, max(size_z, 0.01)), placement=wp)
+        placement = None
+        if wp:
+            if hasattr(wp, "getGlobalPlacement"):
+                placement = wp.getGlobalPlacement()
+            elif hasattr(wp, "Placement"):
+                placement = wp.Placement
+            else:
+                placement = wp
+                
+        return SdfBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(size_x, size_y, max(size_z, 0.01)), placement=placement)
 
     def _get_final_points(self):
         if len(self.points) < 3:
@@ -677,6 +708,9 @@ class BoxCreator(PrimitiveCreatorBase):
 
 
 class SphereCreator(PrimitiveCreatorBase):
+
+    def get_command_id(self):
+        return "DM_CreateSphere"
 
     def __init__(self):
         super().__init__()
@@ -794,7 +828,17 @@ class SphereCreator(PrimitiveCreatorBase):
         
         if radius < 0.01:
             return None
-        return SdfSphereField(loc_center, radius, placement=getattr(self, "working_plane", None))
+        wp = getattr(self, "working_plane", None)
+        placement = None
+        if wp:
+            if hasattr(wp, "getGlobalPlacement"):
+                placement = wp.getGlobalPlacement()
+            elif hasattr(wp, "Placement"):
+                placement = wp.Placement
+            else:
+                placement = wp
+                
+        return SdfSphereField(loc_center, radius, placement=placement)
 
     def _get_final_field(self):
         return self._get_preview_field()
@@ -807,6 +851,9 @@ class SphereCreator(PrimitiveCreatorBase):
 
 
 class CylinderCreator(PrimitiveCreatorBase):
+
+    def get_command_id(self):
+        return "DM_CreateCylinder"
 
     def __init__(self):
         super().__init__()
@@ -985,7 +1032,16 @@ class CylinderCreator(PrimitiveCreatorBase):
         if abs(height) < 0.01:
             height = 0.01 if height >= 0 else -0.01
             
-        return SdfCylinderField(loc_base, loc_axis, radius, height, placement=wp)
+        placement = None
+        if wp:
+            if hasattr(wp, "getGlobalPlacement"):
+                placement = wp.getGlobalPlacement()
+            elif hasattr(wp, "Placement"):
+                placement = wp.Placement
+            else:
+                placement = wp
+                
+        return SdfCylinderField(loc_base, loc_axis, radius, height, placement=placement)
 
     def _get_final_field(self):
         pts = list(self.points)
@@ -1007,7 +1063,16 @@ class CylinderCreator(PrimitiveCreatorBase):
         if abs(height) < 0.01:
             height = 0.01 if height >= 0 else -0.01
             
-        return SdfCylinderField(loc_base, loc_axis, radius, height, placement=wp)
+        placement = None
+        if wp:
+            if hasattr(wp, "getGlobalPlacement"):
+                placement = wp.getGlobalPlacement()
+            elif hasattr(wp, "Placement"):
+                placement = wp.Placement
+            else:
+                placement = wp
+                
+        return SdfCylinderField(loc_base, loc_axis, radius, height, placement=placement)
 
     def _get_final_points(self):
         if len(self.points) < 3:

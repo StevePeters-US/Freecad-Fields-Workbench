@@ -66,29 +66,30 @@ class SdfCylinderField(SdfField):
         return (out_dist + in_dist).astype(np.float32)
 
     def bounding_box(self):
-        center_local = self.base_center + self.axis * (self.height / 2.0)
-        R = math.sqrt(self.radius**2 + (self.height / 2.0)**2)
-        
-        # Rotated bounding box can be significantly larger if just taking min/max of local corners
-        c = center_local
+        # Calculate tight AABB by transforming local corners of the cylinder's bounding box
+        # Our cylinder extends along local Z axis from 0 to height (relative to base_center)
         r = self.radius
-        h = self.height / 2.0
+        z_min = min(0, self.height)
+        z_max = max(0, self.height)
         
-        # A cylinder's bounding box can be approximated by its oriented bounding box's corners
-        # but for simplicity and safety, we can use a sphere that contains the cylinder,
-        # or calculate the 8 corners of the cylinder's bounding box and transform them.
-        # Let's do the latter for accuracy.
-        
-        # Cylinder axis-aligned local corners (assuming axis is the orientation axis)
-        # This is tricky because self.axis might not be (0,0,1) in local space.
-        # However, for primitives created via the tool, self.axis IS usually (0,0,1) in local space.
+        corners_local = [
+            self.base_center + FreeCAD.Vector(-r, -r, z_min),
+            self.base_center + FreeCAD.Vector( r, -r, z_min),
+            self.base_center + FreeCAD.Vector(-r,  r, z_min),
+            self.base_center + FreeCAD.Vector( r,  r, z_min),
+            self.base_center + FreeCAD.Vector(-r, -r, z_max),
+            self.base_center + FreeCAD.Vector( r, -r, z_max),
+            self.base_center + FreeCAD.Vector(-r,  r, z_max),
+            self.base_center + FreeCAD.Vector( r,  r, z_max)
+        ]
         
         if self.placement is not None:
-            # Sphere fallback for speed/simplicity in non-axial cylinders or just transform 8 corners of the AABB
-            # Let's use the sphere fallback for now as it's conservative
-            center_global = self.placement.multVec(center_local)
-            r_vec = FreeCAD.Vector(R, R, R)
-            return (center_global - r_vec, center_global + r_vec)
-
-        r_vec = FreeCAD.Vector(R, R, R)
-        return (center_local - r_vec, center_local + r_vec)
+            corners = [self.placement.multVec(pt) for pt in corners_local]
+        else:
+            corners = corners_local
+            
+        min_x = min(pt.x for pt in corners); max_x = max(pt.x for pt in corners)
+        min_y = min(pt.y for pt in corners); max_y = max(pt.y for pt in corners)
+        min_z = min(pt.z for pt in corners); max_z = max(pt.z for pt in corners)
+        
+        return (FreeCAD.Vector(min_x, min_y, min_z), FreeCAD.Vector(max_x, max_y, max_z))

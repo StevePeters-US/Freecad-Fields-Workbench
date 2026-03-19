@@ -9,11 +9,10 @@ from core.input_manager import DMInputManager
 class EditTool(DMBase, DragTimerMixin):
     """
     Interactive tool for editing lattice-driven SDF objects.
-
-    NOTE: This tool's scope has changed — it is no longer for curve editing.
-    Curve editing is handled by the CurveCreator tool (invoked via the curve
-    button when a curve is already selected).
     """
+    def get_command_id(self):
+        return "DM_EditObject"
+
     def __init__(self):
         super().__init__()
         self._target_obj = None
@@ -480,9 +479,9 @@ _FREP_OPPOSITE = {0: 6, 1: 7, 2: 4, 3: 5, 4: 2, 5: 3, 6: 0, 7: 1}
 class FRepEditTool(DMBase, DragTimerMixin):
     """
     Edit tool for F-Rep (SDF) box primitives.
-    Drag one of the 8 rendered corner handles to reshape the box.
-    The opposite corner stays fixed; the SdfBoxField is rebuilt live.
     """
+    def get_command_id(self):
+        return "DM_EditObject"
 
     def __init__(self):
         super().__init__()

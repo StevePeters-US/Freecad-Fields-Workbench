@@ -11,6 +11,9 @@ from core.input_manager import DMInputManager
 from .dm_base import DMBase
 
 class TranslateTool(DMBase):
+    def get_command_id(self):
+        return "DM_Translate"
+
     def __init__(self):
         super().__init__()
 

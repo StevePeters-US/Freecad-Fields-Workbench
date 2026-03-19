@@ -227,6 +227,11 @@ class ViewProjector:
         if not self.view:
             return FreeCAD.Vector(0,0,0)
 
+        # Small depth bias (in mm) to prioritize workplanes over geometry at the same depth.
+        # This prevents "random" snapping to underlying faces when a workplane is active.
+        WP_BIAS = 1e-3 
+        EPSILON = 1e-4 # Bounds tolerance
+
         skip_names = {obj.Name for obj in skip_objects} if skip_objects else set()
 
         try:
@@ -266,11 +271,13 @@ class ViewProjector:
                     w = float(wp.Width)
                 except Exception:
                     l, w = 100.0, 100.0
-                if abs(local_pt.x) > l / 2.0 or abs(local_pt.y) > w / 2.0:
+                if abs(local_pt.x) > (l / 2.0 + EPSILON) or abs(local_pt.y) > (w / 2.0 + EPSILON):
                     continue
                 cam_t = (pt_candidate - cam_pos).dot(ray_d)
-                if cam_t < wp_t:
-                    wp_t = cam_t
+                # Apply bias so overlapping workplanes win over geometry
+                biased_t = cam_t - WP_BIAS
+                if biased_t < wp_t:
+                    wp_t = biased_t
                     wp_pt = pt_candidate
                     wp_hit = wp
 
@@ -290,11 +297,30 @@ class ViewProjector:
                 sdf_pt, _sdf_n, _sdf_obj = sdf_result
                 sdf_t = (sdf_pt - cam_pos).dot(ray_d)
 
-            # 3. Return closest of bounded workplane / SDF surface / NURBS geometry.
-            if wp_pt is not None and wp_t <= sdf_t and wp_t <= geom_t:
-                return wp_pt, wp_hit
-            
-            # Rotation hint for synthesized placements
+            # 3. Infinite working_plane hit test.
+            fallback_t = float('inf')
+            fallback_pt = None
+            if working_plane:
+                if hasattr(working_plane, "getGlobalPlacement"):
+                    wp_p = working_plane.getGlobalPlacement()
+                elif hasattr(working_plane, "Placement"):
+                    wp_p = working_plane.Placement
+                else:
+                    wp_p = working_plane
+                
+                n_fb = wp_p.Rotation.multVec(FreeCAD.Vector(0,0,1))
+                o_fb = wp_p.Base
+                denom = ray_d.dot(n_fb)
+                if abs(denom) > 1e-6:
+                    t_fb = (o_fb - ray_p).dot(n_fb) / denom
+                    pt_fb = ray_p + ray_d * t_fb
+                    fb_dist = (pt_fb - cam_pos).dot(ray_d)
+                    if fb_dist > 0:
+                        # Apply bias to the fallback plane too
+                        fallback_t = fb_dist - WP_BIAS
+                        fallback_pt = pt_fb
+
+            # 4. Rotation hint for synthesized placements
             def synthesize_placement(pt, normal):
                 # Ensure normal faces toward viewer
                 vd = self.view.getViewDirection() if self.view else (0, 0, -1)
@@ -318,31 +344,26 @@ class ViewProjector:
                 )
                 return FreeCAD.Placement(m)
 
-            if sdf_pt is not None and sdf_t <= geom_t:
+            # 5. Pick closest of all candidates.
+            candidates = []
+            if wp_pt is not None:
+                candidates.append((wp_t, (wp_pt, wp_hit)))
+            if sdf_pt is not None:
                 _pt, world_n, _obj = sdf_result
-                return sdf_pt, synthesize_placement(sdf_pt, world_n)
-                
+                candidates.append((sdf_t, (sdf_pt, synthesize_placement(sdf_pt, world_n))))
             if geom_pt is not None:
                 info = self.get_geometry_info(event_dict, skip_objects=skip_objects)
                 if info:
                     world_hit, world_n, _obj, _sub = info
-                    return world_hit, synthesize_placement(world_hit, world_n)
-                return geom_pt, None
-
-            # 4. working_plane as infinite fallback (cursor outside all workplane bounds).
-            if working_plane:
-                if hasattr(working_plane, "getGlobalPlacement"):
-                    wp_p = working_plane.getGlobalPlacement()
-                elif hasattr(working_plane, "Placement"):
-                    wp_p = working_plane.Placement
+                    candidates.append((geom_t, (world_hit, synthesize_placement(world_hit, world_n))))
                 else:
-                    wp_p = working_plane
-                
-                n = wp_p.Rotation.multVec(FreeCAD.Vector(0,0,1))
-                o = wp_p.Base
-                pt = self.get_mouse_world_pos(event_dict, n, o, place_on_geometry=False)
-                if pt:
-                    return pt, None # Maintain existing orientation (resolved in _resolve_wp_click)
+                    candidates.append((geom_t, (geom_pt, None)))
+            if fallback_pt is not None:
+                candidates.append((fallback_t, (fallback_pt, None)))
+            
+            if candidates:
+                candidates.sort(key=lambda x: x[0])
+                return candidates[0][1]
 
         except Exception as e:
             dm_logger.debug(f"get_mouse_plane_pt failed: {e}")
@@ -505,9 +526,12 @@ class ViewProjector:
             for obj in doc.Objects:
                 if obj.Name in skip_names:
                     continue
-                if not hasattr(obj, 'Proxy') or not hasattr(obj.Proxy, 'FRepField'):
+                if not hasattr(obj, 'Proxy'):
                     continue
-                field = obj.Proxy.FRepField
+                field = getattr(obj.Proxy, 'SdfField', None)
+                if field is None:
+                    field = getattr(obj.Proxy, 'FRepField', None) # Legacy fallback
+                
                 if field is None:
                     continue
                 try:

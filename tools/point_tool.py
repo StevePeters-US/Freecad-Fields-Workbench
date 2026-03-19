@@ -7,6 +7,9 @@ from core.dm_point import DMPoint
 class PointCreator(NURBSPrimitiveCreator):
     """Tool to create a DMPoint object at a clicked location."""
 
+    def get_command_id(self):
+        return "DM_CreatePoint"
+
     def __init__(self):
         super().__init__()
         self.created_points = []

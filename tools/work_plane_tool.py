@@ -30,8 +30,11 @@ class WorkPlaneTaskPanel:
         return True
 
 class WorkPlaneCreator(DMBase):
-    """Tool to create a DMWorkPlane object interactively."""
+    """Tool to create or move a DMWorkPlane object interactively."""
     
+    def get_command_id(self):
+        return "DM_WorkPlane"
+
     def __init__(self):
         super().__init__()
         # Remove the legacy wp_manager we inherited

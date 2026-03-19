@@ -141,6 +141,45 @@ class DMBase:
         # Defer calling to ensure subclass __init__ is finished
         from PySide import QtCore
         QtCore.QTimer.singleShot(0, self._post_init)
+        
+        # Explicit highlight
+        self.set_icon_active(True)
+
+    def get_command_id(self):
+        """Returns the FreeCAD command ID associated with this tool (e.g. 'DM_CreateBox').
+        Subclasses should override this to enable icon highlighting and other UI features.
+        """
+        return None
+
+    def set_icon_active(self, is_active):
+        cmd = self.get_command_id()
+        if not cmd: return
+        import FreeCADGui
+        from PySide import QtGui, QtCore
+        mw = FreeCADGui.getMainWindow()
+        if not mw: return
+        action = mw.findChild(QtGui.QAction, cmd)
+        if not action: return
+
+        if not hasattr(DMBase, "_original_icons"):
+            DMBase._original_icons = {}
+
+        if is_active:
+            if cmd not in DMBase._original_icons:
+                DMBase._original_icons[cmd] = action.icon()
+            orig = DMBase._original_icons[cmd]
+            sizes = orig.availableSizes()
+            size = sizes[0] if sizes else QtCore.QSize(32, 32)
+            pix = orig.pixmap(size)
+            
+            painter = QtGui.QPainter(pix)
+            painter.setCompositionMode(QtGui.QPainter.CompositionMode_SourceAtop)
+            painter.fillRect(pix.rect(), QtGui.QColor(255, 170, 0, 100)) # Orange tint
+            painter.end()
+            action.setIcon(QtGui.QIcon(pix))
+        else:
+            if cmd in DMBase._original_icons:
+                action.setIcon(DMBase._original_icons[cmd])
 
     def _post_init(self):
         """Final initialization after tool is fully constructed."""
@@ -370,6 +409,8 @@ class DMBase:
         tool_mgr = DMToolManager.get_instance()
         if tool_mgr.get_active_tool() is self:
             tool_mgr.set_active_tool(None)
+            
+        self.set_icon_active(False)
         
         if hasattr(self, "_stop_drag_timer"):
             self._stop_drag_timer()
