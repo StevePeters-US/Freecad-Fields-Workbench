@@ -216,6 +216,11 @@ Set `DEBUG_DM_CRASH=1` to also write logs to `~/.FreeCAD/DirectModeling.log`.
 - `doc.recompute()`
 - Closing dialogs
 
+### Input & Fallbacks
+
+- **No Silent Fallbacks**: We should never have silent fallbacks that unexpectedly change state based on hidden history.
+- **Workplane Fallback**: The viewport aligned plane (camera-facing) is the ONLY acceptable fallback when a point is clicked in empty space without an active workplane. NEVER use the "last working plane" as a fallback.
+
 ---
 
 ## Future: CNC Tool Path Generation

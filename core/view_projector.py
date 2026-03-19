@@ -475,11 +475,19 @@ class ViewProjector:
                 try:
                     y_gl = int(vp_h - y_qt)
                     fp = self.view.getPoint(x, y_gl)
-                    vd = self.view.getViewDirection()
-                    if fp and vd:
-                        rd_n = FreeCAD.Vector(vd[0], vd[1], vd[2])
-                        rd_n.normalize()
-                        rays_to_try.append(("getPoint-yflip", FreeCAD.Vector(fp), rd_n))
+                    if fp:
+                        cam = self.view.getCameraNode()
+                        if hasattr(cam, "height"):
+                            vd = self.view.getViewDirection()
+                            rd_n = FreeCAD.Vector(vd[0], vd[1], vd[2])
+                            rd_n.normalize()
+                            rays_to_try.append(("getPoint-yflip", FreeCAD.Vector(fp), rd_n))
+                        else:
+                            p = cam.position.getValue()
+                            cam_p = FreeCAD.Vector(p[0], p[1], p[2])
+                            rd_n = FreeCAD.Vector(fp) - cam_p
+                            rd_n.normalize()
+                            rays_to_try.append(("getPoint-yflip", cam_p, rd_n))
                 except Exception:
                     pass
 
@@ -500,11 +508,19 @@ class ViewProjector:
             # Strategy 3: view.getPoint(x, y_qt) — y-from-top convention.
             try:
                 fp = self.view.getPoint(x, y_qt)
-                vd = self.view.getViewDirection()
-                if fp and vd:
-                    rd_n = FreeCAD.Vector(vd[0], vd[1], vd[2])
-                    rd_n.normalize()
-                    rays_to_try.append(("getPoint-qty", FreeCAD.Vector(fp), rd_n))
+                if fp:
+                    cam = self.view.getCameraNode()
+                    if hasattr(cam, "height"):
+                        vd = self.view.getViewDirection()
+                        rd_n = FreeCAD.Vector(vd[0], vd[1], vd[2])
+                        rd_n.normalize()
+                        rays_to_try.append(("getPoint-qty", FreeCAD.Vector(fp), rd_n))
+                    else:
+                        p = cam.position.getValue()
+                        cam_p = FreeCAD.Vector(p[0], p[1], p[2])
+                        rd_n = FreeCAD.Vector(fp) - cam_p
+                        rd_n.normalize()
+                        rays_to_try.append(("getPoint-qty", cam_p, rd_n))
             except Exception:
                 pass
 
