@@ -104,8 +104,6 @@ class DMBase:
         dm_logger.debug(f"{self.__class__.__name__} initialized")
         tool_mgr.set_active_tool(self)
         self.projector = ViewProjector(self.view)
-        self.callback = self.view.addEventCallback("SoEvent", self.event_cb)
-        dm_logger.debug(f"DMBase: Callback registered: {self.callback is not None}")
 
         self.start_point   = None
         self.current_point = None
@@ -429,10 +427,6 @@ class DMBase:
         self._finish_scheduled = False
         self._terminated = True
         try:
-            if self.callback:
-                self.view.removeEventCallback("SoEvent", self.callback)
-                self.callback = None
-            
             # Close task panel if open
             if getattr(self, "_dialog_open", False):
                 FreeCADGui.Control.closeDialog()
@@ -589,6 +583,39 @@ class DMBase:
     # Event loop & Overridable Input Hooks
     # ------------------------------------------------------------------
 
+    def on_mouse_press(self, event_dict):
+        btn = event_dict.get("Button")
+        if btn == QtCore.Qt.LeftButton:
+            return self.on_button1_down(event_dict)
+        elif btn == QtCore.Qt.MiddleButton:
+            return self.on_button2_down(event_dict)
+        elif btn == QtCore.Qt.RightButton:
+            return self.on_button3_down(event_dict)
+        return False
+
+    def on_mouse_release(self, event_dict):
+        btn = event_dict.get("Button")
+        if btn == QtCore.Qt.LeftButton:
+            return self.on_button1_up(event_dict)
+        elif btn == QtCore.Qt.MiddleButton:
+            return self.on_button2_up(event_dict)
+        elif btn == QtCore.Qt.RightButton:
+            return self.on_button3_up(event_dict)
+        return False
+
+    def on_mouse_move(self, event_dict):
+        self.handle_move(event_dict)
+
+    def on_key_press(self, event_dict):
+        return self.handle_keyboard(event_dict)
+
+    def on_key_release(self, event_dict):
+        return False
+
+    def on_context_menu(self, event_dict):
+        # We handle right-click logic in on_mouse_press
+        return True
+
     def on_button1_down(self, event_dict):
         return self.handle_click(event_dict)
 
@@ -596,20 +623,7 @@ class DMBase:
         return False
 
     def on_button3_down(self, event_dict):
-        # Double-fire guard: Right-click arrives via both Qt and Coin3D.
-        import time
-        now = time.monotonic()
-        if now - getattr(self, "_last_btn3_time", 0.0) < 0.05:
-            return True # Duplicate fire, consume silently
-        self._last_btn3_time = now
-
-        # If Middle Mouse or Shift is held, it's likely a view rotation chord. Do not finish!
-        if DMInputManager.get_instance()._middle_mouse_down or DMInputManager.get_instance().is_shift_down():
-            return False
-            
-        if hasattr(self, 'on_tool_menu') and self.on_tool_menu():
-            return True
-            
+        # One right-click to finish, another to terminate
         if not getattr(self, '_finish_scheduled', False):
             self._finish_scheduled = True
             if self.is_in_progress():
@@ -629,99 +643,60 @@ class DMBase:
     def on_button3_up(self, event_dict):
         return True # Consume release to suppress FreeCAD context menu
 
-    def event_cb(self, event):
-        try:
-            # 0. Convert raw Pivy SoEvent to unified dictionary
-            event_dict = DMInputManager.get_instance().so_event_to_dict(event)
-            event_type = event_dict.get("Type", "Unknown")
-
-            if event_type == "SoMouseButtonEvent":
-                btn = event_dict.get("Button", "None")
-                state = event_dict.get("State", "None")
-                
-                if state == "DOWN":
-                    if btn == "BUTTON1": return self.on_button1_down(event_dict)
-                    elif btn == "BUTTON2": return self.on_button2_down(event_dict)
-                    elif btn == "BUTTON3": return self.on_button3_down(event_dict)
-                    return False
-                
-                elif state == "UP":
-                    if btn == "BUTTON1": return self.on_button1_up(event_dict)
-                    elif btn == "BUTTON2": return self.on_button2_up(event_dict)
-                    elif btn == "BUTTON3": return self.on_button3_up(event_dict)
-                    return False
-            elif event_type == "SoLocation2Event":
-                self.handle_move(event_dict)
-            elif event_type == "SoKeyboardEvent":
-                    return self.handle_keyboard(event_dict)
-            else:
-                # For tools that need to update on camera move (like WorkPlaneCreator preview)
-                if self.state == ToolState.ACTIVE:
-                    # We only care about this if it's NOT a mouse click (handled above)
-                    # and we want to refresh the orientation/position
-                    try:
-                        # Synthetic event dict for handle_move
-                        mouse_pos = DMInputManager.get_instance().get_mouse_pos(None)
-                        self.handle_move({"QtPosition": mouse_pos})
-                    except Exception as e:
-                        dm_logger.debug(f"event_cb: Synthetic handle_move failed: {e}")
-            return False
-        except Exception:
-            dm_logger.exception("event_cb error")
-            return False
 
     def handle_keyboard(self, event_dict):
-        key = str(event_dict.get("Key", "None")).upper()
+        key_code = event_dict.get("Key")
+        key_text = str(event_dict.get("Text", "None")).upper()
         
         # ESC to cancel
-        if key in ["ESCAPE", "ESC"]:
+        if key_code == QtCore.Qt.Key_Escape:
             self.terminate()
             return True
             
         # ENTER/RETURN to finish
-        if key in ["ENTER", "RETURN", "PAD_ENTER"]:
+        if key_code in [QtCore.Qt.Key_Enter, QtCore.Qt.Key_Return]:
             self.finish()
             return True
             
         # Toggle Cutter Mode (C)
-        if key == "C":
+        if key_text == "C":
              self.toggle_cutter_mode()
              return True
 
         # Axis Toggles (X, Y, Z) -> Focus Panel
         target_axis = None
-        if key == "X": target_axis = "x"
-        elif key == "Y": target_axis = "y"
-        elif key == "Z": target_axis = "z"
+        if key_text == "X": target_axis = "x"
+        elif key_text == "Y": target_axis = "y"
+        elif key_text == "Z": target_axis = "z"
         
         if target_axis:
             self.toggle_axis(target_axis)
             return True
             
         # Reset Tool (R)
-        if key == "R":
+        if key_text == "R":
             self.reset_state()
             return True
             
         # Tool Option 0 (Shift)
-        if "SHIFT" in key:
+        if "SHIFT" in key_text:
             self.on_tool_option_0()
             return False
             
         # Tool Option 1 (Ctrl)
-        if "CONTROL" in key or "CTRL" in key:
+        if "CONTROL" in key_text or "CTRL" in key_text:
             self.on_tool_option_1()
             return False
             
         # Snapping Menu (S)
-        if key == "S":
+        if key_text == "S":
             if hasattr(self, 'get_snapping_menu'):
                 from core.dm_menu import DMMenuManager
                 DMMenuManager.get_instance().trigger_dynamic_menu(self.get_snapping_menu())
                 return True
 
         # Tool Menu (D)
-        if key == "D":
+        if key_text == "D":
             items = None
             if hasattr(self, 'get_context_menu'):
                 items = self.get_context_menu()
@@ -806,7 +781,7 @@ class DMBase:
         try:
             btn = event_dict.get("Button")
             
-            if btn != "BUTTON1":
+            if btn != QtCore.Qt.LeftButton:
                 return False
 
             # Use get_mouse_plane_pt to respect workplanes and snapping

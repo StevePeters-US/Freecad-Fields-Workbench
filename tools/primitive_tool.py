@@ -94,8 +94,12 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         else:
             self._restore_cursor()
 
-    def _edit_on_button1_down(self, event_dict):
+    def _edit_on_mouse_press(self, event_dict):
         """Hit-test handles and start drag timer in edit mode."""
+        btn = event_dict.get("Button")
+        if btn != QtCore.Qt.LeftButton:
+            return False
+
         ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
         if not ray_p or not ray_d:
             return True
@@ -109,8 +113,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             self._edit_drag_o = pts[idx]
             self.state = STATE_DRAGGING
             self._start_drag_timer()
-            from PySide.QtCore import Qt
-            self._set_cursor(Qt.SizeAllCursor)
+            self._set_cursor(QtCore.Qt.SizeAllCursor)
         return True  # always consume click in edit mode
 
     def _drag_update(self):
@@ -124,7 +127,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
         mouse_pos = DMInputManager.get_instance()._last_qt_pos
         new_pos = self.projector.get_mouse_world_pos(
-            {"QtPosition": mouse_pos},
+            {"Position": mouse_pos},
             self._edit_drag_n, self._edit_drag_o,
             place_on_geometry=False
         )
@@ -432,7 +435,7 @@ class BoxCreator(PrimitiveCreatorBase):
 
         mouse_pos = DMInputManager.get_instance()._last_qt_pos
         new_world = self.projector.get_mouse_world_pos(
-            {"QtPosition": mouse_pos},
+            {"Position": mouse_pos},
             self._edit_drag_n, self._edit_drag_o,
             place_on_geometry=False
         )
@@ -501,7 +504,7 @@ class BoxCreator(PrimitiveCreatorBase):
     def on_button1_down(self, event_dict):
         dm_logger.debug(f"BoxCreator.on_button1_down: state={self.state} editing={self._is_editing}")
         if self._is_editing:
-            return self._edit_on_button1_down(event_dict)
+            return self._edit_on_mouse_press(event_dict)
 
         skip = [self._preview_obj] if self._preview_obj else None
         pos = self._resolve_wp_click(event_dict, skip_objects=skip)
@@ -736,7 +739,7 @@ class SphereCreator(PrimitiveCreatorBase):
 
     def on_button1_down(self, event_dict):
         if self._is_editing:
-            return self._edit_on_button1_down(event_dict)
+            return self._edit_on_mouse_press(event_dict)
 
         skip = [self._preview_obj] if self._preview_obj else None
         pos = self._resolve_wp_click(event_dict, skip_objects=skip)
@@ -883,7 +886,7 @@ class CylinderCreator(PrimitiveCreatorBase):
 
     def on_button1_down(self, event_dict):
         if self._is_editing:
-            return self._edit_on_button1_down(event_dict)
+            return self._edit_on_mouse_press(event_dict)
 
         skip = [self._preview_obj] if self._preview_obj else None
         pos = self._resolve_wp_click(event_dict, skip_objects=skip)

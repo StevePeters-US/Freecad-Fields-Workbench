@@ -13,79 +13,12 @@ class DMInputManager(QtCore.QObject):
             cls._instance = DMInputManager()
         return cls._instance
 
-    def so_event_to_dict(self, event):
-        """
-        Converts a Pivy SoEvent (MouseButton, Location2, Keyboard) into a unified dictionary.
-        This restores the event contract for DM tools.
-        """
-        if event is None:
-            return {"Type": "Unknown"}
-
-        if isinstance(event, dict):
-            # Already a dict (likely from FreeCAD's native callback mapping)
-            # Normalize to ensure Button="BUTTON1" and State="DOWN"/"UP"
-            d = event.copy()
-            btn = d.get("Button")
-            if isinstance(btn, int):
-                if btn == 1: d["Button"] = "BUTTON1"
-                elif btn == 2: d["Button"] = "BUTTON2"
-                elif btn == 3: d["Button"] = "BUTTON3"
-            
-            st = d.get("State")
-            if isinstance(st, int):
-                if st == 0: d["State"] = "UP"
-                elif st == 1: d["State"] = "DOWN"
-            
-            return d
-
-        d = {}
-        
-        # 1. Basic Type
-        try:
-            type_name = event.getTypeId().getName()
-            d["Type"] = type_name
-        except Exception:
-            # Fallback for objects that might not have getTypeId but aren't dicts
-            d["Type"] = "Unknown"
-            return d
-            
-        # 2. Position (Coin3D coordinates, Y=0 at bottom)
-        pos = event.getPosition()
-        d["Position"] = (pos[0], pos[1])
-        
-        # 3. Specific Event Fields
-        from pivy import coin
-        
-        if type_name == "SoMouseButtonEvent":
-            btn = event.getButton()
-            if btn == coin.SoMouseButtonEvent.BUTTON1: d["Button"] = "BUTTON1"
-            elif btn == coin.SoMouseButtonEvent.BUTTON2: d["Button"] = "BUTTON2"
-            elif btn == coin.SoMouseButtonEvent.BUTTON3: d["Button"] = "BUTTON3"
-            else: d["Button"] = str(btn)
-            
-            st = event.getState()
-            if st == coin.SoMouseButtonEvent.DOWN: d["State"] = "DOWN"
-            elif st == coin.SoMouseButtonEvent.UP: d["State"] = "UP"
-            else: d["State"] = str(st)
-            
-        elif type_name == "SoKeyboardEvent":
-            key = event.getKey()
-            d["Key"] = coin.SoKeyboardEvent.getName(key)
-            
-            st = event.getState()
-            if st == coin.SoKeyboardEvent.DOWN: d["State"] = "DOWN"
-            elif st == coin.SoKeyboardEvent.UP: d["State"] = "UP"
-            
-        elif type_name == "SoLocation2Event":
-            # Already handled by position
-            pass
-
-        return d
 
     def __init__(self):
         super().__init__()
         self._left_mouse_down = False
         self._middle_mouse_down = False
+        self._right_mouse_down = False
         self._shift_down = False
         self._control_down = False
         self._last_qt_pos = (0, 0)
@@ -105,7 +38,19 @@ class DMInputManager(QtCore.QObject):
 
             # [Event Owner: Qt Event Filter] Coordinate tracking
             if event.type() in [QtCore.QEvent.MouseMove, QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
-                self._last_qt_pos = (event.pos().x(), event.pos().y())
+                try:
+                    # Qt events use Logical Pixels. Coin3D / FreeCAD getRay expects Physical Pixels.
+                    # Multiply by devicePixelRatio to fix 'point not under mouse' on High DPI screens.
+                    ratio = 1.0
+                    if hasattr(obj, "devicePixelRatioF"):
+                        ratio = float(obj.devicePixelRatioF())
+                    elif hasattr(obj, "devicePixelRatio"):
+                        ratio = float(obj.devicePixelRatio())
+                        
+                    self._last_qt_pos = (int(event.pos().x() * ratio), int(event.pos().y() * ratio))
+                except Exception as e:
+                    dm_logger.debug(f"Coordinate mapping error: {e}")
+                    self._last_qt_pos = (int(event.pos().x()), int(event.pos().y()))
             
             # [Event Owner: Qt Event Filter] Modifier state
             if event.type() in [QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease]:
@@ -121,107 +66,124 @@ class DMInputManager(QtCore.QObject):
                     self._left_mouse_down = is_press
                 elif event.button() == QtCore.Qt.MiddleButton:
                     self._middle_mouse_down = is_press
+                elif event.button() == QtCore.Qt.RightButton:
+                    self._right_mouse_down = is_press
 
-            # [Event Owner: DMSelectionManager] SDF object selection on LMB press when no tool is active
-            if event.type() == QtCore.QEvent.MouseButtonPress and event.button() == QtCore.Qt.LeftButton:
-                from core.dm_tool_manager import DMToolManager
-                if not DMToolManager.get_instance().has_active_tool():
+            from core.dm_tool_manager import DMToolManager
+            tool = DMToolManager.get_instance().get_active_tool()
+
+            # --- Dispatch to Active Tool ---
+            if tool:
+                # Construct clean Qt-native event dict
+                event_dict = {
+                    "Button": event.button() if hasattr(event, "button") else QtCore.Qt.NoButton,
+                    "Modifiers": event.modifiers() if hasattr(event, "modifiers") else QtCore.Qt.NoModifier,
+                    "Position": self._last_qt_pos,
+                }
+                
+                if event.type() == QtCore.QEvent.MouseMove:
+                    consumed = tool.on_mouse_move(event_dict)
+                    if self._middle_mouse_down:
+                        return False # Pass through for FreeCAD navigation
+                    return bool(consumed) if consumed is not None else True
+                
+                elif event.type() == QtCore.QEvent.MouseButtonPress:
+                    consumed = tool.on_mouse_press(event_dict)
+                    return bool(consumed)
+                
+                elif event.type() == QtCore.QEvent.MouseButtonRelease:
+                    consumed = tool.on_mouse_release(event_dict)
+                    return bool(consumed)
+                
+                elif event.type() == QtCore.QEvent.MouseButtonDblClick:
+                    consumed = tool.on_mouse_press(event_dict)
+                    return bool(consumed)
+                    
+                elif event.type() == QtCore.QEvent.KeyPress:
+                    event_dict["Key"] = event.key()
+                    event_dict["Text"] = event.text()
+                    if tool.on_key_press(event_dict):
+                        return True
+                    # Let through if tool didn't consume it
+                    
+                elif event.type() == QtCore.QEvent.KeyRelease:
+                    event_dict["Key"] = event.key()
+                    if tool.on_key_release(event_dict):
+                        return True
+                        
+                elif event.type() == QtCore.QEvent.ContextMenu:
+                    tool.on_context_menu(event_dict)
+                    return True # Swallowed
+
+                elif event.type() == QtCore.QEvent.ShortcutOverride:
+                    # Claim 'S', 'D', 'E' for tool
+                    text = event.text().lower() if hasattr(event, "text") else ""
+                    if text in ['s', 'd', 'e']:
+                        event.accept()
+                        return True
+
+            # --- Global Handling (No tool active) ---
+            else:
+                # SDF object selection on LMB press
+                if event.type() == QtCore.QEvent.MouseButtonPress and event.button() == QtCore.Qt.LeftButton:
                     from core.dm_selection_manager import DMSelectionManager
-                    DMSelectionManager.get_instance().try_sdf_selection(
-                        (event.pos().x(), event.pos().y())
-                    )
-                    # Do NOT return True — let FreeCAD's navigation also handle this click
+                    DMSelectionManager.get_instance().try_sdf_selection(self._last_qt_pos)
+                    # Let through to FreeCAD
 
-            # [Event Owner: Qt Event Filter] Double-click to edit SDF object
-            if event.type() == QtCore.QEvent.MouseButtonDblClick and event.button() == QtCore.Qt.LeftButton:
-                from core.dm_tool_manager import DMToolManager
-                if not DMToolManager.get_instance().has_active_tool():
+                # Double-click to edit SDF
+                elif event.type() == QtCore.QEvent.MouseButtonDblClick and event.button() == QtCore.Qt.LeftButton:
                     from core.dm_selection_manager import DMSelectionManager
                     sel_mgr = DMSelectionManager.get_instance()
-                    sel_mgr.try_sdf_selection((event.pos().x(), event.pos().y()))
+                    sel_mgr.try_sdf_selection(self._last_qt_pos)
                     sel = FreeCADGui.Selection.getSelection()
                     if sel:
                         obj = sel[0]
                         proxy_name = getattr(getattr(obj, "Proxy", None), "__class__", type(None)).__name__
                         if proxy_name == "DMObjectProxy" and getattr(obj, "ShapeType", "") == "frep":
                             from tools.edit_tool import FRepEditTool
-                            tool = FRepEditTool()
-                            tool.activate()
+                            FRepEditTool().activate()
                             return True
 
-            # [Event Owner: Qt Event Filter] Right-click suppression: when a tool is active,
-            # consume the right mouse button press so FreeCAD's NavigationStyle never opens
-            # its context menu.  Delegate finish logic to tool's on_button3_down (Coin3D path).
-            if event.type() == QtCore.QEvent.MouseButtonPress:
-                if event.button() == QtCore.Qt.RightButton:
-                    from core.dm_tool_manager import DMToolManager
-                    tool = DMToolManager.get_instance().get_active_tool()
-                    if tool and not self._middle_mouse_down:
-                        event.accept()
-                        return False  # Let through to Coin3D - suppress FreeCAD context menu via ContextMenu event filter later
-
-            # 2. ShortcutOverride: claim 'S', 'D', and 'E' so FreeCAD menus don't
-            #    consume them before Coin3D gets the KeyPress.
-            #    [Event Owner: Qt Event Filter] (to prevent FreeCAD from stealing hotkeys like S and D)
-            if event.type() == QtCore.QEvent.ShortcutOverride:
-                text = event.text().lower() if hasattr(event, "text") else ""
-                from core.dm_tool_manager import DMToolManager
-                tool = DMToolManager.get_instance().get_active_tool()
-                if tool:
-                    if text in ['s', 'd', 'e']:
-                        event.accept()
-                        return True
-                if not tool and text == 'e':
-                    # Claim 'E' when any editable DM object is selected
-                    sel = FreeCADGui.Selection.getSelection()
-                    if any(hasattr(o, "Proxy") and getattr(o.Proxy, "__class__", None).__name__ in ("DMWorkPlane", "DMObjectProxy") for o in sel):
-                        event.accept()
-                        return True
-
-            # 3. Handle global hotkeys when no tool is active.
-            #    [Event Owner: Coin3D handle_keyboard (for tools), Qt Event Filter (for global menus)]
-            if event.type() == QtCore.QEvent.KeyPress:
-                key = event.key()
-                text = event.text().lower() if hasattr(event, "text") else ""
-                from core.dm_tool_manager import DMToolManager
-                _no_tool = not DMToolManager.get_instance().has_active_tool()
-
-                # 'D' — default context menu
-                if (key == QtCore.Qt.Key_D or text == 'd') and not self._is_menu_active():
-                    if _no_tool:
+                # Global hotkeys
+                elif event.type() == QtCore.QEvent.KeyPress:
+                    key = event.key()
+                    text = event.text().lower() if hasattr(event, "text") else ""
+                    
+                    if (key == QtCore.Qt.Key_D or text == 'd') and not self._is_menu_active():
                         from core.dm_menu import DMMenuManager
                         if not DMMenuManager.get_instance()._ignore_hotkeys:
                             DMMenuManager.get_instance().show_context_menu()
                             return True
 
-                # 'E' — edit selected DM object (or TODO: common params for multiple selections)
-                if (key == QtCore.Qt.Key_E or text == 'e') and not self._is_menu_active():
-                    if _no_tool:
+                    if (key == QtCore.Qt.Key_E or text == 'e') and not self._is_menu_active():
                         sel = FreeCADGui.Selection.getSelection()
                         if sel:
-                            # TODO: if multiple DM objects are selected, edit their common parameters
                             obj = sel[0]
                             proxy_name = getattr(getattr(obj, "Proxy", None), "__class__", type(None)).__name__
                             if proxy_name == "DMWorkPlane":
                                 from tools.work_plane_tool import WorkPlaneCreator
-                                WorkPlaneCreator()
-                                return True
+                                WorkPlaneCreator(); return True
                             elif proxy_name == "DMObjectProxy":
-                                shape_type = getattr(obj, "ShapeType", "")
-                                if shape_type == "curve":
+                                st = getattr(obj, "ShapeType", "")
+                                if st == "curve":
                                     from tools.edit_tool import EditTool
-                                    tool = EditTool(); tool.activate(); return True
-                                elif shape_type == "frep":
+                                    EditTool().activate(); return True
+                                elif st == "frep":
                                     from tools.edit_tool import FRepEditTool
-                                    tool = FRepEditTool(); tool.activate(); return True
+                                    FRepEditTool().activate(); return True
 
-            # [Event Owner: Qt Event Filter] Suppress FreeCAD context menu when a DM tool is active or a menu is open
-            if event.type() == QtCore.QEvent.ContextMenu:
-                if self._is_menu_active():
-                    return True
-                from core.dm_tool_manager import DMToolManager
-                if DMToolManager.get_instance().has_active_tool():
-                    return True
+                # ShortcutOverride for 'E' when no tool
+                elif event.type() == QtCore.QEvent.ShortcutOverride:
+                    text = event.text().lower() if hasattr(event, "text") else ""
+                    if text == 'e':
+                        sel = FreeCADGui.Selection.getSelection()
+                        if any(hasattr(o, "Proxy") and getattr(o.Proxy, "__class__", None).__name__ in ("DMWorkPlane", "DMObjectProxy") for o in sel):
+                            event.accept(); return True
+
+                # Suppress FreeCAD context menu if DM menu is open
+                elif event.type() == QtCore.QEvent.ContextMenu:
+                    if self._is_menu_active():
+                        return True
 
         except Exception as e:
             dm_logger.error(f"DMInputManager eventFilter error: {e}")
@@ -229,40 +191,11 @@ class DMInputManager(QtCore.QObject):
         return False
 
     def get_mouse_pos(self, event_dict=None):
-        """Standardized Top-Left coordinate retrieval for all tools."""
-        if not event_dict:
-            return self._last_qt_pos
-
-        if "QtPosition" in event_dict:
-            # Already Qt-space (Y=0 at top). Store directly.
-            self._last_qt_pos = event_dict["QtPosition"]
-            return self._last_qt_pos
-            
-        pos = event_dict.get("Position")
-        if not pos:
-            return self._last_qt_pos
-            
-        # SoEvent/Coin3D "Position" has Y=0 at the BOTTOM of the viewport.
-        # FreeCAD's view.getPoint() / view.getRay() expect Qt-style coords
-        # where Y=0 is at the TOP.  Flip Y before storing.
-        x, y = pos[0], pos[1]
-        try:
-            view = FreeCADGui.activeView()
-            if view:
-                viewer = view.getViewer()
-                if hasattr(viewer, "getGlxSize"):
-                    sz = viewer.getGlxSize()
-                    h = float(sz[1])
-                elif hasattr(viewer, "getSize"):
-                    sz = viewer.getSize()
-                    h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
-                else:
-                    h = None
-                if h:
-                    y = h - y
-        except Exception:
-            pass  # best-effort; leave y unflipped if we can't determine height
-        self._last_qt_pos = (x, y)
+        """Standardized Top-Left coordinate retrieval for all tools.
+        After refactor, we standardize on Qt-native coordinates.
+        """
+        if event_dict and "Position" in event_dict:
+            self._last_qt_pos = event_dict["Position"]
         return self._last_qt_pos
 
     def get_drag_delta(self, start_pos, current_event_dict):
@@ -294,7 +227,7 @@ class DMInputManager(QtCore.QObject):
         """Centralized ray generation from screen coordinates."""
         if not view: return None, None
         pos = self.get_mouse_pos(event_dict)
-        x, y = pos[0], pos[1]
+        x, y = int(pos[0]), int(pos[1])
 
         try:
             # 1. Try FreeCAD's native getRay (0.20+)

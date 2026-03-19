@@ -148,7 +148,7 @@ class EditTool(DMBase, DragTimerMixin):
             self._stop_drag_timer()
             return
         mouse_pos = DMInputManager.get_instance()._last_qt_pos
-        event_dict = {"QtPosition": mouse_pos}
+        event_dict = {"Position": mouse_pos}
         pt_global = self.projector.get_mouse_world_pos(
             event_dict, self.drag_plane_n, self.drag_plane_o, place_on_geometry=False
         )
@@ -444,16 +444,16 @@ class EditTool(DMBase, DragTimerMixin):
         ]
 
     def handle_keyboard(self, event_dict):
-        key = str(event_dict.get("Key", "None")).upper()
+        key_code = event_dict.get("Key")
         
-        if key in ["ESCAPE", "ESC"]:
+        if key_code == QtCore.Qt.Key_Escape:
             self.terminate()
             return True
-        if key in ["ENTER", "RETURN"]:
+        if key_code in [QtCore.Qt.Key_Enter, QtCore.Qt.Key_Return]:
             self.finish()
             return True
         
-        if key in ["DELETE", "X", "BACKSPACE"]:
+        if key_code in [QtCore.Qt.Key_Delete, QtCore.Qt.Key_Backspace]:
             if self.state == 1 or self._selected_element:
                 self._delete_selected_point()
                 return True
@@ -612,7 +612,7 @@ class FRepEditTool(DMBase, DragTimerMixin):
 
         mouse_pos = DMInputManager.get_instance()._last_qt_pos
         new_world = self.projector.get_mouse_world_pos(
-            {"QtPosition": mouse_pos},
+            {"Position": mouse_pos},
             self._drag_plane_n, self._drag_plane_o,
             place_on_geometry=False
         )
@@ -693,8 +693,8 @@ class FRepEditTool(DMBase, DragTimerMixin):
                 self._restore_cursor()
 
     def handle_keyboard(self, event_dict):
-        key = str(event_dict.get("Key", "None")).upper()
-        if key in ["ESCAPE", "ESC", "ENTER", "RETURN"]:
+        key_code = event_dict.get("Key")
+        if key_code in [QtCore.Qt.Key_Escape, QtCore.Qt.Key_Enter, QtCore.Qt.Key_Return]:
             self.terminate()
             return True
         return False

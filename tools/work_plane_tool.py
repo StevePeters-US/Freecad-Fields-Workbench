@@ -350,7 +350,7 @@ class WorkPlaneCreator(DMBase):
             return
         try:
             btn = event_dict.get("Button")
-            if btn != "BUTTON1":
+            if btn != QtCore.Qt.LeftButton:
                 return False
 
             if self.state == 0:

@@ -38,7 +38,7 @@ class DMSelectionManager:
 
             from core.view_projector import ViewProjector
             proj = ViewProjector(view)
-            sdf_result = proj.get_sdf_hit({"QtPosition": qt_pos})
+            sdf_result = proj.get_sdf_hit({"Position": qt_pos})
             if sdf_result:
                 _, _, sdf_obj = sdf_result
                 FreeCADGui.Selection.clearSelection()

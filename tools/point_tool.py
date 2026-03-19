@@ -41,7 +41,7 @@ class PointCreator(NURBSPrimitiveCreator):
 
     def handle_click(self, event_dict):
         try:
-            if event_dict.get("Button") != "BUTTON1":
+            if event_dict.get("Button") != QtCore.Qt.LeftButton:
                 return False
 
             pt = self.get_mouse_plane_pt(event_dict)
@@ -81,9 +81,9 @@ class PointCreator(NURBSPrimitiveCreator):
     # Use base class finish() / _do_finish() which calls terminate()
 
     def handle_keyboard(self, event_dict):
-        key = str(event_dict.get("Key", "None")).upper()
+        key_code = event_dict.get("Key")
         # ESC to cancel and remove all points created in this session
-        if key in ["ESCAPE", "ESC"]:
+        if key_code == QtCore.Qt.Key_Escape:
             self.cancel_points()
             return True
         return super().handle_keyboard(event_dict)

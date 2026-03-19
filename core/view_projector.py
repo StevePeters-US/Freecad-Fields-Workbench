@@ -58,10 +58,8 @@ class ViewProjector:
 
     def _get_view_ray(self, x, y):
         """Delegate ray acquisition to DMInputManager."""
-        # Note: x,y are ignored here because DMInputManager.get_ray uses event_dict or last_qt_pos.
-        # We pass a synthetic event_dict to use the specific x,y if needed, but usually 
-        # it's better to just let the manager handle it.
-        return DMInputManager.get_instance().get_ray(self.view, {"QtPosition": (x, y)})
+        # Use clean standardized "Position" key for the event_dict
+        return DMInputManager.get_instance().get_ray(self.view, {"Position": (x, y)})
 
     def _intersect_ray_plane(self, ray_p, ray_d, plane_normal, plane_point):
         """Standard Ray-Plane intersection. Returns Vector or None."""
@@ -76,12 +74,13 @@ class ViewProjector:
 
     def _get_geometry_point(self, event_dict, skip_names=None):
         pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
+        x, y = int(pos[0]), int(pos[1])
         try:
             infos = []
             if hasattr(self.view, "getObjectsInfo"):
-                infos = self.view.getObjectsInfo((int(pos[0]), int(pos[1])))
+                infos = self.view.getObjectsInfo((x, y))
             else:
-                single_info = self.view.getObjectInfo((int(pos[0]), int(pos[1])))
+                single_info = self.view.getObjectInfo((x, y))
                 infos = [single_info] if single_info else []
 
             if not infos:
@@ -381,14 +380,15 @@ class ViewProjector:
         """
         if not self.view: return None
         pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
+        x, y = int(pos[0]), int(pos[1])
         skip_names = [obj.Name for obj in skip_objects] if skip_objects else []
 
         try:
             # 1. Get objects under pixel
             if hasattr(self.view, "getObjectsInfo"):
-                infos = self.view.getObjectsInfo((int(pos[0]), int(pos[1]))) or []
+                infos = self.view.getObjectsInfo((x, y)) or []
             else:
-                s_info = self.view.getObjectInfo((int(pos[0]), int(pos[1])))
+                s_info = self.view.getObjectInfo((x, y))
                 infos = [s_info] if s_info else []
 
             for info in infos:
@@ -462,94 +462,26 @@ class ViewProjector:
             return None
         skip_names = {o.Name for o in skip_objects} if skip_objects else set()
         try:
-            pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
-            x, y_qt = int(pos[0]), int(pos[1])
-
-            # Build candidate rays to try, most-likely-correct first.
-            rays_to_try = []
-            vp_h = self._get_vp_height()
-
-            # Strategy 1: view.getPoint(x, H-y_qt) — y-from-bottom convention (most likely correct).
-            # Coin3D/OpenGL use y-from-bottom; view.getPoint() likely expects the same.
-            if vp_h:
-                try:
-                    y_gl = int(vp_h - y_qt)
-                    fp = self.view.getPoint(x, y_gl)
-                    if fp:
-                        cam = self.view.getCameraNode()
-                        if hasattr(cam, "height"):
-                            vd = self.view.getViewDirection()
-                            rd_n = FreeCAD.Vector(vd[0], vd[1], vd[2])
-                            rd_n.normalize()
-                            rays_to_try.append(("getPoint-yflip", FreeCAD.Vector(fp), rd_n))
-                        else:
-                            p = cam.position.getValue()
-                            cam_p = FreeCAD.Vector(p[0], p[1], p[2])
-                            rd_n = FreeCAD.Vector(fp) - cam_p
-                            rd_n.normalize()
-                            rays_to_try.append(("getPoint-yflip", cam_p, rd_n))
-                except Exception:
-                    pass
-
-            # Strategy 2: get_ray() with y-flip (routes through DMInputManager fallbacks).
-            if vp_h:
-                try:
-                    y_gl = int(vp_h - y_qt)
-                    rp, rd = DMInputManager.get_instance().get_ray(
-                        self.view, {"QtPosition": (x, y_gl)}
-                    )
-                    if rp and rd:
-                        rd_n = FreeCAD.Vector(rd)
-                        rd_n.normalize()
-                        rays_to_try.append(("getRay-yflip", rp, rd_n))
-                except Exception:
-                    pass
-
-            # Strategy 3: view.getPoint(x, y_qt) — y-from-top convention.
-            try:
-                fp = self.view.getPoint(x, y_qt)
-                if fp:
-                    cam = self.view.getCameraNode()
-                    if hasattr(cam, "height"):
-                        vd = self.view.getViewDirection()
-                        rd_n = FreeCAD.Vector(vd[0], vd[1], vd[2])
-                        rd_n.normalize()
-                        rays_to_try.append(("getPoint-qty", FreeCAD.Vector(fp), rd_n))
-                    else:
-                        p = cam.position.getValue()
-                        cam_p = FreeCAD.Vector(p[0], p[1], p[2])
-                        rd_n = FreeCAD.Vector(fp) - cam_p
-                        rd_n.normalize()
-                        rays_to_try.append(("getPoint-qty", cam_p, rd_n))
-            except Exception:
-                pass
-
-            # Strategy 4: get_ray() with Qt y (routes through DMInputManager fallbacks).
-            try:
-                rp, rd = DMInputManager.get_instance().get_ray(self.view, event_dict)
-                if rp and rd:
-                    rd_n = FreeCAD.Vector(rd)
-                    rd_n.normalize()
-                    rays_to_try.append(("getRay-qty", rp, rd_n))
-            except Exception:
-                pass
-
-            if not rays_to_try:
+            # Use the clean, standardized Qt-native ray from DMInputManager.
+            rp, rd = DMInputManager.get_instance().get_ray(self.view, event_dict)
+            if not rp or not rd:
                 return None
 
-            # Collect visible SDF objects once.
+            rd_n = FreeCAD.Vector(rd)
+            rd_n.normalize()
+
+            # Collect visible SDF objects.
             sdf_objs = []
             for obj in doc.Objects:
                 if obj.Name in skip_names:
                     continue
-                if not hasattr(obj, 'Proxy'):
-                    continue
-                field = getattr(obj.Proxy, 'SdfField', None)
+                field = getattr(getattr(obj, "Proxy", None), "SdfField", None)
                 if field is None:
-                    field = getattr(obj.Proxy, 'FRepField', None) # Legacy fallback
+                    field = getattr(getattr(obj, "Proxy", None), "FRepField", None)
                 
                 if field is None:
                     continue
+
                 try:
                     if not obj.ViewObject.Visibility:
                         continue
@@ -557,21 +489,18 @@ class ViewProjector:
                     pass
                 sdf_objs.append((obj, field))
 
-            # Try each ray strategy; return on first hit.
-            for strategy, rp, rd_n in rays_to_try:
-                best_t = float('inf')
-                best = None
-                for obj, field in sdf_objs:
-                    result = field.ray_march(rp, rd_n)
-                    if result is None:
-                        continue
+            # Ray-march and find closest hit.
+            best_t = float('inf')
+            best = None
+            for obj, field in sdf_objs:
+                result = field.ray_march(rp, rd_n)
+                if result:
                     hit_pt, hit_normal = result
-                    t = (hit_pt - rp).dot(rd_n)
+                    t = (hit_pt - rp).Length
                     if t < best_t:
                         best_t = t
                         best = (hit_pt, hit_normal, obj)
-                if best is not None:
-                    return best
+            return best
 
             return None
         except Exception as e:

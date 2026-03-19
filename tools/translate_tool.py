@@ -127,22 +127,24 @@ class TranslateTool(DMBase):
         return len(self.targets) > 0 or getattr(self, "_is_editing", False)
 
     def handle_keyboard(self, event_dict):
-        key = str(event_dict.get("Key", "None")).upper()
-        mod = event_dict.get("Mod", "None")
-        is_shift = "SHIFT" in mod
+        key_code = event_dict.get("Key")
+        mod = event_dict.get("Mod", QtCore.Qt.NoModifier)
+        is_shift = bool(mod & QtCore.Qt.ShiftModifier)
 
-        if key == "ESCAPE":
+        if key_code == QtCore.Qt.Key_Escape:
             self.cancel()
             return True
-        if key in ["X", "Y", "Z"]:
-            axis = key.lower()
-            if is_shift:
-                planes = {'x': 'yz', 'y': 'xz', 'z': 'xy'}
-                self.constraint_plane = planes[axis]
-                self.constraint_axis = None
-            else:
-                self.constraint_axis = axis
-                self.constraint_plane = None
+        if key_code == QtCore.Qt.Key_X:
+            if is_shift: self.constraint_plane = 'yz'; self.constraint_axis = None
+            else: self.constraint_axis = 'x'; self.constraint_plane = None
+            return True
+        if key_code == QtCore.Qt.Key_Y:
+            if is_shift: self.constraint_plane = 'xz'; self.constraint_axis = None
+            else: self.constraint_axis = 'y'; self.constraint_plane = None
+            return True
+        if key_code == QtCore.Qt.Key_Z:
+            if is_shift: self.constraint_plane = 'xy'; self.constraint_axis = None
+            else: self.constraint_axis = 'z'; self.constraint_plane = None
             return True
         return super().handle_keyboard(event_dict)
 
@@ -250,14 +252,7 @@ class TranslateTool(DMBase):
             self.finish()
         return True
 
-    def on_button3_down(self, _event_dict):
-        # Double-fire guard: Right-click arrives via both Qt and Coin3D.
-        import time
-        now = time.monotonic()
-        if now - getattr(self, "_last_btn3_time", 0.0) < 0.05:
-            return True
-        self._last_btn3_time = now
-
+    def on_button3_down(self, event_dict):
         if self.is_in_progress():
             self.finish()
         else:
@@ -289,7 +284,7 @@ class TranslateTool(DMBase):
         mouse_pos = DMInputManager.get_instance()._last_qt_pos
         cam_dir = self.view.getViewDirection()
         pt = self.projector.get_mouse_world_pos(
-            {"QtPosition": mouse_pos}, cam_dir, self.center_w, place_on_geometry=False
+            {"Position": mouse_pos}, cam_dir, self.center_w, place_on_geometry=False
         )
         if pt is None:
             return

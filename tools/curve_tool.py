@@ -175,11 +175,15 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
     def on_button1_down(self, event_dict):
         """In edit mode, hit-test handles and start drag. Otherwise route to handle_click."""
         if self._is_editing:
-            return self._edit_on_button1_down(event_dict)
+            return self._edit_on_mouse_press(event_dict)
         return self.handle_click(event_dict)
 
-    def _edit_on_button1_down(self, event_dict):
+    def _edit_on_mouse_press(self, event_dict):
         """Hit-test control point handles and start drag timer in edit mode."""
+        btn = event_dict.get("Button")
+        if btn != QtCore.Qt.LeftButton:
+            return False
+
         ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
         if not ray_p or not ray_d:
             return True
@@ -192,8 +196,7 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
             self._edit_drag_o = self.points[idx]
             self.state = STATE_DRAGGING
             self._start_drag_timer()
-            from PySide.QtCore import Qt
-            self._set_cursor(Qt.SizeAllCursor)
+            self._set_cursor(QtCore.Qt.SizeAllCursor)
         return True
 
     def _drag_update(self):
@@ -208,7 +211,7 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
 
         mouse_pos = DMInputManager.get_instance()._last_qt_pos
         new_pos = self.projector.get_mouse_world_pos(
-            {"QtPosition": mouse_pos},
+            {"Position": mouse_pos},
             self._edit_drag_n, self._edit_drag_o,
             place_on_geometry=False
         )
@@ -230,8 +233,7 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
             return
         idx, _ = self._hit_test_perp(ray_p, ray_d, self.points)
         if idx is not None:
-            from PySide.QtCore import Qt
-            self._set_cursor(Qt.PointingHandCursor)
+            self._set_cursor(QtCore.Qt.PointingHandCursor)
         else:
             self._restore_cursor()
 
