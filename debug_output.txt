@@ -1,5 +1,0 @@
-Exception while processing file: /home/steve/Documents/Github/Freecad-Direct-Modeling/debug_fields_v2.py ['SoTexture3' object has no attribute 'getNumFields']
-FreeCAD 1.2.0, Libs: 1.2.0devR20260120 (Git shallow)
-(C) 2001-2025 FreeCAD contributors
-FreeCAD is free and open-source software licensed under the terms of LGPL2+ license.
-

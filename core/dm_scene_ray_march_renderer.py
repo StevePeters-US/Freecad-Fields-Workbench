@@ -305,15 +305,9 @@ void main() {
     world_far /= world_far.w;
     vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
 
-    vec3 ro, rd;
-    bool is_persp = (gl_ProjectionMatrix[3][3] < 0.5);
-    if (is_persp) {
-        ro = cam;
-        rd = normalize(world_near.xyz - cam);
-    } else {
-        ro = world_near.xyz;
-        rd = normalize(world_far.xyz - world_near.xyz);
-    }
+    vec3 ro = world_near.xyz;
+    vec3 rd = normalize(world_far.xyz - world_near.xyz);
+    float ray_tmax = length(world_far.xyz - world_near.xyz);
 
     // Combined AABB early discard
     vec3 scene_min = u_bbox_min[0];
@@ -324,8 +318,8 @@ void main() {
         scene_max = max(scene_max, u_bbox_max[fi]);
     }
     vec2 tBox = intersect_aabb(ro, rd, scene_min, scene_max);
-    float tNear = is_persp ? max(tBox.x, 0.0) : tBox.x;
-    float tFar  = tBox.y;
+    float tNear = max(tBox.x, 0.0);
+    float tFar  = min(tBox.y, ray_tmax);
     if (tNear > tFar) discard;
 
     // Per-field AABB intervals
@@ -334,8 +328,8 @@ void main() {
     for (int fi = 0; fi < 8; fi++) {
         if (fi < u_num_fields) {
             vec2 fi_int = intersect_aabb(ro, rd, u_bbox_min[fi], u_bbox_max[fi]);
-            ftn[fi] = is_persp ? max(fi_int.x, 0.0) : fi_int.x;
-            ftf[fi] = fi_int.y;
+            ftn[fi] = max(fi_int.x, 0.0);
+            ftf[fi] = min(fi_int.y, ray_tmax);
         } else {
             ftn[fi] =  1.0e10;
             ftf[fi] = -1.0e10;
@@ -774,6 +768,23 @@ void main() {
             mn, mx = bbox_override
         else:
             mn, mx = field.bounding_box()
+
+        from core.dm_object import get_max_sdf_render_size
+        max_size = get_max_sdf_render_size()
+        
+        # Clamp bounding box if it exceeds MaxSdfRenderSize
+        if mx.x - mn.x > max_size:
+            mid = (mx.x + mn.x) / 2
+            mn.x = mid - max_size / 2
+            mx.x = mid + max_size / 2
+        if mx.y - mn.y > max_size:
+            mid = (mx.y + mn.y) / 2
+            mn.y = mid - max_size / 2
+            mx.y = mid + max_size / 2
+        if mx.z - mn.z > max_size:
+            mid = (mx.z + mn.z) / 2
+            mn.z = mid - max_size / 2
+            mx.z = mid + max_size / 2
 
         def _pad(lo, hi):
             if hi - lo < 1e-4:

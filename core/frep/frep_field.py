@@ -73,15 +73,15 @@ class SdfField:
         
         return np.abs(lap) / grad_mag
 
-    def ray_march(self, ray_origin, ray_direction, max_steps=128, surface_eps=0.5):
+    def ray_march(self, ray_origin, ray_direction, max_steps=256, surface_eps=0.001):
         """
         Sphere-trace a ray against this SDF field.
         Returns (hit_point, hit_normal) as FreeCAD.Vector pair, or None if no hit.
 
         ray_origin:    world-space ray origin (FreeCAD.Vector)
         ray_direction: world-space direction (will be normalized internally)
-        max_steps:     maximum sphere-trace iterations (default 128)
-        surface_eps:   surface hit threshold in mm (default 0.5)
+        max_steps:     maximum sphere-trace iterations (default 256)
+        surface_eps:   surface hit threshold in mm (default 0.001)
         """
         # Normalize direction
         d = FreeCAD.Vector(ray_direction)
@@ -137,7 +137,12 @@ class SdfField:
             pos = ray_origin + d * t
             dist = self.evaluate(pos)
             if dist < surface_eps:
-                # Hit — compute outward normal via gradient
+                # Hit — final refinement to snap exactly to theoretical surface
+                # (only if dist is positive; if we are already inside, stay at pos)
+                if dist > 0:
+                    pos = pos + d * dist
+                
+                # Compute outward normal via gradient
                 normal = self.gradient(pos)
                 nl = normal.Length
                 if nl > 1e-10:

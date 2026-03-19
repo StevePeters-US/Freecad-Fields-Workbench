@@ -101,6 +101,13 @@ def get_rm_texels_per_field():
 def set_rm_texels_per_field(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetInt("RMTexelsPerField", int(val))
 
+def get_max_sdf_render_size():
+    """Return the maximum SDF bounding box dimension in mm for rendering (default 2000)."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("MaxSdfRenderSize", 2000.0)
+
+def set_max_sdf_render_size(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("MaxSdfRenderSize", float(val))
+
 def apply_near_clip_override():
     """Apply near clip distance override to the active camera, if set."""
     dist = get_near_clip_distance()
@@ -300,7 +307,7 @@ class DMObjectProxy:
         """Called by FreeCAD to recompute the object."""
         try:
             from . import dm_logger
-            dm_logger.debug(f"DMObject.execute: {fp.Label}") # TEMP LOG FOR VERIFICATION
+
             st = fp.ShapeType if hasattr(fp, "ShapeType") else "nurbs"
 
             if st == "frep" or st == "curve":

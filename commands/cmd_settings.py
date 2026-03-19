@@ -37,6 +37,8 @@ class _SettingsDialog(QtGui.QDialog):
         current_ps = get_point_size()
         current_pr = get_picking_radius()
         current_mb = get_max_bounds()
+        from core.dm_object import get_max_sdf_render_size
+        current_mss = get_max_sdf_render_size()
 
         # Near Clip Distance spinbox
         from core.dm_object import get_near_clip_distance, get_ray_march_cell_size, get_rm_texels_per_field
@@ -117,6 +119,13 @@ class _SettingsDialog(QtGui.QDialog):
         self._mb_spin.setValue(current_mb)
         layout.addRow("Max Bounds (mm):", self._mb_spin)
 
+        # Max SDF Render Size spinbox
+        self._mss_spin = QtGui.QDoubleSpinBox()
+        self._mss_spin.setRange(10.0, 100000.0) # 10mm to 100m
+        self._mss_spin.setValue(current_mss)
+        self._mss_spin.setToolTip("Maximum allowed dimension for an individual SDF field (mm). Larger fields will be clipped during preview rendering.")
+        layout.addRow("Max SDF Render Size (mm):", self._mss_spin)
+
         # Interactive Throttle spinbox
         self._throttle_spin = QtGui.QDoubleSpinBox()
         self._throttle_spin.setRange(0.0, 1.0)
@@ -145,7 +154,7 @@ class _SettingsDialog(QtGui.QDialog):
                                     refresh_all_dm_objects,
                                      set_near_clip_distance, apply_near_clip_override,
                                      set_interactive_throttle_interval, set_ray_march_cell_size,
-                                     set_rm_texels_per_field)
+                                     set_rm_texels_per_field, set_max_sdf_render_size)
         from core.dm_logger import set_enable_crash_log
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
@@ -159,6 +168,7 @@ class _SettingsDialog(QtGui.QDialog):
         set_point_size(ps)
         set_picking_radius(pr)
         set_max_bounds(mb)
+        set_max_sdf_render_size(self._mss_spin.value())
         set_perf_profiler_enabled(self._perf_check.isChecked())
         set_interactive_throttle_interval(self._throttle_spin.value())
 

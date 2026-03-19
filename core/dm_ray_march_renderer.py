@@ -177,11 +177,12 @@ void main() {
 
     vec3 ro = world_near.xyz;
     vec3 rd = normalize(world_far.xyz - world_near.xyz);
+    float ray_tmax = length(world_far.xyz - world_near.xyz);
 
     // 2. AABB-ray intersection
     vec2 tBox = intersect_aabb(ro, rd);
     float tNear = max(tBox.x, 0.0);
-    float tFar  = tBox.y;
+    float tFar  = min(tBox.y, ray_tmax);
     if (tNear > tFar) discard;
 
     // 3. Sphere-trace

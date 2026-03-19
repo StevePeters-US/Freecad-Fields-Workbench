@@ -12,6 +12,6 @@ print("STEP 4: FreeCAD mocked", flush=True)
 
 # Try importing the mesher
 print("STEP 5: Importing SurfaceNetsMesher...", flush=True)
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from core.dm_mesher import SurfaceNetsMesher
 print("STEP 6: SurfaceNetsMesher imported", flush=True)
