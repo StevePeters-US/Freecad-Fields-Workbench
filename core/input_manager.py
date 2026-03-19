@@ -22,6 +22,7 @@ class DMInputManager(QtCore.QObject):
         self._shift_down = False
         self._control_down = False
         self._last_qt_pos = (0, 0)
+        self._device_pixel_ratio = 1.0
         self._is_initialized = False
         self._sel_observer = None
 
@@ -39,15 +40,16 @@ class DMInputManager(QtCore.QObject):
             # [Event Owner: Qt Event Filter] Coordinate tracking
             if event.type() in [QtCore.QEvent.MouseMove, QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
                 try:
-                    # Qt events use Logical Pixels. Coin3D / FreeCAD getRay expects Physical Pixels.
-                    # Multiply by devicePixelRatio to fix 'point not under mouse' on High DPI screens.
+                    # Store DPI ratio so _get_vp_size can convert physical→logical.
+                    # _last_qt_pos stays in logical (device-independent) pixels — view.getPoint() expects these.
                     ratio = 1.0
                     if hasattr(obj, "devicePixelRatioF"):
                         ratio = float(obj.devicePixelRatioF())
                     elif hasattr(obj, "devicePixelRatio"):
                         ratio = float(obj.devicePixelRatio())
-                        
-                    self._last_qt_pos = (int(event.pos().x() * ratio), int(event.pos().y() * ratio))
+                    self._device_pixel_ratio = ratio
+                    # Store logical (device-independent) pixels — view.getPoint() expects these
+                    self._last_qt_pos = (int(event.pos().x()), int(event.pos().y()))
                 except Exception as e:
                     dm_logger.debug(f"Coordinate mapping error: {e}")
                     self._last_qt_pos = (int(event.pos().x()), int(event.pos().y()))
@@ -203,7 +205,7 @@ class DMInputManager(QtCore.QObject):
         curr_pos = self.get_mouse_pos(current_event_dict)
         return (curr_pos[0] - start_pos[0], curr_pos[1] - start_pos[1])
 
-    def get_qt_cursor_pos(self, view=None):
+    def get_qt_cursor_pos(self, _view=None):
         """Returns the current mouse position in Top-Left coordinates."""
         return self._last_qt_pos
 
@@ -223,11 +225,79 @@ class DMInputManager(QtCore.QObject):
         """Single source of truth for middle mouse button state."""
         return self._middle_mouse_down
 
+    def _get_vp_size(self, view):
+        """Get viewport (width, height) in logical pixels matching _last_qt_pos space."""
+        ratio = max(1.0, self._device_pixel_ratio)
+        # Method 1: Coin3D SoRenderManager — authoritative GL framebuffer size (physical pixels)
+        try:
+            viewer = view.getViewer()
+            if hasattr(viewer, "getSoRenderManager"):
+                rm = viewer.getSoRenderManager()
+                if rm:
+                    sz = rm.getViewportRegion().getViewportSizePixels()
+                    w, h = float(sz[0]) / ratio, float(sz[1]) / ratio
+                    if h > 0:
+                        return w, h
+        except Exception:
+            pass
+
+        # Method 2: viewer size methods (physical or logical depending on platform)
+        try:
+            viewer = view.getViewer()
+            for method_name in ("getGlxSize", "getSize"):
+                if hasattr(viewer, method_name):
+                    try:
+                        sz = getattr(viewer, method_name)()
+                        w = float(sz[0] if isinstance(sz, (list, tuple)) else sz.width())
+                        h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
+                        if h > 0:
+                            return w / ratio, h / ratio
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+
+        # Method 3: Qt widget size (already logical pixels)
+        try:
+            w, h = float(view.width()), float(view.height())
+            if h > 0:
+                return w, h
+        except Exception:
+            pass
+
+        return None
+
+    def _get_vp_height(self, view):
+        """Returns logical viewport height; wrapper around _get_vp_size."""
+        sz = self._get_vp_size(view)
+        return sz[1] if sz else None
+
+    def get_scene_point(self, view, event_dict=None):
+        """Returns the 3D scene point under the cursor via view.getPoint().
+        Applies Y-flip: FreeCAD/Coin3D expect y-from-bottom (OpenGL), Qt is y-from-top.
+        """
+        if not view: return None
+        pos = self.get_mouse_pos(event_dict)
+        x, y_qt = int(pos[0]), int(pos[1])
+        vp_h = self._get_vp_height(view)
+        y = (int(vp_h) - 1 - y_qt) if vp_h else y_qt
+        try:
+            return view.getPoint(x, y)
+        except Exception as e:
+            dm_logger.debug(f"get_scene_point failed: x={x} y_fc={y} err={e}")
+            return None
+
     def get_ray(self, view, event_dict=None):
         """Centralized ray generation from screen coordinates."""
         if not view: return None, None
         pos = self.get_mouse_pos(event_dict)
-        x, y = int(pos[0]), int(pos[1])
+        x, y_qt = int(pos[0]), int(pos[1])
+
+        # FreeCAD/Coin3D APIs (getRay, getPoint) use OpenGL convention:
+        # origin at bottom-left, Y increases upward.
+        # Qt stores top-left, Y-down. Flip Y before passing to any FreeCAD API.
+        vp_h = self._get_vp_height(view)
+        y = (int(vp_h) - 1 - y_qt) if vp_h else y_qt
 
         try:
             # 1. Try FreeCAD's native getRay (0.20+)
@@ -239,7 +309,7 @@ class DMInputManager(QtCore.QObject):
                         r_base, r_dir = FreeCAD.Vector(ray["base"]), FreeCAD.Vector(ray["dir"])
                     elif isinstance(ray, tuple):
                         r_base, r_dir = FreeCAD.Vector(ray[0]), FreeCAD.Vector(ray[1])
-                    
+
                     if isinstance(ray, dict):
                         return (FreeCAD.Vector(ray["base"]), FreeCAD.Vector(ray["dir"]))
                     elif isinstance(ray, tuple):
@@ -274,12 +344,8 @@ class DMInputManager(QtCore.QObject):
 
             # 3. Pure Math Fallback (Directly from Camera)
             rot = cam.orientation.getValue()
-            viewer = view.getViewer()
-            w, h = 1000.0, 1000.0
-            if hasattr(viewer, "getGlxSize"):
-                sz = viewer.getGlxSize(); w, h = float(sz[0]), float(sz[1])
-            elif hasattr(viewer, "getSize"):
-                sz = viewer.getSize(); w = float(sz.width() if hasattr(sz, "width") else sz[0]); h = float(sz.height() if hasattr(sz, "height") else sz[1])
+            vp_sz = self._get_vp_size(view)
+            w, h = vp_sz if vp_sz else (1000.0, 1000.0)
             
             aspect = w / h
             quat = rot.getValue()
@@ -297,14 +363,16 @@ class DMInputManager(QtCore.QObject):
 
             if hasattr(cam, "heightAngle"): # Perspective
                 ha = cam.heightAngle.getValue()
-                ndc_x, ndc_y = (x/w)*2.0 - 1.0, 1.0 - (y/h)*2.0
+                # Path 3 NDC formula expects y-from-top (Qt convention), use y_qt not flipped y
+                ndc_x, ndc_y = (x/w)*2.0 - 1.0, 1.0 - (y_qt/h)*2.0
                 plane_h = math.tan(ha/2.0); plane_w = plane_h * aspect
                 ray_d = forward + right*(ndc_x*plane_w) + up*(ndc_y*plane_h)
                 ray_d.normalize()
                 return ray_p, ray_d
             elif hasattr(cam, "height"): # Ortho
                 height = cam.height.getValue(); width = height * aspect
-                ndc_x, ndc_y = (x/w)*2.0 - 1.0, 1.0 - (y/h)*2.0
+                # Path 3 NDC formula expects y-from-top (Qt convention), use y_qt not flipped y
+                ndc_x, ndc_y = (x/w)*2.0 - 1.0, 1.0 - (y_qt/h)*2.0
                 ray_p_ortho = ray_p + right*(ndc_x*width/2.0) + up*(ndc_y*height/2.0)
                 forward.normalize()  # modifies in-place; returns None — do not use return value
                 return ray_p_ortho, forward
@@ -361,18 +429,8 @@ class DMInputManager(QtCore.QObject):
                 return base_point_3d  # Normal points straight at camera – degenerate
 
             # --- Step 3: Pixels-per-world-unit scale ---
-            # Get viewport size
-            viewer = view.getViewer()
-            vp_w, vp_h = 1000.0, 1000.0
-            try:
-                if hasattr(viewer, "getGlxSize"):
-                    sz = viewer.getGlxSize(); vp_w, vp_h = float(sz[0]), float(sz[1])
-                elif hasattr(viewer, "getSize"):
-                    sz = viewer.getSize()
-                    vp_w = float(sz[0] if isinstance(sz, (list,tuple)) else sz.width())
-                    vp_h = float(sz[1] if isinstance(sz, (list,tuple)) else sz.height())
-            except Exception:
-                pass
+            vp_sz = self._get_vp_size(view)
+            vp_h = vp_sz[1] if vp_sz else 1000.0
 
             # World units that span half the viewport height
             if hasattr(cam, "height"):           # Orthographic

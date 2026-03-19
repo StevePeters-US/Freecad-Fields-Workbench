@@ -131,10 +131,7 @@ class WorkPlaneManager:
         self.plane_mat.diffuseColor.setValue(0.2, 0.6, 0.9)
         self.plane_mat.transparency.setValue(0.8)
         
-        pos_2d = DMInputManager.get_instance().get_mouse_pos(event_dict)
-        mouse_pt = None
-        try: mouse_pt = self.view.getPoint(pos_2d[0], pos_2d[1])
-        except: pass
+        mouse_pt = DMInputManager.get_instance().get_scene_point(self.view, event_dict)
         
         if not mouse_pt:
             focus = self.view.getFocus() if hasattr(self.view, "getFocus") else FreeCAD.Vector(0,0,0)

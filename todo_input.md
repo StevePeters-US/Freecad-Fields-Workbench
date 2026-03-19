@@ -1,114 +1,44 @@
-# Direct Modeling Workbench — Input System Refactor Task List
+# todo_input.md — Input Pipeline Refactor and Bug Fixes
 
-> Tasks are ordered by priority. Each task is atomic and self-contained.
-> Intended audience: junior developer or AI model (Gemini Flash).
-> Each task includes the exact file(s) and line numbers to change.
+Read `.agents/skills/dm_qt_input_architecture/SKILL.md` before starting any task.
 
 ---
 
-## Background
+## Task 1: Restrict input capturing to the 3D viewport `Gemini Flash`
 
-The input system currently has several inconsistencies causing intermittent snapping, command swallowing, and flow issues. These issues stem from a problematic dual-pipeline architecture (Qt event filter vs. Coin3D `event_cb`) and stateful "silent fallbacks" that make the tool flow feel unpredictable.
-
-The goal is to move towards a strict "single owner" model for events:
-- **No silent fallbacks**: The viewport-aligned plane is the only fallback. The "last working plane" should never be silently reused.
-- **Qt Filter**: Only handles state tracking and FreeCAD suppression. It should never call tool methods directly.
-- **Coin3D**: Handles all tool logic.
-
-### Key APIs
-
-| Symbol | Location | Purpose |
-|--------|----------|---------|
-| `DMInputManager.eventFilter` | `core/input_manager.py:99` | Intercepts Qt events, tracks modifiers, steals keys |
-| `DMBase.event_cb` | `tools/dm_base.py:633` | Primary Coin3D event loop for active tools |
-| `PrimitiveCreatorBase._init_working_plane` | `tools/primitive_tool.py:173` | Sets initial workplane |
-| `ViewProjector.get_mouse_plane_pt` | `core/view_projector.py:214` | Casts ray to find 3D point from 2D mouse position |
+- **Goal**: Ensure that DMInputManager only captures and overrides input when the mouse is over the FreeCAD 3D viewport, preventing bugs where toolbar or menu clicks are intercepted and interpreted as tool clicks with incorrect coordinates.
+- **Files to read**: `core/input_manager.py`
+- **Files to modify**: `core/input_manager.py`
+- **Steps**:
+  1. In `DMInputManager.eventFilter(self, obj, event)`, before processing events, verify that `obj` is the viewport widget (e.g. `QuarterWidget`, `SoOpenGLWidget`, `SoQtRenderArea`, or checking against `FreeCADGui.activeView()`).
+  2. Alternatively, use standard Qt coordinate mapping (`obj.mapToGlobal(event.pos())`) to ensure the event is taking place within the active 3D view's geometry and discard events outside of it.
+  3. Ensure that modifier state tracking (Shift, Ctrl) remains reliable even if the mouse is outside the viewport when the key is pressed.
+- **Acceptance**: Clicking on a FreeCAD toolbar button while a tool is active does not place a point or trigger tool logic. Input is only captured over the 3D viewport.
 
 ---
 
-## Tier 1 — Core Input Flow (Do First)
+## Task 2: Fix mouse pointer offset bug `Gemini Flash`
 
-Refactor the most problematic areas of the input pipeline: silent fallbacks and right-click event swallowing.
-
-### I-001: Remove Last Working Plane Fallback
-
-**File:** `tools/primitive_tool.py`
-
-**What:** Remove the `_last_working_plane` and `_last_wp_is_fallback` class-level variables from `PrimitiveCreatorBase`. Ensure the fallback is always the viewport-aligned plane instead.
-
-**Implementation:**
-1. Delete `_last_working_plane = None` and `_last_wp_is_fallback = True` (lines 30-31).
-2. Modify `_init_working_plane()` (line 173):
-```python
-    def _init_working_plane(self):
-        """Pre-load a workplane if one isn't already detected from selection."""
-        if not self.working_plane:
-            visible_wps = self.get_visible_workplanes()
-            if visible_wps:
-                wp = visible_wps[0]
-                self.working_plane = wp.getGlobalPlacement() if hasattr(wp, "getGlobalPlacement") else wp.Placement
-                self._working_plane_is_fallback = False
-```
-3. Remove assignments to `PrimitiveCreatorBase._last_working_plane` and `PrimitiveCreatorBase._last_wp_is_fallback` in `BoxCreator.on_button1_down` (lines 520-521), and `SphereCreator.on_button1_down` (lines 756-757).
-
-### I-002: Route Right-Click through Coin3D
-
-**File:** `core/input_manager.py` — modify `eventFilter` right-click block (line 152)
-
-**What:** Stop injecting a synthetic `event_dict` into `tool.on_button3_down()`. Instead, accept the event so FreeCAD doesn't open its menu, but allow Coin3D to process it naturally.
-
-**Implementation:**
-```python
-            # [Event Owner: Qt Event Filter] Right-click suppression: when a tool is active,
-            # consume the right mouse button press so FreeCAD's NavigationStyle never opens
-            # its context menu.
-            if event.type() == QtCore.QEvent.MouseButtonPress:
-                if event.button() == QtCore.Qt.RightButton:
-                    from core.dm_tool_manager import DMToolManager
-                    tool = DMToolManager.get_instance().get_active_tool()
-                    if tool and not self._middle_mouse_down:
-                        event.accept()
-                        return True  # suppress FreeCAD context menu - Coin3D still gets SoMouseButtonEvent
-```
-
-**Depends on:** None
-
-
-### I-003: Unconditional Shortcut Stealing
-
-**File:** `core/input_manager.py` — modify `eventFilter` ShortcutOverride block (line 170)
-
-**What:** Claim `S`, `D`, and `E` keys unconditionally if a DM tool is active, rather than checking if they support specific menus.
-
-**Implementation:**
-Replace the `ShortcutOverride` tool check with:
-```python
-            if event.type() == QtCore.QEvent.ShortcutOverride:
-                text = event.text().lower() if hasattr(event, "text") else ""
-                from core.dm_tool_manager import DMToolManager
-                tool = DMToolManager.get_instance().get_active_tool()
-                if tool:
-                    if text in ['s', 'd', 'e']:
-                        event.accept()
-                        return True
-                if not tool and text == 'e':
-                    # Claim 'E' when any editable DM object is selected
-                    sel = FreeCADGui.Selection.getSelection()
-                    if any(hasattr(o, "Proxy") and getattr(o.Proxy, "__class__", None).__name__ in ("DMWorkPlane", "DMObjectProxy") for o in sel):
-                        event.accept()
-                        return True
-```
-
-**Depends on:** None
+- **Goal**: Fix the bug where the placed point and mouse pointer are offset, and the offset increases as the mouse moves up and left from the bottom right.
+- **Files to read**: `core/input_manager.py` (lines 40-55, 228-268)
+- **Files to modify**: `core/input_manager.py`
+- **Steps**:
+  1. Investigate the `devicePixelRatio` handling in `DMInputManager.eventFilter` and `_get_vp_size`.
+  2. The issue occurs because the Qt `event.pos()` logical coordinates and the `vp_h` are in different coordinate scales, so the Y-flip (`int(vp_h) - 1 - y_qt`) produces an incorrect Y coordinate.
+  3. If `event.pos()` returns unscaled logical pixels, ensure `_get_vp_size(view)` also strictly returns the viewport height in those same logical units.
+  4. Ensure `event.pos()` is accurate to the viewport widget (Task 1 helps this by ensuring `obj` is actually the viewport).
+- **Acceptance**: The placed 3D point exactly aligns with the mouse cursor anywhere on the screen (including top-left and bottom-right).
 
 ---
 
-## Agent Skills
+## Task 3: Complete single-owner Qt-native input migration (Remove Coin3D) `Gemini Flash`
 
-See `.agents/skills/` for project-specific knowledge:
+- **Goal**: Finish removing `SoEventCallback` (Coin3D) from the input pipeline as described in the input refactor skill.
+- **Files to read**: `.agents/skills/dm_qt_input_architecture/SKILL.md`, `tools/dm_base.py`, `core/input_manager.py`
+- **Files to modify**: `tools/dm_base.py`, `core/input_manager.py`
+- **Steps**:
+  1. Ensure `DMBase` no longer installs `event_cb` on `self.view`. All input must flow strictly from `DMInputManager` calling `on_mouse_press`, `on_mouse_move`, `on_key_press`, etc.
+  2. Remove any lingering Coin3D event handling logic (`SoMouseButtonEvent`, `SoLocation2Event`, `SoKeyboardEvent`) from `dm_base.py` and other tool files.
+  3. Validate that modifiers (Shift, Ctrl) are ONLY read from `DMInputManager`, not from Coin3D event dictionaries.
+- **Acceptance**: The tools function normally (click to place, drag to size, right-click to finish). Coin3D `SoEventCallback` is completely removed from tool logic.
 
-| Skill | Purpose |
-|-------|---------|
-| `dm_input_refactor` | Architecture of Qt/Coin3D dual event pipeline |
-| `dm_event_pipeline` | Complete flow of events from FreeCAD to DM tools |
-| `dm_viewport_fallback` | Enforces the "No Silent Fallbacks" rule for workplanes |
