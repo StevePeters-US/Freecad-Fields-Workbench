@@ -350,8 +350,8 @@ class ViewProjector:
                 log_msg = f"get_mouse_plane_pt candidates: {best_desc} (t={best_t:.4f})"
                 if len(candidates) > 1:
                     log_msg += " Other: " + ", ".join([f"{c[3]} (t={c[0]:.4f})" for c in candidates[1:]])
-                from core import dm_logger
-                dm_logger.info(log_msg)
+                # from core import dm_logger
+                # dm_logger.info(log_msg)
             
             return best_pt, best_hit, best_desc
 

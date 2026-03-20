@@ -48,12 +48,12 @@ class PointCreator(NURBSPrimitiveCreator):
             if event_dict.get("Button") != QtCore.Qt.LeftButton:
                 return False
 
-            pt = self._resolve_wp_click(event_dict, debug=True)
+            pt = self._resolve_wp_click(event_dict, debug=False)
             if pt is None:
                 return False
 
             hit_desc = getattr(self, "_last_hit_desc", "Unknown")
-            dm_logger.info(f"Placing point at: ({pt.x:.2f}, {pt.y:.2f}, {pt.z:.2f}) on {hit_desc}")
+            # dm_logger.info(f"Placing point at: ({pt.x:.2f}, {pt.y:.2f}, {pt.z:.2f}) on {hit_desc}")
 
             self.update_active_object("point", {"Position": pt, "debug_pt": pt})
 

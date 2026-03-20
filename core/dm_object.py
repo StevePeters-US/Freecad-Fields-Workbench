@@ -456,6 +456,7 @@ class DMViewProvider:
     def onDelete(self, vobj, subelements):
         """Called when the object is about to be deleted."""
         try:
+            from . import dm_logger
             # Check for the label we registered
             label = getattr(self, "_scene_rm_label", None)
             if not label:
@@ -466,10 +467,10 @@ class DMViewProvider:
             if label:
                 from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
                 sr = DMSceneRayMarchRenderer.get_instance()
-                dm_logger.debug(f"DMObject: onDelete unregistering field '{label}'")
+                # dm_logger.debug(f"DMObject: onDelete unregistering field '{label}'")
                 sr.unregister_field(label)
         except Exception as e:
-            from core import dm_logger
+            from . import dm_logger
             dm_logger.debug(f"DMObject.onDelete error: {e}")
         return True
 
@@ -560,7 +561,7 @@ def create_dm_object(name, shape_type, params=None, placement=None):
             except Exception as e:
                 dm_logger.debug(f"create_dm_object: Selection/View setup failed for {name} ({type(e).__name__}): {e}")
         
-        dm_logger.debug(f"create_dm_object: {name} created successfully")
+        # dm_logger.debug(f"create_dm_object: {name} created successfully")
         if hasattr(obj, "ViewObject") and obj.ViewObject:
             is_sub = getattr(obj, "IsSubtractive", False)
             if is_sub:
