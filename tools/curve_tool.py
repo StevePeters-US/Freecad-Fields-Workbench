@@ -1,7 +1,7 @@
 import FreeCAD
 from PySide import QtCore, QtGui
 from pivy import coin
-from .dm_base import NURBSPrimitiveCreator, DragTimerMixin, STATE_IDLE, STATE_DRAGGING
+from .dm_base import NURBSPrimitiveCreator, DragTimerMixin, ToolState
 from core import dm_logger
 from core.dm_point import DMPoint
 from core.input_manager import DMInputManager
@@ -22,13 +22,16 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         self._drag_start_pos = None
 
         self._hovered_idx = -1
+        self._hovered_type = None
         self._cached_radius = None
 
         # Edit mode drag state (for DragTimerMixin)
         self._edit_sel_idx = None
+        self._edit_sel_type = None
         self._edit_drag_n = None
         self._edit_drag_o = None
 
+        self.state = ToolState.IDLE
         self.sg = self.view.getSceneGraph() if self.view else None
         self.points_root = coin.SoSeparator()
         if self.sg:
@@ -42,16 +45,26 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         super().edit_object(obj)
         dm_logger.debug(f"CurveCreator: Editing existing object {obj.Label}")
         self._active_obj = obj
+        obj.EditMode = True
 
         # Set working plane FIRST — to_global depends on it
         self.working_plane = obj.Placement
         self._working_plane_is_fallback = False
+        self.state = ToolState.IDLE
 
         self.is_closed = getattr(obj, "Closed", False)
 
         # obj.Points are stored in local (placement) space — convert to world space
         local_pts = list(getattr(obj, "Points", []))
         self.points = [self.to_global(pt) for pt in local_pts]
+        
+        local_hi = list(getattr(obj, "HandleIn", []))
+        local_ho = list(getattr(obj, "HandleOut", []))
+        self.handle_in = [self.to_global(pt) for pt in local_hi]
+        self.handle_out = [self.to_global(pt) for pt in local_ho]
+        
+        if not self.handle_in or len(self.handle_in) != len(self.points):
+            self.handle_in, self.handle_out = self._get_auto_handles(self.points)
 
         # Clear any stale visuals from creation phase
         self._clear_handle_spheres()
@@ -65,10 +78,9 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
 
         # Rebuild handle spheres
         if len(self.points) >= 2:
-            hi, ho = self._get_auto_handles(self.points)
-            self._update_handle_spheres(hi, ho, self.points)
+            self._update_handle_spheres(self.handle_in, self.handle_out, self.points)
 
-        self.state = STATE_IDLE
+        self.state = ToolState.IDLE
         self.update_ui()
 
     def _do_terminate(self):
@@ -76,11 +88,19 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         for dm_pt in self.dm_points:
             dm_pt.undraw()
         self.dm_points.clear()
+        if self._active_obj:
+            try:
+                self._active_obj.EditMode = False
+                self._active_obj.touch()
+                self._active_obj.Document.recompute()
+            except Exception as e:
+                pass
+        
         try:
             if self.sg and self.points_root:
                 self.sg.removeChild(self.points_root)
         except Exception as e:
-            dm_logger.debug(f"CurveCreator._do_terminate: {e}")
+            pass
         super()._do_terminate()
 
     def is_in_progress(self):
@@ -148,11 +168,30 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         """Perpendicular distance hit test against placed control point spheres."""
         return self._hit_test_perp(ray_p, ray_d, self.points)
 
+    def _hit_test_all(self, ray_p, ray_d, tol=None):
+        """Hit test main points and handles, returning (type, idx, dist)."""
+        b_type, b_idx, b_dist = "point", None, float('inf')
+        idx, dist = self._hit_test_perp(ray_p, ray_d, self.points, tolerance=tol)
+        if idx is not None and dist < b_dist:
+            b_type, b_idx, b_dist = "point", idx, dist
+            
+        if hasattr(self, "handle_in") and self.handle_in:
+            idx, dist = self._hit_test_perp(ray_p, ray_d, self.handle_in, tolerance=tol)
+            if idx is not None and dist < b_dist:
+                b_type, b_idx, b_dist = "handle_in", idx, dist
+                
+        if hasattr(self, "handle_out") and self.handle_out:
+            idx, dist = self._hit_test_perp(ray_p, ray_d, self.handle_out, tolerance=tol)
+            if idx is not None and dist < b_dist:
+                b_type, b_idx, b_dist = "handle_out", idx, dist
+                
+        return b_type, b_idx, b_dist
+
     def _set_hover(self, idx):
         """Recolour point spheres and update OS cursor for hovered index (-1 = none)."""
         if idx == self._hovered_idx:
             return
-        if self._hovered_idx != -1 and self._hovered_idx < len(self.dm_points):
+        if self._hovered_idx is not None and self._hovered_idx != -1 and self._hovered_idx < len(self.dm_points):
             self.dm_points[self._hovered_idx].set_color((1, 0.5, 0))
         self._hovered_idx = idx
         if idx == -1 or idx is None:
@@ -187,23 +226,30 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
         if not ray_p or not ray_d:
             return True
-        idx, _ = self._hit_test_perp(ray_p, ray_d, self.points)
-        if idx is not None:
-            self._edit_sel_idx = idx
+        b_type, b_idx, b_dist = self._hit_test_all(ray_p, ray_d)
+        if b_idx is not None:
+            self._edit_sel_idx = b_idx
+            self._edit_sel_type = b_type
             vd = self.view.getViewDirection()
             self._edit_drag_n = FreeCAD.Vector(-vd[0], -vd[1], -vd[2])
             self._edit_drag_n.normalize()
-            self._edit_drag_o = self.points[idx]
-            self.state = STATE_DRAGGING
+            if b_type == "point":
+                self._edit_drag_o = self.points[b_idx]
+            elif b_type == "handle_in":
+                self._edit_drag_o = self.handle_in[b_idx]
+            else:
+                self._edit_drag_o = self.handle_out[b_idx]
+            self.state = ToolState.DRAGGING
             self._start_drag_timer()
             self._set_cursor(QtCore.Qt.SizeAllCursor)
-        return True
+            return True
+        return False
 
     def _drag_update(self):
         """QTimer callback: move the selected control point to the current mouse position."""
         if self._drag_check_lmb_released():
             self._edit_sel_idx = None
-            self.state = STATE_IDLE
+            self.state = ToolState.IDLE
             return
         if self._edit_sel_idx is None:
             self._stop_drag_timer()
@@ -218,21 +264,36 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         if new_pos is None:
             return
 
-        self.points[self._edit_sel_idx] = new_pos
-        self.dm_points[self._edit_sel_idx].position = new_pos
-        self.dm_points[self._edit_sel_idx].update_draw()
-
-        self._update_edit_object()
-        if self.view:
-            self.view.redraw()
+        dist_moved = (new_pos - self._edit_drag_o).Length
+        if dist_moved > 1e-6:
+            self._edit_drag_o = new_pos
+            if self._edit_sel_type == "point":
+                delta = new_pos - self.points[self._edit_sel_idx]
+                self.points[self._edit_sel_idx] = new_pos
+                self.handle_in[self._edit_sel_idx] = self.handle_in[self._edit_sel_idx] + delta
+                self.handle_out[self._edit_sel_idx] = self.handle_out[self._edit_sel_idx] + delta
+                self.dm_points[self._edit_sel_idx].position = new_pos
+                self.dm_points[self._edit_sel_idx].update_draw()
+            elif self._edit_sel_type == "handle_in":
+                self.handle_in[self._edit_sel_idx] = new_pos
+            else:
+                self.handle_out[self._edit_sel_idx] = new_pos
+                
+            self._update_edit_object()
+            
+            # Fast recompute only for this object to improve drag performance
+            if self._active_obj and self._active_obj.Document:
+                self._active_obj.Document.recompute([self._active_obj])
 
     def _edit_hover(self, event_dict):
         """Update cursor when hovering over a handle in edit mode."""
         ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
         if not ray_p or not ray_d:
             return
-        idx, _ = self._hit_test_perp(ray_p, ray_d, self.points)
-        if idx is not None:
+        # Use slightly larger tolerance for hover to make it easier to hit
+        tol = self._compute_handle_radius() * 1.5
+        b_type, b_idx, b_dist = self._hit_test_all(ray_p, ray_d, tol=tol)
+        if b_idx is not None:
             self._set_cursor(QtCore.Qt.PointingHandCursor)
         else:
             self._restore_cursor()
@@ -242,17 +303,12 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         if self._active_obj is None:
             return
         pts = list(self.points)
+        hi = list(self.handle_in)
+        ho = list(self.handle_out)
         params = {"Points": pts, "Closed": self.is_closed}
         if len(pts) >= 2:
-            hi, ho = self._get_auto_handles(pts)
             params["HandleIn"] = hi
             params["HandleOut"] = ho
-            params["PointTypes"] = [0] * len(pts)
-            params["HandleTypes"] = [0] * (2 * len(pts))
-        else:
-            params["HandleIn"] = pts[:]
-            params["HandleOut"] = pts[:]
-            params["PointTypes"] = [0] * len(pts)
             params["HandleTypes"] = [0] * (2 * len(pts))
         self.update_active_object("curve", params)
         if len(pts) >= 2:
@@ -267,7 +323,7 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
             if pt is None:
                 return False
 
-            if self.state == 0:
+            if self.state == ToolState.IDLE:
                 if not self.working_plane:
                     # _resolve_wp_click already set it
                     pass
@@ -284,12 +340,12 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
                 self.start_point = pt
                 self.points.append(pt)
                 self._add_point_sphere(pt)
-                self.state = 1
+                self.state = ToolState.ACTIVE
                 self.update_preview()
                 self.update_ui()
                 return True
 
-            elif self.state == 1:
+            elif self.state == ToolState.ACTIVE:
                 if len(self.points) >= 2:
                     from core.dm_object import get_picking_radius
                     if (pt - self.points[0]).Length < get_picking_radius():
@@ -311,12 +367,12 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
 
     def handle_move(self, event_dict):
         if self._is_editing:
-            if self.state != STATE_DRAGGING:
+            if self.state != ToolState.DRAGGING:
                 self._edit_hover(event_dict)
             return
-        if self.state == 0:
+        if self.state == ToolState.IDLE:
             super().handle_move(event_dict)
-        elif self.state == 1:
+        elif self.state == ToolState.ACTIVE:
             ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
             hit_idx, _ = self._hit_test(ray_p, ray_d)
             self._set_hover(hit_idx)
@@ -387,11 +443,13 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         params = {"Points": pts, "Closed": self.is_closed}
         if len(pts) >= 2:
             hi, ho = self._get_auto_handles(pts)
+            self.handle_in, self.handle_out = hi, ho
             params["HandleIn"] = hi
             params["HandleOut"] = ho
             params["PointTypes"] = [0] * len(pts)
             params["HandleTypes"] = [0] * (2 * len(pts))
         else:
+            self.handle_in, self.handle_out = pts, pts
             params["HandleIn"] = pts
             params["HandleOut"] = pts
             params["PointTypes"] = [0] * len(pts)
@@ -410,6 +468,13 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         """Finalize the curve and enter edit mode."""
         if getattr(self, "_is_editing", False):
             self._is_editing = False
+            if self._active_obj:
+                try:
+                    self._active_obj.EditMode = False
+                    self._active_obj.touch()
+                    self._active_obj.Document.recompute()
+                except Exception:
+                    pass
             self._active_obj = None
             self.reset_state()
             return
@@ -425,14 +490,23 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         self._do_update_preview()
         self._on_committed(self._active_obj)
 
-        # Clear creation visuals — edit_object will rebuild them
-        self._clear_handle_spheres()
-        for dm_pt in self.dm_points:
-            dm_pt.undraw()
-        self.dm_points.clear()
-
-        # Reset so RMB fires finish() again while in edit mode
-        self._finish_scheduled = False
+        # If we are about to terminate (e.g. from RMB close), don't enter edit mode
+        if getattr(self, "_terminated", False) or getattr(self, "_finish_scheduled", False):
+            # Protect the object from _do_terminate cleanup
+            self._is_editing = True
+            if self._active_obj:
+                try:
+                    self._active_obj.EditMode = False
+                    self._active_obj.touch()
+                    self._active_obj.Document.recompute()
+                except Exception:
+                    pass
+            # Clear tool visuals
+            self._clear_handle_spheres()
+            for dm_pt in self.dm_points:
+                dm_pt.undraw()
+            self.dm_points.clear()
+            return
 
         # Enter edit mode on the committed object
         committed_obj = self._active_obj

@@ -978,6 +978,8 @@ class NURBSPrimitiveCreator(DMBase):
         
         # Track placement
         active_placement = placement
+        # Track placement
+        active_placement = placement
         if not active_placement and hasattr(self, "working_plane"):
             active_placement = self.working_plane
         self._last_placement = active_placement

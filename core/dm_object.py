@@ -310,9 +310,8 @@ class DMObjectProxy:
 
             st = fp.ShapeType if hasattr(fp, "ShapeType") else "nurbs"
 
-            if st == "frep" or st == "curve":
-                # SDF objects and pure curves bypass native B-Rep meshing.
-                # Curves will eventually be extruded into SDFs in Phase 7.
+            if st == "frep":
+                # SDF objects bypass native B-Rep meshing.
                 fp.Shape = Part.Shape()
                 return
 
