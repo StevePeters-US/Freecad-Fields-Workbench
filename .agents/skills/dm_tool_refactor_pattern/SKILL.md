@@ -69,7 +69,7 @@ class DragTimerMixin:
         from core.input_manager import DMInputManager
         if not DMInputManager.get_instance()._left_mouse_down:
             self._stop_drag_timer()
-            self.state = EDIT_STATE_IDLE
+            self.state = ToolState.IDLE
             return True
         return False
 
@@ -106,16 +106,22 @@ def _schedule_update(self, callback, interval_ms=None):
 ```
 The callback must set `self._update_pending = False` at its start.
 
-## State Constants (after R-012)
+## State Constants
+
+All tools use the `ToolState` IntEnum from `tools/dm_base.py`:
 
 ```python
-TOOL_STATE_IDLE   = 0
-TOOL_STATE_PLACE1 = 1
-TOOL_STATE_PLACE2 = 2
-TOOL_STATE_DONE   = 3
-EDIT_STATE_IDLE     = 0
-EDIT_STATE_DRAGGING = 1
+from tools.dm_base import ToolState
+
+class ToolState(IntEnum):
+    IDLE = 0
+    ACTIVE = 1
+    DRAGGING = 2
+    FINALIZED = 3
+    EDIT_MODE = 4
 ```
+
+The old bare constants (`STATE_IDLE`, `STATE_DRAGGING`, etc.) are deprecated and will be removed by RF-010.
 
 ---
 

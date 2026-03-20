@@ -20,23 +20,14 @@ This skill defines the canonical pattern for implementing interactive SDF primit
 ### 1. Class Header and State
 ```python
 class MyPrimitiveCreator(PrimitiveCreatorBase):
-    _last_working_plane = None  # Persistent workplane memory
 
     def __init__(self):
         super().__init__()
+        # PrimitiveCreatorBase.__init__ already handles:
+        #   self.dm_points, self.points_root, self._init_working_plane()
+        # Only add tool-specific state here:
         self.points = []
-        self.dm_points = []
-        self.points_root = coin.SoSeparator()
-        if self.view.getSceneGraph():
-            self.view.getSceneGraph().addChild(self.points_root)
-        
-        # Initialize workplane (Priority: Selection -> Memory -> Fallback)
-        if not self.working_plane:
-            if type(self)._last_working_plane:
-                self.working_plane = type(self)._last_working_plane
-            else:
-                vps = self.get_visible_workplanes()
-                if vps: self.working_plane = vps[0].Placement # or getGlobalPlacement
+        self.current_point = None
 ```
 
 ### 2. Input Handling

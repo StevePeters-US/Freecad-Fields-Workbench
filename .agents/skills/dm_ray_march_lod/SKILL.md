@@ -1,6 +1,6 @@
 ---
 name: DM Ray March LOD & Optimization Patterns
-description: Reference for renderer optimizations: screen-space adaptive cell size, dirty-flag incremental baking, camera sensor, and fragment shader stepping. Use when implementing tasks from todo_renderoptimize.md.
+description: Reference for renderer optimizations: screen-space adaptive cell size, dirty-flag incremental baking, camera sensor, and fragment shader stepping. Use when working on dm_scene_ray_march_renderer.py performance.
 ---
 
 # DM Ray March LOD & Optimization Patterns

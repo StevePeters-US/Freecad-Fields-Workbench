@@ -15,7 +15,7 @@ Every SDF primitive lives in its own file in `core/sdf/sdf/` and follows this ex
 import numpy as np
 import FreeCAD
 import math
-from core.sdf.sdf.sdf_field import SdfField
+from core.sdf.sdf_field import SdfField
 
 class Sdf{Name}Field(SdfField):
     """One-line description. Reference: sdName() in iquilezles.org/articles/distfunctions/"""

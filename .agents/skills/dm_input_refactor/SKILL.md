@@ -5,6 +5,9 @@ description: Architecture of the dual Qt/Coin3D event pipeline and the target si
 
 # DM Input Pipeline Refactor Reference
 
+> [!IMPORTANT]
+> **This skill is historical reference only.** The refactor described here has been completed. For the current architecture, read `dm_qt_input_architecture/SKILL.md` instead. This document is kept as background context showing the migration path from the old dual-pipeline to the current Qt-native single-owner design.
+
 ## Current Architecture (Problematic)
 
 Two independent event pipelines fire for the same user input:

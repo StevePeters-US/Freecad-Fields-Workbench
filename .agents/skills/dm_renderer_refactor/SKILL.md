@@ -5,7 +5,7 @@ description: Reference for the renderer/meshing separation refactor. Covers the 
 
 # DM Renderer Refactor Pattern
 
-Use this skill when implementing tasks from `todo_updaterenderer.md`.
+Use this skill when working on renderer/meshing separation or modifying `dm_scene_ray_march_renderer.py`.
 
 ---
 

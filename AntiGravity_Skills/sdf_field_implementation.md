@@ -9,7 +9,7 @@ When implementing a new SDF field (SDF primitive) for the Direct Modeling workbe
 
 ## Required Methods
 
-Every field must inherit from `SdfField` (or `SdfField` once the refactor is complete) and implement:
+Every field must inherit from `SdfField` and implement:
 
 1. **`evaluate(self, point: FreeCAD.Vector) -> float`** — Returns the signed distance at a single point. Negative = inside, positive = outside, zero = on surface.
 
