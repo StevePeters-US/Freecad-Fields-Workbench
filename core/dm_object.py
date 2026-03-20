@@ -311,6 +311,27 @@ class DMObjectProxy:
             st = fp.ShapeType if hasattr(fp, "ShapeType") else "nurbs"
 
             if st == "frep":
+                # Parametric boolean recompute
+                if hasattr(fp, "BooleanInputs") and fp.BooleanInputs:
+                    try:
+                        from commands.cmd_boolean import _recompose_boolean
+                        new_field = _recompose_boolean(fp)
+                        if new_field is not None:
+                            self.SdfField = new_field
+                            # Push updated field to renderer
+                            from core.dm_renderer import SdfRendererStrategy
+                            vp = getattr(fp, "ViewObject", None)
+                            vp_proxy = getattr(vp, "Proxy", None) if vp else None
+                            strategy = getattr(vp_proxy, "_strategy", None) if vp_proxy else None
+                            if strategy and hasattr(strategy, "label") and strategy.label:
+                                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                                DMSceneRayMarchRenderer.get_instance().update_field(
+                                    strategy.label, new_field
+                                )
+                    except Exception as e:
+                        from . import dm_logger
+                        dm_logger.error(f"Boolean recompute failed for {fp.Label}: {e}")
+                
                 # SDF objects bypass native B-Rep meshing.
                 fp.Shape = Part.Shape()
                 return
