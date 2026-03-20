@@ -64,12 +64,9 @@ class ToolState(IntEnum):
     DRAGGING = 2
     FINALIZED = 3
     EDIT_MODE = 4
+    PICK_RADIUS = 5  # Cylinder/Sphere specific
+    PICK_HEIGHT = 6  # Cylinder specific
 
-# Tool States (Deprecated - use ToolState Enum)
-STATE_IDLE = 0
-STATE_ACTIVE = 1
-STATE_DRAGGING = 2
-STATE_FINALIZED = 3
 
 class DMBase:
     # Class-level reference to the currently active tool to allow 
@@ -973,11 +970,8 @@ class NURBSPrimitiveCreator(DMBase):
             return
 
         self._last_shape_type = shape_type
-        self._last_shape_type = shape_type
         self._last_shape_params = params
         
-        # Track placement
-        active_placement = placement
         # Track placement
         active_placement = placement
         if not active_placement and hasattr(self, "working_plane"):

@@ -10,7 +10,7 @@ from core.dm_point import DMPoint
 from core.dm_line import DMLineSet
 from core.dm_object import create_dm_object, get_interactive_throttle_interval
 from core.dm_mesher import mesh_timer
-from tools.dm_base import DMBase, DragTimerMixin, STATE_IDLE, STATE_DRAGGING
+from tools.dm_base import DMBase, DragTimerMixin, ToolState
 
 # Ensure we import the right storage classes. For now, defaulting to MarchingCubes
 from core.sdf.sdf.box import SdfBoxField
@@ -78,7 +78,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     def handle_move(self, event_dict):
         """Suppress creation logic during edit mode hover; normal creation otherwise."""
         if self._is_editing:
-            if self.state != STATE_DRAGGING:
+            if self.state != ToolState.DRAGGING:
                 self._edit_hover(event_dict)
             return  # Never propagate to DMBase.handle_move in edit mode
         super().handle_move(event_dict)
@@ -113,7 +113,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             self._edit_drag_n = FreeCAD.Vector(-vd[0], -vd[1], -vd[2])
             self._edit_drag_n.normalize()
             self._edit_drag_o = pts[idx]
-            self.state = STATE_DRAGGING
+            self.state = ToolState.DRAGGING
             self._start_drag_timer()
             self._set_cursor(QtCore.Qt.SizeAllCursor)
         return True  # always consume click in edit mode
@@ -179,8 +179,65 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             visible_wps = self.get_visible_workplanes()
             if visible_wps:
                 wp = visible_wps[0]
-                self.working_plane = wp.getGlobalPlacement() if hasattr(wp, "getGlobalPlacement") else wp.Placement
+                self.working_plane = self._get_placement()
                 self._working_plane_is_fallback = False
+
+    def _get_placement(self):
+        """Return a FreeCAD.Placement from self.working_plane, or None."""
+        wp = getattr(self, "working_plane", None)
+        if wp is None:
+            return None
+        if hasattr(wp, "getGlobalPlacement"):
+            return wp.getGlobalPlacement()
+        elif hasattr(wp, "Placement"):
+            return wp.Placement
+        return wp
+
+    @staticmethod
+    def _box_corners_local(center, half_size):
+        """Return list of 8 FreeCAD.Vector corners in local space.
+        
+        Order: (-,-,-) (+,-,-) (+,+,-) (-,+,-) (-,-,+) (+,-,+) (+,+,+) (-,+,+)
+        """
+        c, h = center, half_size
+        return [
+            FreeCAD.Vector(c.x - h.x, c.y - h.y, c.z - h.z),
+            FreeCAD.Vector(c.x + h.x, c.y - h.y, c.z - h.z),
+            FreeCAD.Vector(c.x + h.x, c.y + h.y, c.z - h.z),
+            FreeCAD.Vector(c.x - h.x, c.y + h.y, c.z - h.z),
+            FreeCAD.Vector(c.x - h.x, c.y - h.y, c.z + h.z),
+            FreeCAD.Vector(c.x + h.x, c.y - h.y, c.z + h.z),
+            FreeCAD.Vector(c.x + h.x, c.y + h.y, c.z + h.z),
+            FreeCAD.Vector(c.x - h.x, c.y + h.y, c.z + h.z),
+        ]
+
+    def _update_handle_positions(self, world_pts, color=(1.0, 0.5, 0.0)):
+        """Update dm_points to match the given world-space positions.
+        
+        Creates new DMPoint objects as needed, updates existing ones.
+        """
+        while len(self.dm_points) < len(world_pts):
+            self.dm_points.append(DMPoint(world_pts[len(self.dm_points)]))
+        
+        r = self._compute_handle_radius(ref_pt=world_pts[0] if world_pts else None)
+        for i, pt in enumerate(world_pts):
+            if i >= len(self.dm_points):
+                break
+            self.dm_points[i].position = pt
+            if self.dm_points[i]._point_sep is None:
+                self.dm_points[i].draw_point(self.points_root, radius=r, color=color)
+            else:
+                self.dm_points[i].update_draw(radius=r)
+
+    def _height_drag_move(self, event_dict):
+        """Move current_point along workplane normal from _height_drag_base."""
+        if getattr(self, "_height_drag_base", None) is None:
+            return
+        wp = getattr(self, "working_plane", None)
+        normal = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
+        self.current_point = DMInputManager.get_instance().get_axis_point(
+            self.view, self._height_drag_base, normal, event_dict
+        )
 
     def _get_preview_field(self):
         """Subclasses return the current field based on click state + current_point."""
@@ -317,7 +374,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
         # Pre-enter edit state so handle_move doesn't clobber tool vars during async delay
         self._is_editing = True
-        self.state = STATE_IDLE
+        self.state = ToolState.IDLE
 
         QtCore.QTimer.singleShot(0, lambda: self._do_commit_and_edit(name, field, points))
 
@@ -366,7 +423,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     def reset_state(self):
         """Override to clear internal primitive state (points, visuals)."""
         super().reset_state()
-        self.state = 0  # Re-enable dynamic snapping
+        self.state = ToolState.IDLE  # Re-enable dynamic snapping
         self.points = []
         for dm_pt in self.dm_points:
             dm_pt.undraw()
@@ -423,7 +480,7 @@ class BoxCreator(PrimitiveCreatorBase):
             return
         self.points = corners  # keep all 8 for 8-handle drag
         self.current_point = None
-        self.state = STATE_IDLE
+        self.state = ToolState.IDLE
 
         r = self._compute_handle_radius()
         for pt in corners:
@@ -479,14 +536,7 @@ class BoxCreator(PrimitiveCreatorBase):
         sx = max(abs(lc_a.x - lc_b.x), 0.1)
         sy = max(abs(lc_a.y - lc_b.y), 0.1)
         sz = max(abs(lc_a.z - lc_b.z), 0.1)
-        placement = None
-        if wp:
-            if hasattr(wp, "getGlobalPlacement"):
-                placement = wp.getGlobalPlacement()
-            elif hasattr(wp, "Placement"):
-                placement = wp.Placement
-            else:
-                placement = wp
+        placement = getattr(self, "_field_placement", self._get_placement())
                 
         return SdfBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(sx, sy, sz), placement=placement)
 
@@ -494,16 +544,7 @@ class BoxCreator(PrimitiveCreatorBase):
         """Update self.points (8 world corners) from a new SdfBoxField."""
         c, h = field.center, field.half_size
         wp = field.placement
-        pts_local = [
-            FreeCAD.Vector(c.x - h.x, c.y - h.y, c.z - h.z),
-            FreeCAD.Vector(c.x + h.x, c.y - h.y, c.z - h.z),
-            FreeCAD.Vector(c.x + h.x, c.y + h.y, c.z - h.z),
-            FreeCAD.Vector(c.x - h.x, c.y + h.y, c.z - h.z),
-            FreeCAD.Vector(c.x - h.x, c.y - h.y, c.z + h.z),
-            FreeCAD.Vector(c.x + h.x, c.y - h.y, c.z + h.z),
-            FreeCAD.Vector(c.x + h.x, c.y + h.y, c.z + h.z),
-            FreeCAD.Vector(c.x - h.x, c.y + h.y, c.z + h.z),
-        ]
+        pts_local = self._box_corners_local(c, h)
         if wp:
             self.points = [wp.multVec(lc) for lc in pts_local]
         else:
@@ -521,10 +562,11 @@ class BoxCreator(PrimitiveCreatorBase):
         if pos is None:
             return True
 
-        if self.state == 0:
+        if self.state == ToolState.IDLE:
             # 1st click - anchor the tool
+            self._field_placement = self._get_placement()
             self.points.append(pos)
-            self.state = 1
+            self.state = ToolState.ACTIVE
             if len(self.dm_points) < 1:
                 dm_pt = DMPoint(pos)
                 dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
@@ -534,10 +576,10 @@ class BoxCreator(PrimitiveCreatorBase):
                 self.dm_points[0].update_draw()
 
             dm_logger.info("Box Tool: Click 2nd corner")
-        elif self.state == 1:
+        elif self.state == ToolState.ACTIVE:
             # 2nd click - determines base size (x/y)
             self.points.append(pos)
-            self.state = 2
+            self.state = ToolState.DRAGGING
             if len(self.dm_points) < 2:
                 dm_pt = DMPoint(pos)
                 dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
@@ -548,7 +590,7 @@ class BoxCreator(PrimitiveCreatorBase):
             self._height_drag_base = pos
             dm_logger.info("Box Tool: Click height")
             
-        elif self.state == 2:
+        elif self.state == ToolState.DRAGGING:
             # 3rd click - determines height (z). Finalize shape.
             self.points.append(self.current_point)
             if self.current_point:
@@ -557,7 +599,7 @@ class BoxCreator(PrimitiveCreatorBase):
                 self.dm_points.append(dm_pt)
 
             # Transition to a finalized state or finish tool
-            self.state = 3
+            self.state = ToolState.FINALIZED
             self._commit_and_enter_edit("Box")
 
         return True
@@ -583,16 +625,7 @@ class BoxCreator(PrimitiveCreatorBase):
         cy = (loc_p1.y + loc_p2.y) / 2.0
         cz = (loc_p1.z + loc_p3.z) / 2.0
 
-        pts_local = [
-            FreeCAD.Vector(cx - size_x/2, cy - size_y/2, cz - size_z/2),
-            FreeCAD.Vector(cx + size_x/2, cy - size_y/2, cz - size_z/2),
-            FreeCAD.Vector(cx + size_x/2, cy + size_y/2, cz - size_z/2),
-            FreeCAD.Vector(cx - size_x/2, cy + size_y/2, cz - size_z/2),
-            FreeCAD.Vector(cx - size_x/2, cy - size_y/2, cz + size_z/2),
-            FreeCAD.Vector(cx + size_x/2, cy - size_y/2, cz + size_z/2),
-            FreeCAD.Vector(cx + size_x/2, cy + size_y/2, cz + size_z/2),
-            FreeCAD.Vector(cx - size_x/2, cy + size_y/2, cz + size_z/2),
-        ]
+        pts_local = self._box_corners_local(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(size_x/2, size_y/2, size_z/2))
         world_corners = [self.to_global(pt) for pt in pts_local]
 
         # 2. Update lines
@@ -612,31 +645,13 @@ class BoxCreator(PrimitiveCreatorBase):
         self.dm_line_set.update_lines(line_pts, segments=[2]*12)
 
         # 3. Update corner balls
-        while len(self.dm_points) < 8:
-            self.dm_points.append(DMPoint(world_corners[len(self.dm_points)]))
-        
-        r = self._compute_handle_radius(ref_pt=world_corners[0])
-        for i, pt in enumerate(world_corners):
-            self.dm_points[i].position = pt
-            if self.dm_points[i]._point_sep is None:
-                self.dm_points[i].draw_point(self.points_root, radius=r, color=(1.0, 0.5, 0.0))
-            else:
-                self.dm_points[i].update_draw(radius=r)
+        self._update_handle_positions(world_corners)
 
     def on_move_state_1(self, event_dict):
         self.current_point = self.get_mouse_plane_pt(event_dict)
 
     def on_move_state_2(self, event_dict):
-        """Height drag: move current_point along workplane normal."""
-        if self._height_drag_base is None:
-            return
-
-        wp = getattr(self, "working_plane", None)
-        normal = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
-
-        self.current_point = DMInputManager.get_instance().get_axis_point(
-            self.view, self._height_drag_base, normal, event_dict
-        )
+        self._height_drag_move(event_dict)
 
     def _get_preview_field(self):
         if not self.points or self.current_point is None:
@@ -680,14 +695,7 @@ class BoxCreator(PrimitiveCreatorBase):
         cy = (loc_p1.y + loc_p2.y) / 2.0
         cz = (loc_p1.z + loc_p3.z) / 2.0
         
-        placement = None
-        if wp:
-            if hasattr(wp, "getGlobalPlacement"):
-                placement = wp.getGlobalPlacement()
-            elif hasattr(wp, "Placement"):
-                placement = wp.Placement
-            else:
-                placement = wp
+        placement = getattr(self, "_field_placement", self._get_placement())
                 
         return SdfBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(size_x, size_y, max(size_z, 0.01)), placement=placement)
 
@@ -705,16 +713,7 @@ class BoxCreator(PrimitiveCreatorBase):
         cy = (loc_p1.y + loc_p2.y) / 2.0
         cz = (loc_p1.z + loc_p3.z) / 2.0
         
-        pts_local = [
-            FreeCAD.Vector(cx - size_x/2, cy - size_y/2, cz - size_z/2),
-            FreeCAD.Vector(cx + size_x/2, cy - size_y/2, cz - size_z/2),
-            FreeCAD.Vector(cx + size_x/2, cy + size_y/2, cz - size_z/2),
-            FreeCAD.Vector(cx - size_x/2, cy + size_y/2, cz - size_z/2),
-            FreeCAD.Vector(cx - size_x/2, cy - size_y/2, cz + size_z/2),
-            FreeCAD.Vector(cx + size_x/2, cy - size_y/2, cz + size_z/2),
-            FreeCAD.Vector(cx + size_x/2, cy + size_y/2, cz + size_z/2),
-            FreeCAD.Vector(cx - size_x/2, cy + size_y/2, cz + size_z/2),
-        ]
+        pts_local = self._box_corners_local(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(size_x/2, size_y/2, size_z/2))
         return pts_local
 
 
@@ -736,7 +735,7 @@ class SphereCreator(PrimitiveCreatorBase):
         if pts:
             self.center = pts[0]
             self.current_point = pts[1] if len(pts) >= 2 else pts[0] + FreeCAD.Vector(10, 0, 0)
-        self.state = STATE_IDLE
+        self.state = ToolState.IDLE
 
         r = self._compute_handle_radius()
         for pt in [self.center, self.current_point]:
@@ -763,9 +762,9 @@ class SphereCreator(PrimitiveCreatorBase):
         if pos is None:
             return True
 
-        if self.state == 0:
+        if self.state == ToolState.IDLE:
             self.center = pos
-            self.state = 1
+            self.state = ToolState.ACTIVE
 
             if len(self.dm_points) < 1:
                 dm_pt = DMPoint(pos)
@@ -776,8 +775,8 @@ class SphereCreator(PrimitiveCreatorBase):
                 self.dm_points[0].update_draw()
 
             dm_logger.info("Sphere Tool: Click radius")
-        elif self.state == 1:
-            self.state = 2
+        elif self.state == ToolState.ACTIVE:
+            self.state = ToolState.FINALIZED
             self._commit_and_enter_edit("Sphere")
 
         return True
@@ -814,17 +813,7 @@ class SphereCreator(PrimitiveCreatorBase):
         self.dm_line_set.update_lines(line_pts, segments=[segments+1]*3)
 
         # Update points (center and one radius point)
-        pts = [self.center, self.current_point]
-        while len(self.dm_points) < 2:
-            self.dm_points.append(DMPoint(pts[len(self.dm_points)]))
-        
-        r = self._compute_handle_radius(ref_pt=self.center)
-        for i, p in enumerate(pts):
-            self.dm_points[i].position = p
-            if self.dm_points[i]._point_sep is None:
-                self.dm_points[i].draw_point(self.points_root, radius=r, color=(1.0, 0.5, 0.0))
-            else:
-                self.dm_points[i].update_draw(radius=r)
+        self._update_handle_positions([self.center, self.current_point])
 
     def on_move_state_1(self, event_dict):
         self.current_point = self.get_mouse_plane_pt(event_dict)
@@ -840,15 +829,7 @@ class SphereCreator(PrimitiveCreatorBase):
         
         if radius < 0.01:
             return None
-        wp = getattr(self, "working_plane", None)
-        placement = None
-        if wp:
-            if hasattr(wp, "getGlobalPlacement"):
-                placement = wp.getGlobalPlacement()
-            elif hasattr(wp, "Placement"):
-                placement = wp.Placement
-            else:
-                placement = wp
+        placement = self._get_placement()
                 
         return SdfSphereField(loc_center, radius, placement=placement)
 
@@ -869,10 +850,6 @@ class CylinderCreator(PrimitiveCreatorBase):
     _last_working_plane = None
     _last_wp_is_fallback = True
 
-    class ToolState(IntEnum):
-        IDLE = 0
-        PICK_RADIUS = 1
-        PICK_HEIGHT = 2
 
     def get_command_id(self):
         return "DM_CreateCylinder"
@@ -882,13 +859,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         self.points = []
         self.current_point = None
         self._height_drag_base = None
-        self.state = self.ToolState.IDLE
-
-        # Unified workplane pre-load logic
-        if not self.working_plane:
-            if type(self)._last_working_plane:
-                self.working_plane = type(self)._last_working_plane
-                self._working_plane_is_fallback = type(self)._last_wp_is_fallback
+        self.state = ToolState.IDLE
         
         dm_logger.info("Cylinder Tool: Click base center")
 
@@ -902,7 +873,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         elif len(pts) >= 2:
             self.current_point = pts[1]
             self.points = pts[:1]
-        self.state = self.ToolState.IDLE # In edit mode, we are 'idle' relative to creation steps
+        self.state = ToolState.IDLE # In edit mode, we are 'idle' relative to creation steps
 
         r = self._compute_handle_radius()
         all_pts = list(self.points) + ([self.current_point] if self.current_point else [])
@@ -931,21 +902,22 @@ class CylinderCreator(PrimitiveCreatorBase):
         if pos is None:
             return True
 
-        if self.state == self.ToolState.IDLE:
+        if self.state == ToolState.IDLE:
+            self._field_placement = self._get_placement()
             type(self)._last_working_plane = self.working_plane
             type(self)._last_wp_is_fallback = self._working_plane_is_fallback
 
             self.points.append(pos)
-            self.state = self.ToolState.PICK_RADIUS
+            self.state = ToolState.PICK_RADIUS
 
             dm_pt = DMPoint(pos)
             dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
             self.dm_points.append(dm_pt)
 
             dm_logger.info("Cylinder Tool: Click radius")
-        elif self.state == self.ToolState.PICK_RADIUS:
+        elif self.state == ToolState.PICK_RADIUS:
             self.points.append(pos)
-            self.state = self.ToolState.PICK_HEIGHT
+            self.state = ToolState.PICK_HEIGHT
             self._height_drag_base = pos
 
             dm_pt = DMPoint(pos)
@@ -953,7 +925,7 @@ class CylinderCreator(PrimitiveCreatorBase):
             self.dm_points.append(dm_pt)
 
             dm_logger.info("Cylinder Tool: Click height")
-        elif self.state == self.ToolState.PICK_HEIGHT:
+        elif self.state == ToolState.PICK_HEIGHT:
             # 3rd click - determines height. Finalize shape.
             self.points.append(self.current_point)
             self._finalize_object("Cylinder")
@@ -968,7 +940,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         loc_base = self.to_local(self.points[0])
         loc_cur = self.to_local(self.current_point)
         
-        if self.state == self.ToolState.PICK_RADIUS:
+        if self.state == ToolState.PICK_RADIUS:
             radius = math.sqrt((loc_cur.x - loc_base.x)**2 + (loc_cur.y - loc_base.y)**2)
             height = 0.1
         else:
@@ -1006,32 +978,13 @@ class CylinderCreator(PrimitiveCreatorBase):
 
         # Update points
         pts = list(self.points) + [self.current_point]
-        while len(self.dm_points) < len(pts):
-            self.dm_points.append(DMPoint(pts[len(self.dm_points)]))
-        
-        r = self._compute_handle_radius(ref_pt=self.points[0])
-        for i, p in enumerate(pts):
-            self.dm_points[i].position = p
-            if self.dm_points[i]._point_sep is None:
-                self.dm_points[i].draw_point(self.points_root, radius=r, color=(1.0, 0.5, 0.0))
-            else:
-                self.dm_points[i].update_draw(radius=r)
+        self._update_handle_positions(pts)
 
     def on_move_state_1(self, event_dict):
         self.current_point = self.get_mouse_plane_pt(event_dict)
 
     def on_move_state_2(self, event_dict):
-        """Height drag: move current_point along workplane normal."""
-        if self._height_drag_base is None:
-            return
-
-        wp = getattr(self, "working_plane", None)
-        # Explicit normal from workplane rotation
-        normal = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
-
-        self.current_point = DMInputManager.get_instance().get_axis_point(
-            self.view, self._height_drag_base, normal, event_dict
-        )
+        self._height_drag_move(event_dict)
 
     def _get_preview_field(self):
         if not self.points or self.current_point is None:
@@ -1044,7 +997,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         # Axis in local space is always Z (0,0,1) for this tool's logic
         loc_axis = FreeCAD.Vector(0, 0, 1)
         
-        if self.state == self.ToolState.PICK_RADIUS:
+        if self.state == ToolState.PICK_RADIUS:
             # Radius is distance in local XY plane
             radius = math.sqrt((loc_current.x - loc_base.x)**2 + (loc_current.y - loc_base.y)**2)
             height = 1.0  # minimal placeholder
@@ -1060,15 +1013,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         if abs(height) < 0.01:
             height = 0.01 if height >= 0 else -0.01
             
-        # Extract placement for SDF field
-        field_placement = None
-        if wp:
-            if hasattr(wp, "getGlobalPlacement"):
-                field_placement = wp.getGlobalPlacement()
-            elif hasattr(wp, "Placement"):
-                field_placement = wp.Placement
-            else:
-                field_placement = wp
+        field_placement = getattr(self, "_field_placement", self._get_placement())
                 
         return SdfCylinderField(loc_base, loc_axis, radius, height, placement=field_placement)
 
@@ -1092,14 +1037,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         if abs(height) < 0.01:
             height = 0.01 if height >= 0 else -0.01
             
-        field_placement = None
-        if wp:
-            if hasattr(wp, "getGlobalPlacement"):
-                field_placement = wp.getGlobalPlacement()
-            elif hasattr(wp, "Placement"):
-                field_placement = wp.Placement
-            else:
-                field_placement = wp
+        field_placement = getattr(self, "_field_placement", self._get_placement())
                 
         return SdfCylinderField(loc_base, loc_axis, radius, height, placement=field_placement)
 

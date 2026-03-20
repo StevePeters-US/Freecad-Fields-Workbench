@@ -5,6 +5,7 @@ from PySide import QtCore, QtGui
 from tools.dm_base import DMBase, DragTimerMixin
 from core import dm_logger
 from core.input_manager import DMInputManager
+from tools.primitive_tool import _BOX_OPPOSITE
 
 class EditTool(DMBase, DragTimerMixin):
     """
@@ -471,9 +472,6 @@ class EditTool(DMBase, DragTimerMixin):
         super()._do_terminate()
 
 
-# Opposite corner index for a box defined by the standard 8-corner ordering:
-# 0:(-,-,-) 1:(+,-,-) 2:(+,+,-) 3:(-,+,-) 4:(-,-,+) 5:(+,-,+) 6:(+,+,+) 7:(-,+,+)
-_SDF_OPPOSITE = {0: 6, 1: 7, 2: 4, 3: 5, 4: 2, 5: 3, 6: 0, 7: 1}
 
 
 class SdfEditTool(DMBase, DragTimerMixin):
@@ -537,16 +535,9 @@ class SdfEditTool(DMBase, DragTimerMixin):
             self._world_corners = []
             return
         c, h = center, half_size
-        local_corners = [
-            FreeCAD.Vector(c.x - h.x, c.y - h.y, c.z - h.z),
-            FreeCAD.Vector(c.x + h.x, c.y - h.y, c.z - h.z),
-            FreeCAD.Vector(c.x + h.x, c.y + h.y, c.z - h.z),
-            FreeCAD.Vector(c.x - h.x, c.y + h.y, c.z - h.z),
-            FreeCAD.Vector(c.x - h.x, c.y - h.y, c.z + h.z),
-            FreeCAD.Vector(c.x + h.x, c.y - h.y, c.z + h.z),
-            FreeCAD.Vector(c.x + h.x, c.y + h.y, c.z + h.z),
-            FreeCAD.Vector(c.x - h.x, c.y + h.y, c.z + h.z),
-        ]
+        # Use the shared helper from PrimitiveCreatorBase
+        from tools.primitive_tool import PrimitiveCreatorBase
+        local_corners = PrimitiveCreatorBase._box_corners_local(c, h)
         if placement:
             self._world_corners = [placement.multVec(lc) for lc in local_corners]
         else:
@@ -584,7 +575,7 @@ class SdfEditTool(DMBase, DragTimerMixin):
     def _start_drag(self, idx):
         from core.dm_object import get_interactive_throttle_interval
         self._dragging_idx = idx
-        self._fixed_world = self._world_corners[_SDF_OPPOSITE[idx]]
+        self._fixed_world = self._world_corners[_BOX_OPPOSITE[idx]]
         # Drag plane: camera-facing plane through the grabbed corner
         vd = self.view.getViewDirection()
         self._drag_plane_n = FreeCAD.Vector(-vd[0], -vd[1], -vd[2])

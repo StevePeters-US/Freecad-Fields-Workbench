@@ -9,6 +9,113 @@ from core import dm_logger
 
 
 from PySide import QtCore, QtGui
+from pivy import coin
+
+
+class SdfSlicePreview:
+    """Manages Coin3D visual preview for the slicing planes."""
+
+    def __init__(self):
+        self.view = FreeCADGui.activeView()
+        self.root = None
+        if not self.view:
+            return
+
+        self.root = coin.SoSeparator()
+        self.root.setName("SDFSlice_Preview")
+
+        # Shared geometry nodes
+        self.coords = coin.SoCoordinate3()
+        self.lines = coin.SoLineSet()
+        self.face_coords = coin.SoCoordinate3()
+        self.face_set = coin.SoFaceSet()
+
+        self._setup_grid_geom(200, 200, 20.0)
+
+        self.view.getSceneGraph().addChild(self.root)
+
+    def _setup_grid_geom(self, length, width, spacing):
+        points = []
+        half_l = length / 2.0
+        half_w = width / 2.0
+
+        if spacing <= 0:
+            spacing = 10.0
+
+        num_line_l = int(length / spacing)
+        num_line_w = int(width / spacing)
+
+        for i in range(-num_line_w // 2, num_line_w // 2 + 1):
+            y = i * spacing
+            points.append((-half_l, y, 0))
+            points.append((half_l, y, 0))
+
+        for i in range(-num_line_l // 2, num_line_l // 2 + 1):
+            x = i * spacing
+            points.append((x, -half_w, 0))
+            points.append((x, half_w, 0))
+
+        self.coords.point.setValues(0, len(points), points)
+        self.lines.numVertices.setValues(0, len(points) // 2, [2] * (len(points) // 2))
+
+        f_points = [
+            (-half_l, -half_w, 0),
+            (half_l, -half_w, 0),
+            (half_l, half_w, 0),
+            (-half_l, half_w, 0)
+        ]
+        self.face_coords.point.setValues(0, 4, f_points)
+        self.face_set.numVertices.setValue(4)
+
+    def update(self, origin, normal, count=1, spacing=10.0):
+        if not self.root:
+            return
+
+        self.root.removeAllChildren()
+
+        # Calculate rotation from Z-up to normal
+        z_axis = FreeCAD.Vector(0, 0, 1)
+        if (normal + z_axis).Length < 1e-6:
+            rot = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 180)
+        else:
+            rot = FreeCAD.Rotation(z_axis, normal)
+        q = rot.Q
+
+        # Limit count for preview performance
+        display_count = min(count, 20)
+
+        for i in range(display_count):
+            current_origin = origin + normal * (i * spacing)
+
+            p_sep = coin.SoSeparator()
+            trans = coin.SoTransform()
+            trans.translation.setValue(current_origin.x, current_origin.y, current_origin.z)
+            trans.rotation.setValue(q[0], q[1], q[2], q[3])
+            p_sep.addChild(trans)
+
+            mat = coin.SoMaterial()
+            mat.diffuseColor.setValue(1.0, 0.0, 0.0)  # Red
+            # Fade out subsequent slices
+            alpha = 0.4 * (1.0 - (i / display_count) * 0.6) if display_count > 1 else 0.4
+            mat.transparency.setValue(1.0 - alpha)
+            p_sep.addChild(mat)
+
+            # Add shared geometry
+            p_sep.addChild(self.coords)
+            p_sep.addChild(self.lines)
+            p_sep.addChild(self.face_coords)
+            p_sep.addChild(self.face_set)
+
+            self.root.addChild(p_sep)
+
+        if self.view:
+            self.view.redraw()
+
+    def cleanup(self):
+        if self.view and self.root:
+            self.view.getSceneGraph().removeChild(self.root)
+            self.root = None
+            self.view.redraw()
 
 
 class SDFSliceTaskPanel:
@@ -25,6 +132,9 @@ class SDFSliceTaskPanel:
         
         self.form = QtGui.QWidget()
         self.setup_ui()
+        
+        self.preview = SdfSlicePreview()
+        self.update_preview()
 
     def setup_ui(self):
         layout = QtGui.QVBoxLayout(self.form)
@@ -49,7 +159,11 @@ class SDFSliceTaskPanel:
         self.spacing_spin.setRange(0.1, 500)
         self.spacing_spin.setValue(10.0)
         self.spacing_spin.setSuffix(" mm")
+        self.spacing_spin.valueChanged.connect(self.update_preview)
         form_layout.addRow("Spacing:", self.spacing_spin)
+        
+        self.offset_spin.valueChanged.connect(self.update_preview)
+        self.count_spin.valueChanged.connect(self.update_preview)
         
         layout.addLayout(form_layout)
         
@@ -76,9 +190,30 @@ class SDFSliceTaskPanel:
     def set_axis(self, normal):
         self.base_normal = normal
         self.offset_spin.setValue(0.0)
+        self.update_preview()
+
+    def update_preview(self):
+        try:
+            offset_val = self.offset_spin.value()
+            count = self.count_spin.value()
+            spacing = self.spacing_spin.value()
+            origin = self.base_origin + self.base_normal * offset_val
+            self.preview.update(origin, self.base_normal, count, spacing)
+        except Exception as e:
+            dm_logger.debug(f"SDFSlice: Preview update failed: {e}")
 
     def getStandardButtons(self):
         return QtGui.QDialogButtonBox.Close
+
+    def reject(self):
+        self.preview.cleanup()
+        FreeCADGui.Control.closeDialog()
+        return True
+
+    def accept(self):
+        self.preview.cleanup()
+        FreeCADGui.Control.closeDialog()
+        return True
 
     def do_slice(self):
         try:
