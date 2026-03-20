@@ -2,6 +2,10 @@
 
 Shared guidance for all AI agents (Claude, Gemini, etc.) working in this repository.
 
+> [!IMPORTANT]
+> **READ [INDEX.md](file:///home/steve/Documents/Github/Freecad-Direct-Modeling/INDEX.md) BEFORE DOING ANY WORK.**
+> It contains the mapping of files, classes, and skills that will save you many tool calls.
+
 ## Project Overview
 
 FreeCAD workbench for direct/implicit modeling using **Signed Distance Fields (SDF)**. NURBS surfaces are evaluated as spatial discriminator functions `f(P)` (inside/outside), composed via min/max trees (union/cut/intersect), and rendered via GPU ray marching or extracted to mesh via marching cubes/dual contouring.
