@@ -33,6 +33,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         super().__init__()
         self._preview_obj = None     # Live FreeCAD object for preview
         self._update_pending = False  # Throttle rapid updates
+        self._creating_obj = False    # Re-entrancy guard
         # Reset the shared timer so preview calls for this tool session are isolated
         mesh_timer.reset()
 
@@ -201,10 +202,16 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             return
 
         if self._preview_obj is None:
-            # Create the preview object for the first time
-            # Use last part of class name without 'Creator' suffix
-            name = type(self).__name__.replace("Creator", "")
-            self._preview_obj = create_dm_object(name=name, shape_type="frep")
+            if getattr(self, "_creating_obj", False):
+                return
+            self._creating_obj = True
+            try:
+                # Create the preview object for the first time
+                # Use last part of class name without 'Creator' suffix
+                name = type(self).__name__.replace("Creator", "")
+                self._preview_obj = create_dm_object(name=name, shape_type="frep")
+            finally:
+                self._creating_obj = False
 
         self._schedule_update(lambda: self._do_full_preview_update(field))
 
@@ -517,18 +524,26 @@ class BoxCreator(PrimitiveCreatorBase):
             # 1st click - anchor the tool
             self.points.append(pos)
             self.state = 1
-            dm_pt = DMPoint(pos)
-            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
-            self.dm_points.append(dm_pt)
+            if len(self.dm_points) < 1:
+                dm_pt = DMPoint(pos)
+                dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+                self.dm_points.append(dm_pt)
+            else:
+                self.dm_points[0].position = pos
+                self.dm_points[0].update_draw()
 
             dm_logger.info("Box Tool: Click 2nd corner")
         elif self.state == 1:
             # 2nd click - determines base size (x/y)
             self.points.append(pos)
             self.state = 2
-            dm_pt = DMPoint(pos)
-            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
-            self.dm_points.append(dm_pt)
+            if len(self.dm_points) < 2:
+                dm_pt = DMPoint(pos)
+                dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+                self.dm_points.append(dm_pt)
+            else:
+                self.dm_points[1].position = pos
+                self.dm_points[1].update_draw()
             self._height_drag_base = pos
             dm_logger.info("Box Tool: Click height")
             
@@ -751,9 +766,13 @@ class SphereCreator(PrimitiveCreatorBase):
             self.center = pos
             self.state = 1
 
-            dm_pt = DMPoint(pos)
-            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
-            self.dm_points.append(dm_pt)
+            if len(self.dm_points) < 1:
+                dm_pt = DMPoint(pos)
+                dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+                self.dm_points.append(dm_pt)
+            else:
+                self.dm_points[0].position = pos
+                self.dm_points[0].update_draw()
 
             dm_logger.info("Sphere Tool: Click radius")
         elif self.state == 1:
@@ -901,9 +920,13 @@ class CylinderCreator(PrimitiveCreatorBase):
             self.points.append(pos)
             self.state = 1
 
-            dm_pt = DMPoint(pos)
-            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
-            self.dm_points.append(dm_pt)
+            if len(self.dm_points) < 1:
+                dm_pt = DMPoint(pos)
+                dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+                self.dm_points.append(dm_pt)
+            else:
+                self.dm_points[0].position = pos
+                self.dm_points[0].update_draw()
 
             dm_logger.info("Cylinder Tool: Click radius")
         elif self.state == 1:
@@ -911,9 +934,13 @@ class CylinderCreator(PrimitiveCreatorBase):
             self.state = 2
             self._height_drag_base = pos
 
-            dm_pt = DMPoint(pos)
-            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
-            self.dm_points.append(dm_pt)
+            if len(self.dm_points) < 2:
+                dm_pt = DMPoint(pos)
+                dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+                self.dm_points.append(dm_pt)
+            else:
+                self.dm_points[1].position = pos
+                self.dm_points[1].update_draw()
 
             dm_logger.info("Cylinder Tool: Click height")
         elif self.state == 2:
