@@ -252,12 +252,6 @@ class TranslateTool(DMBase):
             self.finish()
         return True
 
-    def on_button3_down(self, event_dict):
-        if self.is_in_progress():
-            self.finish()
-        else:
-            self.terminate()
-        return True
 
     def _start_drag_timer(self):
         from core.dm_object import get_interactive_throttle_interval

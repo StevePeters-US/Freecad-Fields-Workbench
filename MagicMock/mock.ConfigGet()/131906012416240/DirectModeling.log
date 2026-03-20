@@ -1,0 +1,8 @@
+[DEBUG] WorkPlaneCreator initialized
+[INFO] WorkPlane accepted: Work Plane
+[DEBUG] WorkPlaneCreator initialized
+[INFO] Using selected workplane: MyWorkPlane
+[DEBUG] WorkPlaneCreator selection: ['MyWorkPlane']
+[DEBUG] Checking MyWorkPlane: ShapeType='<MagicMock name='mock.ShapeType' id='131906010227216'>' (handled: ['DMWorkPlane'])
+[DEBUG] WorkPlaneCreator: Editing existing object MyWorkPlane
+[INFO] WorkPlane edit finished: MyWorkPlane

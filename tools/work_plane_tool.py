@@ -100,14 +100,22 @@ class WorkPlaneCreator(DMBase):
 
     def edit_object(self, obj):
         """Load an existing workplane into the tool for editing."""
+        super().edit_object(obj)
         dm_logger.debug(f"WorkPlaneCreator: Editing existing object {obj.Label}")
         self._editing_obj = obj
         self.state = 1
         self._is_new = False
         # Remove the preview if we are editing
         if self._preview_obj:
-            super()._do_terminate() # cleanup preview
+            try:
+                # Targeted doc cleanup instead of full _do_terminate()
+                if self.doc and self.doc.getObject(self._preview_obj.Name):
+                    self.doc.removeObject(self._preview_obj.Name)
+            except Exception as e:
+                dm_logger.debug(f"WorkPlaneCreator.edit_object: Failed to remove preview: {e}")
             self._preview_obj = None
+
+        self.update_handles()
 
     def is_in_progress(self):
         """Returns True if a workplane has been dropped (state > 0)."""
@@ -131,24 +139,33 @@ class WorkPlaneCreator(DMBase):
         """Accept the current workplane and reset for another one."""
         self._finished = True
         obj = self._active_obj or self._preview_obj or self._editing_obj
+        is_new_creation = self._is_new
+        
         if self.state > 0 and obj:
-            if self._is_new:
+            if is_new_creation:
                 obj.Label = "Work Plane"
                 dm_logger.info(f"WorkPlane accepted: {obj.Label}")
+            else:
+                dm_logger.info(f"WorkPlane edit finished: {obj.Label}")
             
-            self._finished = False # Reset for next one
+            self._finished = False # Reset for next one if we repeat
             self._active_obj = None
             self._preview_obj = None
             self._editing_obj = None
             
             self.reset_state()
-            # Create fresh preview for the next one
-            try:
-                self._preview_obj = create_dm_workplane(name="DM_WorkPlane_Preview")
-                self._preview_obj.Label = "Work Plane Preview"
-                self._is_new = True
-            except Exception as e:
-                dm_logger.error(f"WorkPlaneCreator repeat preview error: {e}")
+            
+            if is_new_creation:
+                # Create fresh preview for the next one (Accept & Repeat)
+                try:
+                    self._preview_obj = create_dm_workplane(name="DM_WorkPlane_Preview")
+                    self._preview_obj.Label = "Work Plane Preview"
+                    self._is_new = True
+                except Exception as e:
+                    dm_logger.error(f"WorkPlaneCreator repeat preview error: {e}")
+            else:
+                # If we were editing, we are DONE. Terminate the tool.
+                self.terminate()
             
             if FreeCAD.ActiveDocument:
                 FreeCAD.ActiveDocument.recompute()

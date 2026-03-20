@@ -126,6 +126,7 @@ Specialized implementation patterns are in `.agents/skills/`. Before implementin
 - `dm_ray_march_lod/` — adaptive cell size, camera sensor, dirty flags
 - `dm_additive_subtractive/` — IsSubtractive property, shader uniform, Ctrl toggle
 - `dm_opengl33_shader/` — GLSL 330, float32 packing, SoTexture3
+- `dm_rclick_repeat/` — single-RMB close pattern
 
 ## Known Bugs
 

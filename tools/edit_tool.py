@@ -662,19 +662,6 @@ class FRepEditTool(DMBase, DragTimerMixin):
             self._finish_drag()
         return True
 
-    def on_button3_down(self, event_dict):
-        # Double-fire guard: Right-click arrives via both Qt and Coin3D.
-        import time
-        now = time.monotonic()
-        if now - getattr(self, "_last_btn3_time", 0.0) < 0.05:
-            return True
-        self._last_btn3_time = now
-
-        if self.is_in_progress():
-             self.finish()
-        else:
-             self.terminate()
-        return True
 
     def finish(self):
         self._is_editing = False

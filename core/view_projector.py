@@ -73,8 +73,8 @@ class ViewProjector:
         return None
 
     def _get_geometry_point(self, event_dict, skip_names=None):
-        pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
-        x, y = int(pos[0]), int(pos[1])
+        x, y = DMInputManager.get_instance().get_gl_pos_phys(self.view, event_dict)
+        if x is None: return None
         try:
             infos = []
             if hasattr(self.view, "getObjectsInfo"):
@@ -379,8 +379,8 @@ class ViewProjector:
         Uses Part.section for accurate hits and distToShape for normals.
         """
         if not self.view: return None
-        pos = DMInputManager.get_instance().get_mouse_pos(event_dict)
-        x, y = int(pos[0]), int(pos[1])
+        x, y = DMInputManager.get_instance().get_gl_pos_phys(self.view, event_dict)
+        if x is None: return None
         skip_names = [obj.Name for obj in skip_objects] if skip_objects else []
 
         try:

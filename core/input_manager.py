@@ -25,43 +25,42 @@ class DMInputManager(QtCore.QObject):
         self._device_pixel_ratio = 1.0
         self._is_initialized = False
         self._sel_observer = None
+        self._right_click_in_tool = False # State to suppress post-tool menus
 
     def _is_menu_active(self):
         from core.dm_menu import DMMenuManager
         return DMMenuManager.get_instance().is_menu_active()
 
     def eventFilter(self, obj, event):
+        from core.dm_tool_manager import DMToolManager
         try:
             # Drop auto-repeat events to prevent multiple menus
             if getattr(event, "isAutoRepeat", lambda: False)():
                 if event.type() in (QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease, QtCore.QEvent.ShortcutOverride):
                     return True
 
-            # [Event Owner: Qt Event Filter] Coordinate tracking
-            if event.type() in [QtCore.QEvent.MouseMove, QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
-                try:
-                    # Store DPI ratio so _get_vp_size can convert physical→logical.
-                    # _last_qt_pos stays in logical (device-independent) pixels — view.getPoint() expects these.
-                    ratio = 1.0
-                    if hasattr(obj, "devicePixelRatioF"):
-                        ratio = float(obj.devicePixelRatioF())
-                    elif hasattr(obj, "devicePixelRatio"):
-                        ratio = float(obj.devicePixelRatio())
-                    self._device_pixel_ratio = ratio
-                    # Store logical (device-independent) pixels — view.getPoint() expects these
-                    self._last_qt_pos = (int(event.pos().x()), int(event.pos().y()))
-                except Exception as e:
-                    dm_logger.debug(f"Coordinate mapping error: {e}")
-                    self._last_qt_pos = (int(event.pos().x()), int(event.pos().y()))
+            # [Event Owner: Qt Event Filter] Coordinate tracking & Viewport detection
+            # We must be extremely careful here. eventFilter is called on EVERY event.
+            # Avoid expensive FreeCADGui calls on mouse move.
             
-            # [Event Owner: Qt Event Filter] Modifier state
-            if event.type() in [QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease]:
+            # Key events are always processed for state tracking
+            is_key_event = event.type() in [QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease]
+            is_mouse_event = event.type() in [QtCore.QEvent.MouseMove, QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease, QtCore.QEvent.MouseButtonDblClick]
+            
+            if not is_key_event and not is_mouse_event:
+                return False
+
+            # [Event Owner: Qt Event Filter] Modifier & Button state tracking (GLOBAL)
+            # We track these BEFORE any 'return False' to ensure drag/modifier state is always correct,
+            # even if the mouse leaves the viewport or the press started on a decoration.
+            if is_key_event:
                 if event.key() == QtCore.Qt.Key_Shift:
                     self._shift_down = (event.type() == QtCore.QEvent.KeyPress)
                 elif event.key() == QtCore.Qt.Key_Control:
                     self._control_down = (event.type() == QtCore.QEvent.KeyPress)
+                # Ensure we refresh the viewport cache if context might have changed
+                self._cached_viewport = None
 
-            # [Event Owner: Qt Event Filter] Button state tracking
             if event.type() in [QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease]:
                 is_press = (event.type() == QtCore.QEvent.MouseButtonPress)
                 if event.button() == QtCore.Qt.LeftButton:
@@ -69,9 +68,94 @@ class DMInputManager(QtCore.QObject):
                 elif event.button() == QtCore.Qt.MiddleButton:
                     self._middle_mouse_down = is_press
                 elif event.button() == QtCore.Qt.RightButton:
+                    if is_press:
+                        self._right_click_in_tool = (DMToolManager.get_instance().get_active_tool() is not None)
                     self._right_mouse_down = is_press
+                    if not is_press: # Reset on release
+                        if getattr(self, "_right_click_in_tool", False):
+                            # We always swallow the release if the press started in a tool.
+                            # We do NOT clear _right_click_in_tool yet, as we need it
+                            # to suppress the upcoming ContextMenu event.
+                            return True
+                
+            # --- Viewport Detection ---
+            # We cache the viewport widget to avoid expensive FreeCADGui calls.
+            if not hasattr(self, "_cached_viewport") or self._cached_viewport is None:
+                self._cached_viewport = None
+                try:
+                    # Method 1: Active View
+                    av = FreeCADGui.activeView()
+                    if av and hasattr(av, "getWidget"):
+                        # Get the main view widget
+                        self._cached_viewport = av.getWidget()
+                    
+                    # Method 2: Fallback or refinement. We PREFER the specific GL widget 
+                    # for size and coordinate accuracy if the obj looks like one.
+                    # This ensures we use the exact 3D area, excluding title bars/padding.
+                    obj_cls = obj.metaObject().className() if hasattr(obj, "metaObject") else ""
+                    if "OpenGL" in obj_cls or "Quarter" in obj_cls:
+                        # If the current object IS a GL widget, or we don't have a viewport yet, use it.
+                        if not self._cached_viewport or "View3D" in (self._cached_viewport.metaObject().className() if hasattr(self._cached_viewport, "metaObject") else ""):
+                            self._cached_viewport = obj
+                except Exception:
+                    pass
 
-            from core.dm_tool_manager import DMToolManager
+            # Is this event for the viewport or one of its child GL widgets?
+            is_viewport_event = False
+            if self._cached_viewport:
+                if obj == self._cached_viewport:
+                    is_viewport_event = True
+                elif hasattr(self._cached_viewport, "isAncestorOf"):
+                    # QWidget.isAncestorOf only accepts other QWidgets.
+                    # QWindow events must be handled differently or ignored.
+                    try:
+                        is_viewport_event = self._cached_viewport.isAncestorOf(obj)
+                    except (TypeError, Exception):
+                        pass
+
+            # Standardize coordinates relative to viewport & Track DPI
+            if is_mouse_event:
+                try:
+                    # Store DPI ratio from viewport specifically
+                    ratio = 1.0
+                    target = self._cached_viewport if self._cached_viewport else obj
+                    if hasattr(target, "devicePixelRatioF"):
+                        ratio = float(target.devicePixelRatioF())
+                    elif hasattr(target, "devicePixelRatio"):
+                        ratio = float(target.devicePixelRatio())
+                    self._device_pixel_ratio = ratio
+
+                    # Correct way to store coordinates: always relative to the cached viewport.
+                    global_pos = obj.mapToGlobal(event.pos()) if hasattr(obj, "mapToGlobal") else event.pos()
+                    if self._cached_viewport and hasattr(self._cached_viewport, "mapFromGlobal"):
+                        local_pos = self._cached_viewport.mapFromGlobal(global_pos)
+                    else:
+                        local_pos = event.pos()
+                    self._last_qt_pos = (int(local_pos.x()), int(local_pos.y()))
+                except Exception:
+                    pass
+
+            # --- Viewport Toggle (Ctrl+Space) ---
+            if event.type() == QtCore.QEvent.KeyPress and is_viewport_event:
+                if event.key() == QtCore.Qt.Key_Space and (event.modifiers() & QtCore.Qt.ControlModifier):
+                    try:
+                        mw = FreeCADGui.getMainWindow()
+                        mdi = mw.findChild(QtGui.QMdiArea)
+                        if mdi:
+                            sub = mdi.activeSubWindow()
+                            if sub:
+                                if sub.isMaximized():
+                                    sub.showNormal()
+                                else:
+                                    sub.showMaximized()
+                                return True
+                    except Exception as e:
+                        dm_logger.debug(f"Viewport toggle failed: {e}")
+
+            # Filter mouse events: only allow those in the viewport to reach the tools
+            if is_mouse_event and not is_viewport_event:
+                return False
+
             tool = DMToolManager.get_instance().get_active_tool()
 
             # --- Dispatch to Active Tool ---
@@ -182,9 +266,10 @@ class DMInputManager(QtCore.QObject):
                         if any(hasattr(o, "Proxy") and getattr(o.Proxy, "__class__", None).__name__ in ("DMWorkPlane", "DMObjectProxy") for o in sel):
                             event.accept(); return True
 
-                # Suppress FreeCAD context menu if DM menu is open
+                # Suppress FreeCAD context menu if DM menu or tool (or just-closed tool) is active
                 elif event.type() == QtCore.QEvent.ContextMenu:
-                    if self._is_menu_active():
+                    if self._is_menu_active() or DMToolManager.get_instance().get_active_tool() or getattr(self, "_right_click_in_tool", False):
+                        self._right_click_in_tool = False # Consume for this click
                         return True
 
         except Exception as e:
@@ -206,8 +291,30 @@ class DMInputManager(QtCore.QObject):
         return (curr_pos[0] - start_pos[0], curr_pos[1] - start_pos[1])
 
     def get_qt_cursor_pos(self, _view=None):
-        """Returns the current mouse position in Top-Left coordinates."""
+        """Returns the current mouse position in Top-Left logical coordinates."""
         return self._last_qt_pos
+
+    def get_mouse_pos_phys(self, view, event_dict=None):
+        """Returns (x_phys, y_phys) in Top-Left (Qt) physical pixels.
+        Used for FreeCAD view.getObjectInfo() which expects widget-relative top-left.
+        """
+        pos = self.get_mouse_pos(event_dict)
+        ratio = max(1.0, self._device_pixel_ratio)
+        return int(round(pos[0] * ratio)), int(round(pos[1] * ratio))
+
+    def get_gl_pos_phys(self, view, event_dict=None):
+        """Returns (x_phys, y_phys) in Bottom-Left (OpenGL) physical pixels.
+        Used for FreeCAD view.getPoint() and getRay() which expect flipped Y.
+        """
+        pos = self.get_mouse_pos(event_dict)
+        vp_sz = self._get_vp_size(view)
+        if not vp_sz:
+            return None, None
+        
+        # Calculate flipped Y in logical space first to avoid rounding drift
+        y_log_flipped = (vp_sz[1] - 1.0 - pos[1])
+        ratio = max(1.0, self._device_pixel_ratio)
+        return int(round(pos[0] * ratio)), int(round(y_log_flipped * ratio))
 
     def is_shift_down(self):
         """Single source of truth for Shift key state."""
@@ -227,29 +334,44 @@ class DMInputManager(QtCore.QObject):
 
     def _get_vp_size(self, view):
         """Get viewport (width, height) in logical pixels matching _last_qt_pos space."""
+        # Prioritize Method 0: Use the actual GL viewport size from the render manager (PHYSICAL)
+        # And convert to LOGICAL using our tracked ratio.
         ratio = max(1.0, self._device_pixel_ratio)
-        # Method 1: Coin3D SoRenderManager — authoritative GL framebuffer size (physical pixels)
         try:
-            viewer = view.getViewer()
-            if hasattr(viewer, "getSoRenderManager"):
-                rm = viewer.getSoRenderManager()
-                if rm:
-                    sz = rm.getViewportRegion().getViewportSizePixels()
-                    w, h = float(sz[0]) / ratio, float(sz[1]) / ratio
-                    if h > 0:
-                        return w, h
+            # Gui.View3D -> Gui.View3DInventorViewer -> SoRenderManager
+            rm = view.getViewer().getSoRenderManager()
+            sz_pixels = rm.getViewportRegion().getViewportSizePixels()
+            if sz_pixels[0] > 0 and sz_pixels[1] > 0:
+                return float(sz_pixels[0]) / ratio, float(sz_pixels[1]) / ratio
         except Exception:
             pass
 
-        # Method 2: viewer size methods (physical or logical depending on platform)
+        # Fallback Method 1: Use the cached viewport widget ourselves (LOGICAL)
+        if hasattr(self, "_cached_viewport") and self._cached_viewport:
+            try:
+                return float(self._cached_viewport.width()), float(self._cached_viewport.height())
+            except Exception:
+                pass
+
+        # Fallback Method 2: Qt widget size via FreeCAD view
+
+        ratio = max(1.0, self._device_pixel_ratio)
+
+        # Method 2: viewer size methods
         try:
             viewer = view.getViewer()
-            for method_name in ("getGlxSize", "getSize"):
+            for method_name in ("getSize", "getGlxSize"):
                 if hasattr(viewer, method_name):
                     try:
                         sz = getattr(viewer, method_name)()
+                        # This might return logical or physical depending on platform.
+                        # We assume physical if it's much larger than view.width()
                         w = float(sz[0] if isinstance(sz, (list, tuple)) else sz.width())
                         h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
+                        
+                        # Heuristic: if size is roughly physical, scale it down
+                        # (This is safer than blind division if ratio is already applied)
+                        # However, for now we follow the instruction to ensure logical.
                         if h > 0:
                             return w / ratio, h / ratio
                     except Exception:
@@ -257,11 +379,14 @@ class DMInputManager(QtCore.QObject):
         except Exception:
             pass
 
-        # Method 3: Qt widget size (already logical pixels)
+        # Method 3: Coin3D SoRenderManager — authoritative GL framebuffer size (physical pixels)
         try:
-            w, h = float(view.width()), float(view.height())
-            if h > 0:
-                return w, h
+            viewer = view.getViewer()
+            if hasattr(viewer, "getSoRenderManager"):
+                rm = viewer.getSoRenderManager()
+                if rm:
+                    sz = rm.getViewportRegion().getViewportSizePixels()
+                    return float(sz[0]) / ratio, float(sz[1]) / ratio
         except Exception:
             pass
 
@@ -271,38 +396,39 @@ class DMInputManager(QtCore.QObject):
         """Returns logical viewport height; wrapper around _get_vp_size."""
         sz = self._get_vp_size(view)
         return sz[1] if sz else None
-
     def get_scene_point(self, view, event_dict=None):
         """Returns the 3D scene point under the cursor via view.getPoint().
-        Applies Y-flip: FreeCAD/Coin3D expect y-from-bottom (OpenGL), Qt is y-from-top.
+        Standardizes on physical pixel mapping for the FreeCAD API.
         """
         if not view: return None
-        pos = self.get_mouse_pos(event_dict)
-        x, y_qt = int(pos[0]), int(pos[1])
-        vp_h = self._get_vp_height(view)
-        y = (int(vp_h) - 1 - y_qt) if vp_h else y_qt
+        x_phys, y_phys = self.get_gl_pos_phys(view, event_dict)
+        if x_phys is None: return None
+
+        # --- DIAGNOSTICS: Scaling Diagnosis ---
+        if self._left_mouse_down or self._right_mouse_down:
+            pos = self.get_mouse_pos(event_dict)
+            vp_sz = self._get_vp_size(view)
+            dm_logger.debug(f"[SCALING] QT:{pos} -> GL_phys:({x_phys}, {y_phys}) | VP_log:{vp_sz} | Ratio:{self._device_pixel_ratio}")
+
         try:
-            return view.getPoint(x, y)
+            return view.getPoint(x_phys, y_phys)
         except Exception as e:
-            dm_logger.debug(f"get_scene_point failed: x={x} y_fc={y} err={e}")
+            dm_logger.debug(f"get_scene_point failed: x={x_phys} y_phys={y_phys} err={e}")
             return None
 
     def get_ray(self, view, event_dict=None):
         """Centralized ray generation from screen coordinates."""
         if not view: return None, None
         pos = self.get_mouse_pos(event_dict)
-        x, y_qt = int(pos[0]), int(pos[1])
-
-        # FreeCAD/Coin3D APIs (getRay, getPoint) use OpenGL convention:
-        # origin at bottom-left, Y increases upward.
-        # Qt stores top-left, Y-down. Flip Y before passing to any FreeCAD API.
-        vp_h = self._get_vp_height(view)
-        y = (int(vp_h) - 1 - y_qt) if vp_h else y_qt
+        x, y_qt = pos[0], pos[1]
+        
+        x_phys, y_phys = self.get_gl_pos_phys(view, event_dict)
+        if x_phys is None: return None, None
 
         try:
             # 1. Try FreeCAD's native getRay (0.20+)
             if hasattr(view, "getRay"):
-                ray = view.getRay(x, y)
+                ray = view.getRay(x_phys, y_phys)
                 if ray:
                     r_base, r_dir = None, None
                     if isinstance(ray, dict):

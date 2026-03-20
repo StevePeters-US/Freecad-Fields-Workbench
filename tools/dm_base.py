@@ -1,7 +1,7 @@
-"""Base classes for DM primitive creators.
+"""Base classes for DM interactive tools.
 
-Event Ownership Contract
-========================
+Event Ownership Contract (Single-Owner Qt-Native)
+================================================
 - Qt filter (DMInputManager): state tracking, FreeCAD suppression, global hotkeys.
   Never calls tool methods except via synthetic event_dict to on_button3_down.
 - Coin3D callback (event_cb): ALL tool logic — clicks, moves, keyboard, finish.
@@ -623,16 +623,17 @@ class DMBase:
         return False
 
     def on_button3_down(self, event_dict):
-        # One right-click to finish, another to terminate
         if not getattr(self, '_finish_scheduled', False):
             self._finish_scheduled = True
-            if self.is_in_progress():
-                dm_logger.debug(f"{self.__class__.__name__}: RMB Accept (in-progress)")
-                QtCore.QTimer.singleShot(0, self.finish)
-            else:
-                dm_logger.debug(f"{self.__class__.__name__}: RMB Exit (idle)")
-                QtCore.QTimer.singleShot(0, self.terminate)
-        return True # Consume Press
+            def _rclick_close():
+                if self.is_in_progress():
+                    dm_logger.debug(f"{self.__class__.__name__}: RMB commit+close")
+                    self.finish()  # subclass commit logic (may internally terminate — safe)
+                else:
+                    dm_logger.debug(f"{self.__class__.__name__}: RMB close (idle)")
+                self.terminate()  # always close; _terminated guard prevents double-fire
+            QtCore.QTimer.singleShot(0, _rclick_close)
+        return True  # Consume Press
 
     def on_button1_up(self, event_dict):
         return False

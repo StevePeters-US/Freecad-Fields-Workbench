@@ -1,44 +1,111 @@
-# todo_input.md — Input Pipeline Refactor and Bug Fixes
+# Direct Modeling Workbench — Input Behavior Task List
 
-Read `.agents/skills/dm_qt_input_architecture/SKILL.md` before starting any task.
-
----
-
-## Task 1: Restrict input capturing to the 3D viewport `Gemini Flash`
-
-- **Goal**: Ensure that DMInputManager only captures and overrides input when the mouse is over the FreeCAD 3D viewport, preventing bugs where toolbar or menu clicks are intercepted and interpreted as tool clicks with incorrect coordinates.
-- **Files to read**: `core/input_manager.py`
-- **Files to modify**: `core/input_manager.py`
-- **Steps**:
-  1. In `DMInputManager.eventFilter(self, obj, event)`, before processing events, verify that `obj` is the viewport widget (e.g. `QuarterWidget`, `SoOpenGLWidget`, `SoQtRenderArea`, or checking against `FreeCADGui.activeView()`).
-  2. Alternatively, use standard Qt coordinate mapping (`obj.mapToGlobal(event.pos())`) to ensure the event is taking place within the active 3D view's geometry and discard events outside of it.
-  3. Ensure that modifier state tracking (Shift, Ctrl) remains reliable even if the mouse is outside the viewport when the key is pressed.
-- **Acceptance**: Clicking on a FreeCAD toolbar button while a tool is active does not place a point or trigger tool logic. Input is only captured over the 3D viewport.
+> Tasks are ordered by priority. Each task is atomic and self-contained.
+> Intended audience: junior developer or AI model (Gemini Flash).
+> Each task includes the exact file(s) and line numbers to change.
 
 ---
 
-## Task 2: Fix mouse pointer offset bug `Gemini Flash`
+## Background
 
-- **Goal**: Fix the bug where the placed point and mouse pointer are offset, and the offset increases as the mouse moves up and left from the bottom right.
-- **Files to read**: `core/input_manager.py` (lines 40-55, 228-268)
-- **Files to modify**: `core/input_manager.py`
-- **Steps**:
-  1. Investigate the `devicePixelRatio` handling in `DMInputManager.eventFilter` and `_get_vp_size`.
-  2. The issue occurs because the Qt `event.pos()` logical coordinates and the `vp_h` are in different coordinate scales, so the Y-flip (`int(vp_h) - 1 - y_qt`) produces an incorrect Y coordinate.
-  3. If `event.pos()` returns unscaled logical pixels, ensure `_get_vp_size(view)` also strictly returns the viewport height in those same logical units.
-  4. Ensure `event.pos()` is accurate to the viewport widget (Task 1 helps this by ensuring `obj` is actually the viewport).
-- **Acceptance**: The placed 3D point exactly aligns with the mouse cursor anywhere on the screen (including top-left and bottom-right).
+**Single right-click closes the tool.** Currently, right-clicking an in-progress tool calls
+`finish()` (which commits the object and resets to idle state), and a _second_ right-click
+calls `terminate()`. The desired behavior is one right-click: commit if in progress, then
+always terminate.
+
+The primary change is in `DMBase.on_button3_down` (tools/dm_base.py), which is the single
+entry point for right-click across all tools. A secondary fix removes `FRepEditTool`'s
+overriding `on_button3_down` so the base-class behavior applies uniformly.
+
+### Key APIs
+
+| Symbol | Location | Purpose |
+|--------|----------|---------|
+| `DMBase.on_button3_down` | `tools/dm_base.py:625` | Right-click handler for all tools |
+| `DMBase.finish` | `tools/dm_base.py:509` | Commit current work; subclasses override |
+| `DMBase.terminate` | `tools/dm_base.py:402` | Async cleanup entry point (sets `_terminated=True`, schedules `_do_terminate`) |
+| `DMBase.is_in_progress` | `tools/dm_base.py:513` | Returns True if state > 0 or `_is_editing` |
+| `FRepEditTool.on_button3_down` | `tools/edit_tool.py:665` | Override that must be removed |
 
 ---
 
-## Task 3: Complete single-owner Qt-native input migration (Remove Coin3D) `Gemini Flash`
+## Tier 1 — Single Right-Click Close
 
-- **Goal**: Finish removing `SoEventCallback` (Coin3D) from the input pipeline as described in the input refactor skill.
-- **Files to read**: `.agents/skills/dm_qt_input_architecture/SKILL.md`, `tools/dm_base.py`, `core/input_manager.py`
-- **Files to modify**: `tools/dm_base.py`, `core/input_manager.py`
-- **Steps**:
-  1. Ensure `DMBase` no longer installs `event_cb` on `self.view`. All input must flow strictly from `DMInputManager` calling `on_mouse_press`, `on_mouse_move`, `on_key_press`, etc.
-  2. Remove any lingering Coin3D event handling logic (`SoMouseButtonEvent`, `SoLocation2Event`, `SoKeyboardEvent`) from `dm_base.py` and other tool files.
-  3. Validate that modifiers (Shift, Ctrl) are ONLY read from `DMInputManager`, not from Coin3D event dictionaries.
-- **Acceptance**: The tools function normally (click to place, drag to size, right-click to finish). Coin3D `SoEventCallback` is completely removed from tool logic.
+Fixes the two-click-to-close behavior. After these tasks, one right-click always commits
+work and terminates the tool.
 
+### I-001: Change `DMBase.on_button3_down` to always terminate on single right-click
+
+**File:** `tools/dm_base.py` — replace the entire `on_button3_down` method (lines 625–635)
+
+**What:** Replace the current two-step logic (finish → then separately terminate) with a
+single closure that calls `finish()` if in progress and then always calls `terminate()`.
+`terminate()` has a `_terminated` guard, so calling it after `finish()` (which may already
+call `terminate()` internally) is always safe.
+
+**Implementation:**
+
+```python
+def on_button3_down(self, event_dict):
+    if not getattr(self, '_finish_scheduled', False):
+        self._finish_scheduled = True
+        def _rclick_close():
+            if self.is_in_progress():
+                dm_logger.debug(f"{self.__class__.__name__}: RMB commit+close")
+                self.finish()  # subclass commit logic (may internally terminate — safe)
+            else:
+                dm_logger.debug(f"{self.__class__.__name__}: RMB close (idle)")
+            self.terminate()  # always close; _terminated guard prevents double-fire
+        QtCore.QTimer.singleShot(0, _rclick_close)
+    return True  # Consume Press
+```
+
+---
+
+### I-002: Remove `FRepEditTool.on_button3_down` override in edit_tool.py
+
+**File:** `tools/edit_tool.py` — delete lines 665–677 (the entire `on_button3_down` method
+on `FRepEditTool`)
+
+**What:** `FRepEditTool` has its own `on_button3_down` that bypasses the base-class fix from
+I-001. The override's time-based double-fire guard (`_last_btn3_time`) is a legacy artifact
+from the old dual Qt+Coin3D pipeline; the current Qt-native pipeline fires each event once.
+Removing the override lets `DMBase.on_button3_down` handle right-clicks for `FRepEditTool`
+with the same single-click close behavior.
+
+**Implementation:**
+
+Delete these lines in their entirety from `FRepEditTool`:
+
+```python
+    def on_button3_down(self, event_dict):
+        # Double-fire guard: Right-click arrives via both Qt and Coin3D.
+        import time
+        now = time.monotonic()
+        if now - getattr(self, "_last_btn3_time", 0.0) < 0.05:
+            return True
+        self._last_btn3_time = now
+
+        if self.is_in_progress():
+             self.finish()
+        else:
+             self.terminate()
+        return True
+```
+
+After deletion, the next method in the class should be `def finish(self):` (currently at line 679).
+
+**Depends on:** I-001
+
+---
+
+## Agent Skills
+
+See `.agents/skills/` for project-specific knowledge:
+
+| Skill | Purpose |
+|-------|---------|
+| `dm_rclick_repeat` | Single-RMB close pattern; files to read |
+| `dm_qt_input_architecture` | Qt-native event pipeline; ShortcutOverride, dispatch |
+| `dm_tool_refactor_pattern` | DragTimerMixin, state constants, tool lifecycle |
+| `dm_input_refactor` | Current vs. target input architecture |
