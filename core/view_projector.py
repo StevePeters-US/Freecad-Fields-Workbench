@@ -115,7 +115,7 @@ class ViewProjector:
                         continue # Stale subname (e.g. Face1 on empty/different shape)
 
                     import Part
-                    ray_p, ray_d = self._get_view_ray(pos[0], pos[1])
+                    ray_p, ray_d = self._get_view_ray(x, y)
                     if ray_p and ray_d:
                         ray_d.normalize()
                         gpl = obj.getGlobalPlacement() if hasattr(obj, "getGlobalPlacement") else obj.Placement
@@ -161,20 +161,26 @@ class ViewProjector:
 
     def get_visible_workplanes(self):
         """Returns a list of all visible DMWorkPlane objects in the document."""
-        doc = FreeCAD.ActiveDocument
-        if not doc:
-            return []
-            
         planes = []
-        for obj in doc.Objects:
-            if hasattr(obj, "Proxy") and obj.Proxy.__class__.__name__ == "DMWorkPlane":
-                try:
-                    visible = obj.ViewObject.Visibility if hasattr(obj, "ViewObject") else obj.Visibility
-                except Exception:
-                    visible = True  # assume visible if we can't check
-                if visible:
-                    planes.append(obj)
+        try:
+            doc = FreeCAD.ActiveDocument
+            if self.view and hasattr(self.view, "getDocument"):
+                gui_doc = self.view.getDocument()
+                if gui_doc and hasattr(gui_doc, "Document"):
+                    doc = gui_doc.Document
 
+            if not doc:
+                return []
+            for obj in doc.Objects:
+                if hasattr(obj, "Proxy") and getattr(obj.Proxy, "is_dm_workplane", False):
+                    try:
+                        visible = obj.ViewObject.Visibility if hasattr(obj, "ViewObject") else obj.Visibility
+                    except Exception:
+                        visible = True  # assume visible if we can't check
+                    if visible:
+                        planes.append(obj)
+        except Exception:
+            pass # Logged by dm_logger if needed, but often just means no document/view
         return planes
 
     def get_base_plane(self, wp_obj=None):
@@ -209,26 +215,21 @@ class ViewProjector:
             return n, self.view.getFocus()
         return n, FreeCAD.Vector(0,0,0)
 
-    def get_mouse_plane_pt(self, event_dict, place_on_geometry=False, working_plane=None, skip_objects=None):
+    def get_mouse_plane_pt(self, event_dict, place_on_geometry=False, working_plane=None, skip_objects=None, debug=False):
         """
-        Returns the closest hit to the camera.
-
-        Priority order:
-          1. Bounds-checked visible workplane (closest to camera, within its grid)
-          2. Geometry surface (if place_on_geometry=True)
-          3. working_plane as infinite fallback (keeps the tool on its plane when the
-             cursor moves outside all workplane bounds — e.g. mid-curve draw)
-          4. Camera-facing plane
-
-        skip_objects: optional list of FreeCAD objects to exclude from both
-                      workplane and geometry hit tests.
+        Calculates a 3D world position from a 2D viewport click, prioritizing:
+        1. Visible workplanes (biased closer to camera).
+        2. Geometry surfaces (NURBS/B-Rep).
+        3. SDF surfaces.
+        4. Infinite extension of the provided 'working_plane'.
+        5. Viewport-aligned plane at camera focus.
         """
         if not self.view:
             return FreeCAD.Vector(0,0,0)
 
         # Small depth bias (in mm) to prioritize workplanes over geometry at the same depth.
         # This prevents "random" snapping to underlying faces when a workplane is active.
-        WP_BIAS = 1e-3 
+        WP_BIAS = 1.0 # 1 mm bias for robustness
         EPSILON = 1e-4 # Bounds tolerance
 
         skip_names = {obj.Name for obj in skip_objects} if skip_objects else set()
@@ -296,30 +297,7 @@ class ViewProjector:
                 sdf_pt, _sdf_n, _sdf_obj = sdf_result
                 sdf_t = (sdf_pt - cam_pos).dot(ray_d)
 
-            # 3. Infinite working_plane hit test.
-            fallback_t = float('inf')
-            fallback_pt = None
-            if working_plane:
-                if hasattr(working_plane, "getGlobalPlacement"):
-                    wp_p = working_plane.getGlobalPlacement()
-                elif hasattr(working_plane, "Placement"):
-                    wp_p = working_plane.Placement
-                else:
-                    wp_p = working_plane
-                
-                n_fb = wp_p.Rotation.multVec(FreeCAD.Vector(0,0,1))
-                o_fb = wp_p.Base
-                denom = ray_d.dot(n_fb)
-                if abs(denom) > 1e-6:
-                    t_fb = (o_fb - ray_p).dot(n_fb) / denom
-                    pt_fb = ray_p + ray_d * t_fb
-                    fb_dist = (pt_fb - cam_pos).dot(ray_d)
-                    if fb_dist > 0:
-                        # Apply bias to the fallback plane too
-                        fallback_t = fb_dist - WP_BIAS
-                        fallback_pt = pt_fb
-
-            # 4. Rotation hint for synthesized placements
+            # 3. Rotation hint for synthesized placements
             def synthesize_placement(pt, normal):
                 # Ensure normal faces toward viewer
                 vd = self.view.getViewDirection() if self.view else (0, 0, -1)
@@ -342,36 +320,68 @@ class ViewProjector:
                     0, 0, 0, 1
                 )
                 return FreeCAD.Placement(m)
-
-            # 5. Pick closest of all candidates.
-            candidates = []
-            if wp_pt is not None:
-                candidates.append((wp_t, (wp_pt, wp_hit)))
-            if sdf_pt is not None:
-                _pt, world_n, _obj = sdf_result
-                candidates.append((sdf_t, (sdf_pt, synthesize_placement(sdf_pt, world_n))))
-            if geom_pt is not None:
-                info = self.get_geometry_info(event_dict, skip_objects=skip_objects)
-                if info:
-                    world_hit, world_n, _obj, _sub = info
-                    candidates.append((geom_t, (world_hit, synthesize_placement(world_hit, world_n))))
-                else:
-                    candidates.append((geom_t, (geom_pt, None)))
-            if fallback_pt is not None:
-                candidates.append((fallback_t, (fallback_pt, None)))
-            
-            if candidates:
-                candidates.sort(key=lambda x: x[0])
-                return candidates[0][1]
-
         except Exception as e:
-            dm_logger.debug(f"get_mouse_plane_pt failed: {e}")
+            from core import dm_logger
+            dm_logger.debug(f"get_mouse_plane_pt failed hit-test: {e}")
 
-        # 5. Camera-facing plane.
+        # 4. Pick closest of all candidates.
+        # Format: (t, point, hit_result, description)
+        candidates = []
+        if wp_pt is not None:
+            candidates.append((wp_t, wp_pt, wp_hit, f"WorkPlane:{wp_hit.Label if hasattr(wp_hit, 'Label') else wp_hit.Name}"))
+        if sdf_pt is not None:
+            _pt, world_n, sdf_obj = sdf_result
+            name = sdf_obj.Label if hasattr(sdf_obj, 'Label') else sdf_obj.Name
+            candidates.append((sdf_t, sdf_pt, synthesize_placement(sdf_pt, world_n), f"SDF:{name}"))
+        if geom_pt is not None:
+            info = self.get_geometry_info(event_dict, skip_objects=skip_objects)
+            if info:
+                world_hit, world_n, obj, _sub = info
+                name = obj.Label if hasattr(obj, 'Label') else obj.Name
+                candidates.append((geom_t, world_hit, synthesize_placement(world_hit, world_n), f"Geometry:{name}"))
+            else:
+                candidates.append((geom_t, geom_pt, None, "Geometry:Unknown"))
+        
+        if candidates:
+            candidates.sort(key=lambda x: x[0])
+            best_t, best_pt, best_hit, best_desc = candidates[0]
+            
+            if debug:
+                log_msg = f"get_mouse_plane_pt candidates: {best_desc} (t={best_t:.4f})"
+                if len(candidates) > 1:
+                    log_msg += " Other: " + ", ".join([f"{c[3]} (t={c[0]:.4f})" for c in candidates[1:]])
+                from core import dm_logger
+                dm_logger.info(log_msg)
+            
+            return best_pt, best_hit, best_desc
+
+        # 4. Infinite working_plane hit test (Fallback if no real hits found).
+        if working_plane:
+            if hasattr(working_plane, "getGlobalPlacement"):
+                wp_p = working_plane.getGlobalPlacement()
+            elif hasattr(working_plane, "Placement"):
+                wp_p = working_plane.Placement
+            else:
+                wp_p = working_plane # Matrix or Placement
+            
+            n_fb = wp_p.Rotation.multVec(FreeCAD.Vector(0,0,1))
+            o_fb = wp_p.Base
+            
+            denom = ray_d.dot(n_fb)
+            if abs(denom) > 1e-6:
+                t_fb = (o_fb - ray_p).dot(n_fb) / denom
+                fallback_pt = ray_p + ray_d * t_fb
+                fallback_t = (fallback_pt - cam_pos).dot(ray_d)
+                
+                if fallback_t > 0:
+                    description = "Fallback:WorkingPlane"
+                    return fallback_pt, working_plane, description
+
+        # 5. Final Fallback: Camera-facing plane.
         n_cam, o_cam = self.get_base_plane(None)
         pt_cam = self.get_mouse_world_pos(event_dict, n_cam, o_cam)
         rot_cam = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), n_cam)
-        return pt_cam, FreeCAD.Placement(pt_cam if pt_cam else FreeCAD.Vector(0,0,0), rot_cam)
+        return pt_cam, FreeCAD.Placement(pt_cam if pt_cam else FreeCAD.Vector(0,0,0), rot_cam), "Fallback:CameraFacing"
 
     def get_geometry_info(self, event_dict, skip_objects=None):
         """
@@ -396,7 +406,7 @@ class ViewProjector:
                 obj_name = info["Object"]
                 if obj_name in skip_names: continue
                 
-                doc = FreeCAD.ActiveDocument
+                doc = self.view.getDocument().Document if (self.view and hasattr(self.view, "getDocument") and self.view.getDocument()) else FreeCAD.ActiveDocument
                 obj = doc.getObject(obj_name) if doc else None
                 if not obj or not hasattr(obj, "Shape") or obj.Shape.isNull(): continue
                 
@@ -410,8 +420,13 @@ class ViewProjector:
 
                     # 2. Hit position — prefer FreeCAD's pick coordinates (world space,
                     # always on the visible front surface). Fall back to ray-section.
-                    if 'x' in info and 'y' in info and 'z' in info:
+                    world_hit = None
+                    if 'Point' in info:
+                        world_hit = info['Point']
+                    elif 'x' in info and 'y' in info and 'z' in info:
                         world_hit = FreeCAD.Vector(info['x'], info['y'], info['z'])
+                    
+                    if world_hit is not None:
                         local_hit = gpl_inv.multVec(world_hit)
                     else:
                         ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)

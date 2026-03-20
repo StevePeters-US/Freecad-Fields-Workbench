@@ -7,6 +7,7 @@ from . import dm_logger
 class DMWorkPlane:
     def __init__(self, obj):
         obj.Proxy = self
+        self.is_dm_workplane = True
         
         # Add a Placement property specifically for the work plane if we need explicit tracking,
         # otherwise we can just use the standard Placement of the FeaturePython object.

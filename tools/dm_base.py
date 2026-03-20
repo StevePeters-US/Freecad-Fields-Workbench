@@ -230,7 +230,7 @@ class DMBase:
                 
         return best_idx, best_perp
 
-    def _resolve_wp_click(self, event_dict, skip_objects=None):
+    def _resolve_wp_click(self, event_dict, skip_objects=None, debug=False):
         """
         Call get_mouse_plane_pt, update self.working_plane from wp_hit
         if in state 0 (Idle) or if not already set.
@@ -249,12 +249,18 @@ class DMBase:
             event_dict,
             place_on_geometry=getattr(self, "place_on_geometry", False),
             working_plane=getattr(self, "working_plane", None),
-            skip_objects=all_skip or None
+            skip_objects=all_skip or None,
+            debug=debug
         )
-        if isinstance(result, tuple):
+        if isinstance(result, tuple) and len(result) == 3:
+            pos, wp_hit, desc = result
+            self._last_hit_desc = desc
+        elif isinstance(result, tuple) and len(result) == 2:
             pos, wp_hit = result
+            self._last_hit_desc = "Unknown"
         else:
             pos, wp_hit = result, None
+            self._last_hit_desc = "None"
             
         if wp_hit is not None:
             # Update plane if we are in the initial 'Idle' state (state 0)
@@ -264,7 +270,7 @@ class DMBase:
                  return pos
 
             is_real_wp = False
-            if hasattr(wp_hit, "Proxy") and wp_hit.Proxy.__class__.__name__ == "DMWorkPlane":
+            if hasattr(wp_hit, "Proxy") and getattr(wp_hit.Proxy, "is_dm_workplane", False):
                 is_real_wp = True
             
             if hasattr(wp_hit, "getGlobalPlacement"):
@@ -379,8 +385,8 @@ class DMBase:
                 is_wp = False
                 proxy_name = "None"
                 if hasattr(obj, "Proxy") and obj.Proxy:
-                    proxy_name = obj.Proxy.__class__.__name__
-                    if proxy_name == "DMWorkPlane":
+                    is_wp = getattr(obj.Proxy, "is_dm_workplane", False)
+                    if is_wp:
                         is_wp = True
                 
                 # 2. Check for specific properties if proxy check is brittle
@@ -573,7 +579,9 @@ class DMBase:
             skip_objects=skip or None
         )
         if isinstance(result, tuple):
-            pt, wp = result
+            # Handle both 2-tuple and 3-tuple for robustness
+            pt = result[0]
+            wp = result[1]
             return pt
         return result
 
@@ -1016,8 +1024,8 @@ class NURBSPrimitiveCreator(DMBase):
                 elif k == "Position" and placement is None:
                     self._active_obj.Placement.Base = v
             
-            if placement:
-                self._active_obj.Placement = placement
+            if active_placement:
+                self._active_obj.Placement = active_placement
             
             self._active_obj.touch()
             if self.doc:

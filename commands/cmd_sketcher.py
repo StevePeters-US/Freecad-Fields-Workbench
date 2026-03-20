@@ -95,7 +95,7 @@ class DMOpenSketcherCommand:
         sel = FreeCADGui.Selection.getSelection()
         for obj in sel:
             # Check for name specifically as class comparison might fail across reloads
-            if hasattr(obj, "Proxy") and obj.Proxy.__class__.__name__ == "DMWorkPlane":
+            if hasattr(obj, "Proxy") and getattr(obj.Proxy, "is_dm_workplane", False):
                 target_wp = obj
                 break
         

@@ -246,7 +246,8 @@ class DMInputManager(QtCore.QObject):
                         if sel:
                             obj = sel[0]
                             proxy_name = getattr(getattr(obj, "Proxy", None), "__class__", type(None)).__name__
-                            if proxy_name == "DMWorkPlane":
+                            is_wp = getattr(obj.Proxy, "is_dm_workplane", False)
+                            if is_wp:
                                 from tools.work_plane_tool import WorkPlaneCreator
                                 WorkPlaneCreator(); return True
                             elif proxy_name == "DMObjectProxy":
@@ -263,7 +264,7 @@ class DMInputManager(QtCore.QObject):
                     text = event.text().lower() if hasattr(event, "text") else ""
                     if text == 'e':
                         sel = FreeCADGui.Selection.getSelection()
-                        if any(hasattr(o, "Proxy") and getattr(o.Proxy, "__class__", None).__name__ in ("DMWorkPlane", "DMObjectProxy") for o in sel):
+                        if any(hasattr(o, "Proxy") and getattr(o.Proxy, "is_dm_workplane", False) for o in sel):
                             event.accept(); return True
 
                 # Suppress FreeCAD context menu if DM menu or tool (or just-closed tool) is active

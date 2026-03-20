@@ -1,4 +1,5 @@
 import FreeCAD
+from PySide import QtCore
 from pivy import coin
 from .dm_base import NURBSPrimitiveCreator
 from core import dm_logger
@@ -13,6 +14,9 @@ class PointCreator(NURBSPrimitiveCreator):
     def __init__(self):
         super().__init__()
         self.created_points = []
+        self.state = 0
+        self.working_plane = None
+        self._working_plane_is_fallback = True
         self._cursor_dm_pt = None
         self.dm_points = []
         self.sg = self.view.getSceneGraph() if self.view else None
@@ -44,11 +48,12 @@ class PointCreator(NURBSPrimitiveCreator):
             if event_dict.get("Button") != QtCore.Qt.LeftButton:
                 return False
 
-            pt = self.get_mouse_plane_pt(event_dict)
+            pt = self._resolve_wp_click(event_dict, debug=True)
             if pt is None:
                 return False
 
-            dm_logger.info(f"Placing point at: {pt}")
+            hit_desc = getattr(self, "_last_hit_desc", "Unknown")
+            dm_logger.info(f"Placing point at: ({pt.x:.2f}, {pt.y:.2f}, {pt.z:.2f}) on {hit_desc}")
 
             self.update_active_object("point", {"Position": pt, "debug_pt": pt})
 
@@ -68,7 +73,7 @@ class PointCreator(NURBSPrimitiveCreator):
             return False
 
     def handle_move(self, event_dict):
-        pt = self.get_mouse_plane_pt(event_dict)
+        pt = self._resolve_wp_click(event_dict)
         if pt:
             self.update_active_object("point", {"Position": pt, "debug_pt": pt})
             if self._cursor_dm_pt is None:
