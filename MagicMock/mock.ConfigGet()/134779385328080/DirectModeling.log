@@ -1,0 +1,7 @@
+[DEBUG] WorkPlaneCreator initialized
+[INFO] Using selected workplane: MyWorkPlane
+[DEBUG] WorkPlaneCreator selection: ['MyWorkPlane']
+[DEBUG] Checking MyWorkPlane: ShapeType='<MagicMock name='mock.ShapeType' id='134779384366768'>' (handled: ['DMWorkPlane'])
+[DEBUG] WorkPlaneCreator: Editing existing object MyWorkPlane
+[DEBUG] on_button1_down: hit_idx=4
+[DEBUG] on_button1_down: setting state to 3 (translate)

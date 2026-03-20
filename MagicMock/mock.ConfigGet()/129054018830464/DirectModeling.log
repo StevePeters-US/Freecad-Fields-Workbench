@@ -1,0 +1,6 @@
+[DEBUG] WorkPlaneCreator initialized
+[INFO] Using selected workplane: <MagicMock name='mock.Label' id='129054017778896'>
+[DEBUG] WorkPlaneCreator selection: [<MagicMock name='mock.Label' id='129054017778896'>]
+[DEBUG] Checking <MagicMock name='mock.Label' id='129054017778896'>: ShapeType='<MagicMock name='mock.ShapeType' id='129054017950624'>' (handled: ['DMWorkPlane'])
+[DEBUG] WorkPlaneCreator: Editing existing object <MagicMock name='mock.Label' id='129054017778896'>
+[DEBUG] WorkPlaneCreator: workplane fallback failed: Mock object has no attribute 'get_instance'

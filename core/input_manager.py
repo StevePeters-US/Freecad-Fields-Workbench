@@ -404,12 +404,6 @@ class DMInputManager(QtCore.QObject):
         x_phys, y_phys = self.get_gl_pos_phys(view, event_dict)
         if x_phys is None: return None
 
-        # --- DIAGNOSTICS: Scaling Diagnosis ---
-        if self._left_mouse_down or self._right_mouse_down:
-            pos = self.get_mouse_pos(event_dict)
-            vp_sz = self._get_vp_size(view)
-            dm_logger.debug(f"[SCALING] QT:{pos} -> GL_phys:({x_phys}, {y_phys}) | VP_log:{vp_sz} | Ratio:{self._device_pixel_ratio}")
-
         try:
             return view.getPoint(x_phys, y_phys)
         except Exception as e:

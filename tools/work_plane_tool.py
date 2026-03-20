@@ -45,7 +45,7 @@ class WorkPlaneCreator(DMBase):
         self._preview_obj = None
         self._active_obj = None
         self._editing_obj = None # Existing WP being edited
-        self.state = 0 # 0 = waiting for click, 1 = resizing/idle, 2 = dragging corner
+        self.state = 0 # 0 = waiting for click, 1 = resizing/idle, 2 = dragging corner, 3 = translating
         self.active_corner_idx = -1
         self._cursor_active = False
 
@@ -58,17 +58,20 @@ class WorkPlaneCreator(DMBase):
         except Exception as e:
             dm_logger.error(f"WorkPlaneCreator preview creation error: {e}")
 
-        # Setup handles visual — one sphere per corner
+        # Setup handles visual — four corners + one center
         self.sg = self.view.getSceneGraph()
         self.handles_root = coin.SoSeparator()
         self.handle_seps = []
         self.handle_mats = []
         self.handle_transforms = []
         self.handle_spheres = []
-        for _ in range(4):
+        for i in range(5):
             sep = coin.SoSeparator()
             mat = coin.SoMaterial()
-            mat.diffuseColor.setValue(1, 0.5, 0)   # orange at rest
+            if i < 4:
+                mat.diffuseColor.setValue(1, 0.5, 0)   # orange at rest (corners)
+            else:
+                mat.diffuseColor.setValue(1, 1, 0)     # yellow center
             mat.specularColor.setValue(0.8, 0.8, 0.8)
             mat.shininess.setValue(0.7)
             xf = coin.SoTransform()
@@ -231,19 +234,8 @@ class WorkPlaneCreator(DMBase):
             )
             return FreeCAD.Placement(m)
 
-        # Fallback to current working plane or camera-facing plane
+        # Fallback to camera-facing plane
         try:
-            # We want to use the active working plane if one exists, otherwise camera-facing
-            wp = getattr(self, "working_plane", None)
-            if wp:
-                n = wp.Rotation.multVec(FreeCAD.Vector(0,0,1))
-                o = wp.Base
-                rot = wp.Rotation
-                pt = self.projector.get_mouse_world_pos(event_dict, n, o, place_on_geometry=False)
-                if pt:
-                    return FreeCAD.Placement(pt, rot)
-                
-            # If no working plane or ray missed, fallback to camera-facing
             mouse_pt = DMInputManager.get_instance().get_scene_point(self.view, event_dict)
             
             if not mouse_pt:
@@ -299,11 +291,14 @@ class WorkPlaneCreator(DMBase):
         ]
         plc = obj.Placement
         corners_global = [plc.multVec(c) for c in corners_local]
+        # Add center point
+        corners_global.append(plc.Base)
+        
         radius = self._compute_handle_radius(ref_pt=obj.Placement.Base if obj else None)
-        for corner, xf, sphere in zip(corners_global, self.handle_transforms, self.handle_spheres):
-            xf.translation.setValue(corner.x, corner.y, corner.z)
+        for i, (point, xf, sphere) in enumerate(zip(corners_global, self.handle_transforms, self.handle_spheres)):
+            xf.translation.setValue(point.x, point.y, point.z)
             xf.scaleFactor.setValue(1, 1, 1)
-            sphere.radius = radius
+            sphere.radius = radius if i < 4 else radius * 1.2 # slightly larger center handle
 
     def _get_ray(self, event_dict):
         """Delegated to DMInputManager."""
@@ -332,6 +327,8 @@ class WorkPlaneCreator(DMBase):
             FreeCAD.Vector(-l, -w, 0), FreeCAD.Vector(l, -w, 0),
             FreeCAD.Vector(l,  w, 0),  FreeCAD.Vector(-l, w, 0),
         ]]
+        corners_world.append(obj.Placement.Base) # index 4 is center
+        
         radius = self._compute_handle_radius(ref_pt=obj.Placement.Base if obj else None)
 
         best_dist = float('inf')
@@ -349,12 +346,15 @@ class WorkPlaneCreator(DMBase):
         return self.handle_click(event_dict)
 
     def on_button1_up(self, event_dict):
-        if self.state == 2:
+        if self.state in [2, 3]:
             self.state = 1
             self.active_corner_idx = -1
             # Reset all handle colours; next mouse-move will re-evaluate hover
-            for mat in self.handle_mats:
-                mat.diffuseColor.setValue(1, 0.5, 0)
+            for i, mat in enumerate(self.handle_mats):
+                if i < 4:
+                    mat.diffuseColor.setValue(1, 0.5, 0)
+                else:
+                    mat.diffuseColor.setValue(1, 1, 0)
             self._hovered_idx = -1
             return True
         return False
@@ -399,12 +399,15 @@ class WorkPlaneCreator(DMBase):
                 hit_idx, hit_dist = self._hit_test(ray_p, ray_d)
                 if hit_idx != -1:
                     self.active_corner_idx = hit_idx
-                    self.state = 2 # dragging
-                    # Get drag plane normal and origin
-                    obj = self._active_obj or self._preview_obj or self._editing_obj
-                    plc = obj.Placement
-                    self.drag_plane_n = plc.Rotation.multVec(FreeCAD.Vector(0,0,1))
-                    self.drag_plane_o = plc.Base
+                    if hit_idx < 4:
+                        self.state = 2 # resizing corner
+                        # Get drag plane normal and origin for resizing
+                        obj = self._active_obj or self._preview_obj or self._editing_obj
+                        plc = obj.Placement
+                        self.drag_plane_n = plc.Rotation.multVec(FreeCAD.Vector(0,0,1))
+                        self.drag_plane_o = plc.Base
+                    else:
+                        self.state = 3 # translating center
                     return True
                 # Missed all handles — consume the click but do nothing
                 return True
@@ -419,9 +422,12 @@ class WorkPlaneCreator(DMBase):
         from PySide import QtCore, QtGui
         if idx == self._hovered_idx:
             return
-        # Restore previous handle to orange
+        # Restore previous handle to its rest colour
         if self._hovered_idx != -1:
-            self.handle_mats[self._hovered_idx].diffuseColor.setValue(1, 0.5, 0)
+            if self._hovered_idx < 4:
+                self.handle_mats[self._hovered_idx].diffuseColor.setValue(1, 0.5, 0)
+            else:
+                self.handle_mats[self._hovered_idx].diffuseColor.setValue(1, 1, 0)
         self._hovered_idx = idx
         if idx == -1:
             if self._cursor_active:
@@ -467,6 +473,16 @@ class WorkPlaneCreator(DMBase):
                         new_w = abs(pt_local.y) * 2.0
                         obj.Length = max(1.0, new_l)
                         obj.Width = max(1.0, new_w)
+                        if self.doc:
+                            self.doc.recompute()
+                        self.update_handles()
+            
+            elif self.state == 3:
+                obj = self._active_obj or self._editing_obj
+                if obj:
+                    placement = self.get_snapped_placement(event_dict)
+                    if placement:
+                        obj.Placement = placement
                         if self.doc:
                             self.doc.recompute()
                         self.update_handles()
