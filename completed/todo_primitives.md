@@ -45,23 +45,17 @@ must be excluded.
 
 **Pattern for all new tools**:
 
-1. **`on_move_state_N`** — Call `self.get_mouse_plane_pt(event_dict)`. The base class
-   (`DMBase.get_mouse_plane_pt`) automatically passes `skip_objects=[self._preview_obj]`
-   to the projector.
+1. **Enum State Machine** — Define a `ToolState(IntEnum)` class inside your tool to define creation phases (e.g., `IDLE`, `PICK_RADIUS`, `PICK_HEIGHT`) and set `self.state = self.ToolState.IDLE`.
 
-2. **`on_button1_down`** — When calling `self.projector.get_mouse_plane_pt()` directly
-   (to capture `wp_hit`), always pass `skip_objects`:
+2. **`on_button1_down`** — Use the new `self._resolve_wp_click` method to handle workplane hit-testing, and ALWAYS pass `skip_objects`:
    ```python
    skip = [self._preview_obj] if self._preview_obj else None
-   result = self.projector.get_mouse_plane_pt(
-       event_dict,
-       place_on_geometry=False,
-       working_plane=getattr(self, "working_plane", None),
-       skip_objects=skip
-   )
+   pos = self._resolve_wp_click(event_dict, skip_objects=skip)
    ```
 
-3. **Height/axis drags** — Use `DMInputManager.get_instance().get_axis_point()` for
+3. **`on_move_state_N`** — `DMBase` automatically routes `handle_move` to `on_move_state_1`, `on_move_state_2` based on the integer value of the enum. In these methods, call `self.get_mouse_plane_pt(event_dict)` for planar drags.
+
+4. **Height/axis drags** — Use `DMInputManager.get_instance().get_axis_point()` for
    constrained axis drags (e.g., box/cylinder height). This bypasses SDF entirely.
 
 ---

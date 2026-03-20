@@ -175,6 +175,9 @@ class DMRenderer:
             center = getattr(field, "center", None)
             half_size = getattr(field, "half_size", None)
 
+            obj = self.vp.Object
+            inv = obj.Placement.inverse() if (obj and hasattr(obj, "Placement")) else None
+
             if center is not None and half_size is not None:
                 c = center
                 h = half_size
@@ -189,18 +192,32 @@ class DMRenderer:
                     FreeCAD.Vector(c.x - h.x, c.y + h.y, c.z + h.z),
                 ]
                 if placement:
+                    # placement is the field's internal placement (usually same as obj.Placement)
+                    # We want to show these in the object's local space.
+                    # If placement == obj.Placement, then lc is exactly what we want.
+                    # But to be safe, we compute world then go back to local.
                     world_corners = [placement.multVec(lc) for lc in local_corners]
                 else:
                     world_corners = local_corners
-                corners = [(v.x, v.y, v.z) for v in world_corners]
-            else:
-                min_b, max_b = field.bounding_box()
-                corners = [
-                    (min_b.x, min_b.y, min_b.z), (max_b.x, min_b.y, min_b.z),
-                    (max_b.x, max_b.y, min_b.z), (min_b.x, max_b.y, min_b.z),
-                    (min_b.x, min_b.y, max_b.z), (max_b.x, min_b.y, max_b.z),
-                    (max_b.x, max_b.y, max_b.z), (min_b.x, max_b.y, max_b.z),
+
+                if inv:
+                    corners = [(v.x, v.y, v.z) for v in [inv.multVec(wc) for wc in world_corners]]
+                else:
+                    corners = [(v.x, v.y, v.z) for v in world_corners]
+            elif hasattr(field, "bounding_box"):
+                mn, mx = field.bounding_box()
+                world_corners = [
+                    FreeCAD.Vector(mn.x, mn.y, mn.z), FreeCAD.Vector(mx.x, mn.y, mn.z),
+                    FreeCAD.Vector(mx.x, mx.y, mn.z), FreeCAD.Vector(mn.x, mx.y, mn.z),
+                    FreeCAD.Vector(mn.x, mn.y, mx.z), FreeCAD.Vector(mx.x, mn.y, mx.z),
+                    FreeCAD.Vector(mx.x, mx.y, mx.z), FreeCAD.Vector(mn.x, mx.y, mx.z),
                 ]
+                if inv:
+                    corners = [(v.x, v.y, v.z) for v in [inv.multVec(wc) for wc in world_corners]]
+                else:
+                    corners = [(v.x, v.y, v.z) for v in world_corners]
+            else:
+                return
 
             lines = [
                 (0,1), (1,2), (2,3), (3,0),

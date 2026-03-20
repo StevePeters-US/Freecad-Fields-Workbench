@@ -598,7 +598,7 @@ class FRepEditTool(DMBase, DragTimerMixin):
         self._drag_timer.start(interval_ms)
 
     def _stop_drag_timer(self):
-        if self._drag_timer:
+        if getattr(self, "_drag_timer", None):
             self._drag_timer.stop()
             self._drag_timer = None
 

@@ -1,6 +1,7 @@
 import FreeCAD
 import FreeCADGui
 import math
+from enum import IntEnum
 from PySide import QtCore
 from pivy import coin
 from core import dm_logger
@@ -862,6 +863,13 @@ class SphereCreator(PrimitiveCreatorBase):
 
 
 class CylinderCreator(PrimitiveCreatorBase):
+    _last_working_plane = None
+    _last_wp_is_fallback = True
+
+    class ToolState(IntEnum):
+        IDLE = 0
+        PICK_RADIUS = 1
+        PICK_HEIGHT = 2
 
     def get_command_id(self):
         return "DM_CreateCylinder"
@@ -871,7 +879,14 @@ class CylinderCreator(PrimitiveCreatorBase):
         self.points = []
         self.current_point = None
         self._height_drag_base = None
+        self.state = self.ToolState.IDLE
 
+        # Unified workplane pre-load logic
+        if not self.working_plane:
+            if type(self)._last_working_plane:
+                self.working_plane = type(self)._last_working_plane
+                self._working_plane_is_fallback = type(self)._last_wp_is_fallback
+        
         dm_logger.info("Cylinder Tool: Click base center")
 
     def edit_object(self, obj):
@@ -884,7 +899,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         elif len(pts) >= 2:
             self.current_point = pts[1]
             self.points = pts[:1]
-        self.state = STATE_IDLE
+        self.state = self.ToolState.IDLE # In edit mode, we are 'idle' relative to creation steps
 
         r = self._compute_handle_radius()
         all_pts = list(self.points) + ([self.current_point] if self.current_point else [])
@@ -913,41 +928,32 @@ class CylinderCreator(PrimitiveCreatorBase):
         if pos is None:
             return True
 
-        if self.state == 0:
-            PrimitiveCreatorBase._last_working_plane = self.working_plane
-            PrimitiveCreatorBase._last_wp_is_fallback = self._working_plane_is_fallback
+        if self.state == self.ToolState.IDLE:
+            type(self)._last_working_plane = self.working_plane
+            type(self)._last_wp_is_fallback = self._working_plane_is_fallback
 
             self.points.append(pos)
-            self.state = 1
+            self.state = self.ToolState.PICK_RADIUS
 
-            if len(self.dm_points) < 1:
-                dm_pt = DMPoint(pos)
-                dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
-                self.dm_points.append(dm_pt)
-            else:
-                self.dm_points[0].position = pos
-                self.dm_points[0].update_draw()
+            dm_pt = DMPoint(pos)
+            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+            self.dm_points.append(dm_pt)
 
             dm_logger.info("Cylinder Tool: Click radius")
-        elif self.state == 1:
+        elif self.state == self.ToolState.PICK_RADIUS:
             self.points.append(pos)
-            self.state = 2
+            self.state = self.ToolState.PICK_HEIGHT
             self._height_drag_base = pos
 
-            if len(self.dm_points) < 2:
-                dm_pt = DMPoint(pos)
-                dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
-                self.dm_points.append(dm_pt)
-            else:
-                self.dm_points[1].position = pos
-                self.dm_points[1].update_draw()
+            dm_pt = DMPoint(pos)
+            dm_pt.draw_point(self.points_root, self._compute_handle_radius(ref_pt=pos))
+            self.dm_points.append(dm_pt)
 
             dm_logger.info("Cylinder Tool: Click height")
-        elif self.state == 2:
+        elif self.state == self.ToolState.PICK_HEIGHT:
             # 3rd click - determines height. Finalize shape.
             self.points.append(self.current_point)
-            self.state = 3
-            self._commit_and_enter_edit("Cylinder")
+            self._finalize_object("Cylinder")
 
         return True
 
@@ -959,7 +965,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         loc_base = self.to_local(self.points[0])
         loc_cur = self.to_local(self.current_point)
         
-        if self.state == 1:
+        if self.state == self.ToolState.PICK_RADIUS:
             radius = math.sqrt((loc_cur.x - loc_base.x)**2 + (loc_cur.y - loc_base.y)**2)
             height = 0.1
         else:
@@ -1035,7 +1041,7 @@ class CylinderCreator(PrimitiveCreatorBase):
         # Axis in local space is always Z (0,0,1) for this tool's logic
         loc_axis = FreeCAD.Vector(0, 0, 1)
         
-        if self.state == 1:
+        if self.state == self.ToolState.PICK_RADIUS:
             # Radius is distance in local XY plane
             radius = math.sqrt((loc_current.x - loc_base.x)**2 + (loc_current.y - loc_base.y)**2)
             height = 1.0  # minimal placeholder
@@ -1051,16 +1057,17 @@ class CylinderCreator(PrimitiveCreatorBase):
         if abs(height) < 0.01:
             height = 0.01 if height >= 0 else -0.01
             
-        placement = None
+        # Extract placement for SDF field
+        field_placement = None
         if wp:
             if hasattr(wp, "getGlobalPlacement"):
-                placement = wp.getGlobalPlacement()
+                field_placement = wp.getGlobalPlacement()
             elif hasattr(wp, "Placement"):
-                placement = wp.Placement
+                field_placement = wp.Placement
             else:
-                placement = wp
+                field_placement = wp
                 
-        return SdfCylinderField(loc_base, loc_axis, radius, height, placement=placement)
+        return SdfCylinderField(loc_base, loc_axis, radius, height, placement=field_placement)
 
     def _get_final_field(self):
         pts = list(self.points)
@@ -1082,18 +1089,22 @@ class CylinderCreator(PrimitiveCreatorBase):
         if abs(height) < 0.01:
             height = 0.01 if height >= 0 else -0.01
             
-        placement = None
+        field_placement = None
         if wp:
             if hasattr(wp, "getGlobalPlacement"):
-                placement = wp.getGlobalPlacement()
+                field_placement = wp.getGlobalPlacement()
             elif hasattr(wp, "Placement"):
-                placement = wp.Placement
+                field_placement = wp.Placement
             else:
-                placement = wp
+                field_placement = wp
                 
-        return SdfCylinderField(loc_base, loc_axis, radius, height, placement=placement)
+        return SdfCylinderField(loc_base, loc_axis, radius, height, placement=field_placement)
 
     def _get_final_points(self):
-        if len(self.points) < 3:
+        pts = list(self.points)
+        if self.current_point and len(pts) < 3:
+            while len(pts) < 3:
+                pts.append(self.current_point)
+        if len(pts) < 3:
             return None
-        return list(self.points)
+        return pts
