@@ -52,7 +52,7 @@ class Placement:
 sys.modules['FreeCAD'] = type('FreeCAD', (), {'Vector': Vector, 'Placement': Placement})
 import FreeCAD
 
-from core.frep.sdf.cylinder import SdfCylinderField
+from core.sdf.sdf.cylinder import SdfCylinderField
 
 def test():
     # Base center at world (10, 0, 0). 

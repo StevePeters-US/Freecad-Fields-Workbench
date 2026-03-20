@@ -816,7 +816,7 @@ void main() {
     def _try_gpu_compile(self, field):
         """Try to compile a field's GLSL expression. Returns (source, ctx) or None."""
         try:
-            from core.frep.glsl_compiler import compile_field_to_glsl, build_compute_shader
+            from core.sdf.glsl_compiler import compile_field_to_glsl, build_compute_shader
             expr, ctx = compile_field_to_glsl(field)
             source = build_compute_shader(expr, ctx)
             return source, ctx
@@ -910,7 +910,7 @@ void main() {
                     _n_baked += 1
                 else:
                     # CPU fallback bake
-                    from core.frep.sdf_baker import bake_sdf_to_volume
+                    from core.sdf.sdf_baker import bake_sdf_to_volume
                     baked = bake_sdf_to_volume(f, cs, bbox_override=bbox_override)
                     baked["cell_size"] = cs
                     baked["gpu"] = False

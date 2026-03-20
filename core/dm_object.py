@@ -218,12 +218,12 @@ class DMObjectProxy:
                 flat_list = [p for row in grid for p in row]
                 obj.ControlGrid = flat_list
 
-        if shape_type == "frep":
+        if shape_type == "sdf":
             if not hasattr(obj, "ShowWireframe"):
-                obj.addProperty("App::PropertyBool", "ShowWireframe", "FRep", "Show triangle wireframe")
+                obj.addProperty("App::PropertyBool", "ShowWireframe", "Sdf", "Show triangle wireframe")
                 obj.ShowWireframe = get_show_wireframe()
             if not hasattr(obj, "IsSubtractive"):
-                obj.addProperty("App::PropertyBool", "IsSubtractive", "FRep",
+                obj.addProperty("App::PropertyBool", "IsSubtractive", "Sdf",
                                 "If True, this primitive subtracts material (rendered blue)")
                 obj.IsSubtractive = False
 
@@ -310,7 +310,7 @@ class DMObjectProxy:
 
             st = fp.ShapeType if hasattr(fp, "ShapeType") else "nurbs"
 
-            if st == "frep":
+            if st == "sdf":
                 # Parametric boolean recompute
                 if hasattr(fp, "BooleanInputs") and fp.BooleanInputs:
                     try:
@@ -345,7 +345,50 @@ class DMObjectProxy:
 
 
 
-
+    def _recompute_primitive_field(self, fp):
+        """Reconstruct a primitive SDF field from the 'Points' vector list."""
+        pts = getattr(fp, "Points", [])
+        if not pts:
+            return None
+            
+        try:
+            from core.sdf.sdf.box import SdfBoxField
+            from core.sdf.sdf.sphere import SdfSphereField
+            from core.sdf.sdf.cylinder import SdfCylinderField
+            
+            # Use original placement as field coordinate system
+            placement = fp.Placement
+            
+            import math
+            if len(pts) == 8:
+                # Box reconstruction: 8 corners (already mapped locally)
+                local_pts = pts
+                min_v = FreeCAD.Vector(min(p.x for p in local_pts), min(p.y for p in local_pts), min(p.z for p in local_pts))
+                max_v = FreeCAD.Vector(max(p.x for p in local_pts), max(p.y for p in local_pts), max(p.z for p in local_pts))
+                center = (min_v + max_v) / 2.0
+                size = (max_v - min_v)
+                return SdfBoxField(center, size, placement=placement)
+                
+            elif len(pts) == 2:
+                # Sphere: center and radius point
+                c_local = pts[0]
+                r_local = pts[1]
+                radius = (r_local - c_local).Length
+                return SdfSphereField(c_local, radius, placement=placement)
+                
+            elif len(pts) == 3:
+                # Cylinder: base, radius point, height point
+                base_loc = pts[0]
+                r_loc = pts[1]
+                h_loc = pts[2]
+                radius = math.sqrt((r_loc.x - base_loc.x)**2 + (r_loc.y - base_loc.y)**2)
+                height = (h_loc - base_loc).z
+                return SdfCylinderField(base_loc, FreeCAD.Vector(0,0,1), radius, height, placement=placement)
+                
+        except Exception as e:
+            from . import dm_logger
+            dm_logger.debug(f"Primitive field reconstruction failed for {fp.Label}: {e}")
+        return None
 
     def __setstate__(self, state):
         from . import dm_logger
@@ -376,7 +419,7 @@ class DMViewProvider:
             vobj.DisplayMode = "Shaded"
             vobj.PointSize = 0.0
             vobj.LineWidth = 0.0
-        elif shape_type == "frep":
+        elif shape_type == "sdf":
             vobj.PointSize = 0.0
             vobj.LineWidth = 0.0
             try:
@@ -401,7 +444,7 @@ class DMViewProvider:
             self.renderer = DMRenderer(vobj)
 
             st = getattr(self.Object, "ShapeType", None)
-            self._strategy = SdfRendererStrategy() if st == "frep" else NURBSRendererStrategy()
+            self._strategy = SdfRendererStrategy() if st == "sdf" else NURBSRendererStrategy()
             self._strategy.setup(self.renderer, vobj)
             
             # Keep label for backward compatibility with other methods
@@ -590,8 +633,8 @@ def create_dm_object(name, shape_type, params=None, placement=None):
                 obj.ViewObject.ShapeColor = (1.0, 0.5, 0.0)
             obj.ViewObject.LineWidth = get_line_width()
             obj.ViewObject.PointSize = get_point_size()
-            # Disable wireframe for F-Rep mesh objects - reduces render overhead
-            if shape_type == "frep":
+            # Disable wireframe for SDF mesh objects - reduces render overhead
+            if shape_type == "sdf":
                 try:
                     obj.ViewObject.DisplayMode = "Shaded"
                 except Exception:

@@ -22,15 +22,15 @@ class DMRenderer:
             self.vis_switch.whichChild = -3 if vobj.Visibility else -1
             vobj.RootNode.addChild(self.vis_switch)
 
-        self._frep_debug_switch = None
-        self._frep_wide_switch = None
-        self._frep_wire_sep = None
-        self._frep_wire_style = None
+        self._sdf_debug_switch = None
+        self._sdf_wide_switch = None
+        self._sdf_wire_sep = None
+        self._sdf_wire_style = None
 
-        self._frep_handle_coords = None
-        self._frep_handle_lines = None
-        self._frep_corner_xfs = []      # 8 SoTransform nodes for corner sphere positions
-        self._frep_corner_spheres = []  # 8 SoSphere nodes
+        self._sdf_handle_coords = None
+        self._sdf_handle_lines = None
+        self._sdf_corner_xfs = []      # 8 SoTransform nodes for corner sphere positions
+        self._sdf_corner_spheres = []  # 8 SoSphere nodes
 
         # Curve/Control cage specific nodes
         self._ctrl_cage_sep = None
@@ -53,17 +53,17 @@ class DMRenderer:
         show_wire = getattr(obj, "ShowWireframe", get_show_wireframe())
         lw = get_line_width()
         
-        if self._frep_wide_switch:
-            self._frep_wide_switch.whichChild = 0 if show_wire else -1
-        if self._frep_wire_style:
-            self._frep_wire_style.lineWidth = lw
+        if self._sdf_wide_switch:
+            self._sdf_wide_switch.whichChild = 0 if show_wire else -1
+        if self._sdf_wire_style:
+            self._sdf_wire_style.lineWidth = lw
             
         if self._style:
             self._style.lineWidth = lw
             
-        if self._frep_debug_switch:
+        if self._sdf_debug_switch:
             from core.dm_object import get_render_debug_mode
-            self._frep_debug_switch.whichChild = 0 if get_render_debug_mode() else -1
+            self._sdf_debug_switch.whichChild = 0 if get_render_debug_mode() else -1
             
         try:
             if self.vobj:
@@ -73,11 +73,11 @@ class DMRenderer:
             pass
 
     # -------------------------------------------------------------------------
-    # F-Rep Mesh Rendering
+    # SDF Mesh Rendering
     # -------------------------------------------------------------------------
 
-    def setup_frep_mesh_nodes(self):
-        """Setup nodes for F-Rep bounding box and corner spheres (no mesh)."""
+    def setup_sdf_mesh_nodes(self):
+        """Setup nodes for SDF bounding box and corner spheres (no mesh)."""
         if not coin: return
         try:
             sep = coin.SoSeparator()
@@ -90,8 +90,8 @@ class DMRenderer:
             s_mat.shininess.setValue(0.7)
             sphere_root.addChild(s_mat)
 
-            self._frep_corner_xfs = []
-            self._frep_corner_spheres = []
+            self._sdf_corner_xfs = []
+            self._sdf_corner_spheres = []
             for _ in range(8):
                 s_sep = coin.SoSeparator()
                 xf = coin.SoTransform()
@@ -100,8 +100,8 @@ class DMRenderer:
                 s_sep.addChild(xf)
                 s_sep.addChild(sphere)
                 sphere_root.addChild(s_sep)
-                self._frep_corner_xfs.append(xf)
-                self._frep_corner_spheres.append(sphere)
+                self._sdf_corner_xfs.append(xf)
+                self._sdf_corner_spheres.append(sphere)
             sep.addChild(sphere_root)
 
             # ── Bounding-box edge lines ──
@@ -116,27 +116,27 @@ class DMRenderer:
             h_style.linePattern = 0x0F0F
             corner_sep.addChild(h_style)
 
-            self._frep_handle_coords = coin.SoCoordinate3()
-            corner_sep.addChild(self._frep_handle_coords)
-            self._frep_handle_lines = coin.SoLineSet()
-            corner_sep.addChild(self._frep_handle_lines)
+            self._sdf_handle_coords = coin.SoCoordinate3()
+            corner_sep.addChild(self._sdf_handle_coords)
+            self._sdf_handle_lines = coin.SoLineSet()
+            corner_sep.addChild(self._sdf_handle_lines)
 
             sep.addChild(corner_sep)
 
             # Wrapper switch for debug visuals (bbox + corners)
             from core.dm_object import get_render_debug_mode
-            self._frep_debug_switch = coin.SoSwitch()
-            self._frep_debug_switch.whichChild = 0 if get_render_debug_mode() else -1
-            self._frep_debug_switch.addChild(sep)
+            self._sdf_debug_switch = coin.SoSwitch()
+            self._sdf_debug_switch.whichChild = 0 if get_render_debug_mode() else -1
+            self._sdf_debug_switch.addChild(sep)
 
             if self.vis_switch:
-                self.vis_switch.addChild(self._frep_debug_switch)
+                self.vis_switch.addChild(self._sdf_debug_switch)
             else:
-                self.vobj.RootNode.addChild(self._frep_debug_switch)
+                self.vobj.RootNode.addChild(self._sdf_debug_switch)
                 
         except Exception as e:
             from core import dm_logger
-            dm_logger.debug(f"DMRenderer.setup_frep_mesh_nodes failed: {e}")
+            dm_logger.debug(f"DMRenderer.setup_sdf_mesh_nodes failed: {e}")
 
     def _corner_sphere_radius(self):
         """Compute sphere radius to appear ~8px on screen, matching DMBase._compute_handle_radius."""
@@ -167,8 +167,8 @@ class DMRenderer:
         except Exception:
             return 5.0
 
-    def update_frep_corners(self, field):
-        if not coin or not self._frep_handle_coords:
+    def update_sdf_corners(self, field):
+        if not coin or not self._sdf_handle_coords:
             return
         try:
             placement = getattr(field, "placement", None)
@@ -228,18 +228,18 @@ class DMRenderer:
             for i, j in lines:
                 all_pts.extend([corners[i], corners[j]])
 
-            self._frep_handle_coords.point.setValues(all_pts)
-            self._frep_handle_lines.numVertices.setValues([2] * len(lines))
+            self._sdf_handle_coords.point.setValues(all_pts)
+            self._sdf_handle_lines.numVertices.setValues([2] * len(lines))
 
             # Update corner sphere positions and radius
-            if self._frep_corner_xfs:
+            if self._sdf_corner_xfs:
                 r = self._corner_sphere_radius()
                 for i, (x, y, z) in enumerate(corners):
-                    self._frep_corner_xfs[i].translation.setValue(x, y, z)
-                    self._frep_corner_spheres[i].radius = r
+                    self._sdf_corner_xfs[i].translation.setValue(x, y, z)
+                    self._sdf_corner_spheres[i].radius = r
         except Exception as e:
             from core import dm_logger
-            dm_logger.debug(f"DMRenderer.update_frep_corners failed: {e}")
+            dm_logger.debug(f"DMRenderer.update_sdf_corners failed: {e}")
 
 
     # -------------------------------------------------------------------------
@@ -376,7 +376,7 @@ class DMRenderer:
         self._ctrl_lines.numVertices.setNum(len(num_vertices))
         if num_vertices:
             self._ctrl_lines.numVertices.setValues(0, num_vertices)
-    def set_frep_display_mode(self, mode):
+    def set_sdf_display_mode(self, mode):
         """Toggle between shaded and wireframe rendering."""
         # TODO: Implement actual display mode switching for SDF objects.
         pass
@@ -422,8 +422,8 @@ class SdfRendererStrategy(DMRendererStrategy):
     def update(self, renderer, fp, prop):
         if prop == "Shape" or not prop:
             proxy = getattr(fp, "Proxy", None)
-            # Support both names during transition (FRepField for old documents)
-            field = getattr(proxy, "SdfField", None) or getattr(proxy, "FRepField", None)
+            # Support both names during transition (SdfField for old documents)
+            field = getattr(proxy, "SdfField", None) or getattr(proxy, "SdfField", None)
             if self.label and field is not None:
                 from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
                 sr = DMSceneRayMarchRenderer.get_instance()
@@ -433,6 +433,6 @@ class SdfRendererStrategy(DMRendererStrategy):
                     FreeCADGui.activeView().redraw()
 
     def set_display_mode(self, renderer, mode):
-        renderer.set_frep_display_mode(mode)
+        renderer.set_sdf_display_mode(mode)
 
 

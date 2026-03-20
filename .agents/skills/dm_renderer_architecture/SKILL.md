@@ -1,11 +1,11 @@
 ---
 name: DM Renderer Architecture
-description: Reference for how Coin3D rendering is structured across the three geometry types (NURBS curves, F-Rep SDF, WorkPlane). Required reading before adding a new display type or modifying DMViewProvider.
+description: Reference for how Coin3D rendering is structured across the three geometry types (NURBS curves, SDF SDF, WorkPlane). Required reading before adding a new display type or modifying DMViewProvider.
 ---
 
 # DM Renderer Architecture
 
-Rendering is split between **FreeCAD's native Part shape renderer** (for NURBS/BRep) and **custom Coin3D nodes** (for F-Rep meshes and control cages). There is no shared abstraction — geometry type is detected via `ShapeType` string in `DMViewProvider`.
+Rendering is split between **FreeCAD's native Part shape renderer** (for NURBS/BRep) and **custom Coin3D nodes** (for SDF meshes and control cages). There is no shared abstraction — geometry type is detected via `ShapeType` string in `DMViewProvider`.
 
 ---
 
@@ -27,19 +27,19 @@ Rendering is split between **FreeCAD's native Part shape renderer** (for NURBS/B
 
 Overlay is rebuilt on every `updateData()` call for `["Points", "HandleIn", "HandleOut", "Closed", "EditMode"]`.
 
-### 2. F-Rep SDF (`ShapeType == "frep"`)
+### 2. SDF SDF (`ShapeType == "sdf"`)
 
-**Shape source**: `DMObjectProxy.execute()` calls `MarchingCubesMesher.mesh(field, cell_size)` → `(verts, flat_idx)` stored as `_frep_verts` / `_frep_idx` on the proxy. Then sets `fp.Shape = Part.Shape()` (empty, to trigger `updateData`).
+**Shape source**: `DMObjectProxy.execute()` calls `MarchingCubesMesher.mesh(field, cell_size)` → `(verts, flat_idx)` stored as `_sdf_verts` / `_sdf_idx` on the proxy. Then sets `fp.Shape = Part.Shape()` (empty, to trigger `updateData`).
 
 **FreeCAD renderer**: **suppressed** — `vobj.PointSize = 0`, `vobj.LineWidth = 0`, display mode forced to `"Shaded"`
 
-**Coin3D rendering** via `DMRenderer.setup_frep_mesh_nodes()`:
-- `_frep_coords` + `_frep_faces` — filled triangle mesh (orange, `SoIndexedFaceSet`)
-- `_frep_wide_switch` → `_frep_wire_faces` — optional wireframe overlay (same indices, `LINES` draw style)
-- `_frep_corner_coords` + `_frep_corner_pts` — 8 corner points of bounding box
-- `_frep_handle_coords` + `_frep_handle_lines` — 12 bounding box edges
+**Coin3D rendering** via `DMRenderer.setup_sdf_mesh_nodes()`:
+- `_sdf_coords` + `_sdf_faces` — filled triangle mesh (orange, `SoIndexedFaceSet`)
+- `_sdf_wide_switch` → `_sdf_wire_faces` — optional wireframe overlay (same indices, `LINES` draw style)
+- `_sdf_corner_coords` + `_sdf_corner_pts` — 8 corner points of bounding box
+- `_sdf_handle_coords` + `_sdf_handle_lines` — 12 bounding box edges
 
-Updated via `DMRenderer.update_frep_mesh(verts, flat_idx)` and `update_frep_corners(field)`.
+Updated via `DMRenderer.update_sdf_mesh(verts, flat_idx)` and `update_sdf_corners(field)`.
 
 ### 3. WorkPlane (`DMWorkPlane`)
 
@@ -62,18 +62,18 @@ Updated via `DMRenderer.update_frep_mesh(verts, flat_idx)` and `update_frep_corn
 if ShapeType == "curve":
     renderer.setup_coin_overlay()
     renderer.rebuild_control_cage(obj)
-elif ShapeType == "frep":
-    renderer.setup_frep_mesh_nodes()
+elif ShapeType == "sdf":
+    renderer.setup_sdf_mesh_nodes()
 # surface/point: nothing extra — Part renderer handles it
 ```
 
 **`DMViewProvider.updateData(fp, prop)`** (`core/dm_object.py:408`):
 ```python
-if prop == "Shape" and ShapeType == "frep":
-    renderer.update_frep_mesh(...)
-    renderer.update_frep_corners(...)
-elif prop == "DisplayMode" and ShapeType == "frep":
-    renderer.set_frep_display_mode(...)
+if prop == "Shape" and ShapeType == "sdf":
+    renderer.update_sdf_mesh(...)
+    renderer.update_sdf_corners(...)
+elif prop == "DisplayMode" and ShapeType == "sdf":
+    renderer.set_sdf_display_mode(...)
 elif prop in ["Points", "HandleIn", "HandleOut", "Closed", "EditMode"]:
     renderer.rebuild_control_cage(fp)
 ```
@@ -82,7 +82,7 @@ elif prop in ["Points", "HandleIn", "HandleOut", "Closed", "EditMode"]:
 ```python
 if ShapeType == "surface":
     vobj.DisplayMode = "Shaded"
-elif ShapeType == "frep":
+elif ShapeType == "sdf":
     # suppress Part renderer
     vobj.PointSize = 0.0; vobj.LineWidth = 0.0
 ```
@@ -96,17 +96,17 @@ elif ShapeType == "frep":
 ```
 DMRenderer
 ├── vis_switch          — SoSwitch wrapping everything (visibility)
-├── F-Rep nodes
-│   ├── _frep_sep           — root separator
-│   ├── _frep_draw_style    — FILLED / LINES toggle
-│   ├── _frep_coords        — vertex buffer
-│   ├── _frep_faces         — SoIndexedFaceSet (triangles)
-│   ├── _frep_wide_switch   — wireframe on/off switch
-│   ├── _frep_wire_faces    — SoIndexedFaceSet (wireframe, same coords)
-│   ├── _frep_corner_coords — bounding box corners
-│   ├── _frep_corner_pts    — SoPointSet
-│   ├── _frep_handle_coords — bounding box edges
-│   └── _frep_handle_lines  — SoLineSet
+├── SDF nodes
+│   ├── _sdf_sep           — root separator
+│   ├── _sdf_draw_style    — FILLED / LINES toggle
+│   ├── _sdf_coords        — vertex buffer
+│   ├── _sdf_faces         — SoIndexedFaceSet (triangles)
+│   ├── _sdf_wide_switch   — wireframe on/off switch
+│   ├── _sdf_wire_faces    — SoIndexedFaceSet (wireframe, same coords)
+│   ├── _sdf_corner_coords — bounding box corners
+│   ├── _sdf_corner_pts    — SoPointSet
+│   ├── _sdf_handle_coords — bounding box edges
+│   └── _sdf_handle_lines  — SoLineSet
 └── NURBS overlay nodes
     ├── _ctrl_cage_sep      — root separator
     ├── _style              — SoDrawStyle (dashed lines)
@@ -117,7 +117,7 @@ DMRenderer
     └── _knot_points        — SoPointSet (small white knot markers)
 ```
 
-All F-Rep nodes are `None` until `setup_frep_mesh_nodes()` is called.
+All SDF nodes are `None` until `setup_sdf_mesh_nodes()` is called.
 All NURBS nodes are `None` until `setup_coin_overlay()` is called.
 
 ---
@@ -133,12 +133,12 @@ class DMRendererStrategy:
     def set_display_mode(self, renderer: DMRenderer, mode: str) -> None: ...
 
 class NURBSRendererStrategy(DMRendererStrategy): ...
-class FRepRendererStrategy(DMRendererStrategy): ...
+class SdfRendererStrategy(DMRendererStrategy): ...
 ```
 
 `DMViewProvider.attach()` selects the strategy:
 ```python
-self._strategy = FRepRendererStrategy() if ShapeType == "frep" else NURBSRendererStrategy()
+self._strategy = SdfRendererStrategy() if ShapeType == "sdf" else NURBSRendererStrategy()
 self._strategy.setup(self.renderer, vobj)
 ```
 
@@ -156,4 +156,4 @@ Adding a 4th geometry type requires only a new `DMRendererStrategy` subclass.
 1. `core/dm_renderer.py` — all Coin3D node creation and update logic
 2. `core/dm_object.py` — `DMViewProvider.attach()`, `updateData()`, `setup_view()` (the branching points)
 3. `core/dm_workplane.py` — `ViewProviderDMWorkPlane` (separate renderer, not using `DMRenderer`)
-4. `core/dm_mesher.py` — produces `(verts, flat_idx)` consumed by `update_frep_mesh()`
+4. `core/dm_mesher.py` — produces `(verts, flat_idx)` consumed by `update_sdf_mesh()`

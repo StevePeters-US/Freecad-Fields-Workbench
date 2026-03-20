@@ -123,8 +123,8 @@ Always specify:
 - Where in the file to insert: line number OR `"after ClassName.method_name() (line N)"`
 - Never say "add somewhere in file X" — be precise
 
-Good: `**File:** core/frep/frep_field.py — append after line 72 (end of curvature_grid)`
-Bad:  `**File:** core/frep/frep_field.py`
+Good: `**File:** core/sdf/sdf_field.py — append after line 72 (end of curvature_grid)`
+Bad:  `**File:** core/sdf/sdf_field.py`
 
 ### 2. Show the code
 Every task must include the full code the agent should write, formatted as a code block.
@@ -266,7 +266,7 @@ time estimates.
 ```markdown
 ### R-002: Implement `SdfSphereField.to_glsl()`
 
-**File:** `core/frep/sdf/sphere.py` — append to `SdfSphereField` after `bounding_box()` (line 28)
+**File:** `core/sdf/sdf/sphere.py` — append to `SdfSphereField` after `bounding_box()` (line 28)
 
 **What:** Return GLSL for `length(p - center) - radius`.
 
@@ -303,7 +303,7 @@ def to_glsl(self, node_id: str) -> dict:
 ```markdown
 ### R-002: Add GLSL support to sphere
 
-**File:** `core/frep/sdf/sphere.py`
+**File:** `core/sdf/sdf/sphere.py`
 
 **What:** Add a `to_glsl` method that returns the sphere SDF in GLSL format
 with uniforms for the center and radius.

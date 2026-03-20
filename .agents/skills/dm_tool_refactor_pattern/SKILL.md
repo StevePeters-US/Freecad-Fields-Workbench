@@ -146,8 +146,8 @@ After R-002: cursor restore is automatic (DMBase._do_terminate).
 |------|-------|------|
 | `tools/dm_base.py` | `DMBase` | Base for all tools; event dispatch, workplane helpers |
 | `tools/dm_base.py` | `NURBSPrimitiveCreator` | NURBS/curve placement creator |
-| `tools/primitive_tool.py` | `PrimitiveCreatorBase` | F-Rep primitive placement creator |
+| `tools/primitive_tool.py` | `PrimitiveCreatorBase` | SDF primitive placement creator |
 | `tools/edit_tool.py` | `EditTool` | Curve control-point editor |
-| `tools/edit_tool.py` | `FRepEditTool` | F-Rep box corner editor |
+| `tools/edit_tool.py` | `SdfEditTool` | SDF box corner editor |
 | `tools/curve_tool.py` | `CurveCreator` | Click-to-place curve points |
 | `core/input_manager.py` | `DMInputManager` | Qt event filter + ray/coordinate helpers |

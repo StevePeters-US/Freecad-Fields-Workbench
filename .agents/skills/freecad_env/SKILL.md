@@ -77,7 +77,7 @@ fc.Vector = _Vec
 sys.modules["FreeCAD"] = fc
 
 # Now your DM code can be imported
-from core.frep.sdf.box import MCBoxField  # works without real FreeCAD
+from core.sdf.sdf.box import MCBoxField  # works without real FreeCAD
 ```
 
 ---

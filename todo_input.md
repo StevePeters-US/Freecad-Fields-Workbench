@@ -14,7 +14,7 @@ calls `terminate()`. The desired behavior is one right-click: commit if in progr
 always terminate.
 
 The primary change is in `DMBase.on_button3_down` (tools/dm_base.py), which is the single
-entry point for right-click across all tools. A secondary fix removes `FRepEditTool`'s
+entry point for right-click across all tools. A secondary fix removes `SdfEditTool`'s
 overriding `on_button3_down` so the base-class behavior applies uniformly.
 
 ### Key APIs
@@ -25,7 +25,7 @@ overriding `on_button3_down` so the base-class behavior applies uniformly.
 | `DMBase.finish` | `tools/dm_base.py:509` | Commit current work; subclasses override |
 | `DMBase.terminate` | `tools/dm_base.py:402` | Async cleanup entry point (sets `_terminated=True`, schedules `_do_terminate`) |
 | `DMBase.is_in_progress` | `tools/dm_base.py:513` | Returns True if state > 0 or `_is_editing` |
-| `FRepEditTool.on_button3_down` | `tools/edit_tool.py:665` | Override that must be removed |
+| `SdfEditTool.on_button3_down` | `tools/edit_tool.py:665` | Override that must be removed |
 
 ---
 
@@ -62,20 +62,20 @@ def on_button3_down(self, event_dict):
 
 ---
 
-### I-002: Remove `FRepEditTool.on_button3_down` override in edit_tool.py
+### I-002: Remove `SdfEditTool.on_button3_down` override in edit_tool.py
 
 **File:** `tools/edit_tool.py` — delete lines 665–677 (the entire `on_button3_down` method
-on `FRepEditTool`)
+on `SdfEditTool`)
 
-**What:** `FRepEditTool` has its own `on_button3_down` that bypasses the base-class fix from
+**What:** `SdfEditTool` has its own `on_button3_down` that bypasses the base-class fix from
 I-001. The override's time-based double-fire guard (`_last_btn3_time`) is a legacy artifact
 from the old dual Qt+Coin3D pipeline; the current Qt-native pipeline fires each event once.
-Removing the override lets `DMBase.on_button3_down` handle right-clicks for `FRepEditTool`
+Removing the override lets `DMBase.on_button3_down` handle right-clicks for `SdfEditTool`
 with the same single-click close behavior.
 
 **Implementation:**
 
-Delete these lines in their entirety from `FRepEditTool`:
+Delete these lines in their entirety from `SdfEditTool`:
 
 ```python
     def on_button3_down(self, event_dict):

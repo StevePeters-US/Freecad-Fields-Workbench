@@ -1,7 +1,7 @@
 """
 core/dm_ray_march_renderer.py
 
-GPU ray marching renderer for F-Rep fields using Coin3D.
+GPU ray marching renderer for SDF fields using Coin3D.
 Bakes the SDF to a 2D texture atlas and performs sphere tracing in a fragment shader.
 """
 
@@ -289,7 +289,7 @@ void main() {
         self.root.addChild(self._shader_sep)
 
     def update(self, field, cell_size):
-        from core.frep.sdf_baker import bake_sdf_to_volume
+        from core.sdf.sdf_baker import bake_sdf_to_volume
         baked = bake_sdf_to_volume(field, cell_size)
 
         # 1. Upload 3D texture via direct OpenGL (float32 as RGBA8, 4 channels)

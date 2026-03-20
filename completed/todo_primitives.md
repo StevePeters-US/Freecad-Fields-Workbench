@@ -13,23 +13,23 @@ all finite SDF primitives from Inigo Quilez's reference article (iquilezles.org/
 organized into six toolbar dropdown groups. Infinite shapes (Plane, Infinite Cylinder, Infinite Cone)
 are excluded.
 
-Each primitive requires: (1) an `SdfField` subclass in `core/frep/sdf/`, (2) an SVG icon in
+Each primitive requires: (1) an `SdfField` subclass in `core/sdf/sdf/`, (2) an SVG icon in
 `Resources/icons/`, and (3) a command registered in `commands/`. Toolbar dropdowns use FreeCAD's
 command-group mechanism (see `dm_command_group` skill).
 
 Goal state: the "DM - Constructive" toolbar shows six dropdown buttons — one per shape family —
-replacing the current flat Box/Sphere/Cylinder buttons. All shapes create a DM frep object at the
+replacing the current flat Box/Sphere/Cylinder buttons. All shapes create a DM sdf object at the
 world origin with default dimensions; the user moves/scales via the DM Translate tool.
 
 ### Key APIs
 
 | Symbol | Location | Purpose |
 |--------|----------|---------|
-| `SdfField` | `core/frep/sdf/sdf_field.py:1` | Base class for all SDF primitives |
-| `FRepField` | `core/frep/frep_field.py:1` | Abstract base; provides gradient fallback |
+| `SdfField` | `core/sdf/sdf/sdf_field.py:1` | Base class for all SDF primitives |
+| `SdfField` | `core/sdf/sdf_field.py:1` | Abstract base; provides gradient fallback |
 | `create_dm_object` | `core/dm_object.py` | Creates a FreeCAD DM object |
 | `CommandDMCreation` | `commands/cmd_primitive.py:6` | Existing flat command pattern |
-| `DMObjectProxy.FRepField` | `core/dm_object.py` | Where SDF field is stored on proxy |
+| `DMObjectProxy.SdfField` | `core/dm_object.py` | Where SDF field is stored on proxy |
 | `appendToolbar` | `InitGui.py:72` | Toolbar registration |
 
 ### Tool Creation Pattern — SDF Self-Intersection Guard
@@ -212,7 +212,7 @@ self.appendMenu("Direct Modeling", [
 
 ### P-003: `SdfTorusField`
 
-**File:** `core/frep/sdf/torus.py` — create new file
+**File:** `core/sdf/sdf/torus.py` — create new file
 
 **What:** Torus SDF centered at `center`, ring in the XZ plane. `major_radius` = distance from center to tube center, `minor_radius` = tube radius.
 
@@ -220,7 +220,7 @@ self.appendMenu("Direct Modeling", [
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfTorusField(SdfField):
@@ -251,7 +251,7 @@ class SdfTorusField(SdfField):
 
 ### P-004: `SdfCappedTorusField`
 
-**File:** `core/frep/sdf/capped_torus.py` — create new file
+**File:** `core/sdf/sdf/capped_torus.py` — create new file
 
 **What:** Torus with a wedge cut, leaving an arc. `angle` is the half-angle of the remaining arc
 (radians, 0 < angle < π). Uses IQ `sdCappedTorus` formula where `sc = (sin(angle), cos(angle))`.
@@ -260,7 +260,7 @@ class SdfTorusField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfCappedTorusField(SdfField):
@@ -301,7 +301,7 @@ class SdfCappedTorusField(SdfField):
 
 ### P-005: `SdfLinkField`
 
-**File:** `core/frep/sdf/link.py` — create new file
+**File:** `core/sdf/sdf/link.py` — create new file
 
 **What:** Chain-link shape: a rectangle with rounded ends, like a letter D extruded into a loop.
 `half_length` = half the straight section, `ring_radius` = radius of the ring cross-section center,
@@ -311,7 +311,7 @@ class SdfCappedTorusField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfLinkField(SdfField):
@@ -380,7 +380,7 @@ class SdfLinkField(SdfField):
 
 **File:** `commands/cmd_torus_group.py` — create new file
 
-**What:** Three creation commands for Torus, CappedTorus, and Link. Each creates a DM frep object at the world origin with sensible default dimensions.
+**What:** Three creation commands for Torus, CappedTorus, and Link. Each creates a DM sdf object at the world origin with sensible default dimensions.
 
 ```python
 import FreeCAD
@@ -394,10 +394,10 @@ class CommandDMTorus:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.torus import SdfTorusField
+        from core.sdf.sdf.torus import SdfTorusField
         field = SdfTorusField(center=FreeCAD.Vector(0, 0, 0), major_radius=20.0, minor_radius=5.0)
-        obj = create_dm_object(name='Torus', shape_type='frep')
-        obj.Proxy.FRepField = field
+        obj = create_dm_object(name='Torus', shape_type='sdf')
+        obj.Proxy.SdfField = field
         obj.touch()
         FreeCAD.activeDocument().recompute()
 
@@ -410,10 +410,10 @@ class CommandDMCappedTorus:
     def Activated(self):
         import math
         from core.dm_object import create_dm_object
-        from core.frep.sdf.capped_torus import SdfCappedTorusField
+        from core.sdf.sdf.capped_torus import SdfCappedTorusField
         field = SdfCappedTorusField(FreeCAD.Vector(0, 0, 0), 20.0, 5.0, math.radians(60.0))
-        obj = create_dm_object(name='CappedTorus', shape_type='frep')
-        obj.Proxy.FRepField = field
+        obj = create_dm_object(name='CappedTorus', shape_type='sdf')
+        obj.Proxy.SdfField = field
         obj.touch()
         FreeCAD.activeDocument().recompute()
 
@@ -425,11 +425,11 @@ class CommandDMLink:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.link import SdfLinkField
+        from core.sdf.sdf.link import SdfLinkField
         field = SdfLinkField(FreeCAD.Vector(0, 0, 0), half_length=10.0,
                              ring_radius=15.0, tube_radius=4.0)
-        obj = create_dm_object(name='Link', shape_type='frep')
-        obj.Proxy.FRepField = field
+        obj = create_dm_object(name='Link', shape_type='sdf')
+        obj.Proxy.SdfField = field
         obj.touch()
         FreeCAD.activeDocument().recompute()
 
@@ -447,7 +447,7 @@ FreeCADGui.addCommand('DM_CreateLink',        CommandDMLink())
 
 ### P-008: `SdfEllipsoidField`
 
-**File:** `core/frep/sdf/ellipsoid.py` — create new file
+**File:** `core/sdf/sdf/ellipsoid.py` — create new file
 
 **What:** Ellipsoid SDF (lower-bound approximation from IQ). `radii` = FreeCAD.Vector of the three
 semi-axes. Ref: `sdEllipsoid()`.
@@ -456,7 +456,7 @@ semi-axes. Ref: `sdEllipsoid()`.
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfEllipsoidField(SdfField):
@@ -493,7 +493,7 @@ class SdfEllipsoidField(SdfField):
 
 ### P-009: `SdfRoundBoxField`
 
-**File:** `core/frep/sdf/round_box.py` — create new file
+**File:** `core/sdf/sdf/round_box.py` — create new file
 
 **What:** Box with uniformly rounded corners. `half_size` = half-extents (FreeCAD.Vector),
 `radius` = corner rounding radius. Ref: `sdRoundBox()`.
@@ -502,7 +502,7 @@ class SdfEllipsoidField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfRoundBoxField(SdfField):
@@ -539,7 +539,7 @@ class SdfRoundBoxField(SdfField):
 
 ### P-010: `SdfBoxFrameField`
 
-**File:** `core/frep/sdf/box_frame.py` — create new file
+**File:** `core/sdf/sdf/box_frame.py` — create new file
 
 **What:** Hollow wireframe box (the 12 edges of a box rendered as square tubes).
 `half_size` = half-extents of the frame, `edge_width` = half-thickness of each edge bar.
@@ -549,7 +549,7 @@ Ref: `sdBoxFrame()`.
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfBoxFrameField(SdfField):
@@ -649,11 +649,11 @@ class CommandDMEllipsoid:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.ellipsoid import SdfEllipsoidField
+        from core.sdf.sdf.ellipsoid import SdfEllipsoidField
         field = SdfEllipsoidField(FreeCAD.Vector(0, 0, 0),
                                   FreeCAD.Vector(20.0, 12.0, 10.0))
-        obj = create_dm_object(name='Ellipsoid', shape_type='frep')
-        obj.Proxy.FRepField = field
+        obj = create_dm_object(name='Ellipsoid', shape_type='sdf')
+        obj.Proxy.SdfField = field
         obj.touch()
         FreeCAD.activeDocument().recompute()
 
@@ -665,11 +665,11 @@ class CommandDMRoundBox:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.round_box import SdfRoundBoxField
+        from core.sdf.sdf.round_box import SdfRoundBoxField
         field = SdfRoundBoxField(FreeCAD.Vector(0, 0, 0),
                                  FreeCAD.Vector(15.0, 10.0, 8.0), radius=3.0)
-        obj = create_dm_object(name='RoundBox', shape_type='frep')
-        obj.Proxy.FRepField = field
+        obj = create_dm_object(name='RoundBox', shape_type='sdf')
+        obj.Proxy.SdfField = field
         obj.touch()
         FreeCAD.activeDocument().recompute()
 
@@ -681,11 +681,11 @@ class CommandDMBoxFrame:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.box_frame import SdfBoxFrameField
+        from core.sdf.sdf.box_frame import SdfBoxFrameField
         field = SdfBoxFrameField(FreeCAD.Vector(0, 0, 0),
                                  FreeCAD.Vector(15.0, 10.0, 8.0), edge_width=1.5)
-        obj = create_dm_object(name='BoxFrame', shape_type='frep')
-        obj.Proxy.FRepField = field
+        obj = create_dm_object(name='BoxFrame', shape_type='sdf')
+        obj.Proxy.SdfField = field
         obj.touch()
         FreeCAD.activeDocument().recompute()
 
@@ -703,7 +703,7 @@ FreeCADGui.addCommand('DM_CreateBoxFrame',  CommandDMBoxFrame())
 
 ### P-013: `SdfCapsuleField`
 
-**File:** `core/frep/sdf/capsule.py` — create new file
+**File:** `core/sdf/sdf/capsule.py` — create new file
 
 **What:** Capsule between two arbitrary endpoints `a` and `b` with tube radius `radius`. Ref: `sdCapsule()`.
 
@@ -711,7 +711,7 @@ FreeCADGui.addCommand('DM_CreateBoxFrame',  CommandDMBoxFrame())
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfCapsuleField(SdfField):
@@ -749,7 +749,7 @@ class SdfCapsuleField(SdfField):
 
 ### P-014: `SdfVerticalCapsuleField`
 
-**File:** `core/frep/sdf/vertical_capsule.py` — create new file
+**File:** `core/sdf/sdf/vertical_capsule.py` — create new file
 
 **What:** Vertical capsule: cylinder with hemispherical caps, aligned on Y axis. Base at `center`,
 extends upward by `height`. Ref: `sdVerticalCapsule()`.
@@ -758,7 +758,7 @@ extends upward by `height`. Ref: `sdVerticalCapsule()`.
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfVerticalCapsuleField(SdfField):
@@ -791,7 +791,7 @@ class SdfVerticalCapsuleField(SdfField):
 
 ### P-015: `SdfRoundedCylinderField`
 
-**File:** `core/frep/sdf/rounded_cylinder.py` — create new file
+**File:** `core/sdf/sdf/rounded_cylinder.py` — create new file
 
 **What:** Cylinder with rounded top/bottom edges. `ra` controls body size (outer radius = 2*ra),
 `rb` is the edge rounding radius, `half_height` is the half-height. Ref: `sdRoundedCylinder()`.
@@ -800,7 +800,7 @@ class SdfVerticalCapsuleField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfRoundedCylinderField(SdfField):
@@ -889,10 +889,10 @@ class CommandDMCapsule:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.capsule import SdfCapsuleField
+        from core.sdf.sdf.capsule import SdfCapsuleField
         field = SdfCapsuleField(FreeCAD.Vector(-15, 0, 0), FreeCAD.Vector(15, 0, 0), radius=8.0)
-        obj = create_dm_object(name='Capsule', shape_type='frep')
-        obj.Proxy.FRepField = field
+        obj = create_dm_object(name='Capsule', shape_type='sdf')
+        obj.Proxy.SdfField = field
         obj.touch()
         FreeCAD.activeDocument().recompute()
 
@@ -904,10 +904,10 @@ class CommandDMVerticalCapsule:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.vertical_capsule import SdfVerticalCapsuleField
+        from core.sdf.sdf.vertical_capsule import SdfVerticalCapsuleField
         field = SdfVerticalCapsuleField(FreeCAD.Vector(0, -15, 0), height=30.0, radius=8.0)
-        obj = create_dm_object(name='VerticalCapsule', shape_type='frep')
-        obj.Proxy.FRepField = field
+        obj = create_dm_object(name='VerticalCapsule', shape_type='sdf')
+        obj.Proxy.SdfField = field
         obj.touch()
         FreeCAD.activeDocument().recompute()
 
@@ -919,10 +919,10 @@ class CommandDMRoundedCylinder:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.rounded_cylinder import SdfRoundedCylinderField
+        from core.sdf.sdf.rounded_cylinder import SdfRoundedCylinderField
         field = SdfRoundedCylinderField(FreeCAD.Vector(0, 0, 0), ra=8.0, rb=2.0, half_height=12.0)
-        obj = create_dm_object(name='RoundedCylinder', shape_type='frep')
-        obj.Proxy.FRepField = field
+        obj = create_dm_object(name='RoundedCylinder', shape_type='sdf')
+        obj.Proxy.SdfField = field
         obj.touch()
         FreeCAD.activeDocument().recompute()
 
@@ -940,7 +940,7 @@ FreeCADGui.addCommand('DM_CreateRoundedCylinder', CommandDMRoundedCylinder())
 
 ### P-018: `SdfConeField`
 
-**File:** `core/frep/sdf/cone.py` — create new file
+**File:** `core/sdf/sdf/cone.py` — create new file
 
 **What:** Cone with tip at `center`, opening downward (-Y). `half_angle` = half-angle from axis (radians), `height` = height from tip to base. Ref: `sdCone()`.
 
@@ -948,7 +948,7 @@ FreeCADGui.addCommand('DM_CreateRoundedCylinder', CommandDMRoundedCylinder())
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfConeField(SdfField):
@@ -1013,7 +1013,7 @@ class SdfConeField(SdfField):
 
 ### P-019: `SdfCappedConeField`
 
-**File:** `core/frep/sdf/capped_cone.py` — create new file
+**File:** `core/sdf/sdf/capped_cone.py` — create new file
 
 **What:** Frustum (truncated cone). `center` = geometric center, `half_height` = half the height,
 `r1` = bottom cap radius, `r2` = top cap radius. Ref: `sdCappedCone()`.
@@ -1022,7 +1022,7 @@ class SdfConeField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfCappedConeField(SdfField):
@@ -1076,7 +1076,7 @@ class SdfCappedConeField(SdfField):
 
 ### P-020: `SdfRoundConeField`
 
-**File:** `core/frep/sdf/round_cone.py` — create new file
+**File:** `core/sdf/sdf/round_cone.py` — create new file
 
 **What:** Cone between two spheres of different radii. `center` = base center, `r1` = base radius,
 `r2` = tip radius, `height` = height. Ref: `sdRoundCone()`.
@@ -1085,7 +1085,7 @@ class SdfCappedConeField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfRoundConeField(SdfField):
@@ -1135,7 +1135,7 @@ class SdfRoundConeField(SdfField):
 
 ### P-021: `SdfPyramidField`
 
-**File:** `core/frep/sdf/pyramid.py` — create new file
+**File:** `core/sdf/sdf/pyramid.py` — create new file
 
 **What:** Square-base pyramid. `center` = center of the base (1×1 unit square), `height` = height.
 Base spans ±0.5 in XZ. Scale with DM Translate. Ref: `sdPyramid()`.
@@ -1144,7 +1144,7 @@ Base spans ±0.5 in XZ. Scale with DM Translate. Ref: `sdPyramid()`.
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfPyramidField(SdfField):
@@ -1191,7 +1191,7 @@ class SdfPyramidField(SdfField):
 
 ### P-022: `SdfSolidAngleField`
 
-**File:** `core/frep/sdf/solid_angle.py` — create new file
+**File:** `core/sdf/sdf/solid_angle.py` — create new file
 
 **What:** Spherical wedge / solid angle: the region of a sphere carved to a cone-shaped opening.
 `angle` = half-angle of the cone (radians), `radius` = sphere radius. Ref: `sdSolidAngle()`.
@@ -1200,7 +1200,7 @@ class SdfPyramidField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfSolidAngleField(SdfField):
@@ -1304,10 +1304,10 @@ class CommandDMCone:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.cone import SdfConeField
+        from core.sdf.sdf.cone import SdfConeField
         field = SdfConeField(FreeCAD.Vector(0, 0, 0), half_angle=math.radians(25.0), height=30.0)
-        obj = create_dm_object(name='Cone', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='Cone', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 class CommandDMCappedCone:
@@ -1317,10 +1317,10 @@ class CommandDMCappedCone:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.capped_cone import SdfCappedConeField
+        from core.sdf.sdf.capped_cone import SdfCappedConeField
         field = SdfCappedConeField(FreeCAD.Vector(0, 0, 0), half_height=15.0, r1=12.0, r2=6.0)
-        obj = create_dm_object(name='CappedCone', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='CappedCone', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 class CommandDMRoundCone:
@@ -1330,10 +1330,10 @@ class CommandDMRoundCone:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.round_cone import SdfRoundConeField
+        from core.sdf.sdf.round_cone import SdfRoundConeField
         field = SdfRoundConeField(FreeCAD.Vector(0, 0, 0), r1=12.0, r2=3.0, height=30.0)
-        obj = create_dm_object(name='RoundCone', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='RoundCone', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 class CommandDMPyramid:
@@ -1343,10 +1343,10 @@ class CommandDMPyramid:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.pyramid import SdfPyramidField
+        from core.sdf.sdf.pyramid import SdfPyramidField
         field = SdfPyramidField(FreeCAD.Vector(0, 0, 0), height=25.0)
-        obj = create_dm_object(name='Pyramid', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='Pyramid', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 class CommandDMSolidAngle:
@@ -1356,10 +1356,10 @@ class CommandDMSolidAngle:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.solid_angle import SdfSolidAngleField
+        from core.sdf.sdf.solid_angle import SdfSolidAngleField
         field = SdfSolidAngleField(FreeCAD.Vector(0, 0, 0), angle=math.radians(40.0), radius=20.0)
-        obj = create_dm_object(name='SolidAngle', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='SolidAngle', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 FreeCADGui.addCommand('DM_CreateCone',       CommandDMCone())
@@ -1377,7 +1377,7 @@ FreeCADGui.addCommand('DM_CreateSolidAngle', CommandDMSolidAngle())
 
 ### P-025: `SdfHexPrismField`
 
-**File:** `core/frep/sdf/hex_prism.py` — create new file
+**File:** `core/sdf/sdf/hex_prism.py` — create new file
 
 **What:** Hexagonal prism. `hex_radius` = inradius of hexagon cross-section, `half_height` = half-length along Z. Ref: `sdHexPrism()`.
 
@@ -1385,7 +1385,7 @@ FreeCADGui.addCommand('DM_CreateSolidAngle', CommandDMSolidAngle())
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfHexPrismField(SdfField):
@@ -1430,7 +1430,7 @@ class SdfHexPrismField(SdfField):
 
 ### P-026: `SdfTriPrismField`
 
-**File:** `core/frep/sdf/tri_prism.py` — create new file
+**File:** `core/sdf/sdf/tri_prism.py` — create new file
 
 **What:** Triangular prism along Z. `tri_radius` = inradius of the triangular cross-section,
 `half_height` = half-length along Z. Note: result is a lower bound, not exact. Ref: `sdTriPrism()`.
@@ -1439,7 +1439,7 @@ class SdfHexPrismField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfTriPrismField(SdfField):
@@ -1474,7 +1474,7 @@ class SdfTriPrismField(SdfField):
 
 ### P-027: `SdfRhombusField`
 
-**File:** `core/frep/sdf/rhombus.py` — create new file
+**File:** `core/sdf/sdf/rhombus.py` — create new file
 
 **What:** Rhombus-shaped prism (diamond cross-section). `la`, `lb` = half-extents in X and Z,
 `half_height` = half-height in Y, `rounding` = edge bevel. Ref: `sdRhombus()`.
@@ -1483,7 +1483,7 @@ class SdfTriPrismField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfRhombusField(SdfField):
@@ -1529,7 +1529,7 @@ class SdfRhombusField(SdfField):
 
 ### P-028: `SdfOctahedronField`
 
-**File:** `core/frep/sdf/octahedron.py` — create new file
+**File:** `core/sdf/sdf/octahedron.py` — create new file
 
 **What:** Regular octahedron. `size` = distance from center to each vertex. Ref: `sdOctahedron()`.
 
@@ -1537,7 +1537,7 @@ class SdfRhombusField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfOctahedronField(SdfField):
@@ -1641,10 +1641,10 @@ class CommandDMHexPrism:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.hex_prism import SdfHexPrismField
+        from core.sdf.sdf.hex_prism import SdfHexPrismField
         field = SdfHexPrismField(FreeCAD.Vector(0, 0, 0), hex_radius=15.0, half_height=10.0)
-        obj = create_dm_object(name='HexPrism', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='HexPrism', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 class CommandDMTriPrism:
@@ -1654,10 +1654,10 @@ class CommandDMTriPrism:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.tri_prism import SdfTriPrismField
+        from core.sdf.sdf.tri_prism import SdfTriPrismField
         field = SdfTriPrismField(FreeCAD.Vector(0, 0, 0), tri_radius=15.0, half_height=10.0)
-        obj = create_dm_object(name='TriPrism', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='TriPrism', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 class CommandDMRhombus:
@@ -1667,11 +1667,11 @@ class CommandDMRhombus:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.rhombus import SdfRhombusField
+        from core.sdf.sdf.rhombus import SdfRhombusField
         field = SdfRhombusField(FreeCAD.Vector(0, 0, 0), la=18.0, lb=12.0,
                                 half_height=8.0, rounding=2.0)
-        obj = create_dm_object(name='Rhombus', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='Rhombus', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 class CommandDMOctahedron:
@@ -1681,10 +1681,10 @@ class CommandDMOctahedron:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.octahedron import SdfOctahedronField
+        from core.sdf.sdf.octahedron import SdfOctahedronField
         field = SdfOctahedronField(FreeCAD.Vector(0, 0, 0), size=18.0)
-        obj = create_dm_object(name='Octahedron', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='Octahedron', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 FreeCADGui.addCommand('DM_CreateHexPrism',  CommandDMHexPrism())
@@ -1701,7 +1701,7 @@ FreeCADGui.addCommand('DM_CreateOctahedron', CommandDMOctahedron())
 
 ### P-031: `SdfCutSphereField`
 
-**File:** `core/frep/sdf/cut_sphere.py` — create new file
+**File:** `core/sdf/sdf/cut_sphere.py` — create new file
 
 **What:** Sphere with a planar cap cut off. `radius` = sphere radius, `cut_height` = Y coordinate of
 the cutting plane (must satisfy -radius < cut_height < radius). Ref: `sdCutSphere()`.
@@ -1710,7 +1710,7 @@ the cutting plane (must satisfy -radius < cut_height < radius). Ref: `sdCutSpher
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfCutSphereField(SdfField):
@@ -1759,7 +1759,7 @@ class SdfCutSphereField(SdfField):
 
 ### P-032: `SdfCutHollowSphereField`
 
-**File:** `core/frep/sdf/cut_hollow_sphere.py` — create new file
+**File:** `core/sdf/sdf/cut_hollow_sphere.py` — create new file
 
 **What:** Shell of a sphere with a cap removed (like a bowl). `radius` = sphere radius,
 `cut_height` = Y of cut plane, `thickness` = shell wall thickness. Ref: `sdCutHollowSphere()`.
@@ -1768,7 +1768,7 @@ class SdfCutSphereField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfCutHollowSphereField(SdfField):
@@ -1811,7 +1811,7 @@ class SdfCutHollowSphereField(SdfField):
 
 ### P-033: `SdfDeathStarField`
 
-**File:** `core/frep/sdf/death_star.py` — create new file
+**File:** `core/sdf/sdf/death_star.py` — create new file
 
 **What:** Sphere with a spherical dent. `radius` = main sphere radius, `bite_radius` = radius of
 the spherical bite, `bite_offset` = distance from center to bite sphere center. Ref: `sdDeathStar()`.
@@ -1820,7 +1820,7 @@ the spherical bite, `bite_offset` = distance from center to bite sphere center. 
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfDeathStarField(SdfField):
@@ -1862,7 +1862,7 @@ class SdfDeathStarField(SdfField):
 
 ### P-034: `SdfVesicaSegmentField`
 
-**File:** `core/frep/sdf/vesica_segment.py` — create new file
+**File:** `core/sdf/sdf/vesica_segment.py` — create new file
 
 **What:** Lens-shaped volume (vesica piscis) between two points. `a`, `b` = endpoints,
 `width` = lens half-width. Ref: `sdVesicaSegment()`.
@@ -1871,7 +1871,7 @@ class SdfDeathStarField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfVesicaSegmentField(SdfField):
@@ -1933,7 +1933,7 @@ class SdfVesicaSegmentField(SdfField):
 
 ### P-035: `SdfTriangleSurfaceField`
 
-**File:** `core/frep/sdf/triangle_surface.py` — create new file
+**File:** `core/sdf/sdf/triangle_surface.py` — create new file
 
 **What:** Unsigned distance to a triangle surface (thin shell, both sides have equal distance).
 `a`, `b`, `c` = triangle vertices. Result is always ≥ 0. Ref: `udTriangle()`.
@@ -1942,7 +1942,7 @@ class SdfVesicaSegmentField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfTriangleSurfaceField(SdfField):
@@ -1989,7 +1989,7 @@ class SdfTriangleSurfaceField(SdfField):
 
 ### P-036: `SdfQuadSurfaceField`
 
-**File:** `core/frep/sdf/quad_surface.py` — create new file
+**File:** `core/sdf/sdf/quad_surface.py` — create new file
 
 **What:** Unsigned distance to a planar quad surface (4 coplanar vertices). `a`, `b`, `c`, `d`
 = quad vertices in order. Result is always ≥ 0. Ref: `udQuad()`.
@@ -1998,7 +1998,7 @@ class SdfTriangleSurfaceField(SdfField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.sdf.sdf_field import SdfField
+from core.sdf.sdf.sdf_field import SdfField
 
 
 class SdfQuadSurfaceField(SdfField):
@@ -2113,10 +2113,10 @@ class CommandDMCutSphere:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.cut_sphere import SdfCutSphereField
+        from core.sdf.sdf.cut_sphere import SdfCutSphereField
         field = SdfCutSphereField(FreeCAD.Vector(0, 0, 0), radius=20.0, cut_height=5.0)
-        obj = create_dm_object(name='CutSphere', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='CutSphere', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 class CommandDMCutHollowSphere:
@@ -2126,11 +2126,11 @@ class CommandDMCutHollowSphere:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.cut_hollow_sphere import SdfCutHollowSphereField
+        from core.sdf.sdf.cut_hollow_sphere import SdfCutHollowSphereField
         field = SdfCutHollowSphereField(FreeCAD.Vector(0, 0, 0),
                                         radius=20.0, cut_height=5.0, thickness=2.0)
-        obj = create_dm_object(name='CutHollowSphere', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='CutHollowSphere', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 class CommandDMDeathStar:
@@ -2140,11 +2140,11 @@ class CommandDMDeathStar:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.death_star import SdfDeathStarField
+        from core.sdf.sdf.death_star import SdfDeathStarField
         field = SdfDeathStarField(FreeCAD.Vector(0, 0, 0),
                                   radius=20.0, bite_radius=10.0, bite_offset=16.0)
-        obj = create_dm_object(name='DeathStar', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='DeathStar', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 class CommandDMVesicaSegment:
@@ -2154,11 +2154,11 @@ class CommandDMVesicaSegment:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.vesica_segment import SdfVesicaSegmentField
+        from core.sdf.sdf.vesica_segment import SdfVesicaSegmentField
         field = SdfVesicaSegmentField(FreeCAD.Vector(-12, 0, 0),
                                       FreeCAD.Vector(12, 0, 0), width=10.0)
-        obj = create_dm_object(name='VesicaSegment', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='VesicaSegment', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 class CommandDMTriangleSurface:
@@ -2168,12 +2168,12 @@ class CommandDMTriangleSurface:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.triangle_surface import SdfTriangleSurfaceField
+        from core.sdf.sdf.triangle_surface import SdfTriangleSurfaceField
         field = SdfTriangleSurfaceField(FreeCAD.Vector(0, 20, 0),
                                         FreeCAD.Vector(-18, -10, 0),
                                         FreeCAD.Vector(18, -10, 0))
-        obj = create_dm_object(name='Triangle', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='Triangle', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 class CommandDMQuadSurface:
@@ -2183,11 +2183,11 @@ class CommandDMQuadSurface:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.sdf.quad_surface import SdfQuadSurfaceField
+        from core.sdf.sdf.quad_surface import SdfQuadSurfaceField
         field = SdfQuadSurfaceField(FreeCAD.Vector(-15, -15, 0), FreeCAD.Vector(15, -15, 0),
                                     FreeCAD.Vector(15,  15, 0), FreeCAD.Vector(-15,  15, 0))
-        obj = create_dm_object(name='QuadSurface', shape_type='frep')
-        obj.Proxy.FRepField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
+        obj = create_dm_object(name='QuadSurface', shape_type='sdf')
+        obj.Proxy.SdfField = field;  obj.touch();  FreeCAD.activeDocument().recompute()
 
 
 FreeCADGui.addCommand('DM_CreateCutSphere',       CommandDMCutSphere())

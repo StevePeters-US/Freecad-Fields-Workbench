@@ -467,7 +467,7 @@ class ViewProjector:
 
     def get_sdf_hit(self, event_dict, skip_objects=None):
         """
-        Ray-march against all visible F-Rep SDF objects in the scene.
+        Ray-march against all visible SDF SDF objects in the scene.
         Returns (hit_point, hit_normal, obj) for the closest hit, or None.
         """
         if not self.view:
@@ -492,7 +492,7 @@ class ViewProjector:
                     continue
                 field = getattr(getattr(obj, "Proxy", None), "SdfField", None)
                 if field is None:
-                    field = getattr(getattr(obj, "Proxy", None), "FRepField", None)
+                    field = getattr(getattr(obj, "Proxy", None), "SdfField", None)
                 
                 if field is None:
                     continue

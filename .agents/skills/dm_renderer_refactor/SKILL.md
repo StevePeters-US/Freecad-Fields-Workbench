@@ -15,19 +15,19 @@ Use this skill when implementing tasks from `todo_updaterenderer.md`.
 
 ```
 GPU Ray March Renderer (real-time):
-  FRepField → sdf_baker.bake_sdf_to_volume(field, ray_march_cell_size)
+  SdfField → sdf_baker.bake_sdf_to_volume(field, ray_march_cell_size)
             → 3D texture upload (gl_texture3d.py)
             → sphere-trace fragment shader → screen pixels
   Settings: RayMarchCellSize (cmd_settings.py)
 
 SDF-to-Shape Tool (explicit user action, cmd_sdf_export.py):
-  FRepField → dm_mesher.get_active_mesher().mesh(field, cell_size, decimate, deduplicate)
+  SdfField → dm_mesher.get_active_mesher().mesh(field, cell_size, decimate, deduplicate)
             → Part.Shape
   Settings: owned entirely by cmd_sdf_export.py dialog — NOT global params
 ```
 
 No global meshing settings exist after this refactor. The only global setting that
-affects F-Rep appearance is `RayMarchCellSize` (in the renderer group).
+affects SDF appearance is `RayMarchCellSize` (in the renderer group).
 
 ---
 
@@ -95,9 +95,9 @@ These functions are deleted from `core/dm_object.py`:
 | `get_decimate_enabled()` | `decimate=` parameter to `mesher.mesh()` |
 | `get_deduplicate_enabled()` | `deduplicate=` parameter to `mesher.mesh()` |
 | `get_curvature_threshold()` | Local in `cmd_sdf_export.py` dialog (future) |
-| `get_frep_storage_type()` | Deprecated alias — deleted |
+| `get_sdf_storage_type()` | Deprecated alias — deleted |
 
-These FRep object properties are removed from `DMObjectProxy.__init__`:
+These Sdf object properties are removed from `DMObjectProxy.__init__`:
 - `MeshingCellSize` (PropertyFloat)
 - `MeshingType` (PropertyEnumeration)
 - `DecimateEnabled` (PropertyBool)
@@ -171,7 +171,7 @@ No FreeCAD.ParamGet calls in cmd_sdf_export.py.
 
 ## Files to Read Before Editing
 
-1. `core/dm_object.py` — settings functions + DMObjectProxy frep init + refresh_all_dm_objects
+1. `core/dm_object.py` — settings functions + DMObjectProxy sdf init + refresh_all_dm_objects
 2. `core/dm_scene_ray_march_renderer.py:430-460` — _bake_and_upload() method
 3. `core/dm_ray_march_renderer.py:280-310` — update() method + shader string
 4. `commands/cmd_settings.py` — full file (201 lines)
@@ -188,7 +188,7 @@ No FreeCAD.ParamGet calls in cmd_sdf_export.py.
 # After all tasks — should return zero results:
 grep -r "get_meshing_cell_size\|get_meshing_type\|get_decimate_enabled\|get_deduplicate_enabled\|get_curvature_threshold" core/ tools/ commands/
 grep -r "MeshingCellSize\|MeshingType\|DecimateEnabled\|DeduplicateEnabled" core/ tools/ commands/
-grep -r "frep_mesher" .
+grep -r "sdf_mesher" .
 
 # Should return results in dm_object.py and cmd_settings.py only:
 grep -r "get_ray_march_cell_size" core/ commands/

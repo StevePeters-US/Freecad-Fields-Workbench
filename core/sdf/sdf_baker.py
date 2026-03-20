@@ -1,5 +1,5 @@
 """
-core/frep/sdf_baker.py
+core/sdf/sdf_baker.py
 
 Bakes any SdfField to a 3D float32 volume for GPU ray marching.
 Uses field.evaluate_grid() and field.bounding_box() — no primitives.

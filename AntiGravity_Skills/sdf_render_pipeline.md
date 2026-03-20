@@ -16,7 +16,7 @@ _apply_preview_field(field)
     ├─ proxy.SdfField = field
     ├─ obj.touch() + doc.recompute()         ← BOTTLENECK: unnecessary FreeCAD cycle
     ↓
-DMObject.execute() → fp.Shape = Part.Shape() (no-op for frep)
+DMObject.execute() → fp.Shape = Part.Shape() (no-op for sdf)
     ↓
 updateData() → SdfRendererStrategy.update()
     ↓
@@ -41,7 +41,7 @@ Camera zoom → SoNodeSensor._on_camera_changed()
 | File | Role |
 |------|------|
 | `core/dm_scene_ray_march_renderer.py` | Singleton GPU renderer, `_rebuild()`, camera sensor, GLSL shader |
-| `core/frep/sdf_baker.py` | `bake_sdf_to_volume()` — CPU grid eval to 3D float32 volume |
+| `core/sdf/sdf_baker.py` | `bake_sdf_to_volume()` — CPU grid eval to 3D float32 volume |
 | `core/gl_texture3d.py` | OpenGL 3D texture management, `upload()`, `update_slice()` |
 | `tools/dm_base.py` | `_schedule_update()` throttle, `DragTimerMixin` |
 | `tools/primitive_tool.py` | `PrimitiveCreatorBase`, `update_preview()`, `_apply_preview_field()` |

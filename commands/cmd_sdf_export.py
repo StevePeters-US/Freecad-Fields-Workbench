@@ -1,7 +1,7 @@
 """
 commands/cmd_sdf_export.py
 
-Export an F-Rep field to a meshed Part.Shape solid.
+Export an SDF field to a meshed Part.Shape solid.
 """
 
 import FreeCAD
@@ -13,14 +13,14 @@ from PySide import QtCore, QtGui
 
 
 class CommandSDFToShape:
-    """Export a DM F-Rep object to a triangulated Part.Shape."""
+    """Export a DM SDF object to a triangulated Part.Shape."""
 
     def GetResources(self):
         return {
             'Pixmap': 'SDFToShape',
             'MenuText': 'SDF to Shape',
             'ToolTip': (
-                'Generate a triangle mesh from the selected F-Rep object\n'
+                'Generate a triangle mesh from the selected SDF object\n'
                 'and create a Part.Shape solid.\n\n'
                 'Meshing parameters are configured locally in the export dialog.'
             ),
@@ -30,12 +30,12 @@ class CommandSDFToShape:
         sel = FreeCADGui.Selection.getSelection()
         if len(sel) != 1:
             return False
-        return getattr(sel[0], "ShapeType", None) == "frep"
+        return getattr(sel[0], "ShapeType", None) == "sdf"
 
     def Activated(self):
         sel = FreeCADGui.Selection.getSelection()
         if len(sel) != 1:
-            dm_logger.error("SDF to Shape: Select exactly one F-Rep object.")
+            dm_logger.error("SDF to Shape: Select exactly one SDF object.")
             return
 
         obj = sel[0]

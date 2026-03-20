@@ -1,11 +1,11 @@
 ---
 name: DM Mesher Architecture
-description: Reference for the mesher class hierarchy, output format, timer instrumentation, and FRepField API. Required reading before modifying any mesher or adding mesh optimization passes.
+description: Reference for the mesher class hierarchy, output format, timer instrumentation, and SdfField API. Required reading before modifying any mesher or adding mesh optimization passes.
 ---
 
 # DM Mesher Architecture
 
-The meshing pipeline lives in `core/dm_mesher.py`. All meshers convert an `FRepField`
+The meshing pipeline lives in `core/dm_mesher.py`. All meshers convert an `SdfField`
 (signed distance function) into triangle arrays for Coin3D rendering.
 
 ---
@@ -38,7 +38,7 @@ or string label from FreeCAD preferences:
 
 ```python
 class DMMesher:
-    def mesh(self, field: FRepField, cell_size: float) -> tuple:
+    def mesh(self, field: SdfField, cell_size: float) -> tuple:
         """Returns (flat_verts, flat_idx) or None if no surface found."""
 ```
 
@@ -60,12 +60,12 @@ Index buffer is flat with `-1` sentinel after every triple.
 
 ---
 
-## FRepField API
+## SdfField API
 
-Located in `core/frep/frep_field.py`:
+Located in `core/sdf/sdf_field.py`:
 
 ```python
-class FRepField:
+class SdfField:
     def evaluate(self, point: FreeCAD.Vector) -> float
     def evaluate_grid(self, points: np.ndarray) -> np.ndarray   # (N,3) → (N,)
     def gradient(self, point: FreeCAD.Vector, h=1e-4) -> FreeCAD.Vector
@@ -75,10 +75,10 @@ class FRepField:
 
 **SDF convention:** negative inside, positive outside, zero on surface.
 
-**Concrete SDFs** in `core/frep/sdf/`: `SdfBoxField`, `SdfSphereField`,
+**Concrete SDFs** in `core/sdf/sdf/`: `SdfBoxField`, `SdfSphereField`,
 `SdfCylinderField`, `SdfPlaneField`. Each overrides `evaluate_grid()` with
-vectorized NumPy for performance. CSG composition via `core/frep/frep_composer.py`
-(`FRepUnion`, `FRepIntersection`, `FRepDifference`).
+vectorized NumPy for performance. CSG composition via `core/sdf/sdf_composer.py`
+(`SdfUnion`, `SdfIntersection`, `SdfDifference`).
 
 ---
 
@@ -150,7 +150,7 @@ encloses the surface, preventing boundary gaps.
 ## Files to Read Before Editing
 
 1. `core/dm_mesher.py` — all mesher implementations
-2. `core/frep/frep_field.py` — base FRepField class
-3. `core/frep/sdf/box.py` — reference SDF implementation (vectorized `evaluate_grid`)
+2. `core/sdf/sdf_field.py` — base SdfField class
+3. `core/sdf/sdf/box.py` — reference SDF implementation (vectorized `evaluate_grid`)
 4. `core/dm_object.py` — preference accessors (`get_meshing_type`, `get_cell_size`, etc.)
-5. `core/dm_renderer.py` — consumes `(flat_verts, flat_idx)` via `update_frep_mesh()`
+5. `core/dm_renderer.py` — consumes `(flat_verts, flat_idx)` via `update_sdf_mesh()`

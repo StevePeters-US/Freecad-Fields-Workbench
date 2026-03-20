@@ -31,7 +31,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 # (Monkeypatching removed as mesher now takes local arguments)
 
 from core.dm_mesher import DualContouringMesher, mesh_timer
-from core.frep.frep_field import SdfField
+from core.sdf.sdf_field import SdfField
 
 class SphereField(SdfField):
     def __init__(self, radius=10.0):

@@ -15,11 +15,11 @@ uses GPU ray marching for real-time visualization. When the user needs a triangl
 
 ```
 Render pipeline (real-time):
-  FRepField → GPU ray march shader → screen pixels
+  SdfField → GPU ray march shader → screen pixels
   NO meshing in this path.
 
 SDF-to-Mesh tool (explicit action):
-  FRepField → Mesher → (verts, indices) → Part.Shape
+  SdfField → Mesher → (verts, indices) → Part.Shape
   User triggers this via command button.
 ```
 
@@ -76,7 +76,7 @@ def triangles_to_shape(flat_verts, flat_idx):
 **File:** `commands/cmd_sdf_export.py`
 
 This command already implements the SDF-to-Mesh flow. It:
-1. Gets the selected F-Rep object's `FRepField`
+1. Gets the selected SDF object's `SdfField`
 2. Calls `get_active_mesher().mesh(field, cell_size)`
 3. Converts to `Part.Shape` via `Mesh.Mesh`
 4. Creates a new `Part::Feature` in the document
@@ -90,9 +90,9 @@ should NOT call meshers.
 
 In `dm_object.py:execute()`, the mesh-mode branch (lines 378-390) calls
 `get_active_mesher().mesh()` during document recompute. This must be removed so that
-`execute()` only sets `fp.Shape = Part.Shape()` for frep objects, regardless of render mode.
+`execute()` only sets `fp.Shape = Part.Shape()` for sdf objects, regardless of render mode.
 
-The `DMViewProvider.updateData()` mesh handoff to `DMRenderer.update_frep_mesh()` also
+The `DMViewProvider.updateData()` mesh handoff to `DMRenderer.update_sdf_mesh()` also
 becomes dead code once meshing is removed from execute().
 
 ---

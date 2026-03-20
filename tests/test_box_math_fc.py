@@ -5,7 +5,7 @@ import FreeCAD
 
 def test_box_math():
     try:
-        from core.frep.sdf.box import SdfBoxField
+        from core.sdf.sdf.box import SdfBoxField
         
         # 1. Create angled WP
         rot = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 45)

@@ -50,7 +50,7 @@ class _SettingsDialog(QtGui.QDialog):
         self._near_clip_spin.setToolTip(
             "Override camera near clipping distance in mm.\n"
             "Set to 0 for automatic (FreeCAD default).\n"
-            "Increase if F-Rep objects are clipped when zoomed in."
+            "Increase if SDF objects are clipped when zoomed in."
         )
 
         self._rm_res_spin = QtGui.QDoubleSpinBox()

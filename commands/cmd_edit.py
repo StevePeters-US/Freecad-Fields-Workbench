@@ -23,10 +23,10 @@ class EditDMObjectCommand:
         sel = FreeCADGui.Selection.getSelection()
         if not sel: return False
 
-        # Active for lattice-driven SDF objects (frep/implicit shapes)
+        # Active for lattice-driven SDF objects (sdf/implicit shapes)
         obj = sel[0]
         if hasattr(obj, "Proxy") and obj.Proxy.__class__.__name__ == "DMObjectProxy":
-            if hasattr(obj, "ShapeType") and obj.ShapeType in ["frep", "lattice"]:
+            if hasattr(obj, "ShapeType") and obj.ShapeType in ["sdf", "lattice"]:
                 return True
         return False
         
@@ -39,6 +39,6 @@ class EditDMObjectCommand:
     def getIsChecked(self):
         from core.dm_tool_manager import DMToolManager
         active_tool = DMToolManager.get_instance().get_active_tool()
-        return active_tool is not None and active_tool.__class__.__name__ in ["EditTool", "FRepEditTool"]
+        return active_tool is not None and active_tool.__class__.__name__ in ["EditTool", "SdfEditTool"]
 
 FreeCADGui.addCommand('DM_EditObject', EditDMObjectCommand())

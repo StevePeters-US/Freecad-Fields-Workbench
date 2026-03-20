@@ -1,5 +1,5 @@
 """
-core/frep/glsl_compiler.py
+core/sdf/glsl_compiler.py
 
 Compiles an SDF field tree into a GLSL compute shader that evaluates
 the field on a 3D grid and writes results directly to a 3D texture.

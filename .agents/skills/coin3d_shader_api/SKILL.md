@@ -273,4 +273,4 @@ sw.addChild(inner_sep)
 1. `core/dm_ray_march_renderer.py` — main consumer of this API
 2. `core/dm_renderer.py` — reference for how Coin3D nodes are structured in this project
 3. `core/dm_object.py:400` — `DMViewProvider.attach()` where the renderer is instantiated
-4. `core/frep/glsl_assembler.py` — produces the shader source strings consumed here
+4. `core/sdf/glsl_assembler.py` — produces the shader source strings consumed here

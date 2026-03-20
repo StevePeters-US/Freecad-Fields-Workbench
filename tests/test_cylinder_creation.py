@@ -74,7 +74,7 @@ sys.modules['FreeCAD'] = type('FreeCAD', (), {'Vector': Vector, 'Placement': Pla
 sys.modules['FreeCADGui'] = type('FreeCADGui', (), {'Selection': type('Selection', (), {'clearSelection': lambda: None, 'addSelection': lambda x: None}), 'updateGui': lambda: None})
 sys.modules['Part'] = type('Part', (), {'Shape': lambda: type('Shape', (), {'isNull': lambda: False})})
 
-from core.frep.sdf.cylinder import SdfCylinderField
+from core.sdf.sdf.cylinder import SdfCylinderField
 
 def test_cylinder_flow():
     print("--- Simulating CylinderCreator workflow on Front plane (90deg X) ---")

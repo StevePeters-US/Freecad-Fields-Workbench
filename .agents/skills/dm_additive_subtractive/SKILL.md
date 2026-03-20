@@ -5,17 +5,17 @@ description: How primitives store and render their additive/subtractive mode. Re
 
 # DM Additive/Subtractive Primitive Pattern
 
-Every F-Rep primitive is either **additive** (default) or **subtractive**. Additive primitives render orange `(1.0, 0.5, 0.0)`. Subtractive primitives render blue `(0.3, 0.5, 1.0)`. The mode is stored as a FreeCAD property on the object and passed to the GPU shader as a per-field uniform.
+Every SDF primitive is either **additive** (default) or **subtractive**. Additive primitives render orange `(1.0, 0.5, 0.0)`. Subtractive primitives render blue `(0.3, 0.5, 1.0)`. The mode is stored as a FreeCAD property on the object and passed to the GPU shader as a per-field uniform.
 
 ---
 
 ## Object Property
 
-`DMObjectProxy.__init__` adds this property for `shape_type == "frep"`:
+`DMObjectProxy.__init__` adds this property for `shape_type == "sdf"`:
 
 ```python
 if not hasattr(obj, "IsSubtractive"):
-    obj.addProperty("App::PropertyBool", "IsSubtractive", "FRep",
+    obj.addProperty("App::PropertyBool", "IsSubtractive", "Sdf",
                      "If True, this primitive subtracts material")
     obj.IsSubtractive = False
 ```
@@ -82,18 +82,18 @@ This works because `create_dm_object` names the FreeCAD object with the same lab
 When no tool is active, `DMInputManager.eventFilter` handles `QEvent.MouseButtonDblClick` with `Qt.LeftButton`:
 
 1. Call `DMSelectionManager.try_sdf_selection(qt_pos)` to select the SDF object under the cursor.
-2. If an SDF frep object is now selected, launch `FRepEditTool` and call `activate()`.
+2. If an SDF sdf object is now selected, launch `SdfEditTool` and call `activate()`.
 
-This reuses the existing `FRepEditTool` which reads the selected object's `FRepField` and allows corner-drag editing.
+This reuses the existing `SdfEditTool` which reads the selected object's `SdfField` and allows corner-drag editing.
 
 ---
 
 ## Files to Read Before Editing
 
-1. `core/dm_object.py:167` — `DMObjectProxy.__init__` (property registration for frep)
+1. `core/dm_object.py:167` — `DMObjectProxy.__init__` (property registration for sdf)
 2. `core/dm_scene_ray_march_renderer.py:73` — `_setup_nodes` (uniform registration)
 3. `core/dm_scene_ray_march_renderer.py:480` — `_rebuild` (per-field uniform upload)
 4. `tools/primitive_tool.py:51` — `PrimitiveCreatorBase.update_preview` (preview update loop)
 5. `core/input_manager.py:202` — `is_ctrl_down()` accessor
 6. `core/input_manager.py:30` — `eventFilter` (where to add double-click handler)
-7. `tools/edit_tool.py:483` — `FRepEditTool` (existing edit tool for frep objects)
+7. `tools/edit_tool.py:483` — `SdfEditTool` (existing edit tool for sdf objects)

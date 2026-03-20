@@ -90,7 +90,7 @@ Freecad-Direct-Modeling/
 │   ├── dm_object.py               # DMObjectProxy, DMViewProvider, factory
 │   ├── dm_part.py                 # DM_Part FeaturePython wrapper
 │   ├── dm_workplane.py            # DMWorkPlane FeaturePython object
-│   ├── frep_mesher.py             # Isosurface extraction (marching cubes / DC)
+│   ├── sdf_mesher.py             # Isosurface extraction (marching cubes / DC)
 │   ├── input_manager.py           # Global input event routing
 │   ├── nurbs_geometry.py          # DMPoint, DMCurve — NURBS primitives
 │   ├── work_plane.py              # WorkPlaneManager — Coin3D grid & snapping

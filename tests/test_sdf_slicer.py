@@ -30,8 +30,8 @@ sys.modules["FreeCAD"] = fc
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.frep.sdf_slicer import _chain_segments, slice_sdf, fit_dm_curve
-from core.frep.sdf.sphere import SdfSphereField
+from core.sdf.sdf_slicer import _chain_segments, slice_sdf, fit_dm_curve
+from core.sdf.sdf.sphere import SdfSphereField
 
 def test_chain_segments():
     """Test chaining unordered segments into a polyline."""

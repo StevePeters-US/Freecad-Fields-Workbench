@@ -1,7 +1,7 @@
 """
 commands/cmd_sdf_slice.py
 
-Slice an F-Rep SDF on a plane and create DM curve objects.
+Slice an SDF SDF on a plane and create DM curve objects.
 """
 import FreeCAD
 import FreeCADGui
@@ -82,7 +82,7 @@ class SDFSliceTaskPanel:
 
     def do_slice(self):
         try:
-            from core.frep.sdf_slicer import slice_sdf, fit_dm_curve
+            from core.sdf.sdf_slicer import slice_sdf, fit_dm_curve
             from core.dm_object import create_dm_object
 
             offset_val = self.offset_spin.value()
@@ -115,14 +115,14 @@ class SDFSliceTaskPanel:
 
 
 class SDFSliceCommand:
-    """Slice an F-Rep object to create cross-section curves."""
+    """Slice an SDF object to create cross-section curves."""
 
     def GetResources(self):
         return {
             'Pixmap': 'SDFSlice',
             'MenuText': 'SDF Slice',
-            'ToolTip': 'Slice an F-Rep SDF on a plane to create cross-section curves.\n'
-                       'Select an F-Rep object first. Uses the active workplane or XY plane.',
+            'ToolTip': 'Slice an SDF SDF on a plane to create cross-section curves.\n'
+                       'Select an SDF object first. Uses the active workplane or XY plane.',
         }
 
     def Activated(self):

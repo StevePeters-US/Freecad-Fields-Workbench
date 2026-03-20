@@ -184,6 +184,6 @@ vec3 cam = (gl_ModelViewMatrixInverse * vec4(0,0,0,1)).xyz;
 
 1. `core/dm_ray_march_renderer.py` — single-field ray march renderer (to be migrated)
 2. `core/dm_scene_ray_march_renderer.py` — multi-field scene renderer (to be migrated)
-3. `core/frep/sdf_baker.py` — SDF baking (to be migrated to float32)
+3. `core/sdf/sdf_baker.py` — SDF baking (to be migrated to float32)
 4. `.agents/skills/coin3d_shader_api/SKILL.md` — Coin3D shader setup patterns
 5. `.agents/skills/dm_ray_march_scene_graph/SKILL.md` — scene graph structure

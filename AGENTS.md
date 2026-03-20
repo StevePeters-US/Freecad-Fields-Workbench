@@ -4,7 +4,7 @@ Shared guidance for all AI agents (Claude, Gemini, etc.) working in this reposit
 
 ## Project Overview
 
-FreeCAD workbench for direct/implicit modeling using **Signed Distance Fields (F-Rep)**. NURBS surfaces are evaluated as spatial discriminator functions `f(P)` (inside/outside), composed via min/max trees (union/cut/intersect), and rendered via GPU ray marching or extracted to mesh via marching cubes/dual contouring.
+FreeCAD workbench for direct/implicit modeling using **Signed Distance Fields (SDF)**. NURBS surfaces are evaluated as spatial discriminator functions `f(P)` (inside/outside), composed via min/max trees (union/cut/intersect), and rendered via GPU ray marching or extracted to mesh via marching cubes/dual contouring.
 
 ## Running Tests
 
@@ -13,7 +13,7 @@ Tests are ad-hoc scripts in `tests/`. Most mock FreeCAD at import time:
 ```bash
 # From repo root
 python tests/test_imports.py
-python tests/test_frep_boolean.py
+python tests/test_sdf_boolean.py
 python tests/test_sdf_baker.py
 python tests/test_mesh_deduplication.py
 ```
@@ -53,15 +53,15 @@ Tool Lifecycle:
 | Type | Shape | Coin3D overlay | Class |
 |------|-------|----------------|-------|
 | NURBS (curve/surface) | FreeCAD `Part.Shape` | Control cage spheres/lines | `DMViewProvider` + `dm_renderer.py` |
-| F-Rep (SDF primitives) | null (empty shape) | GPU ray march quad | `DMSceneRayMarchRenderer` |
+| SDF (SDF primitives) | null (empty shape) | GPU ray march quad | `DMSceneRayMarchRenderer` |
 | WorkPlane | null | Transient grid lines | `WorkPlaneManager` |
 
 ### SDF Pipeline
 
 ```
-SdfField subclass (core/frep/sdf/*.py)
-  → FRepComposerField (core/frep/frep_composer.py)  — min/max boolean tree
-  → SdfBaker (core/frep/sdf_baker.py)               — field → voxel grid
+SdfField subclass (core/sdf/sdf/*.py)
+  → SdfComposerField (core/sdf/sdf_composer.py)  — min/max boolean tree
+  → SdfBaker (core/sdf/sdf_baker.py)               — field → voxel grid
   → DMSceneRayMarchRenderer (core/dm_scene_ray_march_renderer.py) — GPU visualization
   → DMSdfExport / DMSdfSlice                         — mesh/slice export
 ```
@@ -78,8 +78,8 @@ SdfField subclass (core/frep/sdf/*.py)
 | `core/dm_mesher.py` | `SurfaceNetsMesher` | Marching cubes + dual contouring isosurface extraction |
 | `core/work_plane.py` | `WorkPlaneManager` | Coin3D grid visualization |
 | `tools/dm_base.py` | `DMBase` / `NURBSPrimitiveCreator` | Base classes for all interactive tools |
-| `core/frep/frep_field.py` | `SdfField` | Abstract base for all SDF fields |
-| `core/frep/frep_composer.py` | `FRepComposerField` | Boolean composition tree |
+| `core/sdf/sdf_field.py` | `SdfField` | Abstract base for all SDF fields |
+| `core/sdf/sdf_composer.py` | `SdfComposerField` | Boolean composition tree |
 
 ## Code Conventions
 
@@ -132,7 +132,7 @@ Specialized implementation patterns are in `.agents/skills/`. Before implementin
 
 - `input_manager.py`: `get_projected_point()` returns undefined variable `result` — crashes on call
 - `edit_tool.py:_hit_test_edge` — references `event_dict` (not a parameter); also missing `import Part`
-- `input_manager.py` E-key handler — only dispatches `EditTool` for `curve` ShapeType; FRepEditTool unreachable via E-key
+- `input_manager.py` E-key handler — only dispatches `EditTool` for `curve` ShapeType; SdfEditTool unreachable via E-key
 - `dm_scene_ray_march_renderer.py`: `_rebuild()` label lookup uses `doc.getObject("DocName.ObjName")` → always returns None → IsSubtractive always False. Fix: split label on `.` first.
 
 ## Active Task Files

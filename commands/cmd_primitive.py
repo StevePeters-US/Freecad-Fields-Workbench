@@ -16,7 +16,7 @@ class CommandDMCreation:
         return {
             'Pixmap': self._ICONS.get(self.c_type, f"Part_{self.c_type}"),
             'MenuText': f"Create {self.c_type}",
-            'ToolTip': f"Interactive F-Rep {self.c_type} creation tool."
+            'ToolTip': f"Interactive SDF {self.c_type} creation tool."
         }
 
     def IsActive(self):

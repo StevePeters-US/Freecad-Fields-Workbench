@@ -22,8 +22,8 @@ sys.modules["FreeCAD"] = fc
 
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from core.frep.sdf_baker import bake_sdf_to_atlas
-from core.frep.sdf.sphere import SdfSphereField
+from core.sdf.sdf_baker import bake_sdf_to_atlas
+from core.sdf.sdf.sphere import SdfSphereField
 
 def test_sdf_baker():
     print("Testing SDF Baker...", flush=True)

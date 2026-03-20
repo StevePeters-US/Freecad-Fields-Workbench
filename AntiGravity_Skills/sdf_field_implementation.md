@@ -1,15 +1,15 @@
 ---
-name: FRep Field Implementation Guide
-description: How to implement a new FRep field (SDF primitive) for the Direct Modeling workbench.
+name: Sdf Field Implementation Guide
+description: How to implement a new Sdf field (SDF primitive) for the Direct Modeling workbench.
 ---
 
-# FRep Field Implementation Guide
+# Sdf Field Implementation Guide
 
-When implementing a new F-Rep field (SDF primitive) for the Direct Modeling workbench, follow this checklist.
+When implementing a new SDF field (SDF primitive) for the Direct Modeling workbench, follow this checklist.
 
 ## Required Methods
 
-Every field must inherit from `FRepField` (or `SdfField` once the refactor is complete) and implement:
+Every field must inherit from `SdfField` (or `SdfField` once the refactor is complete) and implement:
 
 1. **`evaluate(self, point: FreeCAD.Vector) -> float`** — Returns the signed distance at a single point. Negative = inside, positive = outside, zero = on surface.
 
@@ -23,8 +23,8 @@ Every field must inherit from `FRepField` (or `SdfField` once the refactor is co
 
 ## File Location
 
-- Place the file in `core/frep/sdf/` (e.g., `core/frep/sdf/torus.py`)
-- Import from the base: `from core.frep.frep_field import FRepField`
+- Place the file in `core/sdf/sdf/` (e.g., `core/sdf/sdf/torus.py`)
+- Import from the base: `from core.sdf.sdf_field import SdfField`
 - Use the class name pattern: `SDF<Shape>Field` (e.g., `SdfTorusField`)
 
 ## Integration Checklist
@@ -40,9 +40,9 @@ Every field must inherit from `FRepField` (or `SdfField` once the refactor is co
 ```python
 import numpy as np
 import FreeCAD
-from core.frep.frep_field import FRepField
+from core.sdf.sdf_field import SdfField
 
-class SdfNewField(FRepField):
+class SdfNewField(SdfField):
     """Exact analytical SDF for <shape>."""
     def __init__(self, center: FreeCAD.Vector, param: float):
         self.center = center

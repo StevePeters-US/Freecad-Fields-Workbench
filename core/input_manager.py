@@ -225,9 +225,9 @@ class DMInputManager(QtCore.QObject):
                     if sel:
                         obj = sel[0]
                         proxy_name = getattr(getattr(obj, "Proxy", None), "__class__", type(None)).__name__
-                        if proxy_name == "DMObjectProxy" and getattr(obj, "ShapeType", "") == "frep":
-                            from tools.edit_tool import FRepEditTool
-                            FRepEditTool().activate()
+                        if proxy_name == "DMObjectProxy" and getattr(obj, "ShapeType", "") == "sdf":
+                            from tools.edit_tool import SdfEditTool
+                            SdfEditTool().activate()
                             return True
 
                 # Global hotkeys
@@ -255,9 +255,9 @@ class DMInputManager(QtCore.QObject):
                                 if st == "curve":
                                     from tools.edit_tool import EditTool
                                     EditTool().activate(); return True
-                                elif st == "frep":
-                                    from tools.edit_tool import FRepEditTool
-                                    FRepEditTool().activate(); return True
+                                elif st == "sdf":
+                                    from tools.edit_tool import SdfEditTool
+                                    SdfEditTool().activate(); return True
 
                 # ShortcutOverride for 'E' when no tool
                 elif event.type() == QtCore.QEvent.ShortcutOverride:

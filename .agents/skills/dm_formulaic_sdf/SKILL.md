@@ -5,15 +5,15 @@ description: Reference for the to_glsl() contract, return format, GLSL naming co
 
 # DM Formulaic SDF Rendering
 
-The formulaic SDF pipeline compiles FRep expression trees directly into GLSL code.
-Each `FRepField` subclass emits its exact analytical SDF formula as GLSL fragments,
+The formulaic SDF pipeline compiles Sdf expression trees directly into GLSL code.
+Each `SdfField` subclass emits its exact analytical SDF formula as GLSL fragments,
 which are assembled into a complete fragment shader for GPU ray marching.
 
 ---
 
 ## `to_glsl()` Contract
 
-Every `FRepField` subclass that supports formulaic rendering must implement:
+Every `SdfField` subclass that supports formulaic rendering must implement:
 
 ```python
 def to_glsl(self, node_id: str) -> dict:
@@ -127,9 +127,9 @@ All generated GLSL must use **GLSL 1.10/1.20** constructs only:
 
 ## Files to Read Before Editing
 
-1. `core/frep/frep_field.py` — base class with `to_glsl()` abstract method
-2. `core/frep/sdf/sphere.py` — reference primitive implementation
-3. `core/frep/frep_composer.py` — CSG operations
-4. `core/frep/glsl_assembler.py` — shader assembly (created in S-007)
+1. `core/sdf/sdf_field.py` — base class with `to_glsl()` abstract method
+2. `core/sdf/sdf/sphere.py` — reference primitive implementation
+3. `core/sdf/sdf_composer.py` — CSG operations
+4. `core/sdf/glsl_assembler.py` — shader assembly (created in S-007)
 5. `core/dm_ray_march_renderer.py` — consumer of assembled shaders
 6. `todo_sdf.md` — task list for the full pipeline

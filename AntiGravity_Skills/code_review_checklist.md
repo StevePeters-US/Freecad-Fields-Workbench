@@ -22,7 +22,7 @@ Check these patterns that indicate code should be promoted to a parent class:
 
 ### 3. Empty Intermediate Classes
 - **Pattern**: A class exists only as `class Foo(Bar): pass`
-- **Example**: `MarchingCubesField(FRepField): pass`
+- **Example**: `MarchingCubesField(SdfField): pass`
 - **Fix**: Remove the class and have children inherit directly, OR add meaningful shared behavior
 
 ### 4. Parallel Cleanup Paths
@@ -32,7 +32,7 @@ Check these patterns that indicate code should be promoted to a parent class:
 
 ## Field Architecture Quality
 
-- [ ] Every `FRepField` subclass overrides `bounding_box()` with a tight bound (not the default ±10km)
+- [ ] Every `SdfField` subclass overrides `bounding_box()` with a tight bound (not the default ±10km)
 - [ ] `evaluate_grid()` uses numpy vectorization (no Python loops)
 - [ ] `gradient()` is analytical when a closed-form expression exists
 - [ ] `ComposerField` subclasses correctly compose child bounding boxes
@@ -51,7 +51,7 @@ DMBase
 ├── NURBSPrimitiveCreator (curves, surfaces, points)
 │   ├── CurveCreator
 │   └── WorkPlaneCreator
-├── PrimitiveCreatorBase (FRep primitives)
+├── PrimitiveCreatorBase (Sdf primitives)
 │   ├── BoxCreator
 │   ├── SphereCreator
 │   └── CylinderCreator
@@ -59,7 +59,7 @@ DMBase
 ├── TranslateTool
 └── (future tools)
 
-FRepField
+SdfField
 ├── SdfField (formula-based SDFs)
 │   ├── SdfBoxField
 │   ├── SdfSphereField

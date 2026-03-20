@@ -101,7 +101,7 @@ class Placement:
 sys.modules['FreeCAD'] = type('FreeCAD', (), {'Vector': Vector, 'Placement': Placement, 'Rotation': Rotation, 'Matrix': Matrix})
 import FreeCAD
 
-from core.frep.sdf.cylinder import SdfCylinderField
+from core.sdf.sdf.cylinder import SdfCylinderField
 
 def test_orientation():
     # 1. Identity Placement (standard Z-up)

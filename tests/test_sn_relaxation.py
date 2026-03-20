@@ -30,7 +30,7 @@ sys.modules["Part"] = part
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from core.dm_mesher import SurfaceNetsMesher
-from core.frep.sdf.sphere import SdfSphereField
+from core.sdf.sdf.sphere import SdfSphereField
 
 def test_sn_relaxation_quality():
     print("Testing SurfaceNets relaxation on a sphere...", flush=True)

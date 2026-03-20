@@ -473,12 +473,12 @@ class EditTool(DMBase, DragTimerMixin):
 
 # Opposite corner index for a box defined by the standard 8-corner ordering:
 # 0:(-,-,-) 1:(+,-,-) 2:(+,+,-) 3:(-,+,-) 4:(-,-,+) 5:(+,-,+) 6:(+,+,+) 7:(-,+,+)
-_FREP_OPPOSITE = {0: 6, 1: 7, 2: 4, 3: 5, 4: 2, 5: 3, 6: 0, 7: 1}
+_SDF_OPPOSITE = {0: 6, 1: 7, 2: 4, 3: 5, 4: 2, 5: 3, 6: 0, 7: 1}
 
 
-class FRepEditTool(DMBase, DragTimerMixin):
+class SdfEditTool(DMBase, DragTimerMixin):
     """
-    Edit tool for F-Rep (SDF) box primitives.
+    Edit tool for SDF (SDF) box primitives.
     """
     def get_command_id(self):
         return "DM_EditObject"
@@ -506,14 +506,14 @@ class FRepEditTool(DMBase, DragTimerMixin):
             self.terminate()
             return
 
-        if not (hasattr(obj, "ShapeType") and obj.ShapeType == "frep"):
-            dm_logger.error("Selected object is not an F-Rep object.")
+        if not (hasattr(obj, "ShapeType") and obj.ShapeType == "sdf"):
+            dm_logger.error("Selected object is not an SDF object.")
             self.terminate()
             return
 
         field = getattr(obj.Proxy, "SdfField", None)
         if field is None:
-            dm_logger.error("F-Rep object has no SdfField.")
+            dm_logger.error("SDF object has no SdfField.")
             self.terminate()
             return
 
@@ -521,7 +521,7 @@ class FRepEditTool(DMBase, DragTimerMixin):
         self._field = field
         self._placement = getattr(field, "placement", None)
         self._refresh_corners()
-        dm_logger.info(f"FRepEditTool: drag a corner handle to reshape '{obj.Label}'")
+        dm_logger.info(f"SdfEditTool: drag a corner handle to reshape '{obj.Label}'")
 
     # ------------------------------------------------------------------
     # Corner geometry helpers
@@ -560,7 +560,7 @@ class FRepEditTool(DMBase, DragTimerMixin):
 
     def _field_from_corners(self, dragged_world, fixed_world):
         """Rebuild SdfBoxField so dragged_world and fixed_world are opposite corners."""
-        from core.frep.sdf.box import SdfBoxField
+        from core.sdf.sdf.box import SdfBoxField
         placement = self._placement
         if placement:
             inv = placement.inverse()
@@ -584,7 +584,7 @@ class FRepEditTool(DMBase, DragTimerMixin):
     def _start_drag(self, idx):
         from core.dm_object import get_interactive_throttle_interval
         self._dragging_idx = idx
-        self._fixed_world = self._world_corners[_FREP_OPPOSITE[idx]]
+        self._fixed_world = self._world_corners[_SDF_OPPOSITE[idx]]
         # Drag plane: camera-facing plane through the grabbed corner
         vd = self.view.getViewDirection()
         self._drag_plane_n = FreeCAD.Vector(-vd[0], -vd[1], -vd[2])
@@ -630,7 +630,7 @@ class FRepEditTool(DMBase, DragTimerMixin):
             obj.touch()
             obj.Document.recompute([obj])
         except Exception as e:
-            dm_logger.debug(f"FRepEditTool._drag_update: {e}")
+            dm_logger.debug(f"SdfEditTool._drag_update: {e}")
 
     def _finish_drag(self):
         self._stop_drag_timer()
@@ -645,7 +645,7 @@ class FRepEditTool(DMBase, DragTimerMixin):
             if hasattr(obj, "Points") and self._world_corners:
                 obj.Points = self._world_corners
         except Exception as e:
-            dm_logger.debug(f"FRepEditTool._finish_drag: {e}")
+            dm_logger.debug(f"SdfEditTool._finish_drag: {e}")
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -702,8 +702,8 @@ def activate():
     shape_type = getattr(obj, "ShapeType", None)
 
     if proxy is not None and proxy_name == "DMObjectProxy":
-        if shape_type == "frep":
-            tool = FRepEditTool()
+        if shape_type == "sdf":
+            tool = SdfEditTool()
             tool.activate()
             return
         elif shape_type == "curve":

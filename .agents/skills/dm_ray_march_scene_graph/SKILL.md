@@ -84,5 +84,5 @@ float sdf_value = (normalized * 2.0 - 1.0) * u_max_dist;
 | File | Purpose |
 |:-----|:--------|
 | `core/dm_ray_march_renderer.py` | Renderer class, scene graph, shaders |
-| `core/frep/sdf_baker.py` | CPU SDF → uint16 atlas baking |
+| `core/sdf/sdf_baker.py` | CPU SDF → uint16 atlas baking |
 | `tests/test_sdf_baker.py` | Unit tests for baker output |

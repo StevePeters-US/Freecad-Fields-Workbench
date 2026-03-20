@@ -7,7 +7,7 @@ description: Reference for the two-color (orange/blue) boolean system where IsSu
 
 ## Color Semantics
 
-Every F-Rep primitive has `IsSubtractive` (bool FreeCAD property):
+Every SDF primitive has `IsSubtractive` (bool FreeCAD property):
 
 | `IsSubtractive` | Display Color | Role |
 |-----------------|---------------|------|
@@ -20,7 +20,7 @@ The user sets a field's color/role by holding **Ctrl** while dragging it into pl
 
 ## Boolean Operations on Grouped Inputs
 
-Boolean commands accept **any number** of selected F-Rep objects. Before composing,
+Boolean commands accept **any number** of selected SDF objects. Before composing,
 split the selection by color:
 
 ```python
@@ -40,7 +40,7 @@ Result object always gets `IsSubtractive = False` (rendered orange).
 
 Helper to fold a list with UnionField:
 ```python
-from core.frep.frep_composer import UnionField
+from core.sdf.sdf_composer import UnionField
 
 def _fold_union(fields):
     """Fold a list of SdfFields into a single UnionField tree (left-associative)."""
@@ -84,10 +84,10 @@ work needed** for tree display — the children will nest under the parent.
 For a boolean result object, `execute()` should re-read `BooleanInputs`, extract
 their `SdfField` attributes, and recompose.
 
-Add a `shape_type == "boolean_frep"` branch (or reuse `"frep"`) inside `execute()`:
+Add a `shape_type == "boolean_sdf"` branch (or reuse `"sdf"`) inside `execute()`:
 
 ```python
-if st == "frep" and hasattr(fp, "BooleanInputs") and fp.BooleanInputs:
+if st == "sdf" and hasattr(fp, "BooleanInputs") and fp.BooleanInputs:
     # Re-compose from children
     from commands.cmd_boolean import _recompose_boolean
     field = _recompose_boolean(fp)
@@ -106,10 +106,10 @@ The recompose helper reads `obj.BooleanOp` (string: "Add", "Subtract",
 
 ## Result Object Properties
 
-The result object (`shape_type == "frep"`) needs these extra FreeCAD properties:
+The result object (`shape_type == "sdf"`) needs these extra FreeCAD properties:
 
 ```python
-# Set in DMObjectProxy.__init__ when shape_type == "frep" AND this is a boolean:
+# Set in DMObjectProxy.__init__ when shape_type == "sdf" AND this is a boolean:
 obj.addProperty("App::PropertyString",  "BooleanOp",     "Boolean", "Add/Subtract/Intersection")
 obj.addProperty("App::PropertyLinkList","BooleanInputs", "Boolean", "Child SDF inputs")
 ```
@@ -153,8 +153,8 @@ Colors to use in SVG:
 ## Files to Read Before Editing
 
 1. `commands/cmd_boolean.py` — current boolean command (lines 51–101: `_sdf_boolean`)
-2. `core/frep/frep_composer.py` — `UnionField`, `SubtractionField`, `IntersectionField`
-3. `core/dm_object.py:140` — `DMObjectProxy.__init__` (frep property registration at line 221)
+2. `core/sdf/sdf_composer.py` — `UnionField`, `SubtractionField`, `IntersectionField`
+3. `core/dm_object.py:140` — `DMObjectProxy.__init__` (sdf property registration at line 221)
 4. `core/dm_object.py:306` — `DMObjectProxy.execute()` (add boolean recompute branch)
 5. `core/dm_object.py:505` — `DMViewProvider.claimChildren()` (already returns `OutList`)
 6. `core/dm_scene_ray_march_renderer.py:519` — `register_field` / `update_field` API

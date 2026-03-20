@@ -8,7 +8,7 @@ description: Quick reference for the Direct Modeling workbench architecture, cla
 ## Data Flow
 
 ```
-User Input → Tool (DMBase subclass) → FRepField → Mesher → Coin3D Nodes → Viewport
+User Input → Tool (DMBase subclass) → SdfField → Mesher → Coin3D Nodes → Viewport
                                     ↓
                              DMObjectProxy (stores field on proxy)
                                     ↓
@@ -19,13 +19,13 @@ User Input → Tool (DMBase subclass) → FRepField → Mesher → Coin3D Nodes 
 
 | Area | Key Files | Purpose |
 |------|-----------|---------|
-| **Fields** | `core/frep/frep_field.py` | Abstract base for all SDF fields |
-| | `core/frep/marching_cubes/*.py` | Concrete SDF SDF primitives |
-| | `core/frep/frep_composer.py` | Boolean field composition (union/intersection/subtraction) |
-| **Meshing** | `core/frep_mesher.py` | Marching cubes mesher + mesher factory |
+| **Fields** | `core/sdf/sdf_field.py` | Abstract base for all SDF fields |
+| | `core/sdf/marching_cubes/*.py` | Concrete SDF SDF primitives |
+| | `core/sdf/sdf_composer.py` | Boolean field composition (union/intersection/subtraction) |
+| **Meshing** | `core/sdf_mesher.py` | Marching cubes mesher + mesher factory |
 | **Document** | `core/dm_object.py` | `DMObjectProxy` (data), `DMViewProvider` (rendering), factory |
 | **Tools** | `tools/dm_base.py` | `DMBase` (event loop), `NURBSPrimitiveCreator` (NURBS objects) |
-| | `tools/primitive_tool.py` | `PrimitiveCreatorBase` (FRep preview), Box/Sphere/Cylinder creators |
+| | `tools/primitive_tool.py` | `PrimitiveCreatorBase` (Sdf preview), Box/Sphere/Cylinder creators |
 | | `tools/edit_tool.py` | Curve point/handle editing |
 | | `tools/curve_tool.py` | Curve creation |
 | | `tools/work_plane_tool.py` | Workplane creation with face snapping |
@@ -33,12 +33,12 @@ User Input → Tool (DMBase subclass) → FRepField → Mesher → Coin3D Nodes 
 | **UI** | `InitGui.py` | Workbench registration, toolbar/menu setup |
 | **Input** | `core/input_manager.py` | Global input event filter, context menus |
 
-## FRep Pipeline Detail
+## Sdf Pipeline Detail
 
 1. **Tool creates field**: e.g., `BoxCreator._make_field()` → `MCBoxField(center, size, placement)`
-2. **Preview loop**: Tool sets `proxy.FRepField = field`, triggers recompute
+2. **Preview loop**: Tool sets `proxy.SdfField = field`, triggers recompute
 3. **Proxy.execute()**: Calls `mesher.mesh(field, resolution)` → returns `(verts, flat_idx)` numpy arrays
-4. **ViewProvider.updateData()**: Detects `"Shape"` prop change → calls `_update_frep_mesh(verts, idx)`
+4. **ViewProvider.updateData()**: Detects `"Shape"` prop change → calls `_update_sdf_mesh(verts, idx)`
 5. **Coin3D rendering**: `SoCoordinate3` + `SoIndexedFaceSet` display the triangles directly
 
 ## Tool State Machine
@@ -54,8 +54,8 @@ Most tools follow a 3-state pattern managed by `DMBase`:
 
 | Setting | Key | Default | Used By |
 |---------|-----|---------|---------|
-| FRep Storage Type | `FrepStorageType` | 0 (MC) | `get_active_mesher()` |
-| Max Bounds | `MaxBounds` | 10000.0 mm | `FRepField.bounding_box()` fallback |
+| Sdf Storage Type | `SdfStorageType` | 0 (MC) | `get_active_mesher()` |
+| Max Bounds | `MaxBounds` | 10000.0 mm | `SdfField.bounding_box()` fallback |
 | Picking Radius | `PickingRadius` | 5.0 mm | Curve close detection |
 | Line Width | `LineWidth` | 3.0 | All DM objects |
 | Point Size | `PointSize` | 6.0 | All DM objects |

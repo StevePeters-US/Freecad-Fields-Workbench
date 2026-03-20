@@ -5,7 +5,7 @@ description: Sphere-tracing ray march for CPU-side SDF hit detection. Required r
 
 # DM SDF CPU Hit Test Pattern
 
-CPU-side sphere tracing for interactive surface snapping and selection against F-Rep SDF objects.
+CPU-side sphere tracing for interactive surface snapping and selection against SDF SDF objects.
 Used for workplane normal snap, point/curve placement on SDF surfaces, and LMB selection.
 
 ---
@@ -53,7 +53,7 @@ t = max(t_near, 0.0)
 
 ---
 
-## `FRepField.ray_march()` Signature
+## `SdfField.ray_march()` Signature
 
 ```python
 def ray_march(self, ray_origin, ray_direction, max_steps=128, surface_eps=0.5):
@@ -73,14 +73,14 @@ def ray_march(self, ray_origin, ray_direction, max_steps=128, surface_eps=0.5):
 ```python
 def get_sdf_hit(self, event_dict, skip_objects=None):
     """
-    Ray-march against all visible F-Rep objects in the document.
-    Returns (hit_point, hit_normal, frep_obj) for closest camera-depth hit, or None.
+    Ray-march against all visible SDF objects in the document.
+    Returns (hit_point, hit_normal, sdf_obj) for closest camera-depth hit, or None.
     """
 ```
 
 - Iterates `FreeCAD.ActiveDocument.Objects`.
 - Skips objects in `skip_objects` list (pass `[self.preview_obj]` to avoid self-hit).
-- Detects F-Rep objects via `hasattr(obj.Proxy, 'FRepField')`.
+- Detects SDF objects via `hasattr(obj.Proxy, 'SdfField')`.
 - Checks `obj.ViewObject.Visibility` before marching.
 - Selects closest hit by `(hit_pt - cam_pos).dot(ray_d_norm)`.
 
@@ -90,7 +90,7 @@ def get_sdf_hit(self, event_dict, skip_objects=None):
 
 | Location | What changes |
 |----------|-------------|
-| `core/frep/frep_field.py:72` | Add `ray_march()` to `FRepField` (H-001) |
+| `core/sdf/sdf_field.py:72` | Add `ray_march()` to `SdfField` (H-001) |
 | `core/view_projector.py:344` | Add `get_sdf_hit()` to `ViewProjector` (H-002) |
 | `core/view_projector.py:241` | Add SDF hit to `get_mouse_plane_pt()` priority chain (H-003) |
 | `tools/work_plane_tool.py:183` | Add SDF normal snap in `get_snapped_placement()` (H-004) |
@@ -112,17 +112,17 @@ def get_sdf_hit(self, event_dict, skip_objects=None):
 
 ---
 
-## Detecting F-Rep Objects
+## Detecting SDF Objects
 
 ```python
-# Check if a FreeCAD object is an F-Rep SDF object
-if hasattr(obj, 'Proxy') and hasattr(obj.Proxy, 'FRepField'):
-    field = obj.Proxy.FRepField   # may be None if not yet computed
+# Check if a FreeCAD object is an SDF SDF object
+if hasattr(obj, 'Proxy') and hasattr(obj.Proxy, 'SdfField'):
+    field = obj.Proxy.SdfField   # may be None if not yet computed
 ```
 
-`FRepField` is set in `tools/primitive_tool.py` (line ~70):
+`SdfField` is set in `tools/primitive_tool.py` (line ~70):
 ```python
-proxy.FRepField = field   # where proxy = obj.Proxy
+proxy.SdfField = field   # where proxy = obj.Proxy
 ```
 
 ---
@@ -130,7 +130,7 @@ proxy.FRepField = field   # where proxy = obj.Proxy
 ## Testing `ray_march()` Manually
 
 ```python
-from core.frep.sdf.sphere import SdfSphereField
+from core.sdf.sdf.sphere import SdfSphereField
 import FreeCAD
 
 s = SdfSphereField(FreeCAD.Vector(0, 0, 0), 50.0)
@@ -158,8 +158,8 @@ assert miss is None
 
 ## Files to Read Before Editing
 
-1. `core/frep/frep_field.py` — `FRepField` base class; `evaluate()`, `gradient()`, `bounding_box()`
-2. `core/frep/sdf/sphere.py` — simplest complete SdfField; shows evaluate/gradient/bounding_box
+1. `core/sdf/sdf_field.py` — `SdfField` base class; `evaluate()`, `gradient()`, `bounding_box()`
+2. `core/sdf/sdf/sphere.py` — simplest complete SdfField; shows evaluate/gradient/bounding_box
 3. `core/view_projector.py` — `get_geometry_info()` (lines 270–344) for NURBS pattern to follow
 4. `tools/work_plane_tool.py:161` — `get_snapped_placement()` for H-004 insertion point
 5. `core/input_manager.py:30` — `eventFilter()` for H-005 insertion point

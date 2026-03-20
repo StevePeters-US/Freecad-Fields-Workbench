@@ -1,11 +1,11 @@
 ---
 name: DM Primitive Tool Implementation Pattern
-description: Standardized pattern for creating interactive F-Rep primitive tools in the Direct Modeling workbench.
+description: Standardized pattern for creating interactive SDF primitive tools in the Direct Modeling workbench.
 ---
 
 # DM Primitive Tool Implementation Pattern
 
-This skill defines the canonical pattern for implementing interactive F-Rep primitive creator tools (e.g., Box, Sphere, Cylinder) in the Direct Modeling workbench. All new primitive tools must follow this pattern to ensure consistent UX, workplane support, and visual feedback.
+This skill defines the canonical pattern for implementing interactive SDF primitive creator tools (e.g., Box, Sphere, Cylinder) in the Direct Modeling workbench. All new primitive tools must follow this pattern to ensure consistent UX, workplane support, and visual feedback.
 
 ## Core Principles
 

@@ -46,7 +46,7 @@ class CommandDMBoolean:
             return
 
         all_sdf = all(
-            getattr(obj, "ShapeType", None) == "frep" for obj in sel
+            getattr(obj, "ShapeType", None) == "sdf" for obj in sel
         )
 
         if all_sdf:
@@ -54,61 +54,9 @@ class CommandDMBoolean:
         else:
             self._brep_boolean(sel)
 
-def _fold_union(fields):
-    """Left-associative UnionField fold. Returns None if list is empty."""
-    from core.frep.frep_composer import UnionField
-    if not fields:
-        return None
-    result = fields[0]
-    for f in fields[1:]:
-        result = UnionField(result, f)
-    return result
-
-def _recompose_boolean(fp):
-    """Re-compose the SDF tree for a boolean result FP object from its BooleanInputs.
-    
-    Returns the composed SdfField, or None on failure.
-    Called from DMObjectProxy.execute() when BooleanInputs are present.
-    """
-    from core.frep.frep_composer import UnionField, SubtractionField, IntersectionField
-    op = getattr(fp, "BooleanOp", None)
-    inputs = getattr(fp, "BooleanInputs", [])
-    if not inputs or not op:
-        return None
-
-    orange_fields = []
-    blue_fields   = []
-    for child in inputs:
-        if child is None:
-            continue
-        proxy = getattr(child, "Proxy", None)
-        field = getattr(proxy, "SdfField", None)
-        if field is None:
-            continue
-        if getattr(child, "IsSubtractive", False):
-            blue_fields.append(field)
-        else:
-            orange_fields.append(field)
-
-    if op == "Add":
-        return _fold_union(orange_fields + blue_fields)
-    elif op == "Subtract":
-        orange = _fold_union(orange_fields)
-        blue   = _fold_union(blue_fields)
-        if orange is None or blue is None:
-            return None
-        return SubtractionField(orange, blue)
-    elif op == "Intersection":
-        orange = _fold_union(orange_fields)
-        blue   = _fold_union(blue_fields)
-        if orange is None or blue is None:
-            return None
-        return IntersectionField(orange, blue)
-    return None
-
     def _sdf_boolean(self, sel):
         """Compose SdfField trees for SDF objects using two-color grouping."""
-        from core.frep.frep_composer import UnionField, SubtractionField, IntersectionField
+        from core.sdf.sdf_composer import UnionField, SubtractionField, IntersectionField
         from core.dm_object import create_dm_object
 
         try:
@@ -161,7 +109,7 @@ def _recompose_boolean(fp):
 
             # Create result object
             new_name = f"{self.operation}"
-            result = create_dm_object(name=new_name, shape_type="frep")
+            result = create_dm_object(name=new_name, shape_type="sdf")
             result.Proxy.SdfField = result_field
             result.IsSubtractive = False  # always orange
 
@@ -185,14 +133,14 @@ def _recompose_boolean(fp):
             FreeCADGui.Selection.clearSelection()
             FreeCADGui.Selection.addSelection(result)
             dm_logger.info(
-                f"F-Rep {self.operation}: composed {len(sel)} fields "
+                f"SDF {self.operation}: composed {len(sel)} fields "
                 f"({len(orange_fields)} orange, {len(blue_fields)} blue)."
             )
         except Exception as e:
-            dm_logger.error(f"DM_{self.operation} (F-Rep) failed: {e}")
+            dm_logger.error(f"DM_{self.operation} (SDF) failed: {e}")
 
     def _brep_boolean(self, sel):
-        """Existing BRep boolean logic for non-frep objects."""
+        """Existing BRep boolean logic for non-sdf objects."""
         # Verify all selected objects are DM objects
         for obj in sel:
             if not hasattr(obj, "ShapeType"):
@@ -235,6 +183,60 @@ def _recompose_boolean(fp):
             dm_logger.info(f"{self.operation} operation completed.")
         except Exception as e:
             dm_logger.error(f"DM_{self.operation} failed: {e}")
+
+
+def _fold_union(fields):
+    """Left-associative UnionField fold. Returns None if list is empty."""
+    from core.sdf.sdf_composer import UnionField
+    if not fields:
+        return None
+    result = fields[0]
+    for f in fields[1:]:
+        result = UnionField(result, f)
+    return result
+
+
+def _recompose_boolean(fp):
+    """Re-compose the SDF tree for a boolean result FP object from its BooleanInputs.
+
+    Returns the composed SdfField, or None on failure.
+    Called from DMObjectProxy.execute() when BooleanInputs are present.
+    """
+    from core.sdf.sdf_composer import UnionField, SubtractionField, IntersectionField
+    op = getattr(fp, "BooleanOp", None)
+    inputs = getattr(fp, "BooleanInputs", [])
+    if not inputs or not op:
+        return None
+
+    orange_fields = []
+    blue_fields = []
+    for child in inputs:
+        if child is None:
+            continue
+        proxy = getattr(child, "Proxy", None)
+        field = getattr(proxy, "SdfField", None)
+        if field is None:
+            continue
+        if getattr(child, "IsSubtractive", False):
+            blue_fields.append(field)
+        else:
+            orange_fields.append(field)
+
+    if op == "Add":
+        return _fold_union(orange_fields + blue_fields)
+    elif op == "Subtract":
+        orange = _fold_union(orange_fields)
+        blue = _fold_union(blue_fields)
+        if orange is None or blue is None:
+            return None
+        return SubtractionField(orange, blue)
+    elif op == "Intersection":
+        orange = _fold_union(orange_fields)
+        blue = _fold_union(blue_fields)
+        if orange is None or blue is None:
+            return None
+        return IntersectionField(orange, blue)
+    return None
 
 
 FreeCADGui.addCommand('DM_Add',         CommandDMBoolean("Add"))

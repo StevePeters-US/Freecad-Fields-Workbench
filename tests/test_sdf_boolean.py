@@ -1,4 +1,4 @@
-"""Test F-Rep boolean composition — runs without FreeCAD."""
+"""Test SDF boolean composition — runs without FreeCAD."""
 import sys, os
 from types import ModuleType
 import numpy as np
@@ -21,9 +21,9 @@ sys.modules["FreeCAD"] = fc
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.frep.sdf.sphere import SdfSphereField
-from core.frep.sdf.box import SdfBoxField
-from core.frep.frep_composer import UnionField, SubtractionField, IntersectionField
+from core.sdf.sdf.sphere import SdfSphereField
+from core.sdf.sdf.box import SdfBoxField
+from core.sdf.sdf_composer import UnionField, SubtractionField, IntersectionField
 
 
 def test_union():
@@ -141,7 +141,7 @@ if __name__ == "__main__":
         test_intersection()
         test_evaluate_grid_matches()
         test_chained_booleans()
-        print("\nAll F-Rep boolean tests passed.", flush=True)
+        print("\nAll SDF boolean tests passed.", flush=True)
     except Exception as e:
         print(f"Test FAILED: {e}", flush=True)
         import traceback

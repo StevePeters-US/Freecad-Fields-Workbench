@@ -40,7 +40,7 @@ Calling `terminate()` after `finish()` (which may itself call `terminate()`) is 
 
 Do **not** add an `on_button3_down` override to a tool unless it has unique commit semantics
 that cannot be expressed by overriding `finish()`. The base-class implementation applies to
-all tools. If a tool previously had an override (e.g. `FRepEditTool`), remove it.
+all tools. If a tool previously had an override (e.g. `SdfEditTool`), remove it.
 
 ## finish() vs terminate()
 
@@ -55,5 +55,5 @@ always exits regardless of what `finish()` did internally.
 ## Files to Read Before Editing
 
 1. `tools/dm_base.py` — `on_button3_down` (line 625), `terminate` (line 402), `is_in_progress` (line 513)
-2. `tools/edit_tool.py` — `FRepEditTool.on_button3_down` (line 665, to be removed per I-002)
+2. `tools/edit_tool.py` — `SdfEditTool.on_button3_down` (line 665, to be removed per I-002)
 3. `tools/primitive_tool.py` — `SdfPrimitiveCreator.finish` (line 157); calls `reset_state()` not `terminate()`

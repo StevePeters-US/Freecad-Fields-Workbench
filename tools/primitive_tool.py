@@ -13,9 +13,9 @@ from core.dm_mesher import mesh_timer
 from tools.dm_base import DMBase, DragTimerMixin, STATE_IDLE, STATE_DRAGGING
 
 # Ensure we import the right storage classes. For now, defaulting to MarchingCubes
-from core.frep.sdf.box import SdfBoxField
-from core.frep.sdf.sphere import SdfSphereField
-from core.frep.sdf.cylinder import SdfCylinderField
+from core.sdf.sdf.box import SdfBoxField
+from core.sdf.sdf.sphere import SdfSphereField
+from core.sdf.sdf.cylinder import SdfCylinderField
 
 # Cell size for interactive preview in mm (larger = faster updates)
 _PREVIEW_CELL_SIZE = 20.0
@@ -26,7 +26,7 @@ _BOX_OPPOSITE = {0: 6, 1: 7, 2: 4, 3: 5, 4: 2, 5: 3, 6: 0, 7: 1}
 
 
 class PrimitiveCreatorBase(DMBase, DragTimerMixin):
-    """Base class for F-Rep primitive creator tools with live mesh preview."""
+    """Base class for SDF primitive creator tools with live mesh preview."""
     
 
 
@@ -53,10 +53,10 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self._init_working_plane()
 
     def get_handled_types(self):
-        return ["frep"]
+        return ["sdf"]
 
     def edit_object(self, obj):
-        """Load an existing F-Rep object into the tool for editing.
+        """Load an existing SDF object into the tool for editing.
 
         Base: sets preview obj, loads raw points, sets workplane.
         Subclasses call super() then reconstruct their specific state and draw handles.
@@ -65,11 +65,11 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         dm_logger.debug(f"{type(self).__name__}: Editing existing object {obj.Label}")
         self._preview_obj = obj
 
-        if hasattr(obj, "Points"):
-            self.points = list(obj.Points)
-
         self.working_plane = obj.Placement
         self._working_plane_is_fallback = False
+
+        if hasattr(obj, "Points"):
+            self.points = [self.working_plane.multVec(pt) for pt in obj.Points]
 
     # ------------------------------------------------------------------
     # Edit mode: hover, handle selection, drag
@@ -210,7 +210,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 # Create the preview object for the first time
                 # Use last part of class name without 'Creator' suffix
                 name = type(self).__name__.replace("Creator", "")
-                self._preview_obj = create_dm_object(name=name, shape_type="frep")
+                self._preview_obj = create_dm_object(name=name, shape_type="sdf")
             finally:
                 self._creating_obj = False
 
@@ -269,7 +269,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         obj = self._preview_obj
         if obj is None or not obj.Document:
             # fallback: create fresh
-            obj = create_dm_object(name=name, shape_type="frep")
+            obj = create_dm_object(name=name, shape_type="sdf")
 
         # Rename to final name
         try:
@@ -281,7 +281,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         if points is not None:
             try:
                 if not hasattr(obj, "Points"):
-                    obj.addProperty("App::PropertyVectorList", "Points", "FRep", "Control Points")
+                    obj.addProperty("App::PropertyVectorList", "Points", "Sdf", "Control Points")
                 obj.Points = points
             except Exception:
                 pass
@@ -328,7 +328,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
         obj = self._preview_obj
         if obj is None or not obj.Document:
-            obj = create_dm_object(name=name, shape_type="frep")
+            obj = create_dm_object(name=name, shape_type="sdf")
 
         try:
             obj.Label = name
@@ -338,7 +338,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         if points is not None:
             try:
                 if not hasattr(obj, "Points"):
-                    obj.addProperty("App::PropertyVectorList", "Points", "FRep", "Control Points")
+                    obj.addProperty("App::PropertyVectorList", "Points", "Sdf", "Control Points")
                 obj.Points = points
             except Exception:
                 pass
@@ -376,13 +376,13 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             self.dm_line_set = None
         self.view.redraw()
 
-    def _create_frep_object(self, name, field, points=None):
+    def _create_sdf_object(self, name, field, points=None):
         """Helper to create the FreeCAD object and assign the field (for 1-shot creation)."""
-        obj = create_dm_object(name=name, shape_type="frep")
+        obj = create_dm_object(name=name, shape_type="sdf")
         obj.Proxy.SdfField = field
         if points is not None:
             if not hasattr(obj, "Points"):
-                obj.addProperty("App::PropertyVectorList", "Points", "FRep", "Control Points")
+                obj.addProperty("App::PropertyVectorList", "Points", "Sdf", "Control Points")
             obj.Points = points
         obj.touch()
         return obj
@@ -715,7 +715,7 @@ class BoxCreator(PrimitiveCreatorBase):
             FreeCAD.Vector(cx + size_x/2, cy + size_y/2, cz + size_z/2),
             FreeCAD.Vector(cx - size_x/2, cy + size_y/2, cz + size_z/2),
         ]
-        return [self.to_global(pt) for pt in pts_local]
+        return pts_local
 
 
 class SphereCreator(PrimitiveCreatorBase):
@@ -858,8 +858,11 @@ class SphereCreator(PrimitiveCreatorBase):
     def _get_final_points(self):
         if self.center is None or self.current_point is None:
             return None
-        radius = (self.current_point - self.center).Length
-        return [self.center, self.center + FreeCAD.Vector(radius, 0, 0)]
+        # We need local coordinates
+        loc_center = self.to_local(self.center)
+        loc_current = self.to_local(self.current_point)
+        radius = (loc_current - loc_center).Length
+        return [loc_center, loc_center + FreeCAD.Vector(radius, 0, 0)]
 
 
 class CylinderCreator(PrimitiveCreatorBase):

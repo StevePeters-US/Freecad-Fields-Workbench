@@ -5,7 +5,7 @@ description: Reference for the marching squares SDF slicer, DM curve compatibili
 
 # DM SDF Slicer Architecture
 
-The SDF slicer extracts smooth cross-section curves from F-Rep SDFs by running marching squares
+The SDF slicer extracts smooth cross-section curves from SDF SDFs by running marching squares
 on a 2D grid projected onto an arbitrary plane, then fitting DM-compatible curves through the
 resulting contour points.
 
@@ -14,7 +14,7 @@ resulting contour points.
 ## Pipeline
 
 ```
-FRepField                    slice plane (origin, normal)
+SdfField                    slice plane (origin, normal)
     │                              │
     ▼                              ▼
 slice_sdf()              ← build 2D grid on plane
@@ -117,7 +117,7 @@ points closer than `0.5 × avg_spacing` to the previous kept point.
 
 ## Files to Read Before Editing
 
-1. `core/frep/sdf_slicer.py` — the slicer implementation
+1. `core/sdf/sdf_slicer.py` — the slicer implementation
 2. `core/dm_curve.py` — `DMCurve` class (consumers of the curve data)
 3. `core/dm_point.py` — `DMPoint` class (handle_in / handle_out semantics)
 4. `core/dm_object.py` — `DMObjectProxy.__init__()` curve branch (property setup)

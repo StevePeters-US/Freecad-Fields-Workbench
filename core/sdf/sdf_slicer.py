@@ -1,7 +1,7 @@
 """
-core/frep/sdf_slicer.py
+core/sdf/sdf_slicer.py
 
-Extracts smooth cross-section curves from F-Rep SDFs using marching squares.
+Extracts smooth cross-section curves from SDF SDFs using marching squares.
 Outputs DM-curve-compatible dicts for create_dm_object().
 """
 import math

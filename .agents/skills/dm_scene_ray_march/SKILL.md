@@ -1,23 +1,23 @@
 ---
 name: Scene-Level Baked SDF Ray March Renderer
-description: Architecture reference for the scene-level ray march renderer that combines all F-Rep fields into a single baked 3D texture atlas and renders them with one full-screen quad. Covers the singleton lifecycle, field registry, combined baking, depth compositing, and how it replaces per-object DMRayMarchRenderer instances. Generic — works with any SDF, no per-primitive GLSL formulas.
+description: Architecture reference for the scene-level ray march renderer that combines all SDF fields into a single baked 3D texture atlas and renders them with one full-screen quad. Covers the singleton lifecycle, field registry, combined baking, depth compositing, and how it replaces per-object DMRayMarchRenderer instances. Generic — works with any SDF, no per-primitive GLSL formulas.
 ---
 
 # Scene-Level Baked SDF Ray March Renderer
 
 The scene-level renderer replaces per-object `DMRayMarchRenderer` instances with a
-single `DMSceneRayMarchRenderer` singleton. One full-screen quad renders ALL F-Rep
+single `DMSceneRayMarchRenderer` singleton. One full-screen quad renders ALL SDF
 fields combined. The SDF is evaluated via a **baked 3D texture** — every field's
 `evaluate_grid()` is called on the CPU, the results are composed into a single scalar
 grid, baked to a uint16 atlas, and uploaded as one texture. This is generic: any
-`FRepField` subclass works automatically, no per-primitive GLSL formulas needed.
+`SdfField` subclass works automatically, no per-primitive GLSL formulas needed.
 
 ---
 
 ## Why Per-Object Renderers Fail
 
 Each `DMRayMarchRenderer` creates its own full-screen quad covering the entire
-viewport. With N F-Rep objects, N quads execute the fragment shader at every pixel.
+viewport. With N SDF objects, N quads execute the fragment shader at every pixel.
 Problems:
 
 1. **Depth compositing** — N independent `gl_FragDepth` writes compete per pixel.
@@ -82,7 +82,7 @@ When fields change, the renderer:
 5. Bakes the result via `bake_sdf_to_atlas()` (existing uint16 pipeline)
 6. Uploads the single texture + updates uniforms
 
-For non-union compositions (intersection, subtraction), the `FRepField` tree already
+For non-union compositions (intersection, subtraction), the `SdfField` tree already
 handles this via `ComposerField.evaluate_grid()`. The scene renderer just unions all
 top-level objects — each object's internal CSG tree is already baked into its field.
 
@@ -196,8 +196,8 @@ _switch (SoSwitch, whichChild=0 when fields exist, -1 when empty)
 ## Files to Read Before Editing
 
 1. `core/dm_ray_march_renderer.py` — the per-object renderer (pattern to follow)
-2. `core/frep/sdf_baker.py` — `bake_sdf_to_atlas()` (reused for combined baking)
+2. `core/sdf/sdf_baker.py` — `bake_sdf_to_atlas()` (reused for combined baking)
 3. `core/dm_object.py` — `DMViewProvider.attach()` and `updateData()` (wiring)
-4. `core/frep/frep_composer.py` — `UnionField` for combining fields
+4. `core/sdf/sdf_composer.py` — `UnionField` for combining fields
 5. `.agents/skills/dm_coin3d_depth_ordering/SKILL.md` — depth buffer management
 6. `.agents/skills/dm_ray_march_scene_graph/SKILL.md` — scene graph structure

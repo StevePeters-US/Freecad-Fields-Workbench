@@ -1,6 +1,6 @@
 import FreeCAD
 import numpy as np
-from core.frep.frep_field import SdfField
+from core.sdf.sdf_field import SdfField
 
 def _bbox_union(box_a, box_b):
     """Returns the spatial union of two bounding boxes (min_corner, max_corner)."""

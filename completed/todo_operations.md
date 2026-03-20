@@ -8,7 +8,7 @@
 
 ## Background
 
-The workbench has three boolean operations (Union, Subtract, Intersect) in `frep_composer.py` and
+The workbench has three boolean operations (Union, Subtract, Intersect) in `sdf_composer.py` and
 matching commands in `cmd_boolean.py`. This task list adds the remaining SDF operations from the
 IQuilezles reference article, organized into four operation families:
 
@@ -25,10 +25,10 @@ modifiers, and spatial/deform ops, keeping the bar uncluttered.
 
 | Symbol | Location | Purpose |
 |--------|----------|---------|
-| `ComposerField` | `core/frep/frep_composer.py:27` | Base for binary operations |
-| `UnionField` | `core/frep/frep_composer.py:35` | Existing union (min) |
-| `FRepField` | `core/frep/frep_field.py:1` | Abstract base for all fields |
-| `create_dm_object` | `core/dm_object.py` | Creates a DM frep object |
+| `ComposerField` | `core/sdf/sdf_composer.py:27` | Base for binary operations |
+| `UnionField` | `core/sdf/sdf_composer.py:35` | Existing union (min) |
+| `SdfField` | `core/sdf/sdf_field.py:1` | Abstract base for all fields |
+| `create_dm_object` | `core/dm_object.py` | Creates a DM sdf object |
 | `cmd_boolean.py` | `commands/cmd_boolean.py` | Existing boolean commands |
 | `appendToolbar` | `InitGui.py:85` | Toolbar registration |
 
@@ -46,12 +46,12 @@ modifiers, and spatial/deform ops, keeping the bar uncluttered.
 
 ## Tier 1 — Smooth Booleans & XOR
 
-Extend `frep_composer.py` with smooth blend operations. The smooth operations take a `k`
+Extend `sdf_composer.py` with smooth blend operations. The smooth operations take a `k`
 smoothing factor: larger k = more blending (k=0 degrades to the sharp boolean).
 
 ### O-001: Add smooth boolean and XOR field classes
 
-**File:** `core/frep/frep_composer.py` — append after `SubtractionField` class (end of file)
+**File:** `core/sdf/sdf_composer.py` — append after `SubtractionField` class (end of file)
 
 **What:** Four new field classes: `SmoothUnionField`, `SmoothSubtractionField`,
 `SmoothIntersectionField`, `XorField`. The smooth versions use the polynomial smooth-min from IQ.
@@ -59,7 +59,7 @@ smoothing factor: larger k = more blending (k=0 degrades to the sharp boolean).
 ```python
 class SmoothUnionField(ComposerField):
     """Smooth union: blends A and B with smoothing radius k. Ref: opSmoothUnion() iq."""
-    def __init__(self, field_a: FRepField, field_b: FRepField, k: float):
+    def __init__(self, field_a: SdfField, field_b: SdfField, k: float):
         super().__init__(field_a, field_b)
         self.k = k
 
@@ -82,7 +82,7 @@ class SmoothUnionField(ComposerField):
 
 class SmoothSubtractionField(ComposerField):
     """Smooth subtraction: A minus B with smooth blend. Ref: opSmoothSubtraction() iq."""
-    def __init__(self, field_a: FRepField, field_b: FRepField, k: float):
+    def __init__(self, field_a: SdfField, field_b: SdfField, k: float):
         super().__init__(field_a, field_b)
         self.k = k
 
@@ -107,7 +107,7 @@ class SmoothSubtractionField(ComposerField):
 
 class SmoothIntersectionField(ComposerField):
     """Smooth intersection: blend of max(A,B). Ref: opSmoothIntersection() iq."""
-    def __init__(self, field_a: FRepField, field_b: FRepField, k: float):
+    def __init__(self, field_a: SdfField, field_b: SdfField, k: float):
         super().__init__(field_a, field_b)
         self.k = k
 
@@ -191,7 +191,7 @@ class XorField(ComposerField):
 
 **File:** `commands/cmd_smooth_boolean.py` — create new file
 
-**What:** Four commands that apply smooth boolean operations to the two selected F-Rep objects.
+**What:** Four commands that apply smooth boolean operations to the two selected SDF objects.
 Follows the same selection-based pattern as `cmd_boolean.py`.
 
 ```python
@@ -222,26 +222,26 @@ class CommandDMSmoothBoolean:
         label = self.operation.replace('Smooth', 'Smooth ')
         return {'Pixmap': self._ICONS[self.operation],
                 'MenuText': label,
-                'ToolTip': f'Apply {label} to two selected F-Rep objects (k={self.k}).'}
+                'ToolTip': f'Apply {label} to two selected SDF objects (k={self.k}).'}
 
     def IsActive(self): return FreeCAD.activeDocument() is not None
 
     def Activated(self):
-        from core.frep.frep_composer import (SmoothUnionField, SmoothSubtractionField,
+        from core.sdf.sdf_composer import (SmoothUnionField, SmoothSubtractionField,
                                               SmoothIntersectionField, XorField)
         from core.dm_object import create_dm_object
         _MAP = {'SmoothUnion': SmoothUnionField, 'SmoothSubtraction': SmoothSubtractionField,
                 'SmoothIntersection': SmoothIntersectionField, 'Xor': XorField}
         sel = FreeCADGui.Selection.getSelection()
         if len(sel) < 2:
-            dm_logger.error(f'DM_{self.operation}: select at least two F-Rep objects.')
+            dm_logger.error(f'DM_{self.operation}: select at least two SDF objects.')
             return
         fields = []
         for obj in sel:
             proxy = getattr(obj, 'Proxy', None)
-            field = getattr(proxy, 'FRepField', None) if proxy else None
+            field = getattr(proxy, 'SdfField', None) if proxy else None
             if field is None:
-                dm_logger.error(f'{obj.Label} has no FRepField — must be an F-Rep object.')
+                dm_logger.error(f'{obj.Label} has no SdfField — must be an SDF object.')
                 return
             fields.append(field)
         cls = _MAP[self.operation]
@@ -251,8 +251,8 @@ class CommandDMSmoothBoolean:
                 result_field = cls(result_field, fields[i])
             else:
                 result_field = cls(result_field, fields[i], self.k)
-        obj_out = create_dm_object(name=self.operation, shape_type='frep')
-        obj_out.Proxy.FRepField = result_field
+        obj_out = create_dm_object(name=self.operation, shape_type='sdf')
+        obj_out.Proxy.SdfField = result_field
         for obj in sel:
             if hasattr(obj, 'ViewObject') and obj.ViewObject:
                 obj.ViewObject.Visibility = False
@@ -290,7 +290,7 @@ class DMSharpBooleanGroup:
         return ('DM_Add', 'DM_Subtract', 'DM_Intersection', 'DM_Xor')
     def GetDefaultCommand(self): return 0
     def GetResources(self):
-        return {'MenuText': 'Boolean Ops', 'ToolTip': 'Sharp boolean operations on F-Rep objects'}
+        return {'MenuText': 'Boolean Ops', 'ToolTip': 'Sharp boolean operations on SDF objects'}
     def IsActive(self): return FreeCAD.activeDocument() is not None
 
 
@@ -339,11 +339,11 @@ self.appendToolbar("DM - Operations", [
 
 Unary operations that wrap a single field and modify its shape. Each takes one child field.
 
-### O-005: Create `frep_modifier.py` with Round, Onion, Elongate
+### O-005: Create `sdf_modifier.py` with Round, Onion, Elongate
 
-**File:** `core/frep/frep_modifier.py` — create new file
+**File:** `core/sdf/sdf_modifier.py` — create new file
 
-**What:** Three modifier fields that each wrap one `FRepField` child.
+**What:** Three modifier fields that each wrap one `SdfField` child.
 - `RoundModifierField`: inflates the surface outward by `radius` (opRound)
 - `OnionModifierField`: creates a shell of `thickness` around the surface (opOnion)
 - `ElongateModifierField`: stretches the shape along each axis by `amounts` (opElongate)
@@ -351,12 +351,12 @@ Unary operations that wrap a single field and modify its shape. Each takes one c
 ```python
 import numpy as np
 import FreeCAD
-from core.frep.frep_field import FRepField
+from core.sdf.sdf_field import SdfField
 
 
-class RoundModifierField(FRepField):
+class RoundModifierField(SdfField):
     """Inflates a field outward by radius. Ref: opRound() iq."""
-    def __init__(self, child: FRepField, radius: float):
+    def __init__(self, child: SdfField, radius: float):
         self.child = child
         self.radius = radius
 
@@ -372,9 +372,9 @@ class RoundModifierField(FRepField):
         return (mn - r, mx + r)
 
 
-class OnionModifierField(FRepField):
+class OnionModifierField(SdfField):
     """Creates a shell of given thickness around a field surface. Ref: opOnion() iq."""
-    def __init__(self, child: FRepField, thickness: float):
+    def __init__(self, child: SdfField, thickness: float):
         self.child = child
         self.thickness = thickness
 
@@ -390,9 +390,9 @@ class OnionModifierField(FRepField):
         return (mn - t, mx + t)
 
 
-class ElongateModifierField(FRepField):
+class ElongateModifierField(SdfField):
     """Stretches a field along each axis. amounts = (hx, hy, hz) half-extents to add. Ref: opElongate() iq."""
-    def __init__(self, child: FRepField, amounts: FreeCAD.Vector):
+    def __init__(self, child: SdfField, amounts: FreeCAD.Vector):
         self.child = child
         self.amounts = amounts  # hx, hy, hz
 
@@ -455,7 +455,7 @@ class ElongateModifierField(FRepField):
 
 **File:** `commands/cmd_modifier.py` — create new file
 
-**What:** Three commands (Round, Onion, Elongate) that each wrap the selected F-Rep object.
+**What:** Three commands (Round, Onion, Elongate) that each wrap the selected SDF object.
 Also includes the `DMModifierGroup` dropdown class.
 
 ```python
@@ -464,16 +464,16 @@ import FreeCADGui
 from core import dm_logger
 
 
-def _get_single_frep_field(label):
+def _get_single_sdf_field(label):
     sel = FreeCADGui.Selection.getSelection()
     if len(sel) != 1:
-        dm_logger.error(f'{label}: select exactly one F-Rep object.')
+        dm_logger.error(f'{label}: select exactly one SDF object.')
         return None, None
     obj = sel[0]
     proxy = getattr(obj, 'Proxy', None)
-    field = getattr(proxy, 'FRepField', None) if proxy else None
+    field = getattr(proxy, 'SdfField', None) if proxy else None
     if field is None:
-        dm_logger.error(f'{label}: selected object has no FRepField.')
+        dm_logger.error(f'{label}: selected object has no SdfField.')
         return None, None
     return obj, field
 
@@ -481,16 +481,16 @@ def _get_single_frep_field(label):
 class CommandDMRound:
     def GetResources(self):
         return {'Pixmap': 'ModRound', 'MenuText': 'Round',
-                'ToolTip': 'Inflate the selected F-Rep surface outward by a radius.'}
+                'ToolTip': 'Inflate the selected SDF surface outward by a radius.'}
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_modifier import RoundModifierField
-        src_obj, field = _get_single_frep_field('Round')
+        from core.sdf.sdf_modifier import RoundModifierField
+        src_obj, field = _get_single_sdf_field('Round')
         if field is None: return
         new_field = RoundModifierField(field, radius=3.0)
-        obj = create_dm_object(name='Round', shape_type='frep')
-        obj.Proxy.FRepField = new_field
+        obj = create_dm_object(name='Round', shape_type='sdf')
+        obj.Proxy.SdfField = new_field
         src_obj.ViewObject.Visibility = False
         obj.touch();  FreeCAD.activeDocument().recompute()
 
@@ -498,16 +498,16 @@ class CommandDMRound:
 class CommandDMOnion:
     def GetResources(self):
         return {'Pixmap': 'ModOnion', 'MenuText': 'Onion',
-                'ToolTip': 'Create a hollow shell around the selected F-Rep surface.'}
+                'ToolTip': 'Create a hollow shell around the selected SDF surface.'}
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_modifier import OnionModifierField
-        src_obj, field = _get_single_frep_field('Onion')
+        from core.sdf.sdf_modifier import OnionModifierField
+        src_obj, field = _get_single_sdf_field('Onion')
         if field is None: return
         new_field = OnionModifierField(field, thickness=2.0)
-        obj = create_dm_object(name='Onion', shape_type='frep')
-        obj.Proxy.FRepField = new_field
+        obj = create_dm_object(name='Onion', shape_type='sdf')
+        obj.Proxy.SdfField = new_field
         src_obj.ViewObject.Visibility = False
         obj.touch();  FreeCAD.activeDocument().recompute()
 
@@ -515,16 +515,16 @@ class CommandDMOnion:
 class CommandDMElongate:
     def GetResources(self):
         return {'Pixmap': 'ModElongate', 'MenuText': 'Elongate',
-                'ToolTip': 'Stretch the selected F-Rep shape along each axis.'}
+                'ToolTip': 'Stretch the selected SDF shape along each axis.'}
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_modifier import ElongateModifierField
-        src_obj, field = _get_single_frep_field('Elongate')
+        from core.sdf.sdf_modifier import ElongateModifierField
+        src_obj, field = _get_single_sdf_field('Elongate')
         if field is None: return
         new_field = ElongateModifierField(field, FreeCAD.Vector(10.0, 0.0, 0.0))
-        obj = create_dm_object(name='Elongate', shape_type='frep')
-        obj.Proxy.FRepField = new_field
+        obj = create_dm_object(name='Elongate', shape_type='sdf')
+        obj.Proxy.SdfField = new_field
         src_obj.ViewObject.Visibility = False
         obj.touch();  FreeCAD.activeDocument().recompute()
 
@@ -549,9 +549,9 @@ FreeCADGui.addCommand('DM_ModifierGroup', DMModifierGroup())
 
 ## Tier 3 — Spatial Operations
 
-### O-008: Create `frep_spatial.py` with symmetry and repetition fields
+### O-008: Create `sdf_spatial.py` with symmetry and repetition fields
 
-**File:** `core/frep/frep_spatial.py` — create new file
+**File:** `core/sdf/sdf_spatial.py` — create new file
 
 **What:** Four spatial operation fields.
 - `SymmetryXField`: mirrors the child across the YZ plane (X=0)
@@ -562,12 +562,12 @@ FreeCADGui.addCommand('DM_ModifierGroup', DMModifierGroup())
 ```python
 import numpy as np
 import FreeCAD
-from core.frep.frep_field import FRepField
+from core.sdf.sdf_field import SdfField
 
 
-class SymmetryXField(FRepField):
+class SymmetryXField(SdfField):
     """Mirror the child across the X=0 plane. Ref: opSymX() iq."""
-    def __init__(self, child: FRepField):
+    def __init__(self, child: SdfField):
         self.child = child
 
     def evaluate(self, point: FreeCAD.Vector) -> float:
@@ -583,9 +583,9 @@ class SymmetryXField(FRepField):
         return (FreeCAD.Vector(-ext, mn.y, mn.z), FreeCAD.Vector(ext, mx.y, mx.z))
 
 
-class SymmetryXZField(FRepField):
+class SymmetryXZField(SdfField):
     """Mirror across both X=0 and Z=0 (4-fold XZ symmetry). Ref: opSymXZ() iq."""
-    def __init__(self, child: FRepField):
+    def __init__(self, child: SdfField):
         self.child = child
 
     def evaluate(self, point: FreeCAD.Vector) -> float:
@@ -602,9 +602,9 @@ class SymmetryXZField(FRepField):
         return (FreeCAD.Vector(-ex, mn.y, -ez), FreeCAD.Vector(ex, mx.y, ez))
 
 
-class RepetitionField(FRepField):
+class RepetitionField(SdfField):
     """Infinite tiling of child with period spacing (FreeCAD.Vector). Ref: opRepetition() iq."""
-    def __init__(self, child: FRepField, spacing: FreeCAD.Vector):
+    def __init__(self, child: SdfField, spacing: FreeCAD.Vector):
         self.child = child
         self.spacing = spacing
 
@@ -629,9 +629,9 @@ class RepetitionField(FRepField):
         return (FreeCAD.Vector(-INF, -INF, -INF), FreeCAD.Vector(INF, INF, INF))
 
 
-class LimitedRepetitionField(FRepField):
+class LimitedRepetitionField(SdfField):
     """Tiling of child clamped to ±limit repetitions. Ref: opLimitedRepetition() iq."""
-    def __init__(self, child: FRepField, spacing: float, limit: FreeCAD.Vector):
+    def __init__(self, child: SdfField, spacing: float, limit: FreeCAD.Vector):
         self.child = child
         self.spacing = spacing
         self.limit = limit  # (lx, ly, lz) max repetition count per axis
@@ -728,27 +728,27 @@ from core import dm_logger
 def _get_single_field(label):
     sel = FreeCADGui.Selection.getSelection()
     if len(sel) != 1:
-        dm_logger.error(f'{label}: select exactly one F-Rep object.'); return None, None
+        dm_logger.error(f'{label}: select exactly one SDF object.'); return None, None
     obj = sel[0]
     proxy = getattr(obj, 'Proxy', None)
-    field = getattr(proxy, 'FRepField', None) if proxy else None
+    field = getattr(proxy, 'SdfField', None) if proxy else None
     if field is None:
-        dm_logger.error(f'{label}: selected object has no FRepField.'); return None, None
+        dm_logger.error(f'{label}: selected object has no SdfField.'); return None, None
     return obj, field
 
 
 class CommandDMSymmetryX:
     def GetResources(self):
         return {'Pixmap': 'OpSymmetryX', 'MenuText': 'Symmetry X',
-                'ToolTip': 'Mirror the selected F-Rep across the YZ plane (X=0).'}
+                'ToolTip': 'Mirror the selected SDF across the YZ plane (X=0).'}
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_spatial import SymmetryXField
+        from core.sdf.sdf_spatial import SymmetryXField
         src, field = _get_single_field('SymmetryX')
         if field is None: return
-        obj = create_dm_object(name='SymmetryX', shape_type='frep')
-        obj.Proxy.FRepField = SymmetryXField(field)
+        obj = create_dm_object(name='SymmetryX', shape_type='sdf')
+        obj.Proxy.SdfField = SymmetryXField(field)
         src.ViewObject.Visibility = False
         obj.touch();  FreeCAD.activeDocument().recompute()
 
@@ -756,15 +756,15 @@ class CommandDMSymmetryX:
 class CommandDMSymmetryXZ:
     def GetResources(self):
         return {'Pixmap': 'OpSymmetryXZ', 'MenuText': 'Symmetry XZ',
-                'ToolTip': 'Mirror the selected F-Rep across both X=0 and Z=0 (4-fold).'}
+                'ToolTip': 'Mirror the selected SDF across both X=0 and Z=0 (4-fold).'}
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_spatial import SymmetryXZField
+        from core.sdf.sdf_spatial import SymmetryXZField
         src, field = _get_single_field('SymmetryXZ')
         if field is None: return
-        obj = create_dm_object(name='SymmetryXZ', shape_type='frep')
-        obj.Proxy.FRepField = SymmetryXZField(field)
+        obj = create_dm_object(name='SymmetryXZ', shape_type='sdf')
+        obj.Proxy.SdfField = SymmetryXZField(field)
         src.ViewObject.Visibility = False
         obj.touch();  FreeCAD.activeDocument().recompute()
 
@@ -772,15 +772,15 @@ class CommandDMSymmetryXZ:
 class CommandDMRepetition:
     def GetResources(self):
         return {'Pixmap': 'OpRepetition', 'MenuText': 'Repeat (Infinite)',
-                'ToolTip': 'Tile the selected F-Rep infinitely with a fixed spacing.'}
+                'ToolTip': 'Tile the selected SDF infinitely with a fixed spacing.'}
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_spatial import RepetitionField
+        from core.sdf.sdf_spatial import RepetitionField
         src, field = _get_single_field('Repetition')
         if field is None: return
-        obj = create_dm_object(name='Repetition', shape_type='frep')
-        obj.Proxy.FRepField = RepetitionField(field, FreeCAD.Vector(50.0, 50.0, 50.0))
+        obj = create_dm_object(name='Repetition', shape_type='sdf')
+        obj.Proxy.SdfField = RepetitionField(field, FreeCAD.Vector(50.0, 50.0, 50.0))
         src.ViewObject.Visibility = False
         obj.touch();  FreeCAD.activeDocument().recompute()
 
@@ -788,15 +788,15 @@ class CommandDMRepetition:
 class CommandDMLimitedRepetition:
     def GetResources(self):
         return {'Pixmap': 'OpLimitedRepetition', 'MenuText': 'Repeat (Limited)',
-                'ToolTip': 'Tile the selected F-Rep within a fixed count per axis.'}
+                'ToolTip': 'Tile the selected SDF within a fixed count per axis.'}
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_spatial import LimitedRepetitionField
+        from core.sdf.sdf_spatial import LimitedRepetitionField
         src, field = _get_single_field('LimitedRepetition')
         if field is None: return
-        obj = create_dm_object(name='LimitedRepeat', shape_type='frep')
-        obj.Proxy.FRepField = LimitedRepetitionField(
+        obj = create_dm_object(name='LimitedRepeat', shape_type='sdf')
+        obj.Proxy.SdfField = LimitedRepetitionField(
             field, spacing=50.0, limit=FreeCAD.Vector(2, 2, 2))
         src.ViewObject.Visibility = False
         obj.touch();  FreeCAD.activeDocument().recompute()
@@ -827,9 +827,9 @@ FreeCADGui.addCommand('DM_SpatialGroup',       DMSpatialGroup())
 Domain-space deformations. These wrap a field and remap evaluation points before passing to
 the child. **Warning:** these do not preserve exact SDF distances — results are approximate.
 
-### O-011: Create `frep_deform.py` with Twist, Bend, Displace
+### O-011: Create `sdf_deform.py` with Twist, Bend, Displace
 
-**File:** `core/frep/frep_deform.py` — create new file
+**File:** `core/sdf/sdf_deform.py` — create new file
 
 **What:** Three deformation fields.
 - `TwistField`: twists the child around the Y axis by `twist_rate` (radians per unit height)
@@ -840,12 +840,12 @@ the child. **Warning:** these do not preserve exact SDF distances — results ar
 import numpy as np
 import FreeCAD
 import math
-from core.frep.frep_field import FRepField
+from core.sdf.sdf_field import SdfField
 
 
-class TwistField(FRepField):
+class TwistField(SdfField):
     """Twist around Y axis. twist_rate = radians per unit of Y. Ref: opTwist() iq."""
-    def __init__(self, child: FRepField, twist_rate: float):
+    def __init__(self, child: SdfField, twist_rate: float):
         self.child = child
         self.twist_rate = twist_rate
 
@@ -873,9 +873,9 @@ class TwistField(FRepField):
         return (FreeCAD.Vector(-R, mn.y, -R), FreeCAD.Vector(R, mx.y, R))
 
 
-class BendField(FRepField):
+class BendField(SdfField):
     """Bend around Z axis. bend_rate = radians per unit of X. Ref: opCheapBend() iq."""
-    def __init__(self, child: FRepField, bend_rate: float):
+    def __init__(self, child: SdfField, bend_rate: float):
         self.child = child
         self.bend_rate = bend_rate
 
@@ -903,10 +903,10 @@ class BendField(FRepField):
         return (FreeCAD.Vector(-R, -R, mn.z), FreeCAD.Vector(R, R, mx.z))
 
 
-class DisplaceField(FRepField):
+class DisplaceField(SdfField):
     """Adds a displacement d(p) to the SDF. displacement_fn must be callable: (FreeCAD.Vector) -> float.
     Ref: opDisplace() iq. Example: lambda p: math.sin(5*p.x)*math.sin(5*p.y)*math.sin(5*p.z)"""
-    def __init__(self, child: FRepField, displacement_fn):
+    def __init__(self, child: SdfField, displacement_fn):
         self.child = child
         self.displacement_fn = displacement_fn
 
@@ -973,27 +973,27 @@ from core import dm_logger
 def _get_single_field(label):
     sel = FreeCADGui.Selection.getSelection()
     if len(sel) != 1:
-        dm_logger.error(f'{label}: select exactly one F-Rep object.'); return None, None
+        dm_logger.error(f'{label}: select exactly one SDF object.'); return None, None
     obj = sel[0]
     proxy = getattr(obj, 'Proxy', None)
-    field = getattr(proxy, 'FRepField', None) if proxy else None
+    field = getattr(proxy, 'SdfField', None) if proxy else None
     if field is None:
-        dm_logger.error(f'{label}: selected object has no FRepField.'); return None, None
+        dm_logger.error(f'{label}: selected object has no SdfField.'); return None, None
     return obj, field
 
 
 class CommandDMTwist:
     def GetResources(self):
         return {'Pixmap': 'DeformTwist', 'MenuText': 'Twist',
-                'ToolTip': 'Twist the selected F-Rep around the Y axis.'}
+                'ToolTip': 'Twist the selected SDF around the Y axis.'}
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_deform import TwistField
+        from core.sdf.sdf_deform import TwistField
         src, field = _get_single_field('Twist')
         if field is None: return
-        obj = create_dm_object(name='Twist', shape_type='frep')
-        obj.Proxy.FRepField = TwistField(field, twist_rate=math.radians(2.0))
+        obj = create_dm_object(name='Twist', shape_type='sdf')
+        obj.Proxy.SdfField = TwistField(field, twist_rate=math.radians(2.0))
         src.ViewObject.Visibility = False
         obj.touch();  FreeCAD.activeDocument().recompute()
 
@@ -1001,15 +1001,15 @@ class CommandDMTwist:
 class CommandDMBend:
     def GetResources(self):
         return {'Pixmap': 'DeformBend', 'MenuText': 'Bend',
-                'ToolTip': 'Bend the selected F-Rep around the Z axis.'}
+                'ToolTip': 'Bend the selected SDF around the Z axis.'}
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_deform import BendField
+        from core.sdf.sdf_deform import BendField
         src, field = _get_single_field('Bend')
         if field is None: return
-        obj = create_dm_object(name='Bend', shape_type='frep')
-        obj.Proxy.FRepField = BendField(field, bend_rate=math.radians(1.5))
+        obj = create_dm_object(name='Bend', shape_type='sdf')
+        obj.Proxy.SdfField = BendField(field, bend_rate=math.radians(1.5))
         src.ViewObject.Visibility = False
         obj.touch();  FreeCAD.activeDocument().recompute()
 
@@ -1017,16 +1017,16 @@ class CommandDMBend:
 class CommandDMDisplace:
     def GetResources(self):
         return {'Pixmap': 'DeformDisplace', 'MenuText': 'Displace (Sine)',
-                'ToolTip': 'Apply a sine-wave displacement to the selected F-Rep surface.'}
+                'ToolTip': 'Apply a sine-wave displacement to the selected SDF surface.'}
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_deform import DisplaceField
+        from core.sdf.sdf_deform import DisplaceField
         src, field = _get_single_field('Displace')
         if field is None: return
         disp_fn = lambda p: 2.0 * math.sin(0.3 * p.x) * math.sin(0.3 * p.y) * math.sin(0.3 * p.z)
-        obj = create_dm_object(name='Displace', shape_type='frep')
-        obj.Proxy.FRepField = DisplaceField(field, disp_fn)
+        obj = create_dm_object(name='Displace', shape_type='sdf')
+        obj.Proxy.SdfField = DisplaceField(field, disp_fn)
         src.ViewObject.Visibility = False
         obj.touch();  FreeCAD.activeDocument().recompute()
 
@@ -1086,15 +1086,15 @@ Replace the existing operations section in the menu (the `'DM_Translate' ... 'DM
 
 ### O-015: `ScaleField` — uniform scaling wrapper
 
-**File:** `core/frep/frep_modifier.py` — append after `ElongateModifierField` class (end of file)
+**File:** `core/sdf/sdf_modifier.py` — append after `ElongateModifierField` class (end of file)
 
 **What:** Uniformly scales the child field by factor `s`. Input point is divided by `s`, output
 distance is multiplied by `s` to preserve the SDF property. Ref: `opScale()`.
 
 ```python
-class ScaleField(FRepField):
+class ScaleField(SdfField):
     """Uniform scale wrapper. s > 1 makes the shape larger. Ref: opScale() iq."""
-    def __init__(self, child: FRepField, s: float):
+    def __init__(self, child: SdfField, s: float):
         self.child = child
         self.s = s
 
@@ -1134,16 +1134,16 @@ class ScaleField(FRepField):
 class CommandDMScale:
     def GetResources(self):
         return {'Pixmap': 'ModScale', 'MenuText': 'Scale',
-                'ToolTip': 'Uniformly scale the selected F-Rep by a factor of 2.'}
+                'ToolTip': 'Uniformly scale the selected SDF by a factor of 2.'}
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_modifier import ScaleField
-        src_obj, field = _get_single_frep_field('Scale')
+        from core.sdf.sdf_modifier import ScaleField
+        src_obj, field = _get_single_sdf_field('Scale')
         if field is None: return
         new_field = ScaleField(field, s=2.0)
-        obj = create_dm_object(name='Scale', shape_type='frep')
-        obj.Proxy.FRepField = new_field
+        obj = create_dm_object(name='Scale', shape_type='sdf')
+        obj.Proxy.SdfField = new_field
         src_obj.ViewObject.Visibility = False
         obj.touch();  FreeCAD.activeDocument().recompute()
 ```
@@ -1169,14 +1169,14 @@ lightweight 2D SDF interface. This tier establishes that interface and two opera
 
 ### O-017: Create 2D SDF base class and circle primitive
 
-**File:** `core/frep/sdf2d/sdf2d_field.py` — create new file (also create `core/frep/sdf2d/__init__.py` as empty file)
+**File:** `core/sdf/sdf2d/sdf2d_field.py` — create new file (also create `core/sdf/sdf2d/__init__.py` as empty file)
 
 **What:** Abstract base class for 2D SDF fields used by Revolution and Extrusion. Provides
 `evaluate_2d(x, y) -> float` and `evaluate_2d_grid(points_2d) -> np.ndarray` where
 `points_2d` is an (N, 2) array. Also includes `Sdf2dCircle` as the first concrete 2D primitive.
 
 ```python
-# core/frep/sdf2d/sdf2d_field.py
+# core/sdf/sdf2d/sdf2d_field.py
 import numpy as np
 import math
 
@@ -1226,7 +1226,7 @@ class Sdf2dBox(Sdf2dField):
 
 ### O-018: `RevolutionField` and `ExtrusionField`
 
-**File:** `core/frep/frep_revolution.py` — create new file
+**File:** `core/sdf/sdf_revolution.py` — create new file
 
 **What:** Two fields that lift 2D SDFs into 3D.
 - `RevolutionField`: revolves a 2D SDF around the Y axis with offset `o`.
@@ -1238,11 +1238,11 @@ class Sdf2dBox(Sdf2dField):
 import numpy as np
 import FreeCAD
 import math
-from core.frep.frep_field import FRepField
-from core.frep.sdf2d.sdf2d_field import Sdf2dField
+from core.sdf.sdf_field import SdfField
+from core.sdf.sdf2d.sdf2d_field import Sdf2dField
 
 
-class RevolutionField(FRepField):
+class RevolutionField(SdfField):
     """Revolves a 2D SDF around the Y axis with radial offset o. Ref: opRevolution() iq."""
     def __init__(self, sdf2d: Sdf2dField, center: FreeCAD.Vector, offset: float):
         self.sdf2d = sdf2d
@@ -1268,7 +1268,7 @@ class RevolutionField(FRepField):
         return (self.center - v, self.center + v)
 
 
-class ExtrusionField(FRepField):
+class ExtrusionField(SdfField):
     """Extrudes a 2D SDF (XZ plane) along Y axis with half-height h. Ref: opExtrusion() iq."""
     def __init__(self, sdf2d: Sdf2dField, center: FreeCAD.Vector, half_height: float):
         self.sdf2d = sdf2d
@@ -1336,12 +1336,12 @@ from core import dm_logger
 def _get_single_field(label):
     sel = FreeCADGui.Selection.getSelection()
     if len(sel) != 1:
-        dm_logger.error(f'{label}: select exactly one F-Rep object.'); return None, None
+        dm_logger.error(f'{label}: select exactly one SDF object.'); return None, None
     obj = sel[0]
     proxy = getattr(obj, 'Proxy', None)
-    field = getattr(proxy, 'FRepField', None) if proxy else None
+    field = getattr(proxy, 'SdfField', None) if proxy else None
     if field is None:
-        dm_logger.error(f'{label}: selected object has no FRepField.'); return None, None
+        dm_logger.error(f'{label}: selected object has no SdfField.'); return None, None
     return obj, field
 
 
@@ -1352,12 +1352,12 @@ class CommandDMRevolution:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_revolution import RevolutionField
-        from core.frep.sdf2d.sdf2d_field import Sdf2dCircle
+        from core.sdf.sdf_revolution import RevolutionField
+        from core.sdf.sdf2d.sdf2d_field import Sdf2dCircle
         sdf2d = Sdf2dCircle(0.0, 0.0, 6.0)
         field = RevolutionField(sdf2d, center=FreeCAD.Vector(0, 0, 0), offset=20.0)
-        obj = create_dm_object(name='Revolution', shape_type='frep')
-        obj.Proxy.FRepField = field
+        obj = create_dm_object(name='Revolution', shape_type='sdf')
+        obj.Proxy.SdfField = field
         obj.touch();  FreeCAD.activeDocument().recompute()
 
 
@@ -1368,12 +1368,12 @@ class CommandDMExtrusion:
     def IsActive(self): return FreeCAD.activeDocument() is not None
     def Activated(self):
         from core.dm_object import create_dm_object
-        from core.frep.frep_revolution import ExtrusionField
-        from core.frep.sdf2d.sdf2d_field import Sdf2dCircle
+        from core.sdf.sdf_revolution import ExtrusionField
+        from core.sdf.sdf2d.sdf2d_field import Sdf2dCircle
         sdf2d = Sdf2dCircle(0.0, 0.0, 12.0)
         field = ExtrusionField(sdf2d, center=FreeCAD.Vector(0, 0, 0), half_height=20.0)
-        obj = create_dm_object(name='Extrusion', shape_type='frep')
-        obj.Proxy.FRepField = field
+        obj = create_dm_object(name='Extrusion', shape_type='sdf')
+        obj.Proxy.SdfField = field
         obj.touch();  FreeCAD.activeDocument().recompute()
 
 

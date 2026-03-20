@@ -4,8 +4,8 @@ import FreeCAD
 import numpy as np
 
 from core import dm_logger
-from core.frep.frep_field import SdfField
-from core.frep.marching_cubes.mc_tables import edgeTable, triTable
+from core.sdf.sdf_field import SdfField
+from core.sdf.marching_cubes.mc_tables import edgeTable, triTable
 from core.dm_object import get_perf_profiler_enabled
 
 # Pre-convert lookup tables to numpy arrays for fast indexing
