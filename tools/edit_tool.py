@@ -601,6 +601,10 @@ class SdfEditTool(DMBase, DragTimerMixin):
             self._stop_drag_timer()
             return
 
+        mods = QtGui.QApplication.keyboardModifiers()
+        is_ctrl = bool(mods & QtCore.Qt.ControlModifier)
+        is_shift = bool(mods & QtCore.Qt.ShiftModifier)
+
         mouse_pos = DMInputManager.get_instance()._last_qt_pos
         new_world = self.projector.get_mouse_world_pos(
             {"Position": mouse_pos},
@@ -610,14 +614,39 @@ class SdfEditTool(DMBase, DragTimerMixin):
         if new_world is None:
             return
 
-        new_field = self._field_from_corners(new_world, self._fixed_world)
-        self._field = new_field
-
         obj = self._target_obj
+        if is_ctrl:
+            delta = new_world - self._world_corners[self._dragging_idx]
+            obj.Placement.Base += delta
+            # Sync field placement so the ray marcher sees the move
+            self._field.placement = obj.Placement
+            self._placement = obj.Placement
+        elif is_shift:
+            pivot = sum(self._world_corners, FreeCAD.Vector()) / len(self._world_corners)
+            v = new_world - pivot
+            angle = math.atan2(v.y, v.x)
+            if not hasattr(self, "_edit_last_angle"): self._edit_last_angle = angle
+            da = angle - self._edit_last_angle
+            rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), math.degrees(da))
+            obj.Placement.Rotation = obj.Placement.Rotation.multiply(rot)
+            # Sync field placement
+            self._field.placement = obj.Placement
+            self._placement = obj.Placement
+            self._edit_last_angle = angle
+        else:
+            new_field = self._field_from_corners(new_world, self._fixed_world)
+            self._field = new_field
+            obj.Proxy.SdfField = new_field
+            # Ensure placement is synced if it was changed by other means
+            self._field.placement = obj.Placement
+            self._placement = obj.Placement
+
         if obj is None or not obj.Document:
             return
         try:
-            obj.Proxy.SdfField = new_field
+            # Re-sync corners from the updated field/placement
+            self._refresh_corners()
+            
             obj.touch()
             obj.Document.recompute([obj])
         except Exception as e:
@@ -676,6 +705,13 @@ class SdfEditTool(DMBase, DragTimerMixin):
 
     def handle_keyboard(self, event_dict):
         key_code = event_dict.get("Key")
+        if key_code == QtCore.Qt.Key_Z:
+            if self._target_obj:
+                cur = getattr(self._target_obj, "IsSubtractive", False)
+                self._target_obj.IsSubtractive = not cur
+                if self._target_obj.Document:
+                    self._target_obj.Document.recompute([self._target_obj])
+            return True
         if key_code in [QtCore.Qt.Key_Escape, QtCore.Qt.Key_Enter, QtCore.Qt.Key_Return]:
             self.terminate()
             return True
