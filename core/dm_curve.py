@@ -55,7 +55,7 @@ class DMCurve:
         filtered_points = filtered_points[:n]
 
         # 1. Faster path: If no points have handles, use native OCCT interpolation
-        has_handles = any(not p.is_sharp() for p in filtered_points)
+        has_handles = any(p.handle_in is not None or p.handle_out is not None for p in filtered_points)
         
         if not has_handles and len(fit_pts) >= 2:
             try:
@@ -95,13 +95,15 @@ class DMCurve:
             p2_obj = filtered_points[(i + 1) % n]
             
             # Bezier pole v1 (leaving p1)
-            if p1_obj.handle_out and (p1_obj.handle_out - p1).Length > 1e-4:
+            # If the handle is explicitly provided and NOT None, respect it even if it's zero-length.
+            # Only use auto-tangent if the handle is None.
+            if p1_obj.handle_out is not None:
                 v1 = p1_obj.handle_out
             else:
                 v1 = p1 + get_auto_tan(i)
                 
             # Bezier pole v2 (entering p2)
-            if p2_obj.handle_in and (p2_obj.handle_in - p2).Length > 1e-4:
+            if p2_obj.handle_in is not None:
                 v2 = p2_obj.handle_in
             else:
                 v2 = p2 - get_auto_tan((i + 1) % n)

@@ -70,7 +70,7 @@ def slice_sdf(field, origin, normal, resolution=1.0, extent=None):
     
     if extent is None:
         diag = (mx - mn).Length
-        extent = diag * 0.7 # slightly larger margin
+        extent = diag * 0.8 # slightly larger margin
 
     n = max(1, int(math.ceil(2 * extent / resolution)))
     half = extent
@@ -81,84 +81,296 @@ def slice_sdf(field, origin, normal, resolution=1.0, extent=None):
     U, V = np.meshgrid(us, vs, indexing='ij')
 
     # Convert 2D grid to 3D world points
-    pts_3d = np.zeros((U.size, 3), dtype=np.float32)
-    pts_3d[:, 0] = projected_center.x + U.ravel() * u_axis.x + V.ravel() * v_axis.x
-    pts_3d[:, 1] = projected_center.y + U.ravel() * u_axis.y + V.ravel() * v_axis.y
-    pts_3d[:, 2] = projected_center.z + U.ravel() * u_axis.z + V.ravel() * v_axis.z
+    pts_3d_flat = np.zeros((U.size, 3), dtype=np.float32)
+    pts_3d_flat[:, 0] = projected_center.x + U.ravel() * u_axis.x + V.ravel() * v_axis.x
+    pts_3d_flat[:, 1] = projected_center.y + U.ravel() * u_axis.y + V.ravel() * v_axis.y
+    pts_3d_flat[:, 2] = projected_center.z + U.ravel() * u_axis.z + V.ravel() * v_axis.z
 
-    vals = field.evaluate_grid(pts_3d).reshape(n + 1, n + 1)
+    vals = field.evaluate_grid(pts_3d_flat).reshape(n + 1, n + 1)
 
-    # ── Marching squares ──
-    segments = []
+    # ── 2D Dual Contouring (Pass 1: Find & Refine Crossings) ──
+    crossings = {}
+    active_cells = set()
+    
+    # Precise crossing finder (Newton steps on grid edges)
+    def refine_crossing(pA, pB, field, iters=3):
+        v0 = field.evaluate(pA)
+        v1 = field.evaluate(pB)
+        if (v0 < 0) == (v1 < 0): return None, None
+        t = v0 / (v0 - v1)
+        p = pA + (pB - pA) * t
+        direction = (pB - pA)
+        dlen = direction.Length
+        if dlen < 1e-12: return p, t
+        direction.normalize()
+        
+        for _ in range(iters):
+            fval = field.evaluate(p)
+            # Estimate derivative along edge using small step
+            eps = 1e-4
+            df = (field.evaluate(p + direction * eps) - fval) / eps
+            if abs(df) > 1e-9:
+                p = p - direction * (fval / df)
+        
+        # New t relative to original edge
+        new_t = (p - pA).Length / dlen
+        return p, new_t
+
     for i in range(n):
         for j in range(n):
-            # Corner values: bottom-left, bottom-right, top-right, top-left
-            v0 = vals[i, j]
-            v1 = vals[i + 1, j]
-            v2 = vals[i + 1, j + 1]
-            v3 = vals[i, j + 1]
+            v0, v1, v2, v3 = vals[i, j], vals[i+1, j], vals[i+1, j+1], vals[i, j+1]
+            p0 = _uv_to_3d(us[i], vs[j], projected_center, u_axis, v_axis)
+            p1 = _uv_to_3d(us[i+1], vs[j], projected_center, u_axis, v_axis)
+            p2 = _uv_to_3d(us[i+1], vs[j+1], projected_center, u_axis, v_axis)
+            p3 = _uv_to_3d(us[i], vs[j+1], projected_center, u_axis, v_axis)
 
-            idx = 0
-            if v0 < 0: idx |= 1
-            if v1 < 0: idx |= 2
-            if v2 < 0: idx |= 4
-            if v3 < 0: idx |= 8
+            # Right edge: (v1, v2) connects i,j and i+1,j
+            if (v1 < 0) != (v2 < 0):
+                p_ref, _ = refine_crossing(p1, p2, field)
+                if p_ref:
+                    # Map p_ref back to UV
+                    rel = p_ref - projected_center
+                    u, v = rel.dot(u_axis), rel.dot(v_axis)
+                    crossings[(i, j, 0)] = (u, v, p_ref)
+                    active_cells.add((i, j))
+                    active_cells.add((i+1, j))
+                
+            # Top edge: (v3, v2) connects i,j and i,j+1
+            if (v3 < 0) != (v2 < 0):
+                p_ref, _ = refine_crossing(p3, p2, field)
+                if p_ref:
+                    rel = p_ref - projected_center
+                    u, v = rel.dot(u_axis), rel.dot(v_axis)
+                    crossings[(i, j, 1)] = (u, v, p_ref)
+                    active_cells.add((i, j))
+                    active_cells.add((i, j+1))
 
-            edges = _MS_EDGES[idx]
-            if not edges:
-                continue
+    if not crossings: return []
 
-            # Edge midpoints with linear interpolation
-            corners_u = [us[i], us[i + 1], us[i + 1], us[i]]
-            corners_v = [vs[j], vs[j], vs[j + 1], vs[j + 1]]
-            corner_vals = [v0, v1, v2, v3]
+    # ── 2D Dual Contouring (Pass 2: Batch UV Gradients) ──
+    crossing_keys = list(crossings.keys())
+    pts_to_eval = []
+    eps = 1e-4
+    for key in crossing_keys:
+        _, _, p3 = crossings[key]
+        pts_to_eval.append([p3.x, p3.y, p3.z])
+        pts_to_eval.append([p3.x + eps, p3.y, p3.z])
+        pts_to_eval.append([p3.x, p3.y + eps, p3.z])
+        pts_to_eval.append([p3.x, p3.y, p3.z + eps])
 
-            def edge_point(e):
-                a = e
-                b = (e + 1) % 4
-                va = corner_vals[a]
-                vb = corner_vals[b]
-                denom = va - vb
-                if abs(denom) < 1e-12:
-                    frac = 0.5
-                else:
-                    frac = va / denom
-                eu = corners_u[a] + frac * (corners_u[b] - corners_u[a])
-                ev = corners_v[a] + frac * (corners_v[b] - corners_v[a])
-                return (eu, ev)
+    all_vals = field.evaluate_grid(np.array(pts_to_eval, dtype=np.float32))
+    uv_grads = []
+    for k in range(len(crossing_keys)):
+        v0 = all_vals[k*4]
+        g3d = FreeCAD.Vector((all_vals[k*4+1]-v0)/eps, (all_vals[k*4+2]-v0)/eps, (all_vals[k*4+3]-v0)/eps)
+        gu, gv = g3d.dot(u_axis), g3d.dot(v_axis)
+        uv_grad = np.array([gu, gv])
+        gl = np.linalg.norm(uv_grad)
+        if gl > 1e-8: uv_grad /= gl
+        uv_grads.append(uv_grad)
 
-            for e0, e1 in edges:
-                p0 = edge_point(e0)
-                p1 = edge_point(e1)
-                segments.append((p0, p1))
+    # ── 2D Dual Contouring (Pass 3: Solve QEF & Refine Vertex) ──
+    cell_vertices = {}
+    for cell in active_cells:
+        i, j = cell
+        if i < 0 or i >= n or j < 0 or j >= n: continue
+        
+        rel_uvs, rel_grads = [], []
+        for ekey in [(i, j-1, 1), (i, j, 0), (i, j, 1), (i-1, j, 0)]:
+            if ekey in crossings:
+                idx = crossing_keys.index(ekey)
+                u, v, _ = crossings[ekey]
+                rel_uvs.append(np.array([u, v]))
+                rel_grads.append(uv_grads[idx])
+        
+        if rel_uvs:
+            A, b = np.zeros((2, 2)), np.zeros(2)
+            for p, n_uv in zip(rel_uvs, rel_grads):
+                A += np.outer(n_uv, n_uv)
+                b += np.dot(p, n_uv) * n_uv
+            
+            # Regularize
+            lambd = 1e-6
+            avg_uv = np.mean(rel_uvs, axis=0)
+            A += np.eye(2) * lambd
+            b += lambd * avg_uv
+            
+            try:
+                uv_res, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+                p_final = _uv_to_3d(uv_res[0], uv_res[1], projected_center, u_axis, v_axis)
+                
+                # Newton-Raphson refinement: snap vertex to surface
+                for _ in range(3):
+                    fval = field.evaluate(p_final)
+                    # Use 3D gradient for snapping
+                    g_x = (field.evaluate(p_final + FreeCAD.Vector(eps,0,0)) - fval)/eps
+                    g_y = (field.evaluate(p_final + FreeCAD.Vector(0,eps,0)) - fval)/eps
+                    g_z = (field.evaluate(p_final + FreeCAD.Vector(0,0,eps)) - fval)/eps
+                    grad = FreeCAD.Vector(g_x, g_y, g_z)
+                    gl2 = grad.Length ** 2
+                    if gl2 > 1e-9:
+                        p_final = p_final - grad * (fval / gl2)
+                
+                cell_vertices[cell] = p_final
+            except:
+                cell_vertices[cell] = _uv_to_3d(avg_uv[0], avg_uv[1], projected_center, u_axis, v_axis)
+    # ── 2D Dual Contouring (Pass 4: Connectivity) ──
+    edges_to_connect = []
+    for (i, j, etype) in crossings:
+        c1, c2 = (i, j), (i+1, j) if etype == 0 else (i, j+1)
+        if c1 in cell_vertices and c2 in cell_vertices:
+            edges_to_connect.append((cell_vertices[c1], cell_vertices[c2]))
 
-    # ── Chain segments into contours ──
-    contours_2d = _chain_segments(segments)
+    contours_3d = _chain_segments(edges_to_connect)
+    
+    final_contours_3d = []
+    for contour in contours_3d:
+        if len(contour) < 2: continue
+        # Simplify using RDP — epsilon should be related to resolution.
+        # DC is much cleaner than MS, so 0.1 * resolution is often enough
+        # to remove tiny noise while keeping sharp corners.
+        epsilon = resolution * 0.1
+        simplified = _simplify_contour_rdp(contour, epsilon)
+        final_contours_3d.append(simplified)
 
-    # ── Convert to 3D ──
-    contours_3d = []
-    for contour in contours_2d:
-        pts = []
-        for (eu, ev) in contour:
-            p = FreeCAD.Vector(
-                origin.x + eu * u_axis.x + ev * v_axis.x,
-                origin.y + eu * u_axis.y + ev * v_axis.y,
-                origin.z + eu * u_axis.z + ev * v_axis.z,
-            )
-            pts.append(p)
-        if pts:
-            contours_3d.append(pts)
-
-    return contours_3d
+    return final_contours_3d
 
 
-def _chain_segments(segments, tol=1e-6):
-    """Chain unordered line segments into ordered polylines."""
+def _uv_to_3d(u, v, projected_center, u_axis, v_axis):
+    """Helper to convert 2D grid coords (u,v) back to 3D world coords."""
+    return FreeCAD.Vector(
+        projected_center.x + u * u_axis.x + v * v_axis.x,
+        projected_center.y + u * u_axis.y + v * v_axis.y,
+        projected_center.z + u * u_axis.z + v * v_axis.z,
+    )
+
+def _calculate_gradient(field, point, epsilon=1e-4):
+    """Estimates the gradient of the SDF at a given 3D point using finite differences."""
+    grad_x = (field.evaluate(point + FreeCAD.Vector(epsilon, 0, 0)) - field.evaluate(point - FreeCAD.Vector(epsilon, 0, 0))) / (2 * epsilon)
+    grad_y = (field.evaluate(point + FreeCAD.Vector(0, epsilon, 0)) - field.evaluate(point - FreeCAD.Vector(0, epsilon, 0))) / (2 * epsilon)
+    grad_z = (field.evaluate(point + FreeCAD.Vector(0, 0, epsilon)) - field.evaluate(point - FreeCAD.Vector(0, 0, epsilon))) / (2 * epsilon)
+    grad = FreeCAD.Vector(grad_x, grad_y, grad_z)
+    if grad.Length < 1e-6: # Avoid division by zero for flat regions
+        return FreeCAD.Vector(0,0,0)
+    return grad.normalize()
+
+
+def _solve_qef(points_on_edges, gradients_on_edges):
+    """
+    Solves the Quadratic Error Function (QEF) for a cell to find the optimal vertex.
+    The QEF minimizes sum((p_i - x) . n_i)^2 for points p_i and normals n_i.
+    This leads to a linear system Ax = b.
+    """
+    A = np.zeros((3, 3))
+    b = np.zeros(3)
+
+    for p, n in zip(points_on_edges, gradients_on_edges):
+        # A += n * n.T (outer product)
+        A[0, 0] += n.x * n.x
+        A[0, 1] += n.x * n.y
+        A[0, 2] += n.x * n.z
+        A[1, 0] += n.y * n.x
+        A[1, 1] += n.y * n.y
+        A[1, 2] += n.y * n.z
+        A[2, 0] += n.z * n.x
+        A[2, 1] += n.z * n.y
+        A[2, 2] += n.z * n.z
+
+        # b += (p . n) * n
+        dot_pn = p.dot(n)
+        b[0] += dot_pn * n.x
+        b[1] += dot_pn * n.y
+        b[2] += dot_pn * n.z
+
+    try:
+        # Solve Ax = b for x using least-squares for stability in 2D/3D
+        x, residuals, rank, s = np.linalg.lstsq(A, b, rcond=None)
+        return FreeCAD.Vector(x[0], x[1], x[2])
+    except Exception:
+        # If A is singular, fall back to centroid of crossing points
+        if points_on_edges:
+            centroid = FreeCAD.Vector(0,0,0)
+            for p in points_on_edges:
+                centroid += p
+            return centroid / len(points_on_edges)
+        return FreeCAD.Vector(0,0,0) # Should not happen if crossing_points is not empty
+
+
+def _simplify_rdp_recursive(points, epsilon):
+    """Internal recursive helper for open-line RDP."""
+    if len(points) < 3:
+        return points
+
+    start, end = points[0], points[-1]
+    max_dist = 0
+    max_idx = 0
+    direction = end - start
+    line_len = direction.Length
+    if line_len > 1e-12:
+        direction.normalize()
+
+    for i in range(1, len(points) - 1):
+        v = points[i] - start
+        if line_len < 1e-12:
+            dist = v.Length
+        else:
+            proj = v.dot(direction)
+            dist = (v - direction * proj).Length
+        if dist > max_dist:
+            max_dist = dist
+            max_idx = i
+
+    if max_dist > epsilon:
+        left = _simplify_rdp_recursive(points[:max_idx + 1], epsilon)
+        right = _simplify_rdp_recursive(points[max_idx:], epsilon)
+        return left[:-1] + right
+    else:
+        return [start, end]
+
+def _simplify_contour_rdp(points, epsilon):
+    """Ramer-Douglas-Peucker simplification for polylines and closed loops."""
+    if len(points) < 3:
+        return points
+
+    start, end = points[0], points[-1]
+    is_closed = (start - end).Length < 1e-7
+
+    if is_closed:
+        # Find the point furthest from the start to use as a 'corner' to break the loop
+        max_dist = -1
+        max_idx = 0
+        for i in range(1, len(points) - 1):
+            d = (points[i] - start).Length
+            if d > max_dist:
+                max_dist = d
+                max_idx = i
+        
+        # Roll points to start at max_idx, then simplify as an open line
+        rolled = points[max_idx:-1] + points[:max_idx+1]
+        simplified = _simplify_rdp_recursive(rolled, epsilon)
+        # Ensure it's still closed if it was originally
+        if (simplified[0] - simplified[-1]).Length > 1e-7:
+            simplified.append(simplified[0])
+        return simplified
+    else:
+        return _simplify_rdp_recursive(points, epsilon)
+
+
+def _chain_segments(segments, tol=1e-4):
+    """Chain unordered line segments into ordered polylines.
+    Works with both (u,v) tuples and FreeCAD.Vector.
+    """
     if not segments:
         return []
 
     remaining = list(segments)
     contours = []
+
+    def get_dist(p1, p2):
+        if hasattr(p1, "x"): # FreeCAD.Vector
+            return (p1 - p2).Length
+        # Manhattan for tuples
+        return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
 
     while remaining:
         seg = remaining.pop(0)
@@ -169,25 +381,22 @@ def _chain_segments(segments, tol=1e-6):
             changed = False
             for k in range(len(remaining) - 1, -1, -1):
                 s = remaining[k]
-                d0_end = abs(chain[-1][0] - s[0][0]) + abs(chain[-1][1] - s[0][1])
-                d1_end = abs(chain[-1][0] - s[1][0]) + abs(chain[-1][1] - s[1][1])
-                d0_start = abs(chain[0][0] - s[1][0]) + abs(chain[0][1] - s[1][1])
-                d1_start = abs(chain[0][0] - s[0][0]) + abs(chain[0][1] - s[0][1])
-
-                if d0_end < tol:
+                
+                # Try all 4 connection possibilities
+                if get_dist(chain[-1], s[0]) < tol:
                     chain.append(s[1])
                     remaining.pop(k)
                     changed = True
-                elif d1_end < tol:
+                elif get_dist(chain[-1], s[1]) < tol:
                     chain.append(s[0])
                     remaining.pop(k)
                     changed = True
-                elif d0_start < tol:
-                    chain.insert(0, s[0])
+                elif get_dist(chain[0], s[0]) < tol:
+                    chain.insert(0, s[1])
                     remaining.pop(k)
                     changed = True
-                elif d1_start < tol:
-                    chain.insert(0, s[1])
+                elif get_dist(chain[0], s[1]) < tol:
+                    chain.insert(0, s[0])
                     remaining.pop(k)
                     changed = True
 
@@ -196,31 +405,29 @@ def _chain_segments(segments, tol=1e-6):
     return contours
 
 
-def fit_dm_curve(contour_points, closed=False, smooth_factor=0.33):
+def fit_dm_curve(contour_points, closed=False, smooth_factor=0.33, sharp_threshold_deg=30.0):
     """
     Fit a DM curve through a list of 3D points.
 
     Args:
-        contour_points: list[FreeCAD.Vector] — ordered 3D points.
-        closed:         bool — whether the contour is closed.
-        smooth_factor:  float — handle length as fraction of chord.
-
-    Returns:
-        dict with keys: Points, HandleIn, HandleOut, Closed
-        Compatible with create_dm_object(name, "curve", params=result).
+        contour_points:      list[FreeCAD.Vector] — ordered 3D points.
+        closed:              bool — whether the contour is closed.
+        smooth_factor:       float — handle length as fraction of chord.
+        sharp_threshold_deg: float — angle above which a corner is "sharp" (zero-length handles).
     """
     pts = list(contour_points)
 
     # Remove near-duplicate last point if closed
     if closed and len(pts) > 2:
-        if (pts[0] - pts[-1]).Length < 0.01:
+        if (pts[0] - pts[-1]).Length < 0.001:
             pts = pts[:-1]
 
     # Decimate: skip points that are too close together
-    if len(pts) > 3:
+    # Only if we have many points (RDP should have already reduced most)
+    if len(pts) > 10:
         decimated = [pts[0]]
         avg_dist = (pts[0] - pts[-1]).Length / max(len(pts), 1)
-        min_dist = max(0.1, avg_dist * 0.5)
+        min_dist = max(0.01, avg_dist * 0.1)
         for p in pts[1:]:
             if (p - decimated[-1]).Length >= min_dist:
                 decimated.append(p)
@@ -228,30 +435,48 @@ def fit_dm_curve(contour_points, closed=False, smooth_factor=0.33):
 
     n = len(pts)
     if n < 2:
-        return {"Points": pts, "HandleIn": pts[:], "HandleOut": pts[:],
+        return {"Points": pts, "HandleIn": [p for p in pts], "HandleOut": [p for p in pts],
                 "Closed": closed, "is_closed": closed}
 
     handles_in = []
     handles_out = []
 
+    cos_threshold = math.cos(math.radians(sharp_threshold_deg))
+
     for i in range(n):
+        p = pts[i]
         prev_p = pts[(i - 1) % n] if (closed or i > 0) else pts[i]
         next_p = pts[(i + 1) % n] if (closed or i < n - 1) else pts[i]
 
-        tangent = next_p - prev_p
-        chord_prev = (pts[i] - prev_p).Length
-        chord_next = (next_p - pts[i]).Length
+        v_in = p - prev_p
+        v_out = next_p - p
+        
+        is_sharp = False
+        if v_in.Length > 1e-6 and v_out.Length > 1e-6:
+            v_in.normalize()
+            v_out.normalize()
+            # If dot product is small, the turn is sharp
+            if v_in.dot(v_out) < cos_threshold:
+                is_sharp = True
+        elif not closed and (i == 0 or i == n - 1):
+            is_sharp = True # Endpoints are always sharp (handles point inwards)
 
-        if tangent.Length > 1e-6:
-            tangent.normalize()
+        if is_sharp:
+            handles_in.append(p)
+            handles_out.append(p)
         else:
-            tangent = FreeCAD.Vector(1, 0, 0)
+            # Smooth handles based on tangent between prev and next
+            tangent = next_p - prev_p
+            chord_prev = (p - prev_p).Length
+            chord_next = (next_p - p).Length
 
-        handle_in = pts[i] - tangent * (chord_prev * smooth_factor)
-        handle_out = pts[i] + tangent * (chord_next * smooth_factor)
+            if tangent.Length > 1e-6:
+                tangent.normalize()
+            else:
+                tangent = FreeCAD.Vector(1, 0, 0)
 
-        handles_in.append(handle_in)
-        handles_out.append(handle_out)
+            handles_in.append(p - tangent * (chord_prev * smooth_factor))
+            handles_out.append(p + tangent * (chord_next * smooth_factor))
 
     return {
         "Points": pts,

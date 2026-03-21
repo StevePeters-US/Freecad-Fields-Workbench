@@ -55,6 +55,10 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     def get_handled_types(self):
         return ["sdf"]
 
+    def to_lattice(self):
+        """Called by the edit lattice tool."""
+        dm_logger.debug("lattice tool called on shaped type")
+
     def edit_object(self, obj):
         """Load an existing SDF object into the tool for editing.
 
@@ -248,8 +252,16 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         return None
 
     def _get_final_points(self):
-        """Subclasses return the corner/boundary points for the committed object."""
-        return None
+        """Default implementation: returns self.points mapped to local space.
+        
+        This ensures that 'obj.Points' always stores coordinates in the field's
+        local coordinate system (relative to obj.Placement / self.working_plane).
+        """
+        if not self.points:
+            return None
+            
+        # Re-map stored world points to local space using the locked working plane
+        return [self.to_local(p) for p in self.points]
 
     def update_preview(self):
         """Called on every mouse move by DMBase.handle_move. Updates the live mesh."""
@@ -330,6 +342,9 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
         # Rename to final name
         try:
+            # We must be careful not to trigger recursive recomputes here if we are
+            # already in a recompute loop.
+            dm_logger.debug(f"Committing {name}: {len(points) if points else 0} points, placement={self.working_plane}")
             obj.Label = name
         except Exception:
             pass
@@ -724,21 +739,25 @@ class SphereCreator(PrimitiveCreatorBase):
 
     def __init__(self):
         super().__init__()
-        self.center = None
+        self.points = []
         self.current_point = None
 
         dm_logger.info("Sphere Tool: Click center")
 
     def edit_object(self, obj):
-        super().edit_object(obj)
-        pts = list(getattr(self, "points", []))
-        if pts:
-            self.center = pts[0]
-            self.current_point = pts[1] if len(pts) >= 2 else pts[0] + FreeCAD.Vector(10, 0, 0)
+        super().edit_object(obj) # loads self.points from obj.Points
+        if not self.points:
+            # Reconstruct fallback if Points property is empty
+            field = getattr(obj.Proxy, "SdfField", None)
+            if field:
+                loc_c = field.center
+                r = field.radius if hasattr(field, "radius") else 10.0
+                self.points = [self.to_global(loc_c), self.to_global(loc_c + FreeCAD.Vector(r, 0, 0))]
+        
         self.state = ToolState.IDLE
 
         r = self._compute_handle_radius()
-        for pt in [self.center, self.current_point]:
+        for pt in self.points:
             if pt is not None:
                 dm_pt = DMPoint(pt)
                 dm_pt.draw_point(self.points_root, r)
@@ -747,10 +766,9 @@ class SphereCreator(PrimitiveCreatorBase):
         self.update_ui()
 
     def _sync_edit_points(self):
-        if len(self.dm_points) >= 1:
-            self.center = self.dm_points[0].position
-        if len(self.dm_points) >= 2:
-            self.current_point = self.dm_points[1].position
+        for i in range(len(self.dm_points)):
+            if i < len(self.points):
+                self.points[i] = self.dm_points[i].position
 
     def on_button1_down(self, event_dict):
         if self._is_editing:
@@ -763,7 +781,7 @@ class SphereCreator(PrimitiveCreatorBase):
             return True
 
         if self.state == ToolState.IDLE:
-            self.center = pos
+            self.points = [pos]
             self.state = ToolState.ACTIVE
 
             if len(self.dm_points) < 1:
@@ -782,11 +800,12 @@ class SphereCreator(PrimitiveCreatorBase):
         return True
 
     def _update_ghost_visuals(self):
-        if self.center is None or self.current_point is None:
+        if not self.points or self.current_point is None:
             return
-
+        
+        center = self.points[0]
         import math
-        loc_center = self.to_local(self.center)
+        loc_center = self.to_local(center)
         loc_cur = self.to_local(self.current_point)
         radius = (loc_cur - loc_center).Length
         if radius < 0.1:
@@ -813,17 +832,17 @@ class SphereCreator(PrimitiveCreatorBase):
         self.dm_line_set.update_lines(line_pts, segments=[segments+1]*3)
 
         # Update points (center and one radius point)
-        self._update_handle_positions([self.center, self.current_point])
+        self._update_handle_positions([self.points[0], self.current_point])
 
     def on_move_state_1(self, event_dict):
         self.current_point = self.get_mouse_plane_pt(event_dict)
 
     def _get_preview_field(self):
-        if self.center is None or self.current_point is None:
+        if not self.points or self.current_point is None:
             return None
         
         # Calculate radius in local space
-        loc_center = self.to_local(self.center)
+        loc_center = self.to_local(self.points[0])
         loc_current = self.to_local(self.current_point)
         radius = (loc_current - loc_center).Length
         
@@ -837,13 +856,11 @@ class SphereCreator(PrimitiveCreatorBase):
         return self._get_preview_field()
 
     def _get_final_points(self):
-        if self.center is None or self.current_point is None:
-            return None
-        # We need local coordinates
-        loc_center = self.to_local(self.center)
-        loc_current = self.to_local(self.current_point)
-        radius = (loc_current - loc_center).Length
-        return [loc_center, loc_center + FreeCAD.Vector(radius, 0, 0)]
+        """Use default to save the 2 original points (center and radius-defining point)."""
+        pts = list(self.points)
+        if self.current_point and len(pts) < 2:
+            pts.append(self.current_point)
+        return [self.to_local(p) for p in pts]
 
 
 class CylinderCreator(PrimitiveCreatorBase):
@@ -1042,10 +1059,8 @@ class CylinderCreator(PrimitiveCreatorBase):
         return SdfCylinderField(loc_base, loc_axis, radius, height, placement=field_placement)
 
     def _get_final_points(self):
+        """Use base class to convert world self.points to local."""
         pts = list(self.points)
         if self.current_point and len(pts) < 3:
-            while len(pts) < 3:
-                pts.append(self.current_point)
-        if len(pts) < 3:
-            return None
-        return pts
+            pts.append(self.current_point)
+        return [self.to_local(p) for p in pts]

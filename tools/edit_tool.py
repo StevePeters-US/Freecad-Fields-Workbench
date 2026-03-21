@@ -627,14 +627,18 @@ class SdfEditTool(DMBase, DragTimerMixin):
         self._stop_drag_timer()
         self._dragging_idx = None
         self.state = 0
-        # Sync stored Points property with new corner positions
+        # Sync stored Points property with new corner positions in local space
         obj = self._target_obj
         if obj is None or not obj.Document:
             return
         try:
             self._refresh_corners()
             if hasattr(obj, "Points") and self._world_corners:
-                obj.Points = self._world_corners
+                # IMPORTANT: obj.Points MUST be in local space relative to obj.Placement
+                # We use the inverse of the object's placement to transform world corners back.
+                inv = obj.Placement.inverse()
+                local_corners = [inv.multVec(wc) for wc in self._world_corners]
+                obj.Points = local_corners
         except Exception as e:
             dm_logger.debug(f"SdfEditTool._finish_drag: {e}")
 
