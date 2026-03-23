@@ -48,6 +48,7 @@
 | Edit boolean tree logic | `dm_boolean_architecture/SKILL.md` |
 | Implement CPU hit testing | `dm_sdf_hit_test/SKILL.md` |
 | Create/Edit primitive tool | `dm_primitive_tool/SKILL.md` |
+| Work with OpenVDB grids, meshing, export | `dm_openvdb_migration/SKILL.md` |
 
 ## 4. Known Bugs
 
