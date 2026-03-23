@@ -208,7 +208,12 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             visible_wps = self.get_visible_workplanes()
             if visible_wps:
                 wp = visible_wps[0]
-                self.working_plane = self._get_placement()
+                if hasattr(wp, "getGlobalPlacement"):
+                    self.working_plane = wp.getGlobalPlacement()
+                elif hasattr(wp, "Placement"):
+                    self.working_plane = wp.Placement
+                else:
+                    self.working_plane = wp
                 self._working_plane_is_fallback = False
 
     def _get_placement(self):
@@ -702,6 +707,7 @@ class BoxCreator(PrimitiveCreatorBase):
         s = self._compute_default_size() / 2.0  # half-size
         self._field_placement = self._get_placement()
         loc_center = self.to_local(click_pt)
+        loc_center.z += s  # Place the base on the workplane instead of centering
         half = FreeCAD.Vector(s, s, s)
         pts_local = self._box_corners_local(loc_center, half)
         world_corners = [self.to_global(lc) for lc in pts_local]
