@@ -95,8 +95,10 @@ def set_ray_march_cell_size(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetFloat("RayMarchCellSize", float(val))
 
 def get_rm_texels_per_field():
-    """Target texel count along the longest axis for screen-space LOD (default 64)."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("RMTexelsPerField", 64)
+    """Target screen pixels per texel for LOD (default 4). Smaller = finer resolution.
+    The LOD cell size = n / px_per_world, so 4 means each texel covers ~4 screen pixels.
+    Below 2mm base cell, the base cell floor takes over regardless."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("RMTexelsPerField", 4)
 
 def set_rm_texels_per_field(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetInt("RMTexelsPerField", int(val))

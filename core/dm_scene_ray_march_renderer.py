@@ -11,11 +11,274 @@ Two bake paths:
 """
 import math
 import time
+import ctypes
 import FreeCAD
 import FreeCADGui
 import pivy.coin as coin
 from core import dm_logger
 from core.gl_texture3d import GLTexture3D
+
+_VERT_PASSTHROUGH = """
+#version 330 compatibility
+out vec2 v_uv;
+void main() {
+    v_uv = gl_Vertex.xy;
+    gl_Position = vec4(gl_Vertex.xy, 0.0, 1.0);
+}
+"""
+
+_FRAG_GBUF = """
+#version 330 compatibility
+in vec2 v_uv;
+
+uniform sampler3D u_sdf_vol;
+uniform int   u_num_fields;
+uniform int   u_nx[8], u_ny[8], u_nz[8], u_z_offset[8], u_z_total;
+uniform int   u_is_subtractive[8];
+uniform vec3  u_bbox_min[8], u_bbox_max[8];
+uniform vec3  u_light_dir;
+
+layout(location = 0) out vec4 out_color;
+layout(location = 1) out vec4 out_vspos;
+layout(location = 2) out vec4 out_vsnorm;
+
+float decode_texel(ivec3 tc) {
+    return texelFetch(u_sdf_vol, tc, 0).r;
+}
+
+float sample_sdf_field(int fi, vec3 p) {
+    vec3 uvw = (p - u_bbox_min[fi]) / (u_bbox_max[fi] - u_bbox_min[fi]);
+    uvw = clamp(uvw, vec3(0.0), vec3(1.0));
+    vec3 tc = vec3(
+        uvw.x * float(u_nx[fi]),
+        uvw.y * float(u_ny[fi]),
+        float(u_z_offset[fi]) + uvw.z * float(u_nz[fi])
+    );
+    tc = clamp(tc, vec3(0.0), vec3(float(u_nx[fi]), float(u_ny[fi]),
+               float(u_z_offset[fi] + u_nz[fi])));
+    ivec3 c0 = ivec3(floor(tc));
+    ivec3 c1 = min(c0 + 1, ivec3(u_nx[fi], u_ny[fi], u_z_offset[fi] + u_nz[fi]));
+    vec3 f = tc - vec3(c0);
+    float d000 = decode_texel(ivec3(c0.x, c0.y, c0.z));
+    float d100 = decode_texel(ivec3(c1.x, c0.y, c0.z));
+    float d010 = decode_texel(ivec3(c0.x, c1.y, c0.z));
+    float d110 = decode_texel(ivec3(c1.x, c1.y, c0.z));
+    float d001 = decode_texel(ivec3(c0.x, c0.y, c1.z));
+    float d101 = decode_texel(ivec3(c1.x, c0.y, c1.z));
+    float d011 = decode_texel(ivec3(c0.x, c1.y, c1.z));
+    float d111 = decode_texel(ivec3(c1.x, c1.y, c1.z));
+    float dx00 = mix(d000, d100, f.x);
+    float dx10 = mix(d010, d110, f.x);
+    float dx01 = mix(d001, d101, f.x);
+    float dx11 = mix(d011, d111, f.x);
+    float dxy0 = mix(dx00, dx10, f.y);
+    float dxy1 = mix(dx01, dx11, f.y);
+    return mix(dxy0, dxy1, f.z);
+}
+
+vec3 sdf_normal_field(int fi, vec3 p) {
+    float cell = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
+    float h = cell * 3.0;
+    vec2 k = vec2(1.0, -1.0);
+    vec3 g = k.xyy * sample_sdf_field(fi, p + k.xyy*h) +
+             k.yyx * sample_sdf_field(fi, p + k.yyx*h) +
+             k.yxy * sample_sdf_field(fi, p + k.yxy*h) +
+             k.xxx * sample_sdf_field(fi, p + k.xxx*h);
+    float len2 = dot(g, g);
+    return (len2 > 1e-10) ? g * inversesqrt(len2) : vec3(0.0, 0.0, 1.0);
+}
+
+vec2 intersect_aabb(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
+    vec3 t1 = (bmin - ro) / rd;
+    vec3 t2 = (bmax - ro) / rd;
+    vec3 tmin_ = min(t1, t2);
+    vec3 tmax_ = max(t1, t2);
+    return vec2(max(max(tmin_.x, tmin_.y), tmin_.z),
+                min(min(tmax_.x, tmax_.y), tmax_.z));
+}
+
+void main() {
+    vec4 ndc_near = vec4(v_uv, -1.0, 1.0);
+    vec4 world_near = gl_ModelViewProjectionMatrixInverse * ndc_near;
+    world_near /= world_near.w;
+    vec4 ndc_far = vec4(v_uv, 1.0, 1.0);
+    vec4 world_far = gl_ModelViewProjectionMatrixInverse * ndc_far;
+    world_far /= world_far.w;
+
+    vec3 ro = world_near.xyz;
+    vec3 rd = normalize(world_far.xyz - world_near.xyz);
+    float ray_tmax = length(world_far.xyz - world_near.xyz);
+
+    vec3 scene_min = u_bbox_min[0];
+    vec3 scene_max = u_bbox_max[0];
+    for (int fi = 1; fi < 8; fi++) {
+        if (fi >= u_num_fields) break;
+        scene_min = min(scene_min, u_bbox_min[fi]);
+        scene_max = max(scene_max, u_bbox_max[fi]);
+    }
+    vec2 tBox = intersect_aabb(ro, rd, scene_min, scene_max);
+    float tNear = max(tBox.x, 0.0);
+    float tFar  = min(tBox.y, ray_tmax);
+    if (tNear > tFar) {
+        out_color = vec4(0.0); out_vspos = vec4(0.0); out_vsnorm = vec4(0.0);
+        return;
+    }
+
+    float ftn[8]; float ftf[8];
+    for (int fi = 0; fi < 8; fi++) {
+        if (fi < u_num_fields) {
+            vec2 fi_int = intersect_aabb(ro, rd, u_bbox_min[fi], u_bbox_max[fi]);
+            ftn[fi] = max(fi_int.x, 0.0);
+            ftf[fi] = min(fi_int.y, ray_tmax);
+        } else { ftn[fi] = 1.0e10; ftf[fi] = -1.0e10; }
+    }
+
+    float global_hit_thresh = 1.0;
+    for (int fi = 0; fi < 8; fi++) {
+        if (fi >= u_num_fields) break;
+        float c = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
+        global_hit_thresh = min(global_hit_thresh, c * 0.1);
+    }
+
+    float t = tNear; bool hit = false; int hit_field = 0;
+    for (int i = 0; i < 512; i++) {
+        vec3 p = ro + t * rd; float min_d = 1.0e10;
+        for (int fi = 0; fi < 8; fi++) {
+            if (fi >= u_num_fields) break;
+            if (ftn[fi] > ftf[fi]) continue;
+            if (t > ftf[fi]) continue;
+            if (t < ftn[fi]) { min_d = min(min_d, ftn[fi] - t); continue; }
+            float d = sample_sdf_field(fi, p);
+            float cell = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
+            if (abs(d) < cell * 0.1) { hit = true; hit_field = fi; break; }
+            min_d = min(min_d, abs(d));
+        }
+        if (hit) break;
+        t += max(min_d * 0.9, global_hit_thresh * 0.5);
+        if (t > tFar) break;
+    }
+
+    if (!hit) {
+        out_color = vec4(0.0); out_vspos = vec4(0.0); out_vsnorm = vec4(0.0);
+        return;
+    }
+
+    vec3 hp = ro + t * rd;
+    vec3 n  = sdf_normal_field(hit_field, hp);
+    vec3 vd = normalize(-rd);
+
+    float diff = max(dot(n, u_light_dir), 0.0);
+    float spec = pow(max(dot(reflect(-u_light_dir, n), vd), 0.0), 32.0);
+
+    vec3 base_color = (u_is_subtractive[hit_field] == 1)
+        ? vec3(0.3, 0.5, 1.0) : vec3(1.0, 0.5, 0.0);
+    vec3 color = base_color * (0.25 + 0.70 * diff) + vec3(0.3) * spec;
+
+    vec4 vs   = gl_ModelViewMatrix * vec4(hp, 1.0);
+    vec3 vs_n = normalize(mat3(gl_ModelViewMatrix) * n);
+
+    out_color  = vec4(color, 1.0);
+    out_vspos  = vec4(vs.xyz, 1.0);
+    out_vsnorm = vec4(vs_n,   1.0);
+
+    vec4 clip   = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
+    float ndc_z = clip.z / clip.w;
+    gl_FragDepth = gl_DepthRange.near + gl_DepthRange.diff * (ndc_z * 0.5 + 0.5);
+}
+"""
+
+_FRAG_SSAO = """
+#version 330 compatibility
+in vec2 v_uv;
+
+uniform sampler2D u_pos;
+uniform sampler2D u_normal;
+uniform sampler2D u_noise;
+uniform vec3      u_samples[64];
+uniform mat4      u_proj;
+uniform vec2      u_noise_scale;
+
+const float RADIUS = 50.0;
+const float BIAS   = 0.025;
+
+void main() {
+    vec2 uv = v_uv * 0.5 + 0.5;
+
+    vec3 frag_pos = texture(u_pos, uv).xyz;
+    float hit_w   = texture(u_pos, uv).w;
+
+    if (hit_w < 0.5) {
+        gl_FragColor = vec4(1.0);
+        return;
+    }
+
+    vec3 normal   = normalize(texture(u_normal, uv).rgb);
+    vec3 rand_vec = normalize(texture(u_noise, uv * u_noise_scale).rgb);
+
+    vec3 tangent   = normalize(rand_vec - normal * dot(rand_vec, normal));
+    vec3 bitangent = cross(normal, tangent);
+    mat3 TBN       = mat3(tangent, bitangent, normal);
+
+    float occlusion = 0.0;
+    for (int i = 0; i < 64; i++) {
+        vec3 s = frag_pos + TBN * u_samples[i] * RADIUS;
+
+        vec4 offset = u_proj * vec4(s, 1.0);
+        offset.xyz /= offset.w;
+        offset.xyz  = offset.xyz * 0.5 + 0.5;
+
+        float sample_depth = texture(u_pos, offset.xy).z;
+        float range_check  = smoothstep(0.0, 1.0, RADIUS / abs(frag_pos.z - sample_depth));
+        occlusion += (sample_depth >= s.z + BIAS ? 1.0 : 0.0) * range_check;
+    }
+
+    float ao = 1.0 - (occlusion / 64.0);
+    gl_FragColor = vec4(ao, ao, ao, 1.0);
+}
+"""
+
+_FRAG_BLUR = """
+#version 330 compatibility
+in vec2 v_uv;
+
+uniform sampler2D u_ssao;
+uniform vec2      u_texel_size;
+
+void main() {
+    vec2 uv = v_uv * 0.5 + 0.5;
+    float result = 0.0;
+    for (int x = -2; x < 2; x++) {
+        for (int y = -2; y < 2; y++) {
+            vec2 offset = vec2(float(x), float(y)) * u_texel_size;
+            result += texture(u_ssao, uv + offset).r;
+        }
+    }
+    gl_FragColor = vec4(result / 16.0);
+}
+"""
+
+_FRAG_COMP = """
+#version 330 compatibility
+in vec2 v_uv;
+
+uniform sampler2D u_color;
+uniform sampler2D u_occlusion;
+uniform sampler2D u_depth;
+
+void main() {
+    vec2 uv    = v_uv * 0.5 + 0.5;
+    vec4 color = texture(u_color, uv);
+
+    if (color.a < 0.5) discard;
+
+    float ao    = texture(u_occlusion, uv).r;
+    vec3 result = color.rgb * ao;
+    result      = pow(result, vec3(1.0 / 2.2));
+
+    gl_FragColor = vec4(result, 1.0);
+    gl_FragDepth = texture(u_depth, uv).r;
+}
+"""
 
 
 class DMSceneRayMarchRenderer:
@@ -44,6 +307,19 @@ class DMSceneRayMarchRenderer:
         self._zoom_timer    = None
         self._baked_cache  = {}    # label → baked metadata dict
         self._dirty_fields = set() # labels needing rebake on next _rebuild()
+
+        # Multi-pass SSAO renderer state
+        self._active_uniforms = {}    # populated by _rebuild(), consumed by render callback
+        self._prog_gbuf  = None       # GLProgram: G-buffer ray march
+        self._prog_ssao  = None       # GLProgram: SSAO
+        self._prog_blur  = None       # GLProgram: blur
+        self._prog_comp  = None       # GLProgram: composition + gamma
+        self._gbuf_fbo   = None       # GLFramebuffer: color0+vspos+vsnorm+depth
+        self._ssao_fbo   = None       # GLFramebuffer: R16F occlusion
+        self._blur_fbo   = None       # GLFramebuffer: R16F blurred occlusion
+        self._noise_tex_id = 0        # GL texture id: 4x4 random rotation vectors
+        self._ssao_kernel_flat = []   # 192 floats: 64 hemisphere samples (x,y,z each)
+        self._vp_size    = (0, 0)     # Last known viewport (w, h) for resize detection
 
         # GPU compute state
         self._gpu_supported = None  # None = not yet checked, True/False after check
@@ -89,6 +365,35 @@ class DMSceneRayMarchRenderer:
         except Exception:
             pass
         self._gl_tex.destroy()
+
+        # Destroy multi-pass GL resources (must be done in GL context; best-effort here)
+        for prog in (self._prog_gbuf, self._prog_ssao, self._prog_blur, self._prog_comp):
+            if prog is not None:
+                try:
+                    prog.destroy()
+                except Exception:
+                    pass
+        self._prog_gbuf = self._prog_ssao = self._prog_blur = self._prog_comp = None
+
+        for fbo in (self._gbuf_fbo, self._ssao_fbo, self._blur_fbo):
+            if fbo is not None:
+                try:
+                    fbo.destroy()
+                except Exception:
+                    pass
+        self._gbuf_fbo = self._ssao_fbo = self._blur_fbo = None
+
+        if self._noise_tex_id:
+            from core.gl_texture3d import _loader
+            glDeleteTextures = _loader.get("glDeleteTextures",
+                [ctypes.c_int, ctypes.POINTER(ctypes.c_uint)], None)
+            arr = (ctypes.c_uint * 1)(self._noise_tex_id)
+            glDeleteTextures(1, arr)
+            self._noise_tex_id = 0
+
+        self._active_uniforms = {}
+        self._vp_size = (0, 0)
+
         # Clean up GPU compute programs
         for info in self._gpu_programs.values():
             try:
@@ -154,7 +459,7 @@ class DMSceneRayMarchRenderer:
                 pass
 
     def _setup_nodes(self):
-        # 1. Bounding box proxy
+        # 1. Bounding-box debug wireframe (toggled by render debug mode)
         self._bbox_switch = coin.SoSwitch()
         self._bbox_sep = coin.SoSeparator()
         self._bbox_switch.addChild(self._bbox_sep)
@@ -179,7 +484,7 @@ class DMSceneRayMarchRenderer:
         ])
         self._bbox_sep.addChild(bbox_lines)
 
-        # 2. Shader-scoped separator
+        # 2. Shader separator (holds callbacks + bbox expansion geometry)
         self._shader_sep = coin.SoSeparator()
         for attr in ["renderCulling", "renderCaching", "cullCaching", "boundingBoxCaching"]:
             try:
@@ -191,267 +496,34 @@ class DMSceneRayMarchRenderer:
         quad_mat.transparency.setValue(0.0)
         self._shader_sep.addChild(quad_mat)
 
-        try:
-            depth_buf = coin.SoDepthBuffer()
-            depth_buf.test.setValue(True)
-            depth_buf.write.setValue(True)
-            self._shader_sep.addChild(depth_buf)
-        except AttributeError:
-            pass
-
-        # 3D texture callback — allocates/uploads texture, binds to unit 0.
-        # Must fire BEFORE compute dispatch so the texture storage exists.
+        # 3D texture upload callback (binds SDF atlas to unit 0)
         self._shader_sep.addChild(self._gl_tex.callback_node)
 
-        # Compute dispatch callback — writes SDF data into the allocated texture
+        # GPU compute dispatch callback
         self._compute_cb_node = coin.SoCallback()
         self._compute_cb_node.setCallback(self._compute_gl_callback)
         self._shader_sep.addChild(self._compute_cb_node)
 
-        # Shader Program
-        shader = coin.SoShaderProgram()
-        v_shader = coin.SoVertexShader()
-        v_shader.sourceType.setValue(coin.SoShaderObject.GLSL_PROGRAM)
-        f_shader = coin.SoFragmentShader()
-        f_shader.sourceType.setValue(coin.SoShaderObject.GLSL_PROGRAM)
+        # Multi-pass SSAO render callback (replaces SoShaderProgram)
+        self._render_cb_node = coin.SoCallback()
+        self._render_cb_node.setCallback(self._render_gl_callback)
+        self._shader_sep.addChild(self._render_cb_node)
 
-        v_shader.sourceProgram.setValue("""
-#version 330 compatibility
-out vec2 v_uv;
-void main() {
-    v_uv = gl_Vertex.xy;
-    gl_Position = vec4(gl_Vertex.xy, 0.0, 1.0);
-}
-""")
-
-        # R32F fragment shader — reads float directly from .r channel
-        f_shader.sourceProgram.setValue("""
-#version 330 compatibility
-in vec2 v_uv;
-uniform sampler3D u_sdf_vol;
-uniform int   u_num_fields;
-
-uniform int   u_nx[8];
-uniform int   u_ny[8];
-uniform int   u_nz[8];
-uniform int   u_z_offset[8];
-uniform int   u_z_total;
-uniform int   u_is_subtractive[8];
-uniform vec3  u_bbox_min[8];
-uniform vec3  u_bbox_max[8];
-
-float decode_texel(ivec3 tc) {
-    return texelFetch(u_sdf_vol, tc, 0).r;
-}
-
-float sample_sdf_field(int fi, vec3 p) {
-    vec3 uvw = (p - u_bbox_min[fi]) / (u_bbox_max[fi] - u_bbox_min[fi]);
-    uvw = clamp(uvw, vec3(0.0), vec3(1.0));
-    vec3 tc = vec3(
-        uvw.x * float(u_nx[fi]),
-        uvw.y * float(u_ny[fi]),
-        float(u_z_offset[fi]) + uvw.z * float(u_nz[fi])
-    );
-    tc = clamp(tc, vec3(0.0), vec3(float(u_nx[fi]), float(u_ny[fi]),
-               float(u_z_offset[fi] + u_nz[fi])));
-    ivec3 c0 = ivec3(floor(tc));
-    ivec3 c1 = min(c0 + 1, ivec3(u_nx[fi], u_ny[fi], u_z_offset[fi] + u_nz[fi]));
-    vec3 f = tc - vec3(c0);
-    float d000 = decode_texel(ivec3(c0.x, c0.y, c0.z));
-    float d100 = decode_texel(ivec3(c1.x, c0.y, c0.z));
-    float d010 = decode_texel(ivec3(c0.x, c1.y, c0.z));
-    float d110 = decode_texel(ivec3(c1.x, c1.y, c0.z));
-    float d001 = decode_texel(ivec3(c0.x, c0.y, c1.z));
-    float d101 = decode_texel(ivec3(c1.x, c0.y, c1.z));
-    float d011 = decode_texel(ivec3(c0.x, c1.y, c1.z));
-    float d111 = decode_texel(ivec3(c1.x, c1.y, c1.z));
-    float dx00 = mix(d000, d100, f.x);
-    float dx10 = mix(d010, d110, f.x);
-    float dx01 = mix(d001, d101, f.x);
-    float dx11 = mix(d011, d111, f.x);
-    float dxy0 = mix(dx00, dx10, f.y);
-    float dxy1 = mix(dx01, dx11, f.y);
-    return mix(dxy0, dxy1, f.z);
-}
-
-vec3 sdf_normal_field(int fi, vec3 p) {
-    float cell = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
-    float h = cell * 2.0;
-    vec2 k = vec2(1.0, -1.0);
-    vec3 g = k.xyy * sample_sdf_field(fi, p + k.xyy*h) +
-             k.yyx * sample_sdf_field(fi, p + k.yyx*h) +
-             k.yxy * sample_sdf_field(fi, p + k.yxy*h) +
-             k.xxx * sample_sdf_field(fi, p + k.xxx*h);
-
-    float len2 = dot(g, g);
-    return (len2 > 1e-10) ? g * inversesqrt(len2) : vec3(0.0, 1.0, 0.0);
-}
-
-vec2 intersect_aabb(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
-    vec3 t1 = (bmin - ro) / rd;
-    vec3 t2 = (bmax - ro) / rd;
-    vec3 tmin = min(t1, t2);
-    vec3 tmax = max(t1, t2);
-    return vec2(max(max(tmin.x, tmin.y), tmin.z),
-                min(min(tmax.x, tmax.y), tmax.z));
-}
-
-void main() {
-    vec4 ndc_near = vec4(v_uv, -1.0, 1.0);
-    vec4 world_near = gl_ModelViewProjectionMatrixInverse * ndc_near;
-    world_near /= world_near.w;
-    vec4 ndc_far = vec4(v_uv, 1.0, 1.0);
-    vec4 world_far = gl_ModelViewProjectionMatrixInverse * ndc_far;
-    world_far /= world_far.w;
-    vec3 cam = (gl_ModelViewMatrixInverse * vec4(0.0,0.0,0.0,1.0)).xyz;
-
-    vec3 ro = world_near.xyz;
-    vec3 rd = normalize(world_far.xyz - world_near.xyz);
-    float ray_tmax = length(world_far.xyz - world_near.xyz);
-
-    // Combined AABB early discard
-    vec3 scene_min = u_bbox_min[0];
-    vec3 scene_max = u_bbox_max[0];
-    for (int fi = 1; fi < 8; fi++) {
-        if (fi >= u_num_fields) break;
-        scene_min = min(scene_min, u_bbox_min[fi]);
-        scene_max = max(scene_max, u_bbox_max[fi]);
-    }
-    vec2 tBox = intersect_aabb(ro, rd, scene_min, scene_max);
-    float tNear = max(tBox.x, 0.0);
-    float tFar  = min(tBox.y, ray_tmax);
-    if (tNear > tFar) discard;
-
-    // Per-field AABB intervals
-    float ftn[8];
-    float ftf[8];
-    for (int fi = 0; fi < 8; fi++) {
-        if (fi < u_num_fields) {
-            vec2 fi_int = intersect_aabb(ro, rd, u_bbox_min[fi], u_bbox_max[fi]);
-            ftn[fi] = max(fi_int.x, 0.0);
-            ftf[fi] = min(fi_int.y, ray_tmax);
-        } else {
-            ftn[fi] =  1.0e10;
-            ftf[fi] = -1.0e10;
-        }
-    }
-
-    float global_hit_thresh = 1.0;
-    for (int fi = 0; fi < 8; fi++) {
-        if (fi >= u_num_fields) break;
-        float c = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
-        global_hit_thresh = min(global_hit_thresh, c * 0.1);
-    }
-
-    float t = tNear;
-    bool hit = false;
-    int hit_field = 0;
-
-    for (int i = 0; i < 512; i++) {
-        vec3 p = ro + t * rd;
-        float min_d = 1.0e10;
-
-        for (int fi = 0; fi < 8; fi++) {
-            if (fi >= u_num_fields) break;
-            if (ftn[fi] > ftf[fi]) continue;
-            if (t > ftf[fi])       continue;
-            if (t < ftn[fi]) {
-                min_d = min(min_d, ftn[fi] - t);
-                continue;
-            }
-            float d = sample_sdf_field(fi, p);
-            float cell = (u_bbox_max[fi].x - u_bbox_min[fi].x) / max(float(u_nx[fi]), 1.0);
-            float thresh = cell * 0.1;
-            if (abs(d) < thresh) { hit = true; hit_field = fi; break; }
-            min_d = min(min_d, abs(d));
-        }
-        if (hit) break;
-
-        t += max(min_d * 0.9, global_hit_thresh * 0.5);
-        if (t > tFar) break;
-    }
-    if (!hit) discard;
-
-    vec3 hp = ro + t * rd;
-    vec3 n  = sdf_normal_field(hit_field, hp);
-
-    vec3 vd = -rd;
-    vec3 ld = vd;
-    float diff = max(dot(n, ld), 0.0);
-    float spec = pow(max(dot(reflect(rd, n), vd), 0.0), 32.0);
-
-    vec3 base_color = (u_is_subtractive[hit_field] == 1)
-        ? vec3(0.3, 0.5, 1.0)
-        : vec3(1.0, 0.5, 0.0);
-    vec3 color = base_color * (0.15 + 0.75 * diff) + vec3(0.4) * spec;
-    gl_FragColor = vec4(color, 1.0);
-
-    vec4 clip    = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
-    float ndc_z  = clip.z / clip.w;
-    gl_FragDepth = gl_DepthRange.near
-                 + gl_DepthRange.diff * (ndc_z * 0.5 + 0.5);
-}
-""")
-
-        # Uniforms
-        u_sdf_vol = coin.SoShaderParameter1i()
-        u_sdf_vol.name.setValue("u_sdf_vol")
-        u_sdf_vol.value.setValue(0)
-
-        self._u["u_num_fields"] = coin.SoShaderParameter1i()
-        self._u["u_num_fields"].name.setValue("u_num_fields")
-        self._u["u_num_fields"].value.setValue(0)
-
-        self._u["u_z_total"] = coin.SoShaderParameter1i()
-        self._u["u_z_total"].name.setValue("u_z_total")
-        self._u["u_z_total"].value.setValue(1)
-
-        per_field_int  = ["u_nx", "u_ny", "u_nz", "u_z_offset", "u_is_subtractive"]
-        per_field_vec3 = ["u_bbox_min", "u_bbox_max"]
-
-        for fi in range(self.MAX_FIELDS):
-            for name in per_field_int:
-                key = f"{name}[{fi}]"
-                node = coin.SoShaderParameter1i()
-                node.name.setValue(key)
-                node.value.setValue(0)
-                self._u[key] = node
-            for name in per_field_vec3:
-                key = f"{name}[{fi}]"
-                node = coin.SoShaderParameter3f()
-                node.name.setValue(key)
-                node.value.setValue(coin.SbVec3f(0, 0, 0))
-                self._u[key] = node
-
-        f_shader.parameter.setNum(0)
-        idx = 0
-        f_shader.parameter.set1Value(idx, u_sdf_vol); idx += 1
-        for key in ["u_num_fields", "u_z_total"]:
-            f_shader.parameter.set1Value(idx, self._u[key]); idx += 1
-        for fi in range(self.MAX_FIELDS):
-            for name in (per_field_int + per_field_vec3):
-                f_shader.parameter.set1Value(idx, self._u[f"{name}[{fi}]"]); idx += 1
-        f_shader.parameter.setNum(idx)
-
-        shader.shaderObject.set1Value(0, v_shader)
-        shader.shaderObject.set1Value(1, f_shader)
-        self._shader_sep.addChild(shader)
-
-        # Quad Geometry + AABB expansion points
+        # Degenerate geometry: 8 bbox-corner points rendered as degenerate triangles
+        # so Coin3D computes a valid bounding box and does not cull the renderer.
         hints = coin.SoShapeHints()
         hints.vertexOrdering.setValue(coin.SoShapeHints.UNKNOWN_ORDERING)
         self._shader_sep.addChild(hints)
 
         self._coords = coin.SoCoordinate3()
-        self._coords.point.setValues(8, 4, [
-            (-1, -1, 0), (1, -1, 0), (1, 1, 0), (-1, 1, 0)
-        ])
+        # 8 placeholder points; actual values set by _rebuild()
+        self._coords.point.setValues(0, 8, [(0, 0, 0)] * 8)
         self._shader_sep.addChild(self._coords)
 
         faceset = coin.SoIndexedFaceSet()
-        indices = [8, 9, 10, -1, 8, 10, 11, -1]
+        indices = []
         for i in range(8):
-            indices.extend([i, i, i, -1])
+            indices.extend([i, i, i, -1])   # degenerate: each "triangle" is one point
         faceset.coordIndex.setValues(0, len(indices), indices)
         self._shader_sep.addChild(faceset)
 
@@ -826,6 +898,241 @@ void main() {
             dm_logger.debug(f"SceneRayMarch: GLSL compile failed: {e}")
             return None
 
+    def _init_gl_programs(self):
+        """Compile all 4 SSAO pipeline programs and upload noise texture.
+        Must be called inside an active GL context (i.e. from a SoCallback).
+        """
+        import random, math, ctypes
+        from core.gl_program import GLProgram
+        from core.gl_texture3d import _loader
+
+        self._prog_gbuf = GLProgram()
+        self._prog_gbuf.compile(_VERT_PASSTHROUGH, _FRAG_GBUF)
+
+        self._prog_ssao = GLProgram()
+        self._prog_ssao.compile(_VERT_PASSTHROUGH, _FRAG_SSAO)
+
+        self._prog_blur = GLProgram()
+        self._prog_blur.compile(_VERT_PASSTHROUGH, _FRAG_BLUR)
+
+        self._prog_comp = GLProgram()
+        self._prog_comp.compile(_VERT_PASSTHROUGH, _FRAG_COMP)
+
+        # SSAO hemisphere kernel: 64 samples, accelerated toward origin
+        kernel = []
+        for i in range(64):
+            s = [random.uniform(-1.0, 1.0),
+                 random.uniform(-1.0, 1.0),
+                 random.uniform(0.0, 1.0)]
+            length = math.sqrt(sum(x * x for x in s))
+            if length < 1e-8:
+                length = 1.0
+            s = [x / length for x in s]
+            scale = i / 64.0
+            scale = 0.1 + scale * scale * 0.9   # lerp(0.1, 1.0, scale^2)
+            kernel.extend([x * scale for x in s])
+        self._ssao_kernel_flat = kernel  # 192 floats
+
+        # 4×4 noise texture: random XY rotation vectors for SSAO tangent-frame
+        noise_data = []
+        for _ in range(16):
+            angle = random.uniform(0.0, 2.0 * math.pi)
+            noise_data.extend([math.cos(angle), math.sin(angle), 0.0])
+        noise_arr = (ctypes.c_float * len(noise_data))(*noise_data)
+
+        GL_TEXTURE_2D     = 0x0DE1
+        GL_RGB32F         = 0x8815
+        GL_RGB            = 0x1907
+        GL_FLOAT          = 0x1406
+        GL_NEAREST        = 0x2600
+        GL_REPEAT         = 0x2901
+        GL_TEXTURE_MIN_FILTER = 0x2801
+        GL_TEXTURE_MAG_FILTER = 0x2800
+        GL_TEXTURE_WRAP_S = 0x2802
+        GL_TEXTURE_WRAP_T = 0x2803
+
+        glGenTextures   = _loader.get("glGenTextures",
+            [ctypes.c_int, ctypes.POINTER(ctypes.c_uint)], None)
+        glBindTexture   = _loader.get("glBindTexture",
+            [ctypes.c_uint, ctypes.c_uint], None)
+        glTexImage2D    = _loader.get("glTexImage2D",
+            [ctypes.c_uint, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+             ctypes.c_int, ctypes.c_int, ctypes.c_uint, ctypes.c_uint,
+             ctypes.c_void_p], None)
+        glTexParameteri = _loader.get("glTexParameteri",
+            [ctypes.c_uint, ctypes.c_uint, ctypes.c_int], None)
+
+        tex = ctypes.c_uint(0)
+        glGenTextures(1, ctypes.byref(tex))
+        self._noise_tex_id = tex.value
+        glBindTexture(GL_TEXTURE_2D, self._noise_tex_id)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, 4, 4, 0,
+                     GL_RGB, GL_FLOAT, noise_arr)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
+        glBindTexture(GL_TEXTURE_2D, 0)
+
+    def _resize_fbos(self, w: int, h: int):
+        """Create or recreate all SSAO FBOs at viewport size (w, h).
+        Must be called inside an active GL context.
+        """
+        from core.gl_framebuffer import GLFramebuffer
+        if self._gbuf_fbo is None:
+            self._gbuf_fbo = GLFramebuffer()
+            self._ssao_fbo = GLFramebuffer()
+            self._blur_fbo = GLFramebuffer()
+        # G-buffer: Phong color + view-space pos + view-space normal + depth
+        self._gbuf_fbo.create(w, h, ['rgba16f', 'rgba16f', 'rgba16f', 'depth24'])
+        # SSAO: raw occlusion float
+        self._ssao_fbo.create(w, h, ['r16f'])
+        # Blur: blurred occlusion float
+        self._blur_fbo.create(w, h, ['r16f'])
+
+    def _set_gbuf_uniforms(self, prog):
+        """Upload per-field and scene uniforms to the G-buffer shader program."""
+        u = self._active_uniforms
+
+        prog.set_1i("u_sdf_vol",    0)           # texture unit 0
+        prog.set_1i("u_num_fields", u["n_fields"])
+        prog.set_1i("u_z_total",    u["z_total"])
+
+        # Fixed key light: normalize(1.0, 1.667, 1.105) ≈ 45° elevation
+        prog.set_3f("u_light_dir", 0.4472, 0.7454, 0.4943)
+
+        for fi, fd in enumerate(u["fields"]):
+            prog.set_1i(f"u_nx[{fi}]",             fd["nx"])
+            prog.set_1i(f"u_ny[{fi}]",             fd["ny"])
+            prog.set_1i(f"u_nz[{fi}]",             fd["nz"])
+            prog.set_1i(f"u_z_offset[{fi}]",       fd["z_offset"])
+            prog.set_1i(f"u_is_subtractive[{fi}]", fd["is_subtractive"])
+            prog.set_3f(f"u_bbox_min[{fi}]",       *fd["bbox_min"])
+            prog.set_3f(f"u_bbox_max[{fi}]",       *fd["bbox_max"])
+
+    def _render_gl_callback(self, userdata, action):
+        """Execute 4-pass SSAO render inside Coin3D's GL context."""
+        import ctypes
+        if not action.isOfType(coin.SoGLRenderAction.getClassTypeId()):
+            return
+        if not self._active_uniforms or self._active_uniforms.get("n_fields", 0) == 0:
+            return
+
+        from core.gl_texture3d import _loader
+
+        # Lazy-initialise programs + noise texture on first call
+        if self._prog_gbuf is None:
+            try:
+                self._init_gl_programs()
+            except Exception as e:
+                dm_logger.debug(f"SceneRayMarch: _init_gl_programs failed: {e}")
+                return
+
+        glGetIntegerv = _loader.get("glGetIntegerv",
+            [ctypes.c_uint, ctypes.POINTER(ctypes.c_int)], None)
+        glGetFloatv   = _loader.get("glGetFloatv",
+            [ctypes.c_uint, ctypes.POINTER(ctypes.c_float)], None)
+        glBindFramebuffer = _loader.get("glBindFramebuffer",
+            [ctypes.c_uint, ctypes.c_uint], None)
+        glActiveTexture   = _loader.get("glActiveTexture", [ctypes.c_uint], None)
+        glBindTexture     = _loader.get("glBindTexture",   [ctypes.c_uint, ctypes.c_uint], None)
+        glClear           = _loader.get("glClear",         [ctypes.c_uint], None)
+        glUseProgram      = _loader.get("glUseProgram",    [ctypes.c_uint], None)
+        glViewport        = _loader.get("glViewport",
+            [ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int], None)
+
+        GL_COLOR_BUFFER_BIT = 0x4000
+        GL_DEPTH_BUFFER_BIT = 0x0100
+        GL_FRAMEBUFFER      = 0x8D40
+        GL_TEXTURE_2D       = 0x0DE1
+        GL_TEXTURE_3D       = 0x806F
+
+        # Viewport size
+        vp = (ctypes.c_int * 4)(0, 0, 0, 0)
+        glGetIntegerv(0x0BA2, vp)   # GL_VIEWPORT
+        w, h = vp[2], vp[3]
+        if w <= 0 or h <= 0:
+            return
+
+        # Resize FBOs if viewport changed
+        if (w, h) != self._vp_size:
+            try:
+                self._resize_fbos(w, h)
+                self._vp_size = (w, h)
+            except Exception as e:
+                dm_logger.debug(f"SceneRayMarch: _resize_fbos failed: {e}")
+                return
+
+        # Save Coin3D's current FBO
+        prev_fbo = (ctypes.c_int * 1)(0)
+        glGetIntegerv(0x8CA6, prev_fbo)   # GL_FRAMEBUFFER_BINDING
+
+        # Read projection matrix (already set by Coin3D)
+        proj_data = (ctypes.c_float * 16)()
+        glGetFloatv(0x0BA7, proj_data)    # GL_PROJECTION_MATRIX
+
+        # ── Pass 1: G-buffer ray march ──
+        self._gbuf_fbo.bind()
+        glViewport(0, 0, w, h)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        self._prog_gbuf.use()
+        glActiveTexture(0x84C0)   # GL_TEXTURE0
+        glBindTexture(GL_TEXTURE_3D, self._gl_tex.tex_id)
+        self._set_gbuf_uniforms(self._prog_gbuf)
+        self._prog_gbuf.draw_fullscreen_quad()
+
+        # ── Pass 2: SSAO ──
+        self._ssao_fbo.bind()
+        glViewport(0, 0, w, h)
+        glClear(GL_COLOR_BUFFER_BIT)
+        self._prog_ssao.use()
+        glActiveTexture(0x84C0)
+        glBindTexture(GL_TEXTURE_2D, self._gbuf_fbo.color_texture(1))  # vs_pos
+        self._prog_ssao.set_1i("u_pos", 0)
+        glActiveTexture(0x84C1)
+        glBindTexture(GL_TEXTURE_2D, self._gbuf_fbo.color_texture(2))  # vs_normal
+        self._prog_ssao.set_1i("u_normal", 1)
+        glActiveTexture(0x84C2)
+        glBindTexture(GL_TEXTURE_2D, self._noise_tex_id)
+        self._prog_ssao.set_1i("u_noise", 2)
+        self._prog_ssao.set_2f("u_noise_scale", w / 4.0, h / 4.0)
+        self._prog_ssao.set_3fv("u_samples", 64, self._ssao_kernel_flat)
+        self._prog_ssao.set_mat4("u_proj", list(proj_data))
+        self._prog_ssao.draw_fullscreen_quad()
+
+        # ── Pass 3: Blur ──
+        self._blur_fbo.bind()
+        glViewport(0, 0, w, h)
+        glClear(GL_COLOR_BUFFER_BIT)
+        self._prog_blur.use()
+        glActiveTexture(0x84C0)
+        glBindTexture(GL_TEXTURE_2D, self._ssao_fbo.color_texture(0))
+        self._prog_blur.set_1i("u_ssao", 0)
+        self._prog_blur.set_2f("u_texel_size", 1.0 / w, 1.0 / h)
+        self._prog_blur.draw_fullscreen_quad()
+
+        # ── Pass 4: Composition → restore main FBO ──
+        glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo[0])
+        glViewport(0, 0, w, h)
+        self._prog_comp.use()
+        glActiveTexture(0x84C0)
+        glBindTexture(GL_TEXTURE_2D, self._gbuf_fbo.color_texture(0))  # Phong color
+        self._prog_comp.set_1i("u_color", 0)
+        glActiveTexture(0x84C1)
+        glBindTexture(GL_TEXTURE_2D, self._blur_fbo.color_texture(0))  # blurred AO
+        self._prog_comp.set_1i("u_occlusion", 1)
+        glActiveTexture(0x84C2)
+        glBindTexture(GL_TEXTURE_2D, self._gbuf_fbo.depth_texture())   # depth
+        self._prog_comp.set_1i("u_depth", 2)
+        self._prog_comp.draw_fullscreen_quad()
+
+        # ── Cleanup: unbind textures, restore shader state ──
+        for unit in (0x84C2, 0x84C1, 0x84C0):
+            glActiveTexture(unit)
+            glBindTexture(GL_TEXTURE_2D, 0)
+        glBindTexture(GL_TEXTURE_3D, 0)
+        glUseProgram(0)
+
     def _rebuild(self):
         """Bake dirty fields. Uses GPU compute if available, else CPU numpy."""
         import numpy as np
@@ -1027,27 +1334,24 @@ void main() {
 
         _t_atlas = time.perf_counter()
 
-        # Update per-field uniforms
-        for fi in range(self.MAX_FIELDS):
-            if fi < n_fields:
-                label, b = baked_list[fi]
-                mn, mx = b["bbox_min"], b["bbox_max"]
-                self._u[f"u_nx[{fi}]"].value.setValue(int(b["nx"]))
-                self._u[f"u_ny[{fi}]"].value.setValue(int(b["ny"]))
-                self._u[f"u_nz[{fi}]"].value.setValue(int(b["nz"]))
-                self._u[f"u_z_offset[{fi}]"].value.setValue(int(z_offsets[fi]))
-                self._u[f"u_bbox_min[{fi}]"].value.setValue(
-                    coin.SbVec3f(mn.x, mn.y, mn.z))
-                self._u[f"u_bbox_max[{fi}]"].value.setValue(
-                    coin.SbVec3f(mx.x, mx.y, mx.z))
-                is_sub = self._get_is_subtractive(label)
-                self._u[f"u_is_subtractive[{fi}]"].value.setValue(
-                    1 if is_sub else 0)
-            else:
-                self._u[f"u_nx[{fi}]"].value.setValue(0)
-
-        self._u["u_num_fields"].value.setValue(n_fields)
-        self._u["u_z_total"].value.setValue(int(new_total_nz))
+        # Store uniform data for _render_gl_callback to consume each frame
+        fields_data = []
+        for fi, (label, b) in enumerate(baked_list):
+            mn, mx = b["bbox_min"], b["bbox_max"]
+            fields_data.append({
+                "nx": int(b["nx"]),
+                "ny": int(b["ny"]),
+                "nz": int(b["nz"]),
+                "z_offset": int(z_offsets[fi]),
+                "bbox_min": (mn.x, mn.y, mn.z),
+                "bbox_max": (mx.x, mx.y, mx.z),
+                "is_subtractive": 1 if self._get_is_subtractive(label) else 0,
+            })
+        self._active_uniforms = {
+            "n_fields": n_fields,
+            "z_total":  int(new_total_nz),
+            "fields":   fields_data,
+        }
 
         # Combined bbox proxy
         all_mn = [b["bbox_min"] for _, b in baked_list]
