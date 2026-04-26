@@ -65,6 +65,13 @@ float sdf_plane(vec3 p, vec3 origin, vec3 normal) {
     return dot(p - origin, normal);
 }
 """,
+    "sdf_torus": """
+float sdf_torus(vec3 p, vec3 center, float major_r, float tube_r) {
+    vec3 lp = p - center;
+    vec2 q = vec2(length(lp.xy) - major_r, lp.z);
+    return length(q) - tube_r;
+}
+""",
     "apply_inv_mat": """
 vec3 apply_inv_mat(mat4 m, vec3 p) {
     return (m * vec4(p, 1.0)).xyz;

@@ -64,8 +64,14 @@ class ToolState(IntEnum):
     DRAGGING = 2
     FINALIZED = 3
     EDIT_MODE = 4
-    PICK_RADIUS = 5  # Cylinder/Sphere specific
-    PICK_HEIGHT = 6  # Cylinder specific
+    PICK_RADIUS = 5  # Cylinder/Sphere specific (legacy)
+    PICK_HEIGHT = 6  # Cylinder specific (legacy)
+    PLACE_ANCHOR = 7   # Hover-snap to place first point, click to accept
+    DRAG_XY      = 8   # Mouse moves on workplane XY; click to accept 2D profile
+    DRAG_Z       = 9   # Mouse moves along WP normal; click to accept height
+    CUSTOM_1     = 10  # Primitive-specific param 1 (e.g. bevel radius)
+    CUSTOM_2     = 11
+    CUSTOM_3     = 12
 
 
 class DMBase:
@@ -260,11 +266,12 @@ class DMBase:
             self._last_hit_desc = "None"
             
         if wp_hit is not None:
-            # Update plane if we are in the initial 'Idle' state (state 0)
+            # Update plane if we are in the initial state (IDLE or PLACE_ANCHOR)
             # where we want to snap to whatever surface is under the first click.
-            # Once drawing has started (state > 0), we lock the plane.
-            if getattr(self, "state", ToolState.IDLE) != ToolState.IDLE:
-                 return pos
+            # Once drawing has started (later stages), we lock the plane.
+            cur_state = getattr(self, "state", ToolState.IDLE)
+            if cur_state not in (ToolState.IDLE, ToolState.PLACE_ANCHOR):
+                return pos
 
             is_real_wp = False
             if hasattr(wp_hit, "Proxy") and getattr(wp_hit.Proxy, "is_dm_workplane", False):
@@ -279,7 +286,7 @@ class DMBase:
                 self.working_plane = wp_hit
             
             self._working_plane_is_fallback = not is_real_wp
-        elif self.working_plane is None and getattr(self, "state", ToolState.ACTIVE) == ToolState.IDLE:
+        elif self.working_plane is None and getattr(self, "state", ToolState.ACTIVE) in (ToolState.IDLE, ToolState.PLACE_ANCHOR):
             # If no hit, and no current plane, use the class-level fallback if available.
             # We look for _last_working_plane on the subclass.
             last_wp = getattr(type(self), "_last_working_plane", None)

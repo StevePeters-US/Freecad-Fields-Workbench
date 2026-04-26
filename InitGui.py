@@ -80,6 +80,7 @@ class DirectModelingWorkbench(Workbench):
                 'DM_CreateBox',
                 'DM_CreateSphere',
                 'DM_CreateCylinder',
+                'DM_CreateTorus',
                 'DM_FillCurve',
             ])
             self.appendToolbar("DM - Operations", [
@@ -101,6 +102,7 @@ class DirectModelingWorkbench(Workbench):
                 'DM_CreateBox',
                 'DM_CreateSphere',
                 'DM_CreateCylinder',
+                'DM_CreateTorus',
                 'DM_FillCurve',
                 'Separator',
                 'DM_Translate',

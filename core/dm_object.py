@@ -94,15 +94,6 @@ def get_ray_march_cell_size():
 def set_ray_march_cell_size(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetFloat("RayMarchCellSize", float(val))
 
-def get_rm_texels_per_field():
-    """Target screen pixels per texel for LOD (default 4). Smaller = finer resolution.
-    The LOD cell size = n / px_per_world, so 4 means each texel covers ~4 screen pixels.
-    Below 2mm base cell, the base cell floor takes over regardless."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("RMTexelsPerField", 4)
-
-def set_rm_texels_per_field(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetInt("RMTexelsPerField", int(val))
-
 def get_max_sdf_render_size():
     """Return the maximum SDF bounding box dimension in mm for rendering (default 2000)."""
     return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("MaxSdfRenderSize", 2000.0)

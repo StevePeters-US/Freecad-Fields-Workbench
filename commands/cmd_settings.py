@@ -41,7 +41,7 @@ class _SettingsDialog(QtGui.QDialog):
         current_mss = get_max_sdf_render_size()
 
         # Near Clip Distance spinbox
-        from core.dm_object import get_near_clip_distance, get_ray_march_cell_size, get_rm_texels_per_field
+        from core.dm_object import get_near_clip_distance, get_ray_march_cell_size
         self._near_clip_spin = QtGui.QDoubleSpinBox()
         self._near_clip_spin.setRange(0.0, 10000.0)
         self._near_clip_spin.setSingleStep(1.0)
@@ -61,16 +61,6 @@ class _SettingsDialog(QtGui.QDialog):
         self._rm_res_spin.setToolTip(
             "SDF baking resolution for GPU ray march renderer in mm.\n"
             "Smaller = smoother surface, higher GPU memory. Default: 2.0 mm."
-        )
-
-        self._quality_spin = QtGui.QSpinBox()
-        self._quality_spin.setRange(16, 256)
-        self._quality_spin.setSingleStep(16)
-        self._quality_spin.setValue(get_rm_texels_per_field())
-        self._quality_spin.setToolTip(
-            "Target texels along longest visible axis (screen-space LOD).\n"
-            "Higher = sharper at all zoom levels, more CPU bake cost.\n"
-            "Default: 64. Range: 16 (fast) – 256 (sharp)."
         )
 
         layout = QtGui.QFormLayout(self)
@@ -137,7 +127,6 @@ class _SettingsDialog(QtGui.QDialog):
 
         layout.addRow("Near Clip Distance (mm):", self._near_clip_spin)
         layout.addRow("Ray March Resolution (mm):", self._rm_res_spin)
-        layout.addRow("Ray March Quality (texels):", self._quality_spin)
 
         # Buttons
         btn_box = QtGui.QDialogButtonBox(
@@ -154,7 +143,7 @@ class _SettingsDialog(QtGui.QDialog):
                                     refresh_all_dm_objects,
                                      set_near_clip_distance, apply_near_clip_override,
                                      set_interactive_throttle_interval, set_ray_march_cell_size,
-                                     set_rm_texels_per_field, set_max_sdf_render_size)
+                                     set_max_sdf_render_size)
         from core.dm_logger import set_enable_crash_log
         wire = self._wire_check.isChecked()
         lw = self._lw_spin.value()
@@ -179,8 +168,7 @@ class _SettingsDialog(QtGui.QDialog):
         apply_near_clip_override()
 
         set_ray_march_cell_size(self._rm_res_spin.value())
-        set_rm_texels_per_field(self._quality_spin.value())
-        
+
         # Apply to all existing objects
         refresh_all_dm_objects()
 

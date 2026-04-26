@@ -6,7 +6,8 @@ class CommandDMCreation:
     _ICONS = {
         "Box": "CreateBox",
         "Sphere": "CreateSphere",
-        "Cylinder": "CreateCylinder"
+        "Cylinder": "CreateCylinder",
+        "Torus": "CreateTorus",
     }
 
     def __init__(self, c_type="Box"):
@@ -24,17 +25,19 @@ class CommandDMCreation:
 
     def Activated(self):
         # We want to wait to import the tool to avoid circular dependencies
-        from tools.primitive_tool import BoxCreator, SphereCreator, CylinderCreator
+        from tools.primitive_tool import BoxCreator, SphereCreator, CylinderCreator, TorusCreator
         from core.input_manager import DMInputManager
-        
+
         manager = DMInputManager.get_instance()
-        
+
         if self.c_type == "Box":
             self.tool = BoxCreator()
         elif self.c_type == "Sphere":
             self.tool = SphereCreator()
         elif self.c_type == "Cylinder":
             self.tool = CylinderCreator()
+        elif self.c_type == "Torus":
+            self.tool = TorusCreator()
         else:
             return
 
@@ -51,8 +54,11 @@ class CommandDMCreation:
             return tool_name == "SphereCreator"
         if self.c_type == "Cylinder":
             return tool_name == "CylinderCreator"
+        if self.c_type == "Torus":
+            return tool_name == "TorusCreator"
         return False
 
 FreeCADGui.addCommand('DM_CreateBox', CommandDMCreation("Box"))
 FreeCADGui.addCommand('DM_CreateSphere', CommandDMCreation("Sphere"))
 FreeCADGui.addCommand('DM_CreateCylinder', CommandDMCreation("Cylinder"))
+FreeCADGui.addCommand('DM_CreateTorus', CommandDMCreation("Torus"))

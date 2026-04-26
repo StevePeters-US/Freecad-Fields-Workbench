@@ -679,9 +679,9 @@ class DMSceneRayMarchRenderer:
             self._rebuild()
 
     def _compute_cell_size(self, field, view):
-        from core.dm_object import get_ray_march_cell_size, get_rm_texels_per_field
+        from core.dm_object import get_ray_march_cell_size
         base_cell  = get_ray_march_cell_size()
-        n_texels   = get_rm_texels_per_field()
+        n_texels   = 2  # 2 screen pixels per texel; LOD only kicks in when object is small on screen
         try:
             bb_min, bb_max = field.bounding_box()
             field_size = max(
@@ -780,9 +780,9 @@ class DMSceneRayMarchRenderer:
             return None
 
     def _compute_cell_size_for_region(self, bbox_override, view):
-        from core.dm_object import get_ray_march_cell_size, get_rm_texels_per_field
+        from core.dm_object import get_ray_march_cell_size
         base_cell = get_ray_march_cell_size()
-        n_texels  = get_rm_texels_per_field()
+        n_texels  = 2
         LOD_EXPONENT = 0.5
         MAX_RATIO    = 16.0
         try:
