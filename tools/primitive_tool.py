@@ -55,6 +55,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self._preview_obj = None     # Live FreeCAD object for preview
         self._update_pending = False  # Throttle rapid updates
         self._creating_obj = False    # Re-entrancy guard
+        self._create_is_subtractive = False # Z hotkey toggle during creation
         # Reset the shared timer so preview calls for this tool session are isolated
         mesh_timer.reset()
 
@@ -514,6 +515,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 # Use last part of class name without 'Creator' suffix
                 name = type(self).__name__.replace("Creator", "")
                 self._preview_obj = create_dm_object(name=name, shape_type="sdf")
+                if hasattr(self._preview_obj, "IsSubtractive"):
+                    self._preview_obj.IsSubtractive = getattr(self, "_create_is_subtractive", False)
             finally:
                 self._creating_obj = False
 
@@ -690,13 +693,10 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
     def handle_keyboard(self, event_dict):
         key = event_dict.get("Key")
-        if self._is_editing and key == QtCore.Qt.Key_Z:
-            if self._preview_obj:
+        if key == QtCore.Qt.Key_Z:
+            if getattr(self, "_preview_obj", None):
                 cur = getattr(self._preview_obj, "IsSubtractive", False)
                 self._preview_obj.IsSubtractive = not cur
-                color = (0.2, 0.6, 1.0) if not cur else (1.0, 0.5, 0.0)
-                for dp in self.dm_points:
-                    dp.set_color(color)
                 self._preview_obj.touch()
                 if self._preview_obj.Document:
                     self._preview_obj.Document.recompute([self._preview_obj])
@@ -704,6 +704,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                         from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
                         label = f"{self._preview_obj.Document.Name}.{self._preview_obj.Name}"
                         DMSceneRayMarchRenderer.get_instance().update_field(label, self._preview_obj.Proxy.SdfField)
+            else:
+                self._create_is_subtractive = not getattr(self, "_create_is_subtractive", False)
             return True
         return False
 
@@ -713,6 +715,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         # Return to first creation step (or IDLE if no steps defined)
         self.state = self.CREATION_STEPS[0] if self.CREATION_STEPS else ToolState.IDLE
         self._anchor_pt = None
+        self._create_is_subtractive = False
         self.points = []
         for dm_pt in self.dm_points:
             dm_pt.undraw()
