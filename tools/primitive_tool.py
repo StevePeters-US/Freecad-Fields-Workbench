@@ -761,15 +761,24 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         """Throttled update of both the mesh and the ghost visuals."""
         self._apply_preview_field(field)
         self._update_ghost_visuals()
-        # Trigger parent boolean recompute in edit mode (GPU already has new field)
+        # Schedule parent boolean recompute deferred (must not run inside drag timer)
         if getattr(self, "_is_editing", False) and self._preview_obj and self._preview_obj.Document:
-            try:
-                self._preview_obj.touch()
-                self._preview_obj.Document.recompute([self._preview_obj])
-            except Exception as e:
-                dm_logger.debug(f"Boolean parent recompute error: {e}")
+            obj = self._preview_obj
+            QtCore.QTimer.singleShot(0, lambda: self._recompute_boolean_parents(obj))
         if self.view:
             self.view.redraw()
+
+    def _recompute_boolean_parents(self, obj):
+        """Deferred: recompute the primitive and its boolean parent dependents."""
+        if getattr(self, "_terminated", False):
+            return
+        try:
+            if obj and obj.Document:
+                obj.touch()
+                obj.Document.recompute()
+        except Exception as e:
+            dm_logger.debug(f"Boolean parent recompute error: {e}")
+
 
     def _update_ghost_visuals(self):
         """Standard implementation for primitive tools to show points/edges."""
