@@ -41,6 +41,152 @@ _CREATION_PREVIEW_STAGES = frozenset({
 })
 
 
+class PrimitiveTaskPanel:
+    """Task panel for SDF primitives (both creation and edit modes)."""
+    def __init__(self, creator):
+        self.creator = creator
+        from PySide import QtGui, QtCore
+        self.form = QtGui.QWidget()
+        self.layout = QtGui.QVBoxLayout(self.form)
+        self.layout.setContentsMargins(10, 10, 10, 10)
+        
+        self._build_ui()
+        self.update_ui()
+        
+    def _build_ui(self):
+        from PySide import QtGui, QtCore
+        # Transform Group
+        self.transform_group = QtGui.QGroupBox("Transform")
+        t_layout = QtGui.QFormLayout(self.transform_group)
+        self.pos_x = QtGui.QLineEdit()
+        self.pos_y = QtGui.QLineEdit()
+        self.pos_z = QtGui.QLineEdit()
+        
+        self.pos_x.editingFinished.connect(self._on_pos_changed)
+        self.pos_y.editingFinished.connect(self._on_pos_changed)
+        self.pos_z.editingFinished.connect(self._on_pos_changed)
+        
+        t_layout.addRow("X:", self.pos_x)
+        t_layout.addRow("Y:", self.pos_y)
+        t_layout.addRow("Z:", self.pos_z)
+        self.layout.addWidget(self.transform_group)
+        
+        # Params Group
+        self.params_group = QtGui.QGroupBox("Parameters")
+        self.p_layout = QtGui.QFormLayout(self.params_group)
+        self.layout.addWidget(self.params_group)
+        
+        self.param_inputs = {}
+        
+        self.layout.addStretch()
+
+    def update_ui(self):
+        """Update line edits with current values from the tool without triggering signals."""
+        creator = self.creator
+        wp = creator.working_plane
+        if wp:
+            base = wp.Base
+            self.pos_x.blockSignals(True)
+            self.pos_y.blockSignals(True)
+            self.pos_z.blockSignals(True)
+            self.pos_x.setText(f"{base.x:.2f} mm")
+            self.pos_y.setText(f"{base.y:.2f} mm")
+            self.pos_z.setText(f"{base.z:.2f} mm")
+            self.pos_x.blockSignals(False)
+            self.pos_y.blockSignals(False)
+            self.pos_z.blockSignals(False)
+            
+        self._update_params_ui()
+
+    def _update_params_ui(self):
+        from PySide import QtGui, QtCore
+        creator = self.creator
+        if not hasattr(creator, "get_parameters") or not hasattr(creator, "set_parameters"):
+            self.params_group.hide()
+            return
+            
+        params = creator.get_parameters()
+        if not params:
+            self.params_group.hide()
+            return
+            
+        self.params_group.show()
+        
+        # Add new fields if needed
+        for key in params.keys():
+            if key not in self.param_inputs:
+                le = QtGui.QLineEdit()
+                le.editingFinished.connect(lambda k=key: self._on_param_changed(k))
+                self.p_layout.addRow(f"{key}:", le)
+                self.param_inputs[key] = le
+                
+        # Update values
+        for key, val in params.items():
+            le = self.param_inputs.get(key)
+            if le:
+                le.blockSignals(True)
+                le.setText(f"{val:.2f} mm")
+                le.blockSignals(False)
+
+    def _on_pos_changed(self):
+        import FreeCAD
+        creator = self.creator
+        if not creator.working_plane:
+            return
+        
+        try:
+            x = FreeCAD.Units.Quantity(self.pos_x.text()).Value
+            y = FreeCAD.Units.Quantity(self.pos_y.text()).Value
+            z = FreeCAD.Units.Quantity(self.pos_z.text()).Value
+            
+            delta = FreeCAD.Vector(x, y, z) - creator.working_plane.Base
+            creator.working_plane.Base = FreeCAD.Vector(x, y, z)
+            
+            creator.points = [p + delta for p in creator.points]
+            if getattr(creator, "_center_handle", None):
+                creator._center_handle.position += delta
+            if getattr(creator, "_rot_handle", None):
+                creator._rot_handle.position += delta
+                
+            creator._update_handle_positions(creator.points)
+            creator.update_preview()
+            if creator.view:
+                creator.view.redraw()
+        except Exception as e:
+            from core import dm_logger
+            dm_logger.debug(f"Error parsing position formula: {e}")
+
+    def _on_param_changed(self, key):
+        import FreeCAD
+        creator = self.creator
+        if not hasattr(creator, "get_parameters") or not hasattr(creator, "set_parameters"):
+            return
+            
+        params = creator.get_parameters()
+        le = self.param_inputs.get(key)
+        if le:
+            try:
+                val = FreeCAD.Units.Quantity(le.text()).Value
+                params[key] = val
+                creator.set_parameters(params)
+                self.update_ui()
+            except Exception as e:
+                from core import dm_logger
+                dm_logger.debug(f"Error parsing parameter formula: {e}")
+
+    def accept(self):
+        if hasattr(self.creator, 'finish'):
+            self.creator.finish()
+        else:
+            self.creator.terminate()
+        return True
+        
+    def reject(self):
+        self.creator.terminate()
+        return True
+
+
+
 class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     """Base class for SDF primitive creator tools with live mesh preview."""
 
@@ -81,6 +227,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
         # Creation-phase anchor (set on PLACE_ANCHOR accept)
         self._anchor_pt = None
+        
+        self.points = []
 
         # Unified workplane pre-load logic
         self._init_working_plane()
@@ -89,6 +237,11 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         if self.CREATION_STEPS:
             self.state = self.CREATION_STEPS[0]
             dm_logger.info(f"{type(self).__name__}: {_STAGE_HINTS.get(self.state, 'Click to begin')}")
+
+        # Show Task Panel
+        self.panel = PrimitiveTaskPanel(self)
+        FreeCADGui.Control.showDialog(self.panel)
+        self._dialog_open = True
 
     def get_handled_types(self):
         return ["sdf"]
@@ -318,6 +471,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             # Always sync dm_point visuals and update SDF after any drag branch
             self._sync_edit_points()
             self._update_handle_positions(self.points)
+            if hasattr(self, "panel") and self.panel:
+                self.panel.update_ui()
             self.update_preview()
         if self.view:
             self.view.redraw()
@@ -554,6 +709,10 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             dm_logger.debug(f"PrimitiveCreatorBase preview update error: {e}")
         finally:
             self._update_pending = False
+
+        if getattr(self, "_is_editing", False) and self._preview_obj and self._preview_obj.Document:
+            self._preview_obj.touch()
+            self._preview_obj.Document.recompute()
 
     def _finalize_object(self, name, terminate=True):
         """Commit the preview object as the final result, upgrading its mesh resolution."""
@@ -1050,6 +1209,50 @@ class BoxCreator(PrimitiveCreatorBase):
             return [inv.multVec(p) for p in self.points]
         return list(self.points)
 
+    def get_parameters(self):
+        if len(self.points) < 8: return {}
+        wp = self.working_plane
+        if wp:
+            inv = wp.inverse()
+            local_pts = [inv.multVec(p) for p in self.points]
+        else:
+            local_pts = self.points
+        xs = [p.x for p in local_pts]
+        ys = [p.y for p in local_pts]
+        zs = [p.z for p in local_pts]
+        l = max(xs) - min(xs)
+        w = max(ys) - min(ys)
+        h = max(zs) - min(zs)
+        return {"Length": l, "Width": w, "Height": h}
+
+    def set_parameters(self, params):
+        if len(self.points) < 8: return
+        l = params.get("Length", 1.0)
+        w = params.get("Width", 1.0)
+        h = params.get("Height", 1.0)
+        wp = self.working_plane
+        if wp:
+            inv = wp.inverse()
+            local_pts = [inv.multVec(p) for p in self.points]
+        else:
+            local_pts = self.points
+        xs = [p.x for p in local_pts]; cx = (max(xs) + min(xs))/2
+        ys = [p.y for p in local_pts]; cy = (max(ys) + min(ys))/2
+        zs = [p.z for p in local_pts]; cz = (max(zs) + min(zs))/2
+        center = FreeCAD.Vector(cx, cy, cz)
+        half = FreeCAD.Vector(l/2.0, w/2.0, h/2.0)
+        pts_local = self._box_corners_local(center, half)
+        if wp:
+            self.points = [wp.multVec(p) for p in pts_local]
+        else:
+            self.points = pts_local
+        self._update_handle_positions(self.points)
+        if hasattr(self, "panel") and self.panel:
+            self.panel.update_ui()
+        self.update_preview()
+        if self.view:
+            self.view.redraw()
+
     def _get_edit_preview_field(self):
         if len(self.points) < 8:
             return None
@@ -1133,6 +1336,25 @@ class SphereCreator(PrimitiveCreatorBase):
         if len(self.points) < 2:
             return None
         return [self.to_local(p) for p in self.points]
+
+    def get_parameters(self):
+        if len(self.points) < 2: return {}
+        loc_c = self.to_local(self.points[0])
+        loc_r = self.to_local(self.points[1])
+        return {"Radius": (loc_r - loc_c).Length}
+
+    def set_parameters(self, params):
+        if len(self.points) < 2: return
+        r = params.get("Radius", 1.0)
+        loc_c = self.to_local(self.points[0])
+        loc_r = loc_c + FreeCAD.Vector(r, 0, 0)
+        self.points[1] = self.to_global(loc_r)
+        self._update_handle_positions(self.points)
+        if hasattr(self, "panel") and self.panel:
+            self.panel.update_ui()
+        self.update_preview()
+        if self.view:
+            self.view.redraw()
 
 
 class CylinderCreator(PrimitiveCreatorBase):
@@ -1242,6 +1464,31 @@ class CylinderCreator(PrimitiveCreatorBase):
         if not self.points:
             return None
         return [self.to_local(p) for p in self.points]
+
+    def get_parameters(self):
+        if len(self.points) < 3: return {}
+        loc_base = self.to_local(self.points[0])
+        loc_rad = self.to_local(self.points[1])
+        loc_h = self.to_local(self.points[2])
+        radius = math.sqrt((loc_rad.x - loc_base.x)**2 + (loc_rad.y - loc_base.y)**2)
+        height = loc_h.z - loc_base.z
+        return {"Radius": radius, "Height": height}
+
+    def set_parameters(self, params):
+        if len(self.points) < 3: return
+        r = params.get("Radius", 1.0)
+        h = params.get("Height", 1.0)
+        loc_base = self.to_local(self.points[0])
+        loc_rad = loc_base + FreeCAD.Vector(r, 0, 0)
+        loc_h = loc_base + FreeCAD.Vector(0, 0, h)
+        self.points[1] = self.to_global(loc_rad)
+        self.points[2] = self.to_global(loc_h)
+        self._update_handle_positions(self.points)
+        if hasattr(self, "panel") and self.panel:
+            self.panel.update_ui()
+        self.update_preview()
+        if self.view:
+            self.view.redraw()
 
 
 class TorusCreator(PrimitiveCreatorBase):
@@ -1360,6 +1607,32 @@ class TorusCreator(PrimitiveCreatorBase):
         if not self.points:
             return None
         return [self.to_local(p) for p in self.points]
+
+    def get_parameters(self):
+        if len(self.points) < 3: return {}
+        loc_c = self.to_local(self.points[0])
+        loc_r = self.to_local(self.points[1])
+        loc_t = self.to_local(self.points[2])
+        major_r = math.sqrt((loc_r.x - loc_c.x)**2 + (loc_r.y - loc_c.y)**2)
+        dist_t = math.sqrt((loc_t.x - loc_c.x)**2 + (loc_t.y - loc_c.y)**2)
+        tube_r = abs(dist_t - major_r)
+        return {"Major Radius": major_r, "Tube Radius": tube_r}
+
+    def set_parameters(self, params):
+        if len(self.points) < 3: return
+        R = params.get("Major Radius", 10.0)
+        r = params.get("Tube Radius", 2.0)
+        loc_c = self.to_local(self.points[0])
+        loc_r = loc_c + FreeCAD.Vector(R, 0, 0)
+        loc_t = loc_c + FreeCAD.Vector(R + r, 0, 0)
+        self.points[1] = self.to_global(loc_r)
+        self.points[2] = self.to_global(loc_t)
+        self._update_handle_positions(self.points)
+        if hasattr(self, "panel") and self.panel:
+            self.panel.update_ui()
+        self.update_preview()
+        if self.view:
+            self.view.redraw()
 
     # ------------------------------------------------------------------
     # Edit drag
