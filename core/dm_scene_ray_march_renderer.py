@@ -886,12 +886,11 @@ class DMSceneRayMarchRenderer:
         }
 
     def _try_gpu_compile(self, field):
-        """Try to compile a field's GLSL expression. Returns (source, ctx) or None."""
+        """Try to compile a field's GLSL expression. Returns (expr, ctx) or None."""
         try:
-            from core.sdf.glsl_compiler import compile_field_to_glsl, build_compute_shader
+            from core.sdf.glsl_compiler import compile_field_to_glsl
             expr, ctx = compile_field_to_glsl(field)
-            source = build_compute_shader(expr, ctx)
-            return source, ctx
+            return expr, ctx
         except NotImplementedError:
             return None
         except Exception as e:
@@ -1028,6 +1027,21 @@ class DMSceneRayMarchRenderer:
                 dm_logger.debug(f"SceneRayMarch: _init_gl_programs failed: {e}")
                 return
 
+        if getattr(self, "_pending_frag_gbuf_source", None):
+            try:
+                self._prog_gbuf.compile(_VERT_PASSTHROUGH, self._pending_frag_gbuf_source)
+                self._active_frag_gbuf_uniforms = self._pending_frag_gbuf_uniforms
+                self._active_is_analytical = True
+                self._pending_frag_gbuf_source = None
+            except Exception as e:
+                dm_logger.debug(f"SceneRayMarch: dynamic shader compile failed: {e}")
+                self._active_is_analytical = False
+                self._pending_frag_gbuf_source = None
+        elif getattr(self, "_pending_restore_default_gbuf", False):
+            self._prog_gbuf.compile(_VERT_PASSTHROUGH, _FRAG_GBUF)
+            self._active_is_analytical = False
+            self._pending_restore_default_gbuf = False
+
         glGetIntegerv = _loader.get("glGetIntegerv",
             [ctypes.c_uint, ctypes.POINTER(ctypes.c_int)], None)
         glGetFloatv   = _loader.get("glGetFloatv",
@@ -1071,14 +1085,21 @@ class DMSceneRayMarchRenderer:
         proj_data = (ctypes.c_float * 16)()
         glGetFloatv(0x0BA7, proj_data)    # GL_PROJECTION_MATRIX
 
-        # ── Pass 1: G-buffer ray march ──
         self._gbuf_fbo.bind()
         glViewport(0, 0, w, h)
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         self._prog_gbuf.use()
-        glActiveTexture(0x84C0)   # GL_TEXTURE0
-        glBindTexture(GL_TEXTURE_3D, self._gl_tex.tex_id)
-        self._set_gbuf_uniforms(self._prog_gbuf)
+
+        # Fixed key light: normalize(1.0, 1.667, 1.105) ≈ 45° elevation
+        self._prog_gbuf.set_3f("u_light_dir", 0.4472, 0.7454, 0.4943)
+
+        if getattr(self, "_active_is_analytical", False):
+            self._prog_gbuf.set_uniforms_from_ctx(self._active_frag_gbuf_uniforms)
+        else:
+            glActiveTexture(0x84C0)   # GL_TEXTURE0
+            glBindTexture(GL_TEXTURE_3D, self._gl_tex.tex_id)
+            self._set_gbuf_uniforms(self._prog_gbuf)
+
         self._prog_gbuf.draw_fullscreen_quad()
 
         # ── Pass 2: SSAO ──
@@ -1155,11 +1176,64 @@ class DMSceneRayMarchRenderer:
         frustum = self._get_view_frustum_aabb(view) if view else None
         _t_frustum = time.perf_counter()
 
-        # Determine which fields need rebaking
         fields_to_bake = []
+        all_analytical = True
+        analytical_data = []
+        
         for label, f in visible:
             if label in self._dirty_fields or label not in self._baked_cache:
                 fields_to_bake.append((label, f))
+                
+            # Attempt to gather analytical GLSL data
+            gpu_result = self._try_gpu_compile(f)
+            if gpu_result is None:
+                all_analytical = False
+            elif all_analytical:
+                expr, ctx = gpu_result
+                try:
+                    bmin, bmax = f.bounding_box()
+                except Exception:
+                    bmin, bmax = FreeCAD.Vector(-10, -10, -10), FreeCAD.Vector(10, 10, 10)
+                is_subtractive = getattr(f, "is_subtractive", False)
+                analytical_data.append({
+                    "expr": expr,
+                    "ctx": ctx,
+                    "bbox_min": bmin,
+                    "bbox_max": bmax,
+                    "is_subtractive": is_subtractive
+                })
+
+        if all_analytical and analytical_data:
+            from core.sdf.glsl_compiler import build_multi_raymarch_fragment_shader
+            source = build_multi_raymarch_fragment_shader(analytical_data)
+            self._pending_frag_gbuf_source = source
+            all_uniforms = []
+            for d in analytical_data:
+                all_uniforms.extend(d["ctx"].uniforms)
+            self._pending_frag_gbuf_uniforms = all_uniforms
+            self._active_uniforms = {"n_fields": len(analytical_data)}
+            self._dirty_fields.clear()
+            
+            # Compute combined bbox so Coin3D doesn't cull the quad
+            all_mn = [d["bbox_min"] for d in analytical_data]
+            all_mx = [d["bbox_max"] for d in analytical_data]
+            mn_all = FreeCAD.Vector(
+                min(v.x for v in all_mn), min(v.y for v in all_mn), min(v.z for v in all_mn))
+            mx_all = FreeCAD.Vector(
+                max(v.x for v in all_mx), max(v.y for v in all_mx), max(v.z for v in all_mx))
+            pts = [
+                (mn_all.x, mn_all.y, mn_all.z), (mx_all.x, mn_all.y, mn_all.z),
+                (mn_all.x, mx_all.y, mn_all.z), (mx_all.x, mx_all.y, mn_all.z),
+                (mn_all.x, mn_all.y, mx_all.z), (mx_all.x, mn_all.y, mx_all.z),
+                (mn_all.x, mx_all.y, mx_all.z), (mx_all.x, mx_all.y, mx_all.z),
+            ]
+            self._bbox_coords.point.setValues(0, 8, pts)
+            self._coords.point.setValues(0, 8, pts)
+            
+            self._switch.whichChild = 0
+            return
+        elif getattr(self, "_active_is_analytical", False):
+            self._pending_restore_default_gbuf = True
 
         # Compute grid params and try GPU compile for dirty fields
         _n_baked = 0
@@ -1196,7 +1270,9 @@ class DMSceneRayMarchRenderer:
                 gpu_result = self._try_gpu_compile(f) if use_gpu else None
 
                 if gpu_result is not None:
-                    source, ctx = gpu_result
+                    expr, ctx = gpu_result
+                    from core.sdf.glsl_compiler import build_compute_shader
+                    source = build_compute_shader(expr, ctx)
                     # Check if we can reuse compiled program
                     cached_gpu = self._gpu_programs.get(label)
                     if cached_gpu and cached_gpu["source"] == source:

@@ -135,3 +135,181 @@ void main() {{
     imageStore(u_volume, ivec3(gid.x, gid.y, u_z_offset + gid.z), vec4(d, 0.0, 0.0, 0.0));
 }}
 """
+
+def build_multi_raymarch_fragment_shader(fields_data):
+    """Build a complete fragment shader that evaluates multiple analytical SDF fields.
+    
+    fields_data: list of dicts with keys:
+        - "expr": str (the GLSL expression)
+        - "ctx": GlslContext
+        - "is_subtractive": bool
+        - "bbox_min": vec3
+        - "bbox_max": vec3
+    """
+    all_uniforms = []
+    all_helpers = set()
+    for fd in fields_data:
+        all_uniforms.extend(fd["ctx"].uniforms)
+        all_helpers.update(fd["ctx"].helpers)
+        
+    uniform_decls = "\n".join(
+        f"uniform {glsl_type} {name};"
+        for name, glsl_type, _ in all_uniforms
+    )
+    
+    helper_defs = "\n".join(
+        GLSL_HELPERS[h] for h in sorted(all_helpers) if h in GLSL_HELPERS
+    )
+    
+    # Generate per-field eval functions
+    eval_funcs = ""
+    for i, fd in enumerate(fields_data):
+        eval_funcs += f"""
+float sdf_eval_{i}(vec3 p) {{
+    return {fd['expr']};
+}}
+
+vec3 sdf_normal_{i}(vec3 p) {{
+    vec2 e = vec2(0.001, 0.0);
+    vec3 n = sdf_eval_{i}(p) - vec3(
+        sdf_eval_{i}(p - e.xyy),
+        sdf_eval_{i}(p - e.yxy),
+        sdf_eval_{i}(p - e.yyx)
+    );
+    return normalize(n);
+}}
+"""
+
+    # Generate the main sphere trace field loop
+    num_fields = len(fields_data)
+    
+    field_bboxes = ""
+    for i, fd in enumerate(fields_data):
+        bmin = fd["bbox_min"]
+        bmax = fd["bbox_max"]
+        field_bboxes += f"    vec3 bmin_{i} = vec3({bmin.x}, {bmin.y}, {bmin.z});\n"
+        field_bboxes += f"    vec3 bmax_{i} = vec3({bmax.x}, {bmax.y}, {bmax.z});\n"
+
+    intersect_bboxes = ""
+    for i in range(num_fields):
+        intersect_bboxes += f"    vec2 fi_int_{i} = intersect_aabb(ro, rd, bmin_{i}, bmax_{i});\n"
+        intersect_bboxes += f"    ftn[{i}] = max(fi_int_{i}.x, 0.0);\n"
+        intersect_bboxes += f"    ftf[{i}] = min(fi_int_{i}.y, ray_tmax);\n"
+
+    sample_loop = ""
+    for i, fd in enumerate(fields_data):
+        sample_loop += f"""
+        if (t >= ftn[{i}] && t <= ftf[{i}]) {{
+            float d_{i} = sdf_eval_{i}(p);
+            if (abs(d_{i}) < 0.005) {{ hit = true; hit_field = {i}; break; }}
+            min_d = min(min_d, abs(d_{i}));
+        }} else if (t < ftn[{i}]) {{
+            min_d = min(min_d, ftn[{i}] - t);
+        }}
+"""
+
+    normal_switch = "    vec3 n = vec3(0, 0, 1);\n"
+    for i in range(num_fields):
+        normal_switch += f"    if (hit_field == {i}) n = sdf_normal_{i}(hp);\n"
+        
+    color_switch = "    vec3 base_color = vec3(1.0, 0.5, 0.0);\n"
+    for i, fd in enumerate(fields_data):
+        color = "vec3(0.3, 0.5, 1.0)" if fd["is_subtractive"] else "vec3(1.0, 0.5, 0.0)"
+        color_switch += f"    if (hit_field == {i}) base_color = {color};\n"
+
+    return f"""#version 330 compatibility
+in vec2 v_uv;
+
+uniform vec3 u_light_dir;
+
+{uniform_decls}
+
+layout(location = 0) out vec4 out_color;
+layout(location = 1) out vec4 out_vspos;
+layout(location = 2) out vec4 out_vsnorm;
+
+{helper_defs}
+
+{eval_funcs}
+
+vec2 intersect_aabb(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {{
+    vec3 t1 = (bmin - ro) / rd;
+    vec3 t2 = (bmax - ro) / rd;
+    vec3 tmin_ = min(t1, t2);
+    vec3 tmax_ = max(t1, t2);
+    return vec2(max(max(tmin_.x, tmin_.y), tmin_.z),
+                min(min(tmax_.x, tmax_.y), tmax_.z));
+}}
+
+void main() {{
+    vec4 ndc_near = vec4(v_uv, -1.0, 1.0);
+    vec4 world_near = gl_ModelViewProjectionMatrixInverse * ndc_near;
+    world_near /= world_near.w;
+    vec4 ndc_far = vec4(v_uv, 1.0, 1.0);
+    vec4 world_far = gl_ModelViewProjectionMatrixInverse * ndc_far;
+    world_far /= world_far.w;
+
+    vec3 ro = world_near.xyz;
+    vec3 rd = normalize(world_far.xyz - world_near.xyz);
+    float ray_tmax = length(world_far.xyz - world_near.xyz);
+
+{field_bboxes}
+
+    vec3 scene_min = bmin_0;
+    vec3 scene_max = bmax_0;
+""" + ("\n".join(f"    scene_min = min(scene_min, bmin_{i});\n    scene_max = max(scene_max, bmax_{i});" for i in range(1, num_fields))) + f"""
+    vec2 tBox = intersect_aabb(ro, rd, scene_min, scene_max);
+    float tNear = max(tBox.x, 0.0);
+    float tFar  = min(tBox.y, ray_tmax);
+    
+    if (tNear > tFar) {{
+        out_color = vec4(0.0); out_vspos = vec4(0.0); out_vsnorm = vec4(0.0);
+        return;
+    }}
+
+    float ftn[{num_fields}]; float ftf[{num_fields}];
+{intersect_bboxes}
+
+    float t = tNear; 
+    bool hit = false;
+    int hit_field = 0;
+    
+    for (int i = 0; i < 512; i++) {{
+        vec3 p = ro + t * rd;
+        float min_d = 1.0e10;
+        
+{sample_loop}
+
+        if (hit) break;
+        t += max(min_d * 0.9, 0.005);
+        if (t > tFar) break;
+    }}
+
+    if (!hit) {{
+        out_color = vec4(0.0); out_vspos = vec4(0.0); out_vsnorm = vec4(0.0);
+        return;
+    }}
+
+    vec3 hp = ro + t * rd;
+{normal_switch}
+    vec3 vd = normalize(-rd);
+
+    float diff = max(dot(n, u_light_dir), 0.0);
+    float spec = pow(max(dot(reflect(-u_light_dir, n), vd), 0.0), 32.0);
+
+{color_switch}
+    vec3 color = base_color * (0.25 + 0.70 * diff) + vec3(0.3) * spec;
+
+    vec4 vs   = gl_ModelViewMatrix * vec4(hp, 1.0);
+    vec3 vs_n = normalize(mat3(gl_ModelViewMatrix) * n);
+
+    out_color  = vec4(color, 1.0);
+    out_vspos  = vec4(vs.xyz, 1.0);
+    out_vsnorm = vec4(vs_n,   1.0);
+
+    vec4 clip   = gl_ModelViewProjectionMatrix * vec4(hp, 1.0);
+    float ndc_z = clip.z / clip.w;
+    gl_FragDepth = gl_DepthRange.near + gl_DepthRange.diff * (ndc_z * 0.5 + 0.5);
+}}
+"""
+

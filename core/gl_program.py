@@ -118,6 +118,31 @@ class GLProgram:
         arr = (ctypes.c_float * 16)(*mat16)
         f(self._loc(name), 1, False, arr)
 
+    def set_int(self, name: str, v: int):
+        f = _loader.get("glUniform1i", [ctypes.c_int, ctypes.c_int], None)
+        f(self._loc(name), int(v))
+
+    def set_uniforms_from_ctx(self, ctx_uniforms):
+        """Set all uniforms from a GlslContext.uniforms list."""
+        for name, glsl_type, value in ctx_uniforms:
+            if glsl_type == "float":
+                self.set_1f(name, value)
+            elif glsl_type == "vec3":
+                self.set_3f(name, value[0], value[1], value[2])
+            elif glsl_type == "mat4":
+                # Ensure value is flat 16-float
+                if isinstance(value[0], list):
+                    # Flatten 4x4 row-major list but transpose to column-major for GLProgram
+                    flat = [0.0] * 16
+                    for r in range(4):
+                        for c in range(4):
+                            flat[c * 4 + r] = value[r][c]
+                    self.set_mat4(name, flat)
+                else:
+                    self.set_mat4(name, value)
+            elif glsl_type == "int":
+                self.set_int(name, value)
+
     def draw_fullscreen_quad(self):
         """Draw a CCW triangle strip covering NDC [-1,1]×[-1,1]."""
         glBegin   = _loader.get("glBegin",    [ctypes.c_uint], None)
