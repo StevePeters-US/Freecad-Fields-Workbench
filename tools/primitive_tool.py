@@ -73,6 +73,9 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self._edit_pivot = None
         self._edit_last_angle = 0.0
         self._edit_is_rotating = False
+        self._center_handle = None
+        self._rot_handle = None
+        self._rot_line = None
 
         # Creation-phase anchor (set on PLACE_ANCHOR accept)
         self._anchor_pt = None
@@ -107,6 +110,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
         if hasattr(obj, "Points"):
             self.points = [self.working_plane.multVec(pt) for pt in obj.Points]
+        self._add_transform_handles()
 
     # ------------------------------------------------------------------
     # Edit mode: hover, handle selection, drag
@@ -135,6 +139,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         if not ray_p or not ray_d:
             return
         pts = [dm_pt.position for dm_pt in self.dm_points]
+        if getattr(self, "_center_handle", None): pts.append(self._center_handle.position)
+        if getattr(self, "_rot_handle", None): pts.append(self._rot_handle.position)
         idx, _ = self._hit_test_perp(ray_p, ray_d, pts)
         if idx is not None:
             from PySide.QtCore import Qt
@@ -152,6 +158,26 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         if not ray_p or not ray_d:
             return True
         
+        # Test special handles
+        special_pts = []
+        if getattr(self, "_center_handle", None): special_pts.append(self._center_handle.position)
+        if getattr(self, "_rot_handle", None): special_pts.append(self._rot_handle.position)
+        idx, _ = self._hit_test_perp(ray_p, ray_d, special_pts)
+        if idx is not None:
+            self._dragging_idx = 'center' if idx == 0 else 'rot'
+            if self._dragging_idx == 'center':
+                self._drag_plane_n = FreeCAD.Vector(-self.view.getViewDirection())
+                self._drag_plane_o = self._center_handle.position
+            else:
+                self._drag_plane_n = self.working_plane.Rotation.multVec(FreeCAD.Vector(0,0,1)) if self.working_plane else FreeCAD.Vector(0,0,1)
+                self._drag_plane_o = self._rot_handle.position
+                self._edit_pivot = self.working_plane.Base if self.working_plane else self._center_handle.position
+                v = self._rot_handle.position - self._edit_pivot
+                self._edit_last_angle = math.atan2(v.y, v.x)
+            self._start_drag_timer()
+            return True
+
+        # Test regular points
         idx, _ = self._hit_test_perp(ray_p, ray_d, self.points)
         if idx is not None:
             self._dragging_idx = idx
@@ -159,7 +185,6 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             self._drag_plane_o = self.points[idx]
             self._edit_is_rotating = (event_dict.get("Modifiers") == QtCore.Qt.ShiftModifier)
             if self._edit_is_rotating:
-                # Pivot is center of all points
                 self._edit_pivot = sum(self.points, FreeCAD.Vector()) / len(self.points)
                 v = self.points[idx] - self._edit_pivot
                 self._edit_last_angle = math.atan2(v.y, v.x)
@@ -254,7 +279,22 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             place_on_geometry=False
         )
         if new_pt:
-            if is_ctrl:
+            if self._dragging_idx == 'center':
+                delta = new_pt - self._center_handle.position
+                self.points = [p + delta for p in self.points]
+                if self.working_plane:
+                    self.working_plane.Base += delta
+            elif self._dragging_idx == 'rot':
+                pivot = self._edit_pivot
+                v = new_pt - pivot
+                angle = math.atan2(v.y, v.x)
+                da = angle - self._edit_last_angle
+                rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), math.degrees(da))
+                self.points = [pivot + rot.multVec(p - pivot) for p in self.points]
+                if self.working_plane:
+                    self.working_plane.Rotation = self.working_plane.Rotation.multiply(rot)
+                self._edit_last_angle = angle
+            elif is_ctrl:
                 delta = new_pt - self.points[self._dragging_idx]
                 self.points = [p + delta for p in self.points]
                 # Sync working plane so local coordinates stay stable
@@ -295,6 +335,9 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             self._edit_pivot = None
             self._edit_last_angle = 0.0
             self._edit_is_rotating = False
+            self._center_handle = None
+            self._rot_handle = None
+            self._rot_line = None
             self._preview_obj = None
             self.reset_state()
             return
@@ -378,6 +421,29 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             FreeCAD.Vector(c.x - h.x, c.y + h.y, c.z + h.z),
         ]
 
+    def _add_transform_handles(self):
+        if not getattr(self, "_is_editing", False) or not self.working_plane:
+            return
+        r = self._compute_handle_radius()
+        if not getattr(self, "_center_handle", None):
+            self._center_handle = DMPoint(self.working_plane.Base)
+            self._center_handle.draw_point(self.points_root, radius=r*1.5, color=(0.8, 0.8, 0.2))
+        else:
+            self._center_handle.position = self.working_plane.Base
+            self._center_handle.update_draw(radius=r*1.5)
+        offset = self.working_plane.Rotation.multVec(FreeCAD.Vector(self._compute_default_size() * 0.4, 0, 0))
+        rot_pos = self.working_plane.Base + offset
+        if not getattr(self, "_rot_handle", None):
+            self._rot_handle = DMPoint(rot_pos)
+            self._rot_handle.draw_point(self.points_root, radius=r*0.8, color=(0.2, 0.8, 0.8))
+        else:
+            self._rot_handle.position = rot_pos
+            self._rot_handle.update_draw(radius=r*0.8)
+        line_pts = [self.working_plane.Base, rot_pos]
+        if not getattr(self, "_rot_line", None):
+            self._rot_line = DMLineSet(self.points_root, color=(0.2, 0.8, 0.8), width=2.0)
+        self._rot_line.update_lines(line_pts)
+
     def _update_handle_positions(self, world_pts, color=(1.0, 0.5, 0.0)):
         """Update dm_points to match the given world-space positions.
         
@@ -395,6 +461,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 self.dm_points[i].draw_point(self.points_root, radius=r, color=color)
             else:
                 self.dm_points[i].update_draw(radius=r)
+        self._add_transform_handles()
 
     def _height_drag_move(self, event_dict):
         """Move current_point along workplane normal from _height_drag_base."""
@@ -601,6 +668,15 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         # Clear creation visuals before entering edit mode
         for dm_pt in self.dm_points:
             dm_pt.undraw()
+        if getattr(self, "_center_handle", None):
+            self._center_handle.undraw()
+            self._center_handle = None
+        if getattr(self, "_rot_handle", None):
+            self._rot_handle.undraw()
+            self._rot_handle = None
+        if getattr(self, "_rot_line", None):
+            self._rot_line.undraw()
+            self._rot_line = None
         self.dm_points.clear()
         if self.dm_line_set:
             self.dm_line_set.undraw()
@@ -621,6 +697,13 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 color = (0.2, 0.6, 1.0) if not cur else (1.0, 0.5, 0.0)
                 for dp in self.dm_points:
                     dp.set_color(color)
+                self._preview_obj.touch()
+                if self._preview_obj.Document:
+                    self._preview_obj.Document.recompute([self._preview_obj])
+                    if hasattr(self._preview_obj, "Proxy") and hasattr(self._preview_obj.Proxy, "SdfField"):
+                        from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                        label = f"{self._preview_obj.Document.Name}.{self._preview_obj.Name}"
+                        DMSceneRayMarchRenderer.get_instance().update_field(label, self._preview_obj.Proxy.SdfField)
             return True
         return False
 
@@ -633,6 +716,15 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self.points = []
         for dm_pt in self.dm_points:
             dm_pt.undraw()
+        if getattr(self, "_center_handle", None):
+            self._center_handle.undraw()
+            self._center_handle = None
+        if getattr(self, "_rot_handle", None):
+            self._rot_handle.undraw()
+            self._rot_handle = None
+        if getattr(self, "_rot_line", None):
+            self._rot_line.undraw()
+            self._rot_line = None
         self.dm_points.clear()
         if self.dm_line_set:
             self.dm_line_set.undraw()
@@ -654,6 +746,15 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     def _do_terminate(self):
         for dm_pt in self.dm_points:
             dm_pt.undraw()
+        if getattr(self, "_center_handle", None):
+            self._center_handle.undraw()
+            self._center_handle = None
+        if getattr(self, "_rot_handle", None):
+            self._rot_handle.undraw()
+            self._rot_handle = None
+        if getattr(self, "_rot_line", None):
+            self._rot_line.undraw()
+            self._rot_line = None
         self.dm_points.clear()
         if self.dm_line_set:
             self.dm_line_set.undraw()
@@ -795,6 +896,10 @@ class BoxCreator(PrimitiveCreatorBase):
         if self._dragging_idx is None:
             return
 
+        if self._dragging_idx in ('center', 'rot'):
+            super()._drag_update()
+            return
+
         from PySide import QtGui
         mods = QtGui.QApplication.keyboardModifiers()
         is_ctrl = bool(mods & QtCore.Qt.ControlModifier)
@@ -806,7 +911,22 @@ class BoxCreator(PrimitiveCreatorBase):
             place_on_geometry=False
         )
         if new_pt:
-            if is_ctrl:
+            if self._dragging_idx == 'center':
+                delta = new_pt - self._center_handle.position
+                self.points = [p + delta for p in self.points]
+                if self.working_plane:
+                    self.working_plane.Base += delta
+            elif self._dragging_idx == 'rot':
+                pivot = self._edit_pivot
+                v = new_pt - pivot
+                angle = math.atan2(v.y, v.x)
+                da = angle - self._edit_last_angle
+                rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), math.degrees(da))
+                self.points = [pivot + rot.multVec(p - pivot) for p in self.points]
+                if self.working_plane:
+                    self.working_plane.Rotation = self.working_plane.Rotation.multiply(rot)
+                self._edit_last_angle = angle
+            elif is_ctrl:
                 delta = new_pt - self.points[self._dragging_idx]
                 self.points = [p + delta for p in self.points]
                 if self.working_plane:
@@ -1244,6 +1364,10 @@ class TorusCreator(PrimitiveCreatorBase):
         if self._dragging_idx is None:
             return
 
+        if self._dragging_idx in ('center', 'rot'):
+            super()._drag_update()
+            return
+
         from PySide import QtGui
         mods = QtGui.QApplication.keyboardModifiers()
         is_ctrl = bool(mods & QtCore.Qt.ControlModifier)
@@ -1254,7 +1378,22 @@ class TorusCreator(PrimitiveCreatorBase):
             place_on_geometry=False
         )
         if new_pt:
-            if is_ctrl:
+            if self._dragging_idx == 'center':
+                delta = new_pt - self._center_handle.position
+                self.points = [p + delta for p in self.points]
+                if self.working_plane:
+                    self.working_plane.Base += delta
+            elif self._dragging_idx == 'rot':
+                pivot = self._edit_pivot
+                v = new_pt - pivot
+                angle = math.atan2(v.y, v.x)
+                da = angle - self._edit_last_angle
+                rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), math.degrees(da))
+                self.points = [pivot + rot.multVec(p - pivot) for p in self.points]
+                if self.working_plane:
+                    self.working_plane.Rotation = self.working_plane.Rotation.multiply(rot)
+                self._edit_last_angle = angle
+            elif is_ctrl:
                 delta = new_pt - self.points[self._dragging_idx]
                 self.points = [p + delta for p in self.points]
                 if self.working_plane:

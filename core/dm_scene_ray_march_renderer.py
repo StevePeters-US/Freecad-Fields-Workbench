@@ -1194,7 +1194,7 @@ class DMSceneRayMarchRenderer:
                     bmin, bmax = f.bounding_box()
                 except Exception:
                     bmin, bmax = FreeCAD.Vector(-10, -10, -10), FreeCAD.Vector(10, 10, 10)
-                is_subtractive = getattr(f, "is_subtractive", False)
+                is_subtractive = self._get_is_subtractive(label)
                 analytical_data.append({
                     "expr": expr,
                     "ctx": ctx,

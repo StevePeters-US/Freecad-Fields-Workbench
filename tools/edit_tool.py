@@ -734,6 +734,23 @@ def activate():
 
     if proxy is not None and proxy_name == "DMObjectProxy":
         if shape_type == "sdf":
+            from tools.primitive_tool import BoxCreator, SphereCreator, CylinderCreator, TorusCreator
+            field = getattr(obj.Proxy, "SdfField", None)
+            if field:
+                field_name = field.__class__.__name__
+                tool = None
+                if field_name == "SdfBoxField":
+                    tool = BoxCreator()
+                elif field_name == "SdfSphereField":
+                    tool = SphereCreator()
+                elif field_name == "SdfCylinderField":
+                    tool = CylinderCreator()
+                elif field_name == "SdfTorusField":
+                    tool = TorusCreator()
+                if tool:
+                    tool.edit_object(obj)
+                    return
+
             tool = SdfEditTool()
             tool.activate()
             return

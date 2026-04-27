@@ -226,20 +226,40 @@ class DMInputManager(QtCore.QObject):
                         obj = sel[0]
                         proxy_name = getattr(getattr(obj, "Proxy", None), "__class__", type(None)).__name__
                         if proxy_name == "DMObjectProxy" and getattr(obj, "ShapeType", "") == "sdf":
-                            from tools.edit_tool import SdfEditTool
-                            SdfEditTool().activate()
+                            from tools import edit_tool
+                            edit_tool.activate()
                             return True
 
                 # Global hotkeys
                 elif event.type() == QtCore.QEvent.KeyPress:
                     key = event.key()
                     text = event.text().lower() if hasattr(event, "text") else ""
+                    dm_logger.debug(f"Global KeyPress: key={key}, text='{text}'")
                     
                     if (key == QtCore.Qt.Key_D or text == 'd') and not self._is_menu_active():
                         from core.dm_menu import DMMenuManager
                         if not DMMenuManager.get_instance()._ignore_hotkeys:
                             DMMenuManager.get_instance().show_context_menu()
                             return True
+
+                    if (key == QtCore.Qt.Key_Z or text == 'z') and not self._is_menu_active():
+                        dm_logger.debug("Processing Z global hotkey")
+                        sel = FreeCADGui.Selection.getSelection()
+                        toggled_any = False
+                        for obj in sel:
+                            if hasattr(obj, "IsSubtractive"):
+                                obj.IsSubtractive = not obj.IsSubtractive
+                                if obj.Document:
+                                    obj.Document.recompute([obj])
+                                    if hasattr(obj, "Proxy") and hasattr(obj.Proxy, "SdfField"):
+                                        from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                                        label = f"{obj.Document.Name}.{obj.Name}"
+                                        DMSceneRayMarchRenderer.get_instance().update_field(label, obj.Proxy.SdfField)
+                                toggled_any = True
+                        if toggled_any:
+                            dm_logger.debug("Toggled IsSubtractive on selected objects")
+                            return True
+                        dm_logger.debug("No selected objects had IsSubtractive property")
 
                     if (key == QtCore.Qt.Key_E or text == 'e') and not self._is_menu_active():
                         sel = FreeCADGui.Selection.getSelection()
@@ -265,6 +285,10 @@ class DMInputManager(QtCore.QObject):
                     if text == 'e':
                         sel = FreeCADGui.Selection.getSelection()
                         if any(hasattr(o, "Proxy") and getattr(o.Proxy, "is_dm_workplane", False) for o in sel):
+                            event.accept(); return True
+                    elif text == 'z':
+                        sel = FreeCADGui.Selection.getSelection()
+                        if any(hasattr(o, "IsSubtractive") for o in sel):
                             event.accept(); return True
 
                 # Suppress FreeCAD context menu if DM menu or tool (or just-closed tool) is active
