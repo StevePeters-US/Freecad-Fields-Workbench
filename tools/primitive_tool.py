@@ -566,7 +566,6 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 self.points[self._dragging_idx] = new_pt
 
             # Always sync dm_point visuals and update SDF after any drag branch
-            self._sync_edit_points()
             self._update_handle_positions(self.points)
             if hasattr(self, "panel") and self.panel:
                 self.panel.update_ui()
