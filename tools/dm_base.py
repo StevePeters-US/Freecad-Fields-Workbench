@@ -46,7 +46,7 @@ class DragTimerMixin:
         """Returns True if LMB was released, stopping the timer and resetting state."""
         if not DMInputManager.get_instance().is_left_mouse_down():
             self._stop_drag_timer()
-            self.state = ToolState.IDLE
+            self.state = getattr(self, '_drag_return_state', ToolState.IDLE)
             if hasattr(self, "_selected_element"): self._selected_element = None
             if hasattr(self, "_dragging_idx"): self._dragging_idx = None
             return True
@@ -664,6 +664,7 @@ class DMBase:
     def handle_keyboard(self, event_dict):
         key_code = event_dict.get("Key")
         key_text = str(event_dict.get("Text", "None")).upper()
+        dm_logger.debug(f"DMBase.handle_keyboard: key={key_code}, text='{key_text}', is_editing={getattr(self, '_is_editing', False)}")
         
         # ESC to cancel
         if key_code == QtCore.Qt.Key_Escape:

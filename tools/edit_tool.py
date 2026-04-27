@@ -5,7 +5,6 @@ from PySide import QtCore, QtGui
 from tools.dm_base import DMBase, DragTimerMixin
 from core import dm_logger
 from core.input_manager import DMInputManager
-from tools.primitive_tool import _BOX_OPPOSITE
 
 class EditTool(DMBase, DragTimerMixin):
     """
@@ -446,6 +445,7 @@ class EditTool(DMBase, DragTimerMixin):
 
     def handle_keyboard(self, event_dict):
         key_code = event_dict.get("Key")
+        dm_logger.debug(f"EditTool.handle_keyboard: key={key_code}, is_editing={self._is_editing}")
         
         if key_code == QtCore.Qt.Key_Escape:
             self.terminate()
@@ -473,257 +473,6 @@ class EditTool(DMBase, DragTimerMixin):
 
 
 
-
-class SdfEditTool(DMBase, DragTimerMixin):
-    """
-    Edit tool for SDF (SDF) box primitives.
-    """
-    def get_command_id(self):
-        return "DM_EditObject"
-
-    def __init__(self):
-        super().__init__()
-        self._target_obj = None
-        self._is_editing = True
-        self._field = None             # current SdfBoxField
-        self._placement = None         # field placement (may be None)
-        self._world_corners = []       # 8 FreeCAD.Vector in world space
-        self._hovered_idx = None
-        self._is_editing = True
-
-    def activate(self):
-        sel = FreeCADGui.Selection.getSelection()
-        if not sel:
-            dm_logger.error("No object selected to edit.")
-            self.terminate()
-            return
-
-        obj = sel[0]
-        if not (hasattr(obj, "Proxy") and obj.Proxy.__class__.__name__ == "DMObjectProxy"):
-            dm_logger.error("Selected object is not a DM object.")
-            self.terminate()
-            return
-
-        if not (hasattr(obj, "ShapeType") and obj.ShapeType == "sdf"):
-            dm_logger.error("Selected object is not an SDF object.")
-            self.terminate()
-            return
-
-        field = getattr(obj.Proxy, "SdfField", None)
-        if field is None:
-            dm_logger.error("SDF object has no SdfField.")
-            self.terminate()
-            return
-
-        self._target_obj = obj
-        self._field = field
-        self._placement = getattr(field, "placement", None)
-        self._refresh_corners()
-        dm_logger.info(f"SdfEditTool: drag a corner handle to reshape '{obj.Label}'")
-
-    # ------------------------------------------------------------------
-    # Corner geometry helpers
-    # ------------------------------------------------------------------
-
-    def _refresh_corners(self):
-        """Recompute self._world_corners from the current field."""
-        field = self._field
-        center = getattr(field, "center", None)
-        half_size = getattr(field, "half_size", None)
-        placement = getattr(field, "placement", None)
-        if center is None or half_size is None:
-            self._world_corners = []
-            return
-        c, h = center, half_size
-        # Use the shared helper from PrimitiveCreatorBase
-        from tools.primitive_tool import PrimitiveCreatorBase
-        local_corners = PrimitiveCreatorBase._box_corners_local(c, h)
-        if placement:
-            self._world_corners = [placement.multVec(lc) for lc in local_corners]
-        else:
-            self._world_corners = local_corners
-
-    def _hit_test_corners(self, event_dict):
-        """Return index of hit corner sphere or None."""
-        ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
-        best_idx, _ = self._hit_test_perp(ray_p, ray_d, self._world_corners)
-        return best_idx
-
-    def _field_from_corners(self, dragged_world, fixed_world):
-        """Rebuild SdfBoxField so dragged_world and fixed_world are opposite corners."""
-        from core.sdf.sdf.box import SdfBoxField
-        placement = self._placement
-        if placement:
-            inv = placement.inverse()
-            lc1 = inv.multVec(dragged_world)
-            lc2 = inv.multVec(fixed_world)
-        else:
-            lc1, lc2 = dragged_world, fixed_world
-        cx = (lc1.x + lc2.x) / 2.0
-        cy = (lc1.y + lc2.y) / 2.0
-        cz = (lc1.z + lc2.z) / 2.0
-        sx = max(abs(lc1.x - lc2.x), 0.1)
-        sy = max(abs(lc1.y - lc2.y), 0.1)
-        sz = max(abs(lc1.z - lc2.z), 0.1)
-        return SdfBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(sx, sy, sz),
-                           placement=placement)
-
-    # ------------------------------------------------------------------
-    # Drag mechanics
-    # ------------------------------------------------------------------
-
-    def _start_drag(self, idx):
-        from core.dm_object import get_interactive_throttle_interval
-        self._dragging_idx = idx
-        self._fixed_world = self._world_corners[_BOX_OPPOSITE[idx]]
-        # Drag plane: camera-facing plane through the grabbed corner
-        vd = self.view.getViewDirection()
-        self._drag_plane_n = FreeCAD.Vector(-vd[0], -vd[1], -vd[2])
-        self._drag_plane_n.normalize()
-        self._drag_plane_o = self._world_corners[idx]
-        self.state = 1
-        # Start polling timer
-        self._drag_timer = QtCore.QTimer()
-        self._drag_timer.timeout.connect(self._drag_update)
-        interval_ms = int(get_interactive_throttle_interval() * 1000)
-        self._drag_timer.start(interval_ms)
-
-    def _stop_drag_timer(self):
-        if getattr(self, "_drag_timer", None):
-            self._drag_timer.stop()
-            self._drag_timer = None
-
-    def _drag_update(self):
-        if self._drag_check_lmb_released():
-            self._finish_drag()
-            return
-        if self._dragging_idx is None:
-            self._stop_drag_timer()
-            return
-
-        mods = QtGui.QApplication.keyboardModifiers()
-        is_ctrl = bool(mods & QtCore.Qt.ControlModifier)
-        is_shift = bool(mods & QtCore.Qt.ShiftModifier)
-
-        mouse_pos = DMInputManager.get_instance()._last_qt_pos
-        new_world = self.projector.get_mouse_world_pos(
-            {"Position": mouse_pos},
-            self._drag_plane_n, self._drag_plane_o,
-            place_on_geometry=False
-        )
-        if new_world is None:
-            return
-
-        obj = self._target_obj
-        if is_ctrl:
-            delta = new_world - self._world_corners[self._dragging_idx]
-            obj.Placement.Base += delta
-            # Sync field placement so the ray marcher sees the move
-            self._field.placement = obj.Placement
-            self._placement = obj.Placement
-        elif is_shift:
-            pivot = sum(self._world_corners, FreeCAD.Vector()) / len(self._world_corners)
-            v = new_world - pivot
-            angle = math.atan2(v.y, v.x)
-            if not hasattr(self, "_edit_last_angle"): self._edit_last_angle = angle
-            da = angle - self._edit_last_angle
-            rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), math.degrees(da))
-            obj.Placement.Rotation = obj.Placement.Rotation.multiply(rot)
-            # Sync field placement
-            self._field.placement = obj.Placement
-            self._placement = obj.Placement
-            self._edit_last_angle = angle
-        else:
-            new_field = self._field_from_corners(new_world, self._fixed_world)
-            self._field = new_field
-            obj.Proxy.SdfField = new_field
-            # Ensure placement is synced if it was changed by other means
-            self._field.placement = obj.Placement
-            self._placement = obj.Placement
-
-        if obj is None or not obj.Document:
-            return
-        try:
-            # Re-sync corners from the updated field/placement
-            self._refresh_corners()
-            
-            obj.touch()
-            obj.Document.recompute([obj])
-        except Exception as e:
-            dm_logger.debug(f"SdfEditTool._drag_update: {e}")
-
-    def _finish_drag(self):
-        self._stop_drag_timer()
-        self._dragging_idx = None
-        self.state = 0
-        # Sync stored Points property with new corner positions in local space
-        obj = self._target_obj
-        if obj is None or not obj.Document:
-            return
-        try:
-            self._refresh_corners()
-            if hasattr(obj, "Points") and self._world_corners:
-                # IMPORTANT: obj.Points MUST be in local space relative to obj.Placement
-                # We use the inverse of the object's placement to transform world corners back.
-                inv = obj.Placement.inverse()
-                local_corners = [inv.multVec(wc) for wc in self._world_corners]
-                obj.Points = local_corners
-        except Exception as e:
-            dm_logger.debug(f"SdfEditTool._finish_drag: {e}")
-
-    # ------------------------------------------------------------------
-    # Event handlers
-    # ------------------------------------------------------------------
-
-    def on_button1_down(self, event_dict):
-        idx = self._hit_test_corners(event_dict)
-        if idx is not None:
-            self._start_drag(idx)
-        return True
-
-    def on_button1_up(self, event_dict):
-        if self.state == 1:
-            self._finish_drag()
-        return True
-
-
-    def finish(self):
-        self._is_editing = False
-        self.reset_state()
-
-    def handle_move(self, event_dict):
-        if self.state == 1:
-            return  # Drag handled by QTimer
-        # Hover: change cursor when over a corner
-        idx = self._hit_test_corners(event_dict)
-        if idx != self._hovered_idx:
-            self._hovered_idx = idx
-            if idx is not None:
-                self._set_cursor(QtCore.Qt.PointingHandCursor)
-            else:
-                self._restore_cursor()
-
-    def handle_keyboard(self, event_dict):
-        key_code = event_dict.get("Key")
-        if key_code == QtCore.Qt.Key_Z:
-            if self._target_obj:
-                cur = getattr(self._target_obj, "Group", "Group 1")
-                new_group = "Group 2" if cur == "Group 1" else "Group 1"
-                self._target_obj.Group = new_group
-                if self._target_obj.Document:
-                    self._target_obj.Document.recompute([self._target_obj])
-                    if hasattr(self._target_obj, "Proxy") and hasattr(self._target_obj.Proxy, "SdfField"):
-                        from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
-                        label = f"{self._target_obj.Document.Name}.{self._target_obj.Name}"
-                        DMSceneRayMarchRenderer.get_instance().update_field(label, self._target_obj.Proxy.SdfField)
-            return True
-        if key_code in [QtCore.Qt.Key_Escape, QtCore.Qt.Key_Enter, QtCore.Qt.Key_Return]:
-            self.terminate()
-            return True
-        return False
-
-    def _do_terminate(self):
-        super()._do_terminate()
 
 
 def activate():
@@ -756,8 +505,7 @@ def activate():
                     tool.edit_object(obj)
                     return
 
-            tool = SdfEditTool()
-            tool.activate()
+            dm_logger.error(f"edit_tool.activate: No editor for SDF field type '{getattr(obj.Proxy.SdfField, '__class__', type(None)).__name__}'.")
             return
         elif shape_type == "curve":
             tool = EditTool()

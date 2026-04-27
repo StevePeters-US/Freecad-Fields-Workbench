@@ -54,6 +54,8 @@ class DMInputManager(QtCore.QObject):
             # We track these BEFORE any 'return False' to ensure drag/modifier state is always correct,
             # even if the mouse leaves the viewport or the press started on a decoration.
             if is_key_event:
+                key_text = event.text().upper() if hasattr(event, "text") else "None"
+                dm_logger.debug(f"DMInputManager: {event.type()} key={event.key()} text='{key_text}'")
                 if event.key() == QtCore.Qt.Key_Shift:
                     self._shift_down = (event.type() == QtCore.QEvent.KeyPress)
                 elif event.key() == QtCore.Qt.Key_Control:
@@ -241,7 +243,7 @@ class DMInputManager(QtCore.QObject):
                             DMMenuManager.get_instance().show_context_menu()
                             return True
 
-                    if (key == QtCore.Qt.Key_Z or text == 'z') and not self._is_menu_active():
+                    if (key == QtCore.Qt.Key_Q or text == 'q') and not self._is_menu_active():
                         sel = FreeCADGui.Selection.getSelection()
                         toggled_any = False
                         for obj in sel:
@@ -273,8 +275,8 @@ class DMInputManager(QtCore.QObject):
                                     from tools.edit_tool import EditTool
                                     EditTool().activate(); return True
                                 elif st == "sdf":
-                                    from tools.edit_tool import SdfEditTool
-                                    SdfEditTool().activate(); return True
+                                    from tools import edit_tool as _et
+                                    _et.activate(); return True
 
                 # ShortcutOverride for 'E' when no tool
                 elif event.type() == QtCore.QEvent.ShortcutOverride:
@@ -283,7 +285,7 @@ class DMInputManager(QtCore.QObject):
                         sel = FreeCADGui.Selection.getSelection()
                         if any(hasattr(o, "Proxy") and getattr(o.Proxy, "is_dm_workplane", False) for o in sel):
                             event.accept(); return True
-                    elif text == 'z':
+                    elif text == 'q':
                         sel = FreeCADGui.Selection.getSelection()
                         if any(hasattr(o, "IsSubtractive") for o in sel):
                             event.accept(); return True

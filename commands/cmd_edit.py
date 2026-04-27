@@ -1,6 +1,5 @@
 import FreeCADGui
 from PySide import QtCore
-from core import dm_logger
 
 class EditDMObjectCommand:
     """Activates the lattice editor for modifying a lattice-driven SDF object.
@@ -39,6 +38,6 @@ class EditDMObjectCommand:
     def getIsChecked(self):
         from core.dm_tool_manager import DMToolManager
         active_tool = DMToolManager.get_instance().get_active_tool()
-        return active_tool is not None and active_tool.__class__.__name__ in ["EditTool", "SdfEditTool"]
+        return active_tool is not None and active_tool.get_command_id() == "DM_EditObject"
 
 FreeCADGui.addCommand('DM_EditObject', EditDMObjectCommand())

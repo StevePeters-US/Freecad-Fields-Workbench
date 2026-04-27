@@ -1,5 +1,0 @@
-[DEBUG] WorkPlaneCreator initialized
-[INFO] Using selected workplane: <MagicMock name='mock.Label' id='125543113504624'>
-[DEBUG] WorkPlaneCreator selection: [<MagicMock name='mock.Label' id='125543113504624'>]
-[DEBUG] Checking <MagicMock name='mock.Label' id='125543113504624'>: ShapeType='<MagicMock name='mock.ShapeType' id='125543113676304'>' (handled: ['DMWorkPlane'])
-[DEBUG] WorkPlaneCreator: Editing existing object <MagicMock name='mock.Label' id='125543113504624'>

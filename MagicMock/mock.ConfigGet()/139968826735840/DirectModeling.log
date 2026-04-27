@@ -1,6 +1,0 @@
-[ERROR] DMObject.execute error for TestObj
-[ERROR] Traceback (most recent call last):
-[ERROR]   File "/home/steve/Documents/Github/Freecad-Direct-Modeling/core/dm_object.py", line 344, in execute
-[ERROR]     self._frep_verts, self._frep_idx = result
-[ERROR]     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-[ERROR] ValueError: not enough values to unpack (expected 2, got 0)

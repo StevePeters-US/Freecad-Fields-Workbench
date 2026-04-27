@@ -245,12 +245,26 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self._drag_plane_o = None
 
         self._is_editing = False
+        self._drag_return_state = ToolState.IDLE
         self._edit_pivot = None
         self._edit_last_angle = 0.0
         self._edit_is_rotating = False
         self._center_handle = None
         self._rot_handle = None
         self._rot_line = None
+
+        # Axis constraint state (edit mode)
+        self._constraint_axis  = None   # 'x' | 'y' | 'z' | None
+        self._constraint_plane = None   # 'yz' | 'xz' | 'xy' | None
+        self._constraint_space = 'global'  # 'global' | 'local'
+        self._constraint_last_key = None   # last key pressed — enables global→local cycle
+        self._drag_constraint_base = None  # handle world pos at drag-start
+
+        # Snap mode for edit drag (mirrors first-point snap pipeline when active)
+        self._edit_snap_mode = 'off'    # 'off' | 'workplane_sdf' | 'all'
+
+        # Constraint axis visual
+        self._constraint_line = None    # DMLineSet drawn along active axis
 
         # Creation-phase anchor (set on PLACE_ANCHOR accept)
         self._anchor_pt = None
@@ -277,6 +291,11 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             FreeCADGui.Control.showDialog(self.panel)
             self._dialog_open = True
 
+    def get_command_id(self):
+        if self.state == ToolState.EDIT_MODE:
+            return "DM_EditObject"
+        return super().get_command_id()
+
     def get_handled_types(self):
         return ["sdf"]
 
@@ -293,6 +312,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         super().edit_object(obj)
         dm_logger.debug(f"{type(self).__name__}: Editing existing object {obj.Label}")
         self._preview_obj = obj
+        self.state = ToolState.EDIT_MODE
+        self._drag_return_state = ToolState.EDIT_MODE
 
         self.working_plane = obj.Placement
         self._field_placement = None # Clear stale creation placement
@@ -357,6 +378,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         idx, _ = self._hit_test_perp(ray_p, ray_d, special_pts)
         if idx is not None:
             self._dragging_idx = 'center' if idx == 0 else 'rot'
+            self._drag_constraint_base = None  # constraints don't apply to special handles
             if self._dragging_idx == 'center':
                 self._drag_plane_n = FreeCAD.Vector(-self.view.getViewDirection())
                 self._drag_plane_o = self._center_handle.position
@@ -373,6 +395,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         idx, _ = self._hit_test_perp(ray_p, ray_d, self.points)
         if idx is not None:
             self._dragging_idx = idx
+            self._drag_constraint_base = FreeCAD.Vector(self.points[idx])
             self._drag_plane_n = FreeCAD.Vector(-self.view.getViewDirection())
             self._drag_plane_o = self.points[idx]
             self._edit_is_rotating = (event_dict.get("Modifiers") == QtCore.Qt.ShiftModifier)
@@ -380,6 +403,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 self._edit_pivot = sum(self.points, FreeCAD.Vector()) / len(self.points)
                 v = self.points[idx] - self._edit_pivot
                 self._edit_last_angle = math.atan2(v.y, v.x)
+            # Refresh constraint visual now that base point is known
+            self._update_constraint_visual()
             self._start_drag_timer()
             return True
         return False
@@ -456,6 +481,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     def _drag_update(self):
         """QTimer callback: move the selected handle to the current mouse position."""
         if self._drag_check_lmb_released():
+            self._clear_constraint_visual()
             return
         if self._dragging_idx is None:
             return
@@ -466,10 +492,34 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         is_shift = bool(mods & QtCore.Qt.ShiftModifier)
 
         mouse_pos = DMInputManager.get_instance()._last_qt_pos
-        new_pt = self.projector.get_mouse_world_pos(
-            {"Position": mouse_pos}, self._drag_plane_n, self._drag_plane_o,
-            place_on_geometry=False
-        )
+        event_dict_pos = {"Position": mouse_pos}
+
+        # ── Resolve drag target with constraint/snap priority ──────────────────
+        base_pt = self._drag_constraint_base
+        axis_vec, plane_normal = self._get_constraint_vectors()
+
+        if base_pt is not None and axis_vec:
+            # Axis constraint: closest point on axis to mouse ray (overrides snap)
+            new_pt = DMInputManager.get_instance().get_axis_point(
+                self.view, base_pt, axis_vec, event_dict_pos)
+        elif base_pt is not None and plane_normal:
+            # Plane constraint: intersect mouse ray with constraint plane
+            new_pt = self.projector.get_mouse_world_pos(
+                event_dict_pos, plane_normal, base_pt, place_on_geometry=False)
+        elif base_pt is not None and self._edit_snap_mode != 'off':
+            # Snap mode: full pipeline (workplane → SDF → NURBS → camera plane)
+            skip = [self._preview_obj] if self._preview_obj else None
+            place_on_geo = (self._edit_snap_mode == 'all')
+            snap_result = self.projector.get_mouse_plane_pt(
+                event_dict_pos, place_on_geometry=place_on_geo,
+                working_plane=self.working_plane, skip_objects=skip)
+            new_pt = snap_result[0] if snap_result else None
+        else:
+            # Default: camera-facing plane
+            new_pt = self.projector.get_mouse_world_pos(
+                event_dict_pos, self._drag_plane_n, self._drag_plane_o,
+                place_on_geometry=False)
+
         if new_pt:
             if self._dragging_idx == 'center':
                 delta = new_pt - self._center_handle.position
@@ -532,6 +582,63 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     def _get_edit_preview_field(self):
         """Return the SDF field for the current edit state. Defaults to _get_preview_field."""
         return self._get_preview_field()
+
+    # ── Axis constraint helpers ────────────────────────────────────────────────
+
+    def _get_constraint_vectors(self):
+        """Returns (axis_vec, plane_normal) in world space, or (None, None) if no constraint."""
+        if self._constraint_space == 'local' and self.working_plane:
+            rot = self.working_plane.Rotation
+            axes = {
+                'x': rot.multVec(FreeCAD.Vector(1, 0, 0)),
+                'y': rot.multVec(FreeCAD.Vector(0, 1, 0)),
+                'z': rot.multVec(FreeCAD.Vector(0, 0, 1)),
+            }
+        else:
+            axes = {
+                'x': FreeCAD.Vector(1, 0, 0),
+                'y': FreeCAD.Vector(0, 1, 0),
+                'z': FreeCAD.Vector(0, 0, 1),
+            }
+        plane_normals = {'yz': axes['x'], 'xz': axes['y'], 'xy': axes['z']}
+        if self._constraint_axis:
+            return axes[self._constraint_axis], None
+        if self._constraint_plane:
+            return None, plane_normals[self._constraint_plane]
+        return None, None
+
+    def _update_constraint_visual(self):
+        """Draw or hide the colored axis line that indicates the active constraint."""
+        if getattr(self, "_constraint_line", None):
+            self._constraint_line.undraw()
+            self._constraint_line = None
+        if not self._constraint_axis:
+            return
+        base = getattr(self, "_drag_constraint_base", None)
+        if base is None and isinstance(getattr(self, "_dragging_idx", None), int):
+            idx = self._dragging_idx
+            if idx < len(self.points):
+                base = self.points[idx]
+        if base is None:
+            return
+        axis_vec, _ = self._get_constraint_vectors()
+        if axis_vec is None:
+            return
+        colors = {'x': (1.0, 0.15, 0.15), 'y': (0.15, 0.85, 0.15), 'z': (0.25, 0.45, 1.0)}
+        color = colors.get(self._constraint_axis, (1.0, 1.0, 1.0))
+        length = 1000
+        from core.dm_line import DMLineSet
+        self._constraint_line = DMLineSet(
+            [base - axis_vec * length, base + axis_vec * length],
+            self.view, color=color, width=2)
+        self._constraint_line.draw()
+        if self.view:
+            self.view.redraw()
+
+    def _clear_constraint_visual(self):
+        if getattr(self, "_constraint_line", None):
+            self._constraint_line.undraw()
+            self._constraint_line = None
 
     def finish(self):
         """In edit mode, finish resets to idle. Otherwise, standard creation finish."""
@@ -941,7 +1048,42 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
     def handle_keyboard(self, event_dict):
         key = event_dict.get("Key")
-        if key == QtCore.Qt.Key_Z:
+        key_text = str(event_dict.get("Text", "None")).upper()
+        dm_logger.debug(f"PrimitiveCreatorBase.handle_keyboard: key={key}, text='{key_text}', is_editing={self._is_editing}")
+
+        # ── Axis constraints (edit mode) ────────────────────────────────────────
+        if self._is_editing and key in (QtCore.Qt.Key_X, QtCore.Qt.Key_Y, QtCore.Qt.Key_Z):
+            axis = {QtCore.Qt.Key_X: 'x', QtCore.Qt.Key_Y: 'y', QtCore.Qt.Key_Z: 'z'}[key]
+            mods = event_dict.get("Modifiers", 0)
+            is_shift = bool(mods & QtCore.Qt.ShiftModifier)
+            if is_shift:
+                plane = {'x': 'yz', 'y': 'xz', 'z': 'xy'}[axis]
+                if self._constraint_plane == plane and self._constraint_space == 'global':
+                    self._constraint_space = 'local'
+                elif self._constraint_plane == plane:
+                    self._constraint_axis = None
+                    self._constraint_plane = None
+                else:
+                    self._constraint_plane = plane
+                    self._constraint_axis = None
+                    self._constraint_space = 'global'
+                    self._constraint_last_key = f'shift_{axis}'
+            else:
+                if self._constraint_axis == axis and self._constraint_space == 'global':
+                    self._constraint_space = 'local'
+                elif self._constraint_axis == axis:
+                    self._constraint_axis = None
+                    self._constraint_plane = None
+                else:
+                    self._constraint_axis = axis
+                    self._constraint_plane = None
+                    self._constraint_space = 'global'
+                    self._constraint_last_key = axis
+            self._update_constraint_visual()
+            return True
+
+        # ── Group toggle (was Z, now Q) ─────────────────────────────────────────
+        if key == QtCore.Qt.Key_Q:
             if getattr(self, "_preview_obj", None):
                 cur = getattr(self._preview_obj, "Group", "Group 1")
                 new_group = "Group 2" if cur == "Group 1" else "Group 1"
@@ -957,7 +1099,17 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 cur = getattr(self, "_create_group", "Group 1")
                 self._create_group = "Group 2" if cur == "Group 1" else "Group 1"
             return True
-        return False
+        return super().handle_keyboard(event_dict)
+
+    def get_snapping_menu(self):
+        return [
+            ("Snap Off",            lambda: self._set_edit_snap('off'),           self._edit_snap_mode == 'off'),
+            ("Snap: Workplane+SDF", lambda: self._set_edit_snap('workplane_sdf'), self._edit_snap_mode == 'workplane_sdf'),
+            ("Snap: All Geometry",  lambda: self._set_edit_snap('all'),           self._edit_snap_mode == 'all'),
+        ]
+
+    def _set_edit_snap(self, mode):
+        self._edit_snap_mode = mode
 
     def reset_state(self):
         """Override to clear internal primitive state (points, visuals)."""
@@ -983,6 +1135,14 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         if self.dm_line_set:
             self.dm_line_set.undraw()
             self.dm_line_set = None
+        # Clear constraint state and visual
+        self._constraint_axis = None
+        self._constraint_plane = None
+        self._constraint_space = 'global'
+        self._drag_constraint_base = None
+        self._edit_snap_mode = 'off'
+        self._drag_return_state = ToolState.IDLE
+        self._clear_constraint_visual()
         self.view.redraw()
 
     def _create_sdf_object(self, name, field, points=None):
@@ -1012,6 +1172,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self.dm_points.clear()
         if self.dm_line_set:
             self.dm_line_set.undraw()
+        self._clear_constraint_visual()
         try:
             if self.view and self.view.getSceneGraph() and self.points_root:
                 self.view.getSceneGraph().removeChild(self.points_root)
