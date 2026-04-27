@@ -826,7 +826,7 @@ class DMSceneRayMarchRenderer:
                 return False
             doc = FreeCAD.getDocument(parts[0])
             obj = doc.getObject(parts[1]) if doc else None
-            return bool(getattr(obj, "IsSubtractive", False))
+            return getattr(obj, "Group", "Group 1") == "Group 2"
         except Exception:
             return False
 

@@ -70,7 +70,7 @@ class CommandDMBoolean:
                         f"DM_{self.operation}: '{obj.Label}' has no SdfField."
                     )
                     return
-                if getattr(obj, "IsSubtractive", False):
+                if getattr(obj, "Group", "Group 1") == "Group 2":
                     blue_fields.append(field)
                 else:
                     orange_fields.append(field)
@@ -111,7 +111,7 @@ class CommandDMBoolean:
             new_name = f"{self.operation}"
             result = create_dm_object(name=new_name, shape_type="sdf")
             result.Proxy.SdfField = result_field
-            result.IsSubtractive = False  # always orange
+            result.Group = "Group 1"  # always orange
 
             # B-002: Store operation and inputs for parametric updates
             if not hasattr(result, "BooleanOp"):
@@ -217,7 +217,7 @@ def _recompose_boolean(fp):
         field = getattr(proxy, "SdfField", None)
         if field is None:
             continue
-        if getattr(child, "IsSubtractive", False):
+        if getattr(child, "Group", "Group 1") == "Group 2":
             blue_fields.append(field)
         else:
             orange_fields.append(field)

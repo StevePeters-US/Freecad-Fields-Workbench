@@ -707,10 +707,15 @@ class SdfEditTool(DMBase, DragTimerMixin):
         key_code = event_dict.get("Key")
         if key_code == QtCore.Qt.Key_Z:
             if self._target_obj:
-                cur = getattr(self._target_obj, "IsSubtractive", False)
-                self._target_obj.IsSubtractive = not cur
+                cur = getattr(self._target_obj, "Group", "Group 1")
+                new_group = "Group 2" if cur == "Group 1" else "Group 1"
+                self._target_obj.Group = new_group
                 if self._target_obj.Document:
                     self._target_obj.Document.recompute([self._target_obj])
+                    if hasattr(self._target_obj, "Proxy") and hasattr(self._target_obj.Proxy, "SdfField"):
+                        from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                        label = f"{self._target_obj.Document.Name}.{self._target_obj.Name}"
+                        DMSceneRayMarchRenderer.get_instance().update_field(label, self._target_obj.Proxy.SdfField)
             return True
         if key_code in [QtCore.Qt.Key_Escape, QtCore.Qt.Key_Enter, QtCore.Qt.Key_Return]:
             self.terminate()

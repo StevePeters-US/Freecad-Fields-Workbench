@@ -234,7 +234,6 @@ class DMInputManager(QtCore.QObject):
                 elif event.type() == QtCore.QEvent.KeyPress:
                     key = event.key()
                     text = event.text().lower() if hasattr(event, "text") else ""
-                    dm_logger.debug(f"Global KeyPress: key={key}, text='{text}'")
                     
                     if (key == QtCore.Qt.Key_D or text == 'd') and not self._is_menu_active():
                         from core.dm_menu import DMMenuManager
@@ -243,12 +242,12 @@ class DMInputManager(QtCore.QObject):
                             return True
 
                     if (key == QtCore.Qt.Key_Z or text == 'z') and not self._is_menu_active():
-                        dm_logger.debug("Processing Z global hotkey")
                         sel = FreeCADGui.Selection.getSelection()
                         toggled_any = False
                         for obj in sel:
-                            if hasattr(obj, "IsSubtractive"):
-                                obj.IsSubtractive = not obj.IsSubtractive
+                            if hasattr(obj, "Group"):
+                                cur = getattr(obj, "Group", "Group 1")
+                                obj.Group = "Group 2" if cur == "Group 1" else "Group 1"
                                 if obj.Document:
                                     obj.Document.recompute([obj])
                                     if hasattr(obj, "Proxy") and hasattr(obj.Proxy, "SdfField"):
@@ -257,9 +256,7 @@ class DMInputManager(QtCore.QObject):
                                         DMSceneRayMarchRenderer.get_instance().update_field(label, obj.Proxy.SdfField)
                                 toggled_any = True
                         if toggled_any:
-                            dm_logger.debug("Toggled IsSubtractive on selected objects")
                             return True
-                        dm_logger.debug("No selected objects had IsSubtractive property")
 
                     if (key == QtCore.Qt.Key_E or text == 'e') and not self._is_menu_active():
                         sel = FreeCADGui.Selection.getSelection()

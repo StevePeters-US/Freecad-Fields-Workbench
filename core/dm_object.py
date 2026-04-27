@@ -215,10 +215,17 @@ class DMObjectProxy:
             if not hasattr(obj, "ShowWireframe"):
                 obj.addProperty("App::PropertyBool", "ShowWireframe", "Sdf", "Show triangle wireframe")
                 obj.ShowWireframe = get_show_wireframe()
-            if not hasattr(obj, "IsSubtractive"):
-                obj.addProperty("App::PropertyBool", "IsSubtractive", "Sdf",
-                                "If True, this primitive subtracts material (rendered blue)")
-                obj.IsSubtractive = False
+            # Migrate legacy IsSubtractive bool to Group enum
+            if hasattr(obj, "IsSubtractive"):
+                was_sub = bool(obj.IsSubtractive)
+                obj.removeProperty("IsSubtractive")
+            else:
+                was_sub = False
+            if not hasattr(obj, "Group"):
+                obj.addProperty("App::PropertyEnumeration", "Group", "Sdf",
+                                "Rendering group: Group 1 (orange/additive) or Group 2 (blue/subtractive)")
+                obj.Group = ["Group 1", "Group 2"]
+                obj.Group = "Group 2" if was_sub else "Group 1"
 
     def build_shape(self, fp):
         """Return a Part.Shape based on the object's properties."""
@@ -465,12 +472,12 @@ class DMViewProvider:
     def updateData(self, fp, prop):
         from . import dm_logger
         
-        if prop in ["ShowWireframe", "IsSubtractive"]:
+        if prop in ["ShowWireframe", "Group"]:
             self.on_prefs_changed()
         
-        if prop == "IsSubtractive" and hasattr(fp, "IsSubtractive"):
+        if prop == "Group" and hasattr(fp, "Group"):
             try:
-                if fp.IsSubtractive:
+                if fp.Group == "Group 2":
                     fp.ViewObject.ShapeColor = (0.3, 0.5, 1.0)
                 else:
                     fp.ViewObject.ShapeColor = (1.0, 0.5, 0.0)
@@ -619,8 +626,7 @@ def create_dm_object(name, shape_type, params=None, placement=None):
         
         # dm_logger.debug(f"create_dm_object: {name} created successfully")
         if hasattr(obj, "ViewObject") and obj.ViewObject:
-            is_sub = getattr(obj, "IsSubtractive", False)
-            if is_sub:
+            if getattr(obj, "Group", "Group 1") == "Group 2":
                 obj.ViewObject.ShapeColor = (0.3, 0.5, 1.0)
             else:
                 obj.ViewObject.ShapeColor = (1.0, 0.5, 0.0)

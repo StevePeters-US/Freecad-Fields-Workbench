@@ -55,7 +55,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self._preview_obj = None     # Live FreeCAD object for preview
         self._update_pending = False  # Throttle rapid updates
         self._creating_obj = False    # Re-entrancy guard
-        self._create_is_subtractive = False # Z hotkey toggle during creation
+        self._create_is_subtractive = False  # DEPRECATED — use _create_group
+        self._create_group = "Group 1"  # Z hotkey toggle during creation
         # Reset the shared timer so preview calls for this tool session are isolated
         mesh_timer.reset()
 
@@ -515,8 +516,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 # Use last part of class name without 'Creator' suffix
                 name = type(self).__name__.replace("Creator", "")
                 self._preview_obj = create_dm_object(name=name, shape_type="sdf")
-                if hasattr(self._preview_obj, "IsSubtractive"):
-                    self._preview_obj.IsSubtractive = getattr(self, "_create_is_subtractive", False)
+                if hasattr(self._preview_obj, "Group"):
+                    self._preview_obj.Group = getattr(self, "_create_group", "Group 1")
             finally:
                 self._creating_obj = False
 
@@ -695,8 +696,9 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         key = event_dict.get("Key")
         if key == QtCore.Qt.Key_Z:
             if getattr(self, "_preview_obj", None):
-                cur = getattr(self._preview_obj, "IsSubtractive", False)
-                self._preview_obj.IsSubtractive = not cur
+                cur = getattr(self._preview_obj, "Group", "Group 1")
+                new_group = "Group 2" if cur == "Group 1" else "Group 1"
+                self._preview_obj.Group = new_group
                 self._preview_obj.touch()
                 if self._preview_obj.Document:
                     self._preview_obj.Document.recompute([self._preview_obj])
@@ -705,7 +707,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                         label = f"{self._preview_obj.Document.Name}.{self._preview_obj.Name}"
                         DMSceneRayMarchRenderer.get_instance().update_field(label, self._preview_obj.Proxy.SdfField)
             else:
-                self._create_is_subtractive = not getattr(self, "_create_is_subtractive", False)
+                cur = getattr(self, "_create_group", "Group 1")
+                self._create_group = "Group 2" if cur == "Group 1" else "Group 1"
             return True
         return False
 
@@ -715,7 +718,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         # Return to first creation step (or IDLE if no steps defined)
         self.state = self.CREATION_STEPS[0] if self.CREATION_STEPS else ToolState.IDLE
         self._anchor_pt = None
-        self._create_is_subtractive = False
+        self._create_group = "Group 1"
+        self._create_is_subtractive = False  # DEPRECATED
         self.points = []
         for dm_pt in self.dm_points:
             dm_pt.undraw()
