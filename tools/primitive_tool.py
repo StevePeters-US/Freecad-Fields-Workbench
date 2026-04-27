@@ -2,7 +2,7 @@ import FreeCAD
 import FreeCADGui
 import math
 from enum import IntEnum
-from PySide import QtCore
+from PySide import QtCore, QtGui
 from pivy import coin
 from core import dm_logger
 from core.input_manager import DMInputManager
@@ -41,6 +41,33 @@ _CREATION_PREVIEW_STAGES = frozenset({
 })
 
 
+class QuantityLineEdit(QtGui.QLineEdit):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.step = 1.0
+        
+    def wheelEvent(self, event):
+        # angleDelta is the PySide6/Qt6 API; fallback to legacy delta() for Qt5
+        try:
+            dy = event.angleDelta().y()
+        except AttributeError:
+            dy = event.delta()
+        if dy == 0:
+            event.ignore()
+            return
+        try:
+            q = FreeCAD.Units.Quantity(self.text())
+            val = q.Value
+            val += self.step if dy > 0 else -self.step
+            unit_str = q.Unit.getUserString() or "mm"
+            self.setText(f"{val:.2f} {unit_str}")
+            self.editingFinished.emit()
+        except Exception:
+            pass
+        # Always accept to prevent parent scroll area from stealing the event
+        event.accept()
+
+
 class PrimitiveTaskPanel:
     """Task panel for SDF primitives (both creation and edit modes)."""
     def __init__(self, creator):
@@ -58,9 +85,9 @@ class PrimitiveTaskPanel:
         # Transform Group
         self.transform_group = QtGui.QGroupBox("Transform")
         t_layout = QtGui.QFormLayout(self.transform_group)
-        self.pos_x = QtGui.QLineEdit()
-        self.pos_y = QtGui.QLineEdit()
-        self.pos_z = QtGui.QLineEdit()
+        self.pos_x = QuantityLineEdit()
+        self.pos_y = QuantityLineEdit()
+        self.pos_z = QuantityLineEdit()
         
         self.pos_x.editingFinished.connect(self._on_pos_changed)
         self.pos_y.editingFinished.connect(self._on_pos_changed)
@@ -115,7 +142,7 @@ class PrimitiveTaskPanel:
         # Add new fields if needed
         for key in params.keys():
             if key not in self.param_inputs:
-                le = QtGui.QLineEdit()
+                le = QuantityLineEdit()
                 le.editingFinished.connect(lambda k=key: self._on_param_changed(k))
                 self.p_layout.addRow(f"{key}:", le)
                 self.param_inputs[key] = le
@@ -238,10 +265,17 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             self.state = self.CREATION_STEPS[0]
             dm_logger.info(f"{type(self).__name__}: {_STAGE_HINTS.get(self.state, 'Click to begin')}")
 
-        # Show Task Panel
-        self.panel = PrimitiveTaskPanel(self)
-        FreeCADGui.Control.showDialog(self.panel)
-        self._dialog_open = True
+        # Panel is shown after _post_init runs (after edit_object detection)
+        self.panel = None
+
+    def _post_init(self):
+        """Override: detect selected object first, THEN show the task panel."""
+        super()._post_init()  # runs _detect_selected_object() + updateGui()
+        # Now show the panel (after _is_editing is correctly set)
+        if not getattr(self, "_terminated", False):
+            self.panel = PrimitiveTaskPanel(self)
+            FreeCADGui.Control.showDialog(self.panel)
+            self._dialog_open = True
 
     def get_handled_types(self):
         return ["sdf"]
@@ -261,6 +295,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self._preview_obj = obj
 
         self.working_plane = obj.Placement
+        self._field_placement = None # Clear stale creation placement
         self._working_plane_is_fallback = False
 
         if hasattr(obj, "Points"):
@@ -305,9 +340,11 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
     def _edit_on_mouse_press(self, event_dict):
         """Hit-test handles and start drag timer in edit mode."""
+        dm_logger.debug(f"{type(self).__name__}._edit_on_mouse_press: _is_editing={self._is_editing}, pts={len(self.points)}, dm_pts={len(self.dm_points)}")
         btn = event_dict.get("Button")
         if btn != QtCore.Qt.LeftButton:
             return False
+
 
         ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
         if not ray_p or not ray_d:
@@ -439,6 +476,10 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 self.points = [p + delta for p in self.points]
                 if self.working_plane:
                     self.working_plane.Base += delta
+                # Update handle visual to current position
+                self._center_handle.position = new_pt
+                if self._rot_handle:
+                    self._rot_handle.position += delta
             elif self._dragging_idx == 'rot':
                 pivot = self._edit_pivot
                 v = new_pt - pivot
@@ -449,12 +490,18 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 if self.working_plane:
                     self.working_plane.Rotation = self.working_plane.Rotation.multiply(rot)
                 self._edit_last_angle = angle
+                # Update handle visual
+                self._rot_handle.position = new_pt
             elif is_ctrl:
                 delta = new_pt - self.points[self._dragging_idx]
                 self.points = [p + delta for p in self.points]
                 # Sync working plane so local coordinates stay stable
                 if self.working_plane:
                     self.working_plane.Base += delta
+                if self._center_handle:
+                    self._center_handle.position += delta
+                if self._rot_handle:
+                    self._rot_handle.position += delta
             elif is_shift and self._edit_pivot:
                 v = new_pt - self._edit_pivot
                 angle = math.atan2(v.y, v.x)
@@ -477,6 +524,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         if self.view:
             self.view.redraw()
 
+
     def _sync_edit_points(self):
         """Sync dm_point positions back to tool-specific variables. Override in subclasses."""
         pass
@@ -488,6 +536,29 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     def finish(self):
         """In edit mode, finish resets to idle. Otherwise, standard creation finish."""
         if getattr(self, "_is_editing", False):
+            # Persist edits back to the FreeCAD object before leaving edit mode
+            obj = self._preview_obj
+            if obj and obj.Document:
+                try:
+                    field = self._get_edit_preview_field()
+                    points = self._get_final_points()
+                    if field is not None:
+                        obj.Proxy.SdfField = field
+                    if points is not None:
+                        if not hasattr(obj, "Points"):
+                            obj.addProperty("App::PropertyVectorList", "Points", "Sdf", "Control Points")
+                        obj.Points = points
+                    if self.working_plane:
+                        if hasattr(self.working_plane, "getGlobalPlacement"):
+                            obj.Placement = self.working_plane.getGlobalPlacement()
+                        elif hasattr(self.working_plane, "Placement"):
+                            obj.Placement = self.working_plane.Placement
+                        else:
+                            obj.Placement = self.working_plane
+                    QtCore.QTimer.singleShot(0, lambda: self._commit_edit_deferred(obj))
+                except Exception as e:
+                    dm_logger.error(f"finish(): failed to commit edit: {e}")
+
             self._is_editing = False
             self._edit_pivot = None
             self._edit_last_angle = 0.0
@@ -506,6 +577,14 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             dm_logger.info(f"{name} accepted. Tool remains active.")
         else:
             self.terminate()
+
+    def _commit_edit_deferred(self, obj):
+        """Deferred recompute after editing — required for Shape assignment safety."""
+        try:
+            obj.touch()
+            obj.Document.recompute([obj])
+        except Exception as e:
+            dm_logger.error(f"_commit_edit_deferred: {e}")
 
 
     def _init_working_plane(self):
@@ -682,6 +761,13 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         """Throttled update of both the mesh and the ghost visuals."""
         self._apply_preview_field(field)
         self._update_ghost_visuals()
+        # Trigger parent boolean recompute in edit mode (GPU already has new field)
+        if getattr(self, "_is_editing", False) and self._preview_obj and self._preview_obj.Document:
+            try:
+                self._preview_obj.touch()
+                self._preview_obj.Document.recompute([self._preview_obj])
+            except Exception as e:
+                dm_logger.debug(f"Boolean parent recompute error: {e}")
         if self.view:
             self.view.redraw()
 
@@ -698,9 +784,6 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 return
             proxy.SdfField = field
 
-            im = DMInputManager.get_instance()
-            # Note: IsSubtractive toggle is now handled by 'Z' key, not Ctrl-drag.
-
             # Direct GPU update — skip FreeCAD recompute cycle
             from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
             label = f"{self._preview_obj.Document.Name}.{self._preview_obj.Name}"
@@ -709,10 +792,6 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             dm_logger.debug(f"PrimitiveCreatorBase preview update error: {e}")
         finally:
             self._update_pending = False
-
-        if getattr(self, "_is_editing", False) and self._preview_obj and self._preview_obj.Document:
-            self._preview_obj.touch()
-            self._preview_obj.Document.recompute()
 
     def _finalize_object(self, name, terminate=True):
         """Commit the preview object as the final result, upgrading its mesh resolution."""
@@ -961,6 +1040,7 @@ class BoxCreator(PrimitiveCreatorBase):
             dm_pt = DMPoint(pt)
             dm_pt.draw_point(self.points_root, r, color=(1.0, 0.5, 0.0))
             self.dm_points.append(dm_pt)
+        self.update_preview()
         self.update_ui()
 
     # ------------------------------------------------------------------
@@ -1077,22 +1157,7 @@ class BoxCreator(PrimitiveCreatorBase):
             place_on_geometry=False
         )
         if new_pt:
-            if self._dragging_idx == 'center':
-                delta = new_pt - self._center_handle.position
-                self.points = [p + delta for p in self.points]
-                if self.working_plane:
-                    self.working_plane.Base += delta
-            elif self._dragging_idx == 'rot':
-                pivot = self._edit_pivot
-                v = new_pt - pivot
-                angle = math.atan2(v.y, v.x)
-                da = angle - self._edit_last_angle
-                rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), math.degrees(da))
-                self.points = [pivot + rot.multVec(p - pivot) for p in self.points]
-                if self.working_plane:
-                    self.working_plane.Rotation = self.working_plane.Rotation.multiply(rot)
-                self._edit_last_angle = angle
-            elif is_ctrl:
+            if is_ctrl:
                 delta = new_pt - self.points[self._dragging_idx]
                 self.points = [p + delta for p in self.points]
                 if self.working_plane:
@@ -1159,7 +1224,7 @@ class BoxCreator(PrimitiveCreatorBase):
         sx = max(abs(lc_a.x - lc_b.x), 0.1)
         sy = max(abs(lc_a.y - lc_b.y), 0.1)
         sz = max(abs(lc_a.z - lc_b.z), 0.1)
-        placement = getattr(self, "_field_placement", self._get_placement())
+        placement = self._get_placement()
                 
         return SdfBoxField(FreeCAD.Vector(cx, cy, cz), FreeCAD.Vector(sx, sy, sz), placement=placement)
 
@@ -1437,7 +1502,7 @@ class CylinderCreator(PrimitiveCreatorBase):
             return None
         if abs(height) < 0.01:
             height = 0.01 if height >= 0 else -0.01
-        fp = getattr(self, "_field_placement", self._get_placement())
+        fp = self._get_placement()
         return SdfCylinderField(loc_base, FreeCAD.Vector(0, 0, 1), radius, height, placement=fp)
 
     def _get_preview_field(self):
@@ -1450,7 +1515,7 @@ class CylinderCreator(PrimitiveCreatorBase):
             radius = math.sqrt((loc_rad.x - loc_base.x)**2 + (loc_rad.y - loc_base.y)**2)
             if radius < 0.01:
                 return None
-            fp = getattr(self, "_field_placement", self._get_placement())
+            fp = self._get_placement()
             return SdfCylinderField(loc_base, FreeCAD.Vector(0, 0, 1), radius, 1.0, placement=fp)
         return self._cylinder_field_from_points()
 
@@ -1579,7 +1644,7 @@ class TorusCreator(PrimitiveCreatorBase):
             return None
         dist_t = math.sqrt((loc_t.x - loc_c.x) ** 2 + (loc_t.y - loc_c.y) ** 2)
         tube_r = max(abs(dist_t - major_r), 0.5)
-        fp = getattr(self, "_field_placement", self._get_placement())
+        fp = self._get_placement()
         return SdfTorusField(loc_c, major_r, tube_r, placement=fp)
 
     def _get_preview_field(self):
@@ -1593,7 +1658,7 @@ class TorusCreator(PrimitiveCreatorBase):
         # During DRAG_XY only 2 unique points: show a thin ring as preview
         if len(self.points) < 3 or self.points[1] == self.points[2]:
             tube_r = max(major_r * 0.15, 1.0)
-            fp = getattr(self, "_field_placement", self._get_placement())
+            fp = self._get_placement()
             return SdfTorusField(loc_c, major_r, tube_r, placement=fp)
         return self._torus_field_from_points()
 
@@ -1658,22 +1723,7 @@ class TorusCreator(PrimitiveCreatorBase):
             place_on_geometry=False
         )
         if new_pt:
-            if self._dragging_idx == 'center':
-                delta = new_pt - self._center_handle.position
-                self.points = [p + delta for p in self.points]
-                if self.working_plane:
-                    self.working_plane.Base += delta
-            elif self._dragging_idx == 'rot':
-                pivot = self._edit_pivot
-                v = new_pt - pivot
-                angle = math.atan2(v.y, v.x)
-                da = angle - self._edit_last_angle
-                rot = FreeCAD.Rotation(FreeCAD.Vector(0,0,1), math.degrees(da))
-                self.points = [pivot + rot.multVec(p - pivot) for p in self.points]
-                if self.working_plane:
-                    self.working_plane.Rotation = self.working_plane.Rotation.multiply(rot)
-                self._edit_last_angle = angle
-            elif is_ctrl:
+            if is_ctrl:
                 delta = new_pt - self.points[self._dragging_idx]
                 self.points = [p + delta for p in self.points]
                 if self.working_plane:

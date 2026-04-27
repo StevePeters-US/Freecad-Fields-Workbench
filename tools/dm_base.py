@@ -209,6 +209,10 @@ class DMBase:
         Returns (best_idx, best_perp_dist) for list of FreeCAD.Vector points.
         Uses perpendicular distance (depth-independent, correct for ortho cameras).
         tolerance defaults to _compute_handle_radius() if None.
+
+        NOTE: Do NOT filter by proj < 0. In orthographic mode, get_ray() returns
+        the focal-plane origin, not the camera position, so scene points can have
+        negative or near-zero projection and must still be hit-tested.
         """
         if not ray_p or not ray_d or not points:
             return None, float('inf')
@@ -223,15 +227,15 @@ class DMBase:
             if pt is None: continue
             v = pt - ray_p
             proj = v.dot(ray_d)
-            if proj < 0: continue
             
-            # Perpendicular distance to ray
+            # Perpendicular distance to ray — no proj < 0 guard (ortho camera)
             perp = (ray_p + ray_d * proj - pt).Length
             if perp < tolerance and perp < best_perp:
                 best_perp = perp
                 best_idx = i
                 
         return best_idx, best_perp
+
 
     def _resolve_wp_click(self, event_dict, skip_objects=None, debug=False):
         """
