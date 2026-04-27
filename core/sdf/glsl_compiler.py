@@ -6,6 +6,8 @@ the field on a 3D grid and writes results directly to a 3D texture.
 """
 
 
+import uuid
+
 class GlslContext:
     """Collects uniforms and helper functions during SDF→GLSL compilation."""
 
@@ -13,10 +15,11 @@ class GlslContext:
         self._uniforms = []   # [(name, glsl_type, value)]
         self._counter = 0
         self._helpers = set()
+        self._prefix = f"u_{uuid.uuid4().hex[:8]}_"
 
     def uniform(self, glsl_type, value):
         """Register a uniform and return its GLSL name."""
-        name = f"u_f{self._counter}"
+        name = f"{self._prefix}{self._counter}"
         self._counter += 1
         self._uniforms.append((name, glsl_type, value))
         return name
