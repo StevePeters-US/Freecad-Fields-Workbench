@@ -638,6 +638,11 @@ class DMSceneRayMarchRenderer:
         if not self._attached:
             self._attach()
         self._rebuild()
+        try:
+            if FreeCADGui.activeView():
+                FreeCADGui.activeView().redraw()
+        except Exception:
+            pass
         if get_perf_profiler_enabled():
             _t1 = time.perf_counter()
             FreeCAD.Console.PrintMessage(
@@ -1034,9 +1039,14 @@ class DMSceneRayMarchRenderer:
                 self._active_is_analytical = True
                 self._pending_frag_gbuf_source = None
             except Exception as e:
-                dm_logger.debug(f"SceneRayMarch: dynamic shader compile failed: {e}")
+                dm_logger.error(f"SceneRayMarch: dynamic shader compile failed: {e}")
                 self._active_is_analytical = False
                 self._pending_frag_gbuf_source = None
+                # Analytical path skipped baking — force a CPU/GPU rebuild now
+                for lbl in list(self._fields.keys()):
+                    self._dirty_fields.add(lbl)
+                from PySide import QtCore as _QC
+                _QC.QTimer.singleShot(0, self._rebuild)
         elif getattr(self, "_pending_restore_default_gbuf", False):
             self._prog_gbuf.compile(_VERT_PASSTHROUGH, _FRAG_GBUF)
             self._active_is_analytical = False

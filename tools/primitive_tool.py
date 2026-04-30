@@ -266,6 +266,9 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         # Constraint axis visual
         self._constraint_line = None    # DMLineSet drawn along active axis
 
+        # Transform gizmo (edit mode only)
+        self._gizmo = None
+
         # Creation-phase anchor (set on PLACE_ANCHOR accept)
         self._anchor_pt = None
         
@@ -322,6 +325,18 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         if hasattr(obj, "Points"):
             self.points = [self.working_plane.multVec(pt) for pt in obj.Points]
         self._add_transform_handles()
+        self._init_gizmo()
+
+    def _init_gizmo(self):
+        from core.dm_gizmo import DMTransformGizmo
+        if self._gizmo:
+            self._gizmo.undraw()
+            self._gizmo = None
+        if not self.working_plane:
+            return
+        self._gizmo = DMTransformGizmo()
+        length = self._compute_default_size() * 0.6
+        self._gizmo.draw(self.points_root, self.working_plane.Base, length=length)
 
     # ------------------------------------------------------------------
     # Edit mode: hover, handle selection, drag
@@ -370,8 +385,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         ray_p, ray_d = DMInputManager.get_instance().get_ray(self.view, event_dict)
         if not ray_p or not ray_d:
             return True
-        
-        # Test special handles
+
+        # Test center/rot handles first — center dot always gives free drag
         special_pts = []
         if getattr(self, "_center_handle", None): special_pts.append(self._center_handle.position)
         if getattr(self, "_rot_handle", None): special_pts.append(self._rot_handle.position)
@@ -390,6 +405,19 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 self._edit_last_angle = math.atan2(v.y, v.x)
             self._start_drag_timer()
             return True
+
+        # Test gizmo axes (lower priority than center dot, higher than control points)
+        if self._gizmo and self.working_plane:
+            tol = self._compute_handle_radius() * 2.5
+            axis = self._gizmo.hit_test(ray_p, ray_d, tol)
+            if axis:
+                self._dragging_idx = f'gizmo_{axis}'
+                ax_vec = self._gizmo._axes[axis]
+                click_pt = DMInputManager.get_instance().get_axis_point(
+                    self.view, FreeCAD.Vector(self.working_plane.Base), ax_vec, event_dict)
+                self._drag_constraint_base = click_pt if click_pt else FreeCAD.Vector(self.working_plane.Base)
+                self._start_drag_timer()
+                return True
 
         # Test regular points
         idx, _ = self._hit_test_perp(ray_p, ray_d, self.points)
@@ -478,12 +506,39 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         """Subclass: update internal state from pos so _get_preview_field() returns the right shape."""
         pass
 
+    def _gizmo_drag_update(self):
+        """Translate all points + working_plane along the clicked gizmo axis."""
+        axis = self._dragging_idx[len('gizmo_'):]
+        if not self._gizmo or axis not in self._gizmo._axes:
+            return
+        ax_vec = self._gizmo._axes[axis]
+        mouse_pos = DMInputManager.get_instance()._last_qt_pos
+        new_pt = DMInputManager.get_instance().get_axis_point(
+            self.view, self._drag_constraint_base, ax_vec, {"Position": mouse_pos})
+        if new_pt:
+            delta = new_pt - self._drag_constraint_base
+            self.points = [p + delta for p in self.points]
+            if self.working_plane:
+                self.working_plane.Base += delta
+            self._drag_constraint_base = new_pt
+            self._gizmo.update(self.working_plane.Base if self.working_plane else new_pt)
+            self._update_handle_positions(self.points)
+            if hasattr(self, "panel") and self.panel:
+                self.panel.update_ui()
+            self.update_preview()
+        if self.view:
+            self.view.redraw()
+
     def _drag_update(self):
         """QTimer callback: move the selected handle to the current mouse position."""
         if self._drag_check_lmb_released():
             self._clear_constraint_visual()
             return
         if self._dragging_idx is None:
+            return
+
+        if isinstance(self._dragging_idx, str) and self._dragging_idx.startswith('gizmo_'):
+            self._gizmo_drag_update()
             return
 
         from PySide import QtGui
@@ -526,10 +581,11 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 self.points = [p + delta for p in self.points]
                 if self.working_plane:
                     self.working_plane.Base += delta
-                # Update handle visual to current position
                 self._center_handle.position = new_pt
                 if self._rot_handle:
                     self._rot_handle.position += delta
+                if self._gizmo:
+                    self._gizmo.update(new_pt)
             elif self._dragging_idx == 'rot':
                 pivot = self._edit_pivot
                 v = new_pt - pivot
@@ -540,18 +596,20 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 if self.working_plane:
                     self.working_plane.Rotation = self.working_plane.Rotation.multiply(rot)
                 self._edit_last_angle = angle
-                # Update handle visual
                 self._rot_handle.position = new_pt
+                if self._gizmo:
+                    self._gizmo.update(self.working_plane.Base)
             elif is_ctrl:
                 delta = new_pt - self.points[self._dragging_idx]
                 self.points = [p + delta for p in self.points]
-                # Sync working plane so local coordinates stay stable
                 if self.working_plane:
                     self.working_plane.Base += delta
                 if self._center_handle:
                     self._center_handle.position += delta
                 if self._rot_handle:
                     self._rot_handle.position += delta
+                if self._gizmo:
+                    self._gizmo.update(self.working_plane.Base)
             elif is_shift and self._edit_pivot:
                 v = new_pt - self._edit_pivot
                 angle = math.atan2(v.y, v.x)
@@ -1142,6 +1200,9 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self._edit_snap_mode = 'off'
         self._drag_return_state = ToolState.IDLE
         self._clear_constraint_visual()
+        if self._gizmo:
+            self._gizmo.undraw()
+            self._gizmo = None
         self.view.redraw()
 
     def _create_sdf_object(self, name, field, points=None):
@@ -1172,6 +1233,9 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         if self.dm_line_set:
             self.dm_line_set.undraw()
         self._clear_constraint_visual()
+        if getattr(self, "_gizmo", None):
+            self._gizmo.undraw()
+            self._gizmo = None
         try:
             if self.view and self.view.getSceneGraph() and self.points_root:
                 self.view.getSceneGraph().removeChild(self.points_root)
@@ -1311,7 +1375,8 @@ class BoxCreator(PrimitiveCreatorBase):
         if self._dragging_idx is None:
             return
 
-        if self._dragging_idx in ('center', 'rot'):
+        if self._dragging_idx in ('center', 'rot') or (
+                isinstance(self._dragging_idx, str) and self._dragging_idx.startswith('gizmo_')):
             super()._drag_update()
             return
 
@@ -1878,7 +1943,8 @@ class TorusCreator(PrimitiveCreatorBase):
         if self._dragging_idx is None:
             return
 
-        if self._dragging_idx in ('center', 'rot'):
+        if self._dragging_idx in ('center', 'rot') or (
+                isinstance(self._dragging_idx, str) and self._dragging_idx.startswith('gizmo_')):
             super()._drag_update()
             return
 

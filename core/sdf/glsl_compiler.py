@@ -80,6 +80,24 @@ vec3 apply_inv_mat(mat4 m, vec3 p) {
     return (m * vec4(p, 1.0)).xyz;
 }
 """,
+    "smooth_union": """
+float smooth_union(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5*(b-a)/k, 0.0, 1.0);
+    return mix(b, a, h) - k*h*(1.0-h);
+}
+""",
+    "smooth_subtraction": """
+float smooth_subtraction(float a, float b, float k) {
+    float h = clamp(0.5 - 0.5*(a+b)/k, 0.0, 1.0);
+    return mix(a, -b, h) + k*h*(1.0-h);
+}
+""",
+    "smooth_intersection": """
+float smooth_intersection(float a, float b, float k) {
+    float h = clamp(0.5 - 0.5*(b-a)/k, 0.0, 1.0);
+    return mix(b, a, h) + k*h*(1.0-h);
+}
+""",
 }
 
 
