@@ -15,6 +15,7 @@ class GlslContext:
         self._uniforms = []   # [(name, glsl_type, value)]
         self._counter = 0
         self._helpers = set()
+        self._custom_helpers = {}  # name → GLSL function body string
         self._prefix = f"u_{uuid.uuid4().hex[:8]}_"
 
     def uniform(self, glsl_type, value):
@@ -25,7 +26,12 @@ class GlslContext:
         return name
 
     def need_helper(self, name):
-        """Mark an SDF helper function as needed."""
+        """Mark a built-in SDF helper function as needed."""
+        self._helpers.add(name)
+
+    def add_custom_helper(self, name: str, body: str):
+        """Register an inline-generated GLSL helper (e.g. per-polygon functions)."""
+        self._custom_helpers[name] = body
         self._helpers.add(name)
 
     @property
@@ -98,6 +104,12 @@ float smooth_intersection(float a, float b, float k) {
     return mix(b, a, h) + k*h*(1.0-h);
 }
 """,
+    "sdf_box2d": """
+float sdf_box2d(vec2 p, vec2 h) {
+    vec2 d = abs(p) - h;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+}
+""",
 }
 
 
@@ -123,9 +135,10 @@ def build_compute_shader(expression, ctx):
         for name, glsl_type, _ in ctx.uniforms
     )
 
-    # Helper function definitions (sorted for deterministic output)
+    # Merge static helpers with any inline-generated helpers (e.g. per-polygon)
+    all_helper_bodies = {**GLSL_HELPERS, **ctx._custom_helpers}
     helper_defs = "\n".join(
-        GLSL_HELPERS[h] for h in sorted(ctx.helpers) if h in GLSL_HELPERS
+        all_helper_bodies[h] for h in sorted(ctx.helpers) if h in all_helper_bodies
     )
 
     return f"""#version 430
@@ -169,17 +182,20 @@ def build_multi_raymarch_fragment_shader(fields_data):
     """
     all_uniforms = []
     all_helpers = set()
+    all_custom_helpers = {}
     for fd in fields_data:
         all_uniforms.extend(fd["ctx"].uniforms)
         all_helpers.update(fd["ctx"].helpers)
-        
+        all_custom_helpers.update(fd["ctx"]._custom_helpers)
+
     uniform_decls = "\n".join(
         f"uniform {glsl_type} {name};"
         for name, glsl_type, _ in all_uniforms
     )
-    
+
+    all_helper_bodies = {**GLSL_HELPERS, **all_custom_helpers}
     helper_defs = "\n".join(
-        GLSL_HELPERS[h] for h in sorted(all_helpers) if h in GLSL_HELPERS
+        all_helper_bodies[h] for h in sorted(all_helpers) if h in all_helper_bodies
     )
     
     # Generate per-field eval functions

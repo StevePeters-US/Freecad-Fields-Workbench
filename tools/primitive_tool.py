@@ -17,6 +17,10 @@ from core.sdf.sdf.box import SdfBoxField
 from core.sdf.sdf.sphere import SdfSphereField
 from core.sdf.sdf.cylinder import SdfCylinderField
 from core.sdf.sdf.torus import SdfTorusField
+from core.sdf.sdf2d.polygon import Sdf2dPolygon
+from core.sdf.sdf2d.circle import Sdf2dCircle
+from core.sdf.sdf_extrusion import SdfExtrusionField
+from core.sdf.sdf_revolution import SdfRevolutionField
 
 # Cell size for interactive preview in mm (larger = faster updates)
 _PREVIEW_CELL_SIZE = 20.0
@@ -1967,5 +1971,275 @@ class TorusCreator(PrimitiveCreatorBase):
                 self.points[self._dragging_idx] = new_pt
             self._update_handle_positions(self.points)
             self.update_preview()
+        if self.view:
+            self.view.redraw()
+
+
+class PrismCreator(PrimitiveCreatorBase):
+    """N-sided regular prism via polygon extrusion. Default 6 sides (hexagonal prism).
+
+    3-click creation: anchor (center) → XY circumradius → Z half-height.
+    The solid extends ±half-height from the anchor along local Z.
+    """
+
+    CREATION_STEPS = [ToolState.PLACE_ANCHOR, ToolState.DRAG_XY, ToolState.DRAG_Z]
+    _DEFAULT_SIDES = 6
+
+    def get_command_id(self):
+        return "DM_CreatePrism"
+
+    def __init__(self):
+        super().__init__()
+        self.points = []
+        self.n_sides = self._DEFAULT_SIDES
+        self._height_drag_base = None
+
+    def edit_object(self, obj):
+        super().edit_object(obj)
+        # points[3] encodes n_sides in its .x component (stored in local space)
+        if len(self.points) >= 4:
+            ns = round(self.to_local(self.points[3]).x)
+            if 3 <= ns <= 64:
+                self.n_sides = ns
+        self.state = ToolState.IDLE
+        r = self._compute_handle_radius()
+        for pt in self.points[:3]:
+            dm_pt = DMPoint(pt)
+            dm_pt.draw_point(self.points_root, r)
+            self.dm_points.append(dm_pt)
+        self.update_preview()
+        self.update_ui()
+
+    def _sync_edit_points(self):
+        for i in range(min(len(self.dm_points), 3)):
+            if i < len(self.points):
+                self.points[i] = self.dm_points[i].position
+
+    # ── Creation stage hooks ──────────────────────────────────────────────────
+
+    def _on_stage_accept(self, state, pos):
+        if state == ToolState.PLACE_ANCHOR:
+            self._anchor_pt = pos
+            self.points = [pos, pos, pos]
+            self._field_placement = self._get_placement()
+        elif state == ToolState.DRAG_XY:
+            self.points[1] = pos
+            self._height_drag_base = self.points[0]
+            if len(self.points) < 3:
+                self.points.append(self.points[0])
+        elif state == ToolState.DRAG_Z:
+            self.points[2] = pos
+
+    def _on_stage_preview(self, state, pos):
+        if state == ToolState.DRAG_XY and len(self.points) >= 2:
+            self.points[1] = pos
+        elif state == ToolState.DRAG_Z and len(self.points) >= 3:
+            self.points[2] = pos
+
+    # ── Field builders ────────────────────────────────────────────────────────
+
+    def _prism_field(self):
+        if len(self.points) < 2:
+            return None
+        loc_center = self.to_local(self.points[0])
+        loc_rad = self.to_local(self.points[1])
+        dx = loc_rad.x - loc_center.x
+        dy = loc_rad.y - loc_center.y
+        radius = math.sqrt(dx * dx + dy * dy)
+        if radius < 0.1:
+            return None
+
+        if len(self.points) >= 3:
+            loc_h = self.to_local(self.points[2])
+            half_h = abs(loc_h.z - loc_center.z)
+        else:
+            half_h = radius * 0.5
+
+        if half_h < 0.01:
+            half_h = 0.01
+
+        n = self.n_sides
+        vertices = [
+            (loc_center.x + radius * math.cos(2.0 * math.pi * i / n),
+             loc_center.y + radius * math.sin(2.0 * math.pi * i / n))
+            for i in range(n)
+        ]
+        profile = Sdf2dPolygon(vertices)
+        return SdfExtrusionField(profile, height=2.0 * half_h, placement=self._get_placement())
+
+    def _get_preview_field(self):
+        return self._prism_field()
+
+    def _get_edit_preview_field(self):
+        return self._prism_field()
+
+    def _get_final_field(self):
+        return self._prism_field()
+
+    def _get_final_points(self):
+        if len(self.points) < 3:
+            return None
+        pts = [self.to_local(p) for p in self.points[:3]]
+        pts.append(FreeCAD.Vector(float(self.n_sides), 0.0, 0.0))
+        return pts
+
+    def get_parameters(self):
+        if len(self.points) < 3:
+            return {}
+        loc_center = self.to_local(self.points[0])
+        loc_rad = self.to_local(self.points[1])
+        loc_h = self.to_local(self.points[2])
+        radius = math.sqrt((loc_rad.x - loc_center.x) ** 2 + (loc_rad.y - loc_center.y) ** 2)
+        half_h = abs(loc_h.z - loc_center.z)
+        return {"Radius": radius, "Height": 2.0 * half_h}
+
+    def set_parameters(self, params):
+        if len(self.points) < 3:
+            return
+        r = params.get("Radius", 10.0)
+        h = params.get("Height", 20.0)
+        loc_center = self.to_local(self.points[0])
+        self.points[1] = self.to_global(loc_center + FreeCAD.Vector(r, 0, 0))
+        self.points[2] = self.to_global(loc_center + FreeCAD.Vector(0, 0, h * 0.5))
+        self._update_handle_positions(self.points)
+        if hasattr(self, "panel") and self.panel:
+            self.panel.update_ui()
+        self.update_preview()
+        if self.view:
+            self.view.redraw()
+
+
+class RevolveCreator(PrimitiveCreatorBase):
+    """Revolves a circle profile around the local Z axis.
+
+    3-click creation: anchor (center) → ring offset point (XY) → tube radius point.
+    offset=0 collapses to a sphere; offset>0 gives a toroidal ring.
+    """
+
+    CREATION_STEPS = [ToolState.PLACE_ANCHOR, ToolState.DRAG_XY, ToolState.CUSTOM_1]
+
+    def get_command_id(self):
+        return "DM_CreateRevolve"
+
+    def __init__(self):
+        super().__init__()
+        self.points = []
+
+    def edit_object(self, obj):
+        super().edit_object(obj)
+        if not self.points:
+            field = getattr(obj.Proxy, "SdfField", None)
+            if field and hasattr(field, "offset") and hasattr(field, "profile"):
+                offset = field.offset
+                tube_r = getattr(field.profile, "radius", 5.0)
+                loc_c = FreeCAD.Vector(0.0, 0.0, 0.0)
+                self.points = [
+                    self.to_global(loc_c),
+                    self.to_global(loc_c + FreeCAD.Vector(max(offset, tube_r), 0, 0)),
+                    self.to_global(loc_c + FreeCAD.Vector(offset + tube_r, 0, 0)),
+                ]
+        self.state = ToolState.IDLE
+        r = self._compute_handle_radius()
+        for pt in self.points:
+            dm_pt = DMPoint(pt)
+            dm_pt.draw_point(self.points_root, r)
+            self.dm_points.append(dm_pt)
+        self.update_preview()
+        self.update_ui()
+
+    def _sync_edit_points(self):
+        for i in range(len(self.dm_points)):
+            if i < len(self.points):
+                self.points[i] = self.dm_points[i].position
+
+    # ── Creation stage hooks ──────────────────────────────────────────────────
+
+    def _on_stage_accept(self, state, pos):
+        if state == ToolState.PLACE_ANCHOR:
+            self._anchor_pt = pos
+            self.points = [pos, pos, pos]
+            self._field_placement = self._get_placement()
+        elif state == ToolState.DRAG_XY:
+            self.points[1] = pos
+            self.points[2] = pos
+        elif state == ToolState.CUSTOM_1:
+            self.points[2] = pos
+
+    def _on_stage_preview(self, state, pos):
+        if state == ToolState.DRAG_XY and len(self.points) >= 2:
+            self.points[1] = pos
+            self.points[2] = pos
+        elif state == ToolState.CUSTOM_1 and len(self.points) >= 3:
+            self.points[2] = pos
+
+    # ── Field builders ────────────────────────────────────────────────────────
+
+    def _ring_and_tube(self):
+        """Return (ring_offset, tube_radius) in local units, or None."""
+        if len(self.points) < 2:
+            return None
+        loc_c = self.to_local(self.points[0])
+        loc_r = self.to_local(self.points[1])
+        ring_d = math.sqrt((loc_r.x - loc_c.x) ** 2 + (loc_r.y - loc_c.y) ** 2)
+
+        if len(self.points) >= 3 and self.points[1] != self.points[2]:
+            loc_t = self.to_local(self.points[2])
+            dt = math.sqrt((loc_t.x - loc_c.x) ** 2 + (loc_t.y - loc_c.y) ** 2)
+            tube_r = max(abs(dt - ring_d), 0.5)
+        else:
+            tube_r = max(ring_d * 0.15, 1.0)
+
+        return ring_d, tube_r
+
+    def _revolve_field(self):
+        result = self._ring_and_tube()
+        if result is None:
+            return None
+        ring_d, tube_r = result
+        if ring_d < 0.1 and tube_r < 0.1:
+            return None
+        profile = Sdf2dCircle(tube_r)
+        return SdfRevolutionField(profile, offset=ring_d, placement=self._get_placement())
+
+    def _get_preview_field(self):
+        result = self._ring_and_tube()
+        if result is None:
+            return None
+        ring_d, tube_r = result
+        if ring_d < 0.1 and tube_r < 0.1:
+            return None
+        profile = Sdf2dCircle(tube_r)
+        return SdfRevolutionField(profile, offset=ring_d, placement=self._get_placement())
+
+    def _get_edit_preview_field(self):
+        return self._revolve_field()
+
+    def _get_final_field(self):
+        return self._revolve_field()
+
+    def _get_final_points(self):
+        if not self.points:
+            return None
+        return [self.to_local(p) for p in self.points]
+
+    def get_parameters(self):
+        result = self._ring_and_tube()
+        if result is None:
+            return {}
+        ring_d, tube_r = result
+        return {"Ring Offset": ring_d, "Tube Radius": tube_r}
+
+    def set_parameters(self, params):
+        if len(self.points) < 3:
+            return
+        offset = params.get("Ring Offset", 10.0)
+        tube_r = params.get("Tube Radius", 2.0)
+        loc_c = self.to_local(self.points[0])
+        self.points[1] = self.to_global(loc_c + FreeCAD.Vector(offset, 0, 0))
+        self.points[2] = self.to_global(loc_c + FreeCAD.Vector(offset + tube_r, 0, 0))
+        self._update_handle_positions(self.points)
+        if hasattr(self, "panel") and self.panel:
+            self.panel.update_ui()
+        self.update_preview()
         if self.view:
             self.view.redraw()

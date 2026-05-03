@@ -1,6 +1,5 @@
 import FreeCAD
 import FreeCADGui
-from core import dm_logger
 
 class CommandDMCreation:
     _ICONS = {
@@ -8,6 +7,16 @@ class CommandDMCreation:
         "Sphere": "CreateSphere",
         "Cylinder": "CreateCylinder",
         "Torus": "CreateTorus",
+        "Prism": "Part_Prism",
+        "Revolve": "Part_Revolution",
+    }
+    _CREATORS = {
+        "Box": "BoxCreator",
+        "Sphere": "SphereCreator",
+        "Cylinder": "CylinderCreator",
+        "Torus": "TorusCreator",
+        "Prism": "PrismCreator",
+        "Revolve": "RevolveCreator",
     }
 
     def __init__(self, c_type="Box"):
@@ -24,41 +33,37 @@ class CommandDMCreation:
         return FreeCAD.activeDocument() is not None
 
     def Activated(self):
-        # We want to wait to import the tool to avoid circular dependencies
-        from tools.primitive_tool import BoxCreator, SphereCreator, CylinderCreator, TorusCreator
+        from tools.primitive_tool import (
+            BoxCreator, SphereCreator, CylinderCreator, TorusCreator,
+            PrismCreator, RevolveCreator,
+        )
         from core.input_manager import DMInputManager
 
-        manager = DMInputManager.get_instance()
+        DMInputManager.get_instance()
 
-        if self.c_type == "Box":
-            self.tool = BoxCreator()
-        elif self.c_type == "Sphere":
-            self.tool = SphereCreator()
-        elif self.c_type == "Cylinder":
-            self.tool = CylinderCreator()
-        elif self.c_type == "Torus":
-            self.tool = TorusCreator()
-        else:
-            return
+        creators = {
+            "Box": BoxCreator,
+            "Sphere": SphereCreator,
+            "Cylinder": CylinderCreator,
+            "Torus": TorusCreator,
+            "Prism": PrismCreator,
+            "Revolve": RevolveCreator,
+        }
+        cls = creators.get(self.c_type)
+        if cls:
+            self.tool = cls()
 
     def getIsChecked(self):
         from core.dm_tool_manager import DMToolManager
         active_tool = DMToolManager.get_instance().get_active_tool()
         if not active_tool:
             return False
-        
-        tool_name = active_tool.__class__.__name__
-        if self.c_type == "Box":
-            return tool_name == "BoxCreator"
-        if self.c_type == "Sphere":
-            return tool_name == "SphereCreator"
-        if self.c_type == "Cylinder":
-            return tool_name == "CylinderCreator"
-        if self.c_type == "Torus":
-            return tool_name == "TorusCreator"
-        return False
+        expected = self._CREATORS.get(self.c_type)
+        return type(active_tool).__name__ == expected if expected else False
 
 FreeCADGui.addCommand('DM_CreateBox', CommandDMCreation("Box"))
 FreeCADGui.addCommand('DM_CreateSphere', CommandDMCreation("Sphere"))
 FreeCADGui.addCommand('DM_CreateCylinder', CommandDMCreation("Cylinder"))
 FreeCADGui.addCommand('DM_CreateTorus', CommandDMCreation("Torus"))
+FreeCADGui.addCommand('DM_CreatePrism', CommandDMCreation("Prism"))
+FreeCADGui.addCommand('DM_CreateRevolve', CommandDMCreation("Revolve"))
