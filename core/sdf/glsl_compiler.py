@@ -137,8 +137,12 @@ def build_compute_shader(expression, ctx):
 
     # Merge static helpers with any inline-generated helpers (e.g. per-polygon)
     all_helper_bodies = {**GLSL_HELPERS, **ctx._custom_helpers}
+    # Static helpers in any order; custom helpers in insertion order (topological —
+    # child helpers like sdf_poly64_xxx are added before parents that call them).
+    static_needed = sorted(h for h in ctx.helpers if h in GLSL_HELPERS)
+    custom_in_order = [h for h in ctx._custom_helpers if h in ctx.helpers]
     helper_defs = "\n".join(
-        all_helper_bodies[h] for h in sorted(ctx.helpers) if h in all_helper_bodies
+        all_helper_bodies[h] for h in (static_needed + custom_in_order) if h in all_helper_bodies
     )
 
     return f"""#version 430
@@ -194,8 +198,11 @@ def build_multi_raymarch_fragment_shader(fields_data):
     )
 
     all_helper_bodies = {**GLSL_HELPERS, **all_custom_helpers}
+    # Static helpers in any order; custom helpers in insertion order (topological).
+    static_needed = sorted(h for h in all_helpers if h in GLSL_HELPERS)
+    custom_in_order = [h for h in all_custom_helpers if h in all_helpers]
     helper_defs = "\n".join(
-        all_helper_bodies[h] for h in sorted(all_helpers) if h in all_helper_bodies
+        all_helper_bodies[h] for h in (static_needed + custom_in_order) if h in all_helper_bodies
     )
     
     # Generate per-field eval functions

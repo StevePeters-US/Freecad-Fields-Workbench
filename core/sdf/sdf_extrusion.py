@@ -1,4 +1,3 @@
-import uuid
 import numpy as np
 import FreeCAD
 from .sdf_field import SdfField
@@ -58,7 +57,7 @@ class SdfExtrusionField(SdfField):
         return (inner + outer).astype(np.float32)
 
     def to_glsl(self, ctx, point_var: str = "p") -> str:
-        uid = uuid.uuid4().hex[:8]
+        uid = f"{id(self) & 0xFFFFFFFF:08x}"
         func_name = f"sdf_extrude_{uid}"
 
         half_h = ctx.uniform("float", self.height * 0.5)
@@ -88,26 +87,27 @@ class SdfExtrusionField(SdfField):
         return f"{func_name}({point_var})"
 
     def bounding_box(self):
-        # Derive XY bounds from a grid sample of the profile (fallback: ±large)
         half_h = self.height * 0.5
-        try:
-            r = _profile_radial_extent(self.profile)
-        except Exception:
-            r = 1000.0
-        corners_local = [
-            FreeCAD.Vector(-r, -r, -half_h), FreeCAD.Vector(r, r, half_h)
+        if hasattr(self.profile, 'bbox_2d'):
+            minx, miny, maxx, maxy = self.profile.bbox_2d()
+        else:
+            try:
+                r = _profile_radial_extent(self.profile)
+            except Exception:
+                r = 1000.0
+            minx, miny, maxx, maxy = -r, -r, r, r
+
+        all_corners = [
+            FreeCAD.Vector(x, y, z)
+            for x in (minx, maxx) for y in (miny, maxy) for z in (-half_h, half_h)
         ]
         if self.placement is not None:
-            all_corners = [
-                FreeCAD.Vector(sx * r, sy * r, sz * half_h)
-                for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)
-            ]
             world = [self.placement.multVec(c) for c in all_corners]
             return (
                 FreeCAD.Vector(min(p.x for p in world), min(p.y for p in world), min(p.z for p in world)),
                 FreeCAD.Vector(max(p.x for p in world), max(p.y for p in world), max(p.z for p in world)),
             )
-        return (FreeCAD.Vector(-r, -r, -half_h), FreeCAD.Vector(r, r, half_h))
+        return (FreeCAD.Vector(minx, miny, -half_h), FreeCAD.Vector(maxx, maxy, half_h))
 
 
 def _profile_radial_extent(profile: Sdf2dField, samples: int = 32, search_range: float = 2000.0) -> float:

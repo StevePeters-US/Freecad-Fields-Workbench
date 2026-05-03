@@ -27,7 +27,7 @@ from core.input_manager import DMInputManager
 
 class DragTimerMixin:
     """Consolidated QTimer-based polling for tool dragging."""
-    def _start_drag_timer(self, interval_ms=16):
+    def _start_drag_timer(self, interval_ms=33):
         self._stop_drag_timer()
         self._drag_timer = QtCore.QTimer()
         self._drag_timer.timeout.connect(self._drag_update)

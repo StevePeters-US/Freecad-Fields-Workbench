@@ -2243,3 +2243,128 @@ class RevolveCreator(PrimitiveCreatorBase):
         self.update_preview()
         if self.view:
             self.view.redraw()
+
+
+class CurveExtrudeCreator(PrimitiveCreatorBase):
+    """
+    Extrudes a selected closed curve into an SDF solid using exact cubic Bezier distance.
+    Uses obj.Placement directly as the extrusion direction (2D curves only).
+    """
+
+    CREATION_STEPS = [ToolState.DRAG_Z]
+
+    def get_command_id(self):
+        return "DM_ExtrudeCurve"
+
+    def __init__(self):
+        super().__init__()
+        self._curve_obj      = None
+        self._height         = 5.0   # full extrusion height in mm
+        self._bezier_segs    = None
+        # GLSL-stable field cache: id() must stay constant to avoid shader recompiles
+        self._cached_profile = None   # Sdf2dBezierCurve
+        self._cached_extrude = None   # SdfExtrusionField
+
+        import FreeCADGui
+        for obj in FreeCADGui.Selection.getSelection():
+            if getattr(obj, "ShapeType", None) == "curve" and getattr(obj, "Closed", False):
+                self._curve_obj = obj
+                break
+
+        if self._curve_obj is not None:
+            from core.sdf.curve_sampler import extract_bezier_segments_2d
+            self._bezier_segs               = extract_bezier_segments_2d(self._curve_obj)
+            self.working_plane              = self._curve_obj.Placement
+            self._working_plane_is_fallback = False
+            self._anchor_pt                 = self._curve_obj.Placement.Base
+
+    # Prevent _detect_selected_workplane from overriding the curve's placement
+    def _detect_selected_workplane(self):
+        pass
+
+    def _clamp_height(self, h):
+        return max(0.1, h)
+
+    def _on_stage_accept(self, state, pos):
+        if state == ToolState.DRAG_Z and pos and self._anchor_pt:
+            wp   = self.working_plane
+            norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
+            self._height = self._clamp_height((pos - self._anchor_pt).dot(norm))
+
+    def _on_stage_preview(self, state, pos):
+        if state == ToolState.DRAG_Z and pos and self._anchor_pt:
+            wp   = self.working_plane
+            norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
+            self._height = self._clamp_height((pos - self._anchor_pt).dot(norm))
+
+    def _offset_placement(self):
+        """Working plane shifted height/2 along its normal — centers the ±height/2 extrusion."""
+        wp   = self.working_plane
+        norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
+        return FreeCAD.Placement(wp.Base + norm * (self._height * 0.5), wp.Rotation)
+
+    def _update_field_inplace(self, field):
+        """Sync height and placement on an existing SdfExtrusionField without changing id()."""
+        import numpy as np
+        field.height = self._height
+        op = self._offset_placement()
+        field.placement = op
+        m = op.toMatrix()
+        m.invert()
+        field.inv_matrix = np.array([
+            [m.A11, m.A12, m.A13, m.A14],
+            [m.A21, m.A22, m.A23, m.A24],
+            [m.A31, m.A32, m.A33, m.A34],
+            [m.A41, m.A42, m.A43, m.A44],
+        ], dtype=np.float32)
+
+    def _extrude_field(self):
+        if not self._bezier_segs or self._height < 0.01:
+            return None
+        from core.sdf.sdf2d.bezier_curve import Sdf2dBezierCurve
+        from core.sdf.sdf_extrusion import SdfExtrusionField
+
+        if self._cached_profile is None:
+            self._cached_profile = Sdf2dBezierCurve(self._bezier_segs)
+
+        if self._cached_extrude is None:
+            self._cached_extrude = SdfExtrusionField(
+                self._cached_profile,
+                height=self._height,
+                placement=self._offset_placement(),
+            )
+        else:
+            # Update height + placement in-place: id() stays constant → GLSL unchanged → no recompile
+            self._update_field_inplace(self._cached_extrude)
+
+        return self._cached_extrude
+
+    def _get_preview_field(self):       return self._extrude_field()
+    def _get_edit_preview_field(self):  return self._extrude_field()
+    def _get_final_field(self):         return self._extrude_field()
+
+    def _get_final_points(self):
+        return [FreeCAD.Vector(0.0, 0.0, self._height)] if self._curve_obj else None
+
+    def get_parameters(self):
+        return {"Height": self._height}
+
+    def set_parameters(self, params):
+        self._height = self._clamp_height(params.get("Height", 10.0))
+        if self._cached_extrude is not None:
+            self._update_field_inplace(self._cached_extrude)
+        self.update_preview()
+
+    def _primitive_name(self):
+        return "CurveExtrude"
+
+    def finish(self):
+        """One-shot tool: commit then terminate (prevents a second object being created)."""
+        if getattr(self, "_is_editing", False):
+            super().finish()   # commits edits, resets to DRAG_Z
+            self._finished = True
+            self.terminate()
+        elif self.is_in_progress():
+            self._finalize_object(self._primitive_name(), terminate=True)
+        else:
+            self.terminate()

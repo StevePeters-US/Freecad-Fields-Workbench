@@ -1,5 +1,4 @@
 import math
-import uuid
 import numpy as np
 from .sdf2d_field import Sdf2dField
 
@@ -72,10 +71,15 @@ class Sdf2dPolygon(Sdf2dField):
 
         return (s * np.sqrt(d2)).astype(np.float32)
 
+    def bbox_2d(self):
+        xs = [v[0] for v in self.vertices]
+        ys = [v[1] for v in self.vertices]
+        return min(xs), min(ys), max(xs), max(ys)
+
     def to_glsl_2d(self, ctx, pvar: str = "q") -> str:
         # Generate a unique inline GLSL helper with vertices baked in as constants.
         n = len(self.vertices)
-        uid = uuid.uuid4().hex[:8]
+        uid = f"{id(self) & 0xFFFFFFFF:08x}"
         func_name = f"sdf_poly{n}_{uid}"
 
         lines = [f"float {func_name}(vec2 p) {{"]

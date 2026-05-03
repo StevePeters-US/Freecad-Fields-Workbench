@@ -62,8 +62,10 @@ class DirectModelingWorkbench(Workbench):
             import commands.cmd_fill_curve
             import commands.cmd_edit
             import commands.cmd_primitive
+            import commands.cmd_curve_sdf
             import commands.cmd_sdf_export
             import commands.cmd_sdf_slice
+            import commands.cmd_noise
             
             # Import core modules
             import core as FCDirectModeling
@@ -82,12 +84,14 @@ class DirectModelingWorkbench(Workbench):
                 'DM_CreateCylinder',
                 'DM_CreateTorus',
                 'DM_FillCurve',
+                'DM_ExtrudeCurve',
             ])
             self.appendToolbar("DM - Operations", [
                 'DM_Translate',
                 'DM_Add',
                 'DM_Subtract',
                 'DM_Intersection',
+                'DM_CreateNoiseModifier',
                 'DM_SDFSlice',
                 'DM_SDFToShape',
                 'DM_OpenSketcher',
@@ -104,11 +108,13 @@ class DirectModelingWorkbench(Workbench):
                 'DM_CreateCylinder',
                 'DM_CreateTorus',
                 'DM_FillCurve',
+                'DM_ExtrudeCurve',
                 'Separator',
                 'DM_Translate',
                 'DM_Add',
                 'DM_Subtract',
                 'DM_Intersection',
+                'DM_CreateNoiseModifier',
                 'DM_SDFSlice',
                 'DM_SDFToShape',
                 'DM_OpenSketcher',

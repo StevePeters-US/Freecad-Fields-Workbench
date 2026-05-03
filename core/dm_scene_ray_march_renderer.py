@@ -320,6 +320,7 @@ class DMSceneRayMarchRenderer:
         self._noise_tex_id = 0        # GL texture id: 4x4 random rotation vectors
         self._ssao_kernel_flat = []   # 192 floats: 64 hemisphere samples (x,y,z each)
         self._vp_size    = (0, 0)     # Last known viewport (w, h) for resize detection
+        self._last_render_t = 0.0     # Timestamp of last completed render pass
 
         # GPU compute state
         self._gpu_supported = None  # None = not yet checked, True/False after check
@@ -1032,7 +1033,9 @@ class DMSceneRayMarchRenderer:
                 dm_logger.debug(f"SceneRayMarch: _init_gl_programs failed: {e}")
                 return
 
+        _had_pending = False
         if getattr(self, "_pending_frag_gbuf_source", None):
+            _had_pending = True
             try:
                 self._prog_gbuf.compile(_VERT_PASSTHROUGH, self._pending_frag_gbuf_source)
                 self._active_frag_gbuf_uniforms = self._pending_frag_gbuf_uniforms
@@ -1048,9 +1051,17 @@ class DMSceneRayMarchRenderer:
                 from PySide import QtCore as _QC
                 _QC.QTimer.singleShot(0, self._rebuild)
         elif getattr(self, "_pending_restore_default_gbuf", False):
+            _had_pending = True
             self._prog_gbuf.compile(_VERT_PASSTHROUGH, _FRAG_GBUF)
             self._active_is_analytical = False
             self._pending_restore_default_gbuf = False
+
+        # Render framerate cap: skip the expensive 4-pass render if a frame was
+        # just drawn. Always render immediately after a shader compile/restore.
+        _now = time.perf_counter()
+        if not _had_pending and (_now - self._last_render_t) < (1.0 / 30.0):
+            return
+        self._last_render_t = _now
 
         glGetIntegerv = _loader.get("glGetIntegerv",
             [ctypes.c_uint, ctypes.POINTER(ctypes.c_int)], None)
@@ -1216,14 +1227,29 @@ class DMSceneRayMarchRenderer:
         if all_analytical and analytical_data:
             from core.sdf.glsl_compiler import build_multi_raymarch_fragment_shader
             source = build_multi_raymarch_fragment_shader(analytical_data)
-            self._pending_frag_gbuf_source = source
             all_uniforms = []
             for d in analytical_data:
                 all_uniforms.extend(d["ctx"].uniforms)
+
+            # Only recompile the fragment shader when the source structure changes.
+            # Uniform VALUES (e.g. placement matrices) change every frame during drag
+            # but the source text stays the same when field object identity is stable
+            # (stable id() names in to_glsl).  Skipping recompile here is the key
+            # performance fix for interactive rotation.
+            if source != getattr(self, "_last_analytical_source", None):
+                self._pending_frag_gbuf_source = source
+                self._last_analytical_source = source
+
+            # Always refresh uniform values so rotation / translation are reflected
             self._pending_frag_gbuf_uniforms = all_uniforms
+            if getattr(self, "_active_is_analytical", False):
+                # Shader already loaded — push new uniform values directly so the
+                # next draw call picks them up without waiting for _pending_ processing
+                self._active_frag_gbuf_uniforms = all_uniforms
+
             self._active_uniforms = {"n_fields": len(analytical_data)}
             self._dirty_fields.clear()
-            
+
             # Compute combined bbox so Coin3D doesn't cull the quad
             all_mn = [d["bbox_min"] for d in analytical_data]
             all_mx = [d["bbox_max"] for d in analytical_data]
@@ -1239,7 +1265,7 @@ class DMSceneRayMarchRenderer:
             ]
             self._bbox_coords.point.setValues(0, 8, pts)
             self._coords.point.setValues(0, 8, pts)
-            
+
             self._switch.whichChild = 0
             return
         elif getattr(self, "_active_is_analytical", False):
