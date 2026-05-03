@@ -20,6 +20,44 @@ class SdfField:
         """Returns (min_corner: Vector, max_corner: Vector)."""
         raise NotImplementedError("Subclasses must implement bounding_box()")
 
+    def to_vdb(self, voxel_size=0.5, half_width=3.0):
+        """Convert this SDF to an OpenVDB FloatGrid (sparse level set).
+
+        Args:
+            voxel_size:  Grid spacing in mm.
+            half_width:  Narrow band width in voxels (default 3.0).
+
+        Returns:
+            openvdb.FloatGrid with gridClass=LEVEL_SET.
+
+        Raises:
+            ImportError if pyopenvdb is not installed.
+        """
+        import openvdb
+        mn, mx = self.bounding_box()
+        pad = half_width * voxel_size
+        xs = np.arange(mn.x - pad, mx.x + pad + voxel_size, voxel_size)
+        ys = np.arange(mn.y - pad, mx.y + pad + voxel_size, voxel_size)
+        zs = np.arange(mn.z - pad, mx.z + pad + voxel_size, voxel_size)
+        X, Y, Z = np.meshgrid(xs, ys, zs, indexing='ij')
+        pts = np.column_stack([X.ravel(), Y.ravel(), Z.ravel()]).astype(np.float32)
+
+        vals = self.evaluate_grid(pts).astype(np.float32)
+        vol = vals.reshape(len(xs), len(ys), len(zs))
+
+        grid = openvdb.FloatGrid()
+        grid.copyFromArray(vol)
+        grid.transform = openvdb.createLinearTransform(voxel_size)
+        grid.transform = grid.transform.deepCopy()
+        grid.transform.translate((mn.x - pad, mn.y - pad, mn.z - pad))
+        grid.gridClass = openvdb.GridClass.LEVEL_SET
+        grid.name = type(self).__name__
+
+        background = half_width * voxel_size
+        grid.background = background
+        grid.prune(tolerance=0.0)
+        return grid
+
     def sign_at(self, point: FreeCAD.Vector, tol: float = 1e-5) -> int:
         """Returns -1 (inside), 0 (surface), or +1 (outside)."""
         v = self.evaluate(point)

@@ -1312,6 +1312,59 @@ def deduplicate_verts(flat_verts, flat_idx, tol=1e-5):
     return unique_verts.astype(np.float32), new_idx.astype(np.int32)
 
 
+class VDBMesher(DMMesher):
+    """Mesher using OpenVDB's volumeToMesh. Requires pyopenvdb."""
+
+    def mesh(self, field: SdfField, cell_size: float, decimate=False,
+             deduplicate=True, adaptivity=0.0, **kwargs) -> tuple:
+        from core.sdf.sdf_baker import has_openvdb
+        if not has_openvdb():
+            dm_logger.debug("VDBMesher: pyopenvdb not available, falling back to MarchingCubesMesher")
+            return MarchingCubesMesher().mesh(field, cell_size, decimate=decimate,
+                                              deduplicate=deduplicate, **kwargs)
+
+        import openvdb
+        mesh_timer.tick()
+
+        mesh_timer.start("field_eval")
+        grid = field.to_vdb(voxel_size=cell_size)
+        mesh_timer.stop("field_eval")
+
+        mesh_timer.start("mesh_build")
+        points, quads = openvdb.tools.volumeToMesh(grid, isovalue=0.0,
+                                                    adaptivity=adaptivity)
+
+        # volumeToMesh returns quads (Mx4). Triangulate: each quad → 2 triangles.
+        tris = []
+        for q in quads:
+            tris.append([q[0], q[1], q[2]])
+            tris.append([q[0], q[2], q[3]])
+
+        if not tris:
+            mesh_timer.stop("mesh_build")
+            return None
+
+        tri_arr = np.array(tris, dtype=np.int32)
+        flat_verts = np.array(points, dtype=np.float32)  # (V, 3)
+
+        # Expand indexed triangles to flat per-triangle vertices for Coin3D
+        tri_verts = flat_verts[tri_arr.ravel()].reshape(-1, 3)
+
+        n_tris = len(tri_arr)
+        base = np.arange(n_tris, dtype=np.int32) * 3
+        tri_idx = np.stack([base, base + 1, base + 2], axis=1)
+        sentinel = np.full((n_tris, 1), -1, dtype=np.int32)
+        flat_idx = np.hstack([tri_idx, sentinel]).ravel()
+        mesh_timer.stop("mesh_build")
+
+        if deduplicate:
+            mesh_timer.start("deduplicate")
+            tri_verts, flat_idx = deduplicate_verts(tri_verts, flat_idx)
+            mesh_timer.stop("deduplicate")
+
+        return tri_verts, flat_idx
+
+
 
 def get_active_mesher(type_override=None) -> DMMesher:
     """Return the active mesher based on type override, defaulting to Marching Cubes (0).
@@ -1321,7 +1374,7 @@ def get_active_mesher(type_override=None) -> DMMesher:
     st = type_override if type_override is not None else 0
     
     # Map index or label to worker class
-    # Order: 0: MC, 1: AMC, 2: SN, 3: DC
+    # Order: 0: MC, 1: AMC, 2: SN, 3: DC, 4: VDB
     mesher = MarchingCubesMesher()
     label = str(st)
     
@@ -1331,6 +1384,7 @@ def get_active_mesher(type_override=None) -> DMMesher:
         mesher = SurfaceNetsMesher()
     elif st == 3 or "Dual Contouring" in label:
         mesher = DualContouringMesher()
+    elif st == 4 or "VDB Mesher" in label:
+        mesher = VDBMesher()
     
-    # dm_logger.debug(f"DirectModeling: Using mesher {mesher.__class__.__name__} (selection: {st})")
     return mesher

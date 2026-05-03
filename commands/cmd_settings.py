@@ -128,6 +128,17 @@ class _SettingsDialog(QtGui.QDialog):
         layout.addRow("Near Clip Distance (mm):", self._near_clip_spin)
         layout.addRow("Ray March Resolution (mm):", self._rm_res_spin)
 
+        # VDB Support
+        from core.sdf.sdf_baker import has_openvdb
+        vdb_status = "Installed" if has_openvdb() else "Not Installed"
+        self._vdb_status_label = QtGui.QLabel(vdb_status)
+        layout.addRow("OpenVDB Status:", self._vdb_status_label)
+
+        if not has_openvdb():
+            self._install_vdb_btn = QtGui.QPushButton("Install pyopenvdb via pip")
+            self._install_vdb_btn.clicked.connect(self._on_install_vdb)
+            layout.addRow("", self._install_vdb_btn)
+
         # Buttons
         btn_box = QtGui.QDialogButtonBox(
             QtGui.QDialogButtonBox.Ok | QtGui.QDialogButtonBox.Cancel
@@ -174,6 +185,43 @@ class _SettingsDialog(QtGui.QDialog):
 
         dm_logger.info(f"DM Settings: wire={wire}, lw={lw}, ps={ps}, pr={pr}, mb={mb}")
         self.accept()
+
+    def _on_install_vdb(self):
+        """Try to install pyopenvdb via pip."""
+        import subprocess
+        import sys
+        
+        reply = QtGui.QMessageBox.question(
+            self, "Install OpenVDB",
+            "This will attempt to run 'pip install pyopenvdb'.\n\n"
+            "This may take a few minutes. Continue?",
+            QtGui.QMessageBox.Yes | QtGui.QMessageBox.No
+        )
+        if reply == QtGui.QMessageBox.No:
+            return
+
+        QtGui.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            # We use -m pip to ensure it uses the pip associated with this python executable
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "pyopenvdb"])
+            QtGui.QMessageBox.information(
+                self, "Success",
+                "pyopenvdb installed successfully.\nPlease restart FreeCAD to enable VDB support."
+            )
+            # Update status
+            self._vdb_status_label.setText("Installed (Restart required)")
+            if hasattr(self, "_install_vdb_btn"):
+                self._install_vdb_btn.setEnabled(False)
+        except Exception as e:
+            dm_logger.error(f"VDB Installation failed: {e}")
+            QtGui.QMessageBox.critical(
+                self, "Installation Failed",
+                f"Failed to install pyopenvdb:\n\n{e}\n\n"
+                "You may need to run FreeCAD with administrator/root privileges or "
+                "manually install pyopenvdb."
+            )
+        finally:
+            QtGui.QApplication.restoreOverrideCursor()
 
 
 FreeCADGui.addCommand('DM_Settings', CommandDMSettings())

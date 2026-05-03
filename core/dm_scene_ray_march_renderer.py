@@ -1332,9 +1332,14 @@ class DMSceneRayMarchRenderer:
                     self._baked_cache[label] = params
                     _n_baked += 1
                 else:
-                    # CPU fallback bake
-                    from core.sdf.sdf_baker import bake_sdf_to_volume
-                    baked = bake_sdf_to_volume(f, cs, bbox_override=bbox_override)
+                    # CPU bake: prefer VDB sparse path, fall back to dense numpy
+                    from core.sdf.sdf_baker import has_openvdb
+                    if has_openvdb():
+                        from core.sdf.sdf_baker import bake_sdf_vdb
+                        baked = bake_sdf_vdb(f, cs, bbox_override=bbox_override)
+                    else:
+                        from core.sdf.sdf_baker import bake_sdf_to_volume
+                        baked = bake_sdf_to_volume(f, cs, bbox_override=bbox_override)
                     baked["cell_size"] = cs
                     baked["gpu"] = False
                     self._baked_cache[label] = baked

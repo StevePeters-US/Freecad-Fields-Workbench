@@ -18,6 +18,7 @@ After all tasks are complete:
 - Boolean operations use VDB CSG (sharp) and keep formula-based smooth booleans as an option
 - `DMObjectProxy` caches VDB grids to avoid redundant baking
 - A new `VDBMesher` class wraps `volumeToMesh` for the export tool
+- A new "Install OpenVDB" button in DM Settings for easy setup
 
 ### Key APIs
 
@@ -37,6 +38,18 @@ After all tasks are complete:
 | `_recompose_boolean()` | `commands/cmd_boolean.py:244` | Recompose boolean tree on recompute |
 | `DMMesher` | `core/dm_mesher.py:91` | Abstract mesher base class |
 | `cmd_sdf_export.py` | `commands/cmd_sdf_export.py` | Export SDF to mesh/shape |
+
+---
+
+## Tier 0 — VDB Installation (New)
+
+Provides a user-facing way to install the optional dependency.
+
+### VDB-000: Add "Install OpenVDB" button to Settings
+
+**File:** `commands/cmd_settings.py`
+
+**What:** Add a status label and an installation button to the `_SettingsDialog`.
 
 ---
 

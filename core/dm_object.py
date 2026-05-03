@@ -143,6 +143,9 @@ class DMObjectProxy:
         
         if placement:
             obj.Placement = placement
+
+        self._vdb_cache = None
+        self._vdb_cache_voxel_size = None
         
         # Add typed properties for parametric editing
         params = params or {}
@@ -306,6 +309,7 @@ class DMObjectProxy:
     def execute(self, fp):
         """Called by FreeCAD to recompute the object."""
         try:
+            self.invalidate_vdb_cache()
             from . import dm_logger
 
             st = fp.ShapeType if hasattr(fp, "ShapeType") else "nurbs"
@@ -389,6 +393,24 @@ class DMObjectProxy:
             from . import dm_logger
             dm_logger.debug(f"Primitive field reconstruction failed for {fp.Label}: {e}")
         return None
+
+    def get_vdb_grid(self, voxel_size=0.5):
+        """Return a cached VDB grid for the SdfField at the given voxel_size."""
+        field = getattr(self, "SdfField", None)
+        if field is None:
+            return None
+        if self._vdb_cache is None or self._vdb_cache_voxel_size != voxel_size:
+            try:
+                self._vdb_cache = field.to_vdb(voxel_size)
+                self._vdb_cache_voxel_size = voxel_size
+            except (ImportError, NotImplementedError):
+                return None
+        return self._vdb_cache
+
+    def invalidate_vdb_cache(self):
+        """Clear cached VDB grid (call when SdfField parameters change)."""
+        self._vdb_cache = None
+        self._vdb_cache_voxel_size = None
 
     def __setstate__(self, state):
         from . import dm_logger

@@ -60,6 +60,13 @@ class UnionField(ComposerField):
         # Bounding box of a union is the spatial union of both boxes
         return _bbox_union(self.a.bounding_box(), self.b.bounding_box())
 
+    def to_vdb(self, voxel_size=0.5, half_width=3.0):
+        import openvdb
+        a = self.a.to_vdb(voxel_size, half_width)
+        b = self.b.to_vdb(voxel_size, half_width)
+        openvdb.tools.csgUnion(a, b)
+        return a
+
 class IntersectionField(ComposerField):
     """Max(a, b)"""
     def to_glsl(self, ctx, point_var="p"):
@@ -77,6 +84,13 @@ class IntersectionField(ComposerField):
         # Bounding box of intersection is the spatial intersection of both boxes
         return _bbox_intersection(self.a.bounding_box(), self.b.bounding_box())
 
+    def to_vdb(self, voxel_size=0.5, half_width=3.0):
+        import openvdb
+        a = self.a.to_vdb(voxel_size, half_width)
+        b = self.b.to_vdb(voxel_size, half_width)
+        openvdb.tools.csgIntersection(a, b)
+        return a
+
 class SubtractionField(ComposerField):
     """Max(a, -b). A - B"""
     def to_glsl(self, ctx, point_var="p"):
@@ -93,6 +107,13 @@ class SubtractionField(ComposerField):
     def bounding_box(self):
         # Subtracting B doesn't extend A's bounding box. We just keep A's bounds.
         return self.a.bounding_box()
+
+    def to_vdb(self, voxel_size=0.5, half_width=3.0):
+        import openvdb
+        a = self.a.to_vdb(voxel_size, half_width)
+        b = self.b.to_vdb(voxel_size, half_width)
+        openvdb.tools.csgDifference(a, b)
+        return a
 
 
 class SmoothUnionField(ComposerField):
@@ -116,6 +137,9 @@ class SmoothUnionField(ComposerField):
 
     def bounding_box(self):
         return _bbox_union(self.a.bounding_box(), self.b.bounding_box())
+
+    # to_vdb(): inherits base SdfField.to_vdb() which samples evaluate_grid().
+    # This preserves the smooth blend — no native VDB smooth CSG exists.
 
 
 class SmoothSubtractionField(ComposerField):
@@ -146,6 +170,8 @@ class SmoothSubtractionField(ComposerField):
     def bounding_box(self):
         return self.a.bounding_box()
 
+    # to_vdb(): inherits base SdfField.to_vdb() which samples evaluate_grid().
+
 
 class SmoothIntersectionField(ComposerField):
     """Smooth intersection of A and B with blend radius k (mm). = -smooth_union(-a, -b, k)"""
@@ -174,3 +200,5 @@ class SmoothIntersectionField(ComposerField):
 
     def bounding_box(self):
         return _bbox_intersection(self.a.bounding_box(), self.b.bounding_box())
+
+    # to_vdb(): inherits base SdfField.to_vdb() which samples evaluate_grid().
