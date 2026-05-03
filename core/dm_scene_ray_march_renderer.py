@@ -1056,13 +1056,6 @@ class DMSceneRayMarchRenderer:
             self._active_is_analytical = False
             self._pending_restore_default_gbuf = False
 
-        # Render framerate cap: skip the expensive 4-pass render if a frame was
-        # just drawn. Always render immediately after a shader compile/restore.
-        _now = time.perf_counter()
-        if not _had_pending and (_now - self._last_render_t) < (1.0 / 30.0):
-            return
-        self._last_render_t = _now
-
         glGetIntegerv = _loader.get("glGetIntegerv",
             [ctypes.c_uint, ctypes.POINTER(ctypes.c_int)], None)
         glGetFloatv   = _loader.get("glGetFloatv",
@@ -1089,11 +1082,13 @@ class DMSceneRayMarchRenderer:
         if w <= 0 or h <= 0:
             return
 
-        # Resize FBOs if viewport changed
+        # Resize FBOs if viewport changed — force a full expensive render on resize
+        _force_full = False
         if (w, h) != self._vp_size:
             try:
                 self._resize_fbos(w, h)
                 self._vp_size = (w, h)
+                _force_full = True
             except Exception as e:
                 dm_logger.debug(f"SceneRayMarch: _resize_fbos failed: {e}")
                 return
@@ -1102,58 +1097,67 @@ class DMSceneRayMarchRenderer:
         prev_fbo = (ctypes.c_int * 1)(0)
         glGetIntegerv(0x8CA6, prev_fbo)   # GL_FRAMEBUFFER_BINDING
 
-        # Read projection matrix (already set by Coin3D)
-        proj_data = (ctypes.c_float * 16)()
-        glGetFloatv(0x0BA7, proj_data)    # GL_PROJECTION_MATRIX
+        # Render framerate cap: skip passes 1-3 (expensive) but always run pass 4
+        # (composite) so the SDF overlay stays visible every Coin3D frame.
+        _now = time.perf_counter()
+        _run_expensive = _force_full or _had_pending or (_now - self._last_render_t) >= (1.0 / 30.0)
+        if _run_expensive:
+            self._last_render_t = _now
 
-        self._gbuf_fbo.bind()
-        glViewport(0, 0, w, h)
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        self._prog_gbuf.use()
+            # Read projection matrix (only needed for SSAO pass)
+            proj_data = (ctypes.c_float * 16)()
+            glGetFloatv(0x0BA7, proj_data)    # GL_PROJECTION_MATRIX
 
-        # Fixed key light: normalize(1.0, 1.667, 1.105) ≈ 45° elevation
-        self._prog_gbuf.set_3f("u_light_dir", 0.4472, 0.7454, 0.4943)
+            # ── Pass 1: G-buffer (ray march SDF) ──
+            self._gbuf_fbo.bind()
+            glViewport(0, 0, w, h)
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+            self._prog_gbuf.use()
 
-        if getattr(self, "_active_is_analytical", False):
-            self._prog_gbuf.set_uniforms_from_ctx(self._active_frag_gbuf_uniforms)
-        else:
-            glActiveTexture(0x84C0)   # GL_TEXTURE0
-            glBindTexture(GL_TEXTURE_3D, self._gl_tex.tex_id)
-            self._set_gbuf_uniforms(self._prog_gbuf)
+            # Fixed key light: normalize(1.0, 1.667, 1.105) ≈ 45° elevation
+            self._prog_gbuf.set_3f("u_light_dir", 0.4472, 0.7454, 0.4943)
 
-        self._prog_gbuf.draw_fullscreen_quad()
+            if getattr(self, "_active_is_analytical", False):
+                self._prog_gbuf.set_uniforms_from_ctx(self._active_frag_gbuf_uniforms)
+            else:
+                glActiveTexture(0x84C0)   # GL_TEXTURE0
+                glBindTexture(GL_TEXTURE_3D, self._gl_tex.tex_id)
+                self._set_gbuf_uniforms(self._prog_gbuf)
 
-        # ── Pass 2: SSAO ──
-        self._ssao_fbo.bind()
-        glViewport(0, 0, w, h)
-        glClear(GL_COLOR_BUFFER_BIT)
-        self._prog_ssao.use()
-        glActiveTexture(0x84C0)
-        glBindTexture(GL_TEXTURE_2D, self._gbuf_fbo.color_texture(1))  # vs_pos
-        self._prog_ssao.set_1i("u_pos", 0)
-        glActiveTexture(0x84C1)
-        glBindTexture(GL_TEXTURE_2D, self._gbuf_fbo.color_texture(2))  # vs_normal
-        self._prog_ssao.set_1i("u_normal", 1)
-        glActiveTexture(0x84C2)
-        glBindTexture(GL_TEXTURE_2D, self._noise_tex_id)
-        self._prog_ssao.set_1i("u_noise", 2)
-        self._prog_ssao.set_2f("u_noise_scale", w / 4.0, h / 4.0)
-        self._prog_ssao.set_3fv("u_samples", 64, self._ssao_kernel_flat)
-        self._prog_ssao.set_mat4("u_proj", list(proj_data))
-        self._prog_ssao.draw_fullscreen_quad()
+            self._prog_gbuf.draw_fullscreen_quad()
 
-        # ── Pass 3: Blur ──
-        self._blur_fbo.bind()
-        glViewport(0, 0, w, h)
-        glClear(GL_COLOR_BUFFER_BIT)
-        self._prog_blur.use()
-        glActiveTexture(0x84C0)
-        glBindTexture(GL_TEXTURE_2D, self._ssao_fbo.color_texture(0))
-        self._prog_blur.set_1i("u_ssao", 0)
-        self._prog_blur.set_2f("u_texel_size", 1.0 / w, 1.0 / h)
-        self._prog_blur.draw_fullscreen_quad()
+            # ── Pass 2: SSAO ──
+            self._ssao_fbo.bind()
+            glViewport(0, 0, w, h)
+            glClear(GL_COLOR_BUFFER_BIT)
+            self._prog_ssao.use()
+            glActiveTexture(0x84C0)
+            glBindTexture(GL_TEXTURE_2D, self._gbuf_fbo.color_texture(1))  # vs_pos
+            self._prog_ssao.set_1i("u_pos", 0)
+            glActiveTexture(0x84C1)
+            glBindTexture(GL_TEXTURE_2D, self._gbuf_fbo.color_texture(2))  # vs_normal
+            self._prog_ssao.set_1i("u_normal", 1)
+            glActiveTexture(0x84C2)
+            glBindTexture(GL_TEXTURE_2D, self._noise_tex_id)
+            self._prog_ssao.set_1i("u_noise", 2)
+            self._prog_ssao.set_2f("u_noise_scale", w / 4.0, h / 4.0)
+            self._prog_ssao.set_3fv("u_samples", 64, self._ssao_kernel_flat)
+            self._prog_ssao.set_mat4("u_proj", list(proj_data))
+            self._prog_ssao.draw_fullscreen_quad()
 
-        # ── Pass 4: Composition → restore main FBO ──
+            # ── Pass 3: Blur ──
+            self._blur_fbo.bind()
+            glViewport(0, 0, w, h)
+            glClear(GL_COLOR_BUFFER_BIT)
+            self._prog_blur.use()
+            glActiveTexture(0x84C0)
+            glBindTexture(GL_TEXTURE_2D, self._ssao_fbo.color_texture(0))
+            self._prog_blur.set_1i("u_ssao", 0)
+            self._prog_blur.set_2f("u_texel_size", 1.0 / w, 1.0 / h)
+            self._prog_blur.draw_fullscreen_quad()
+
+        # ── Pass 4: Composite cached FBO results → restore main FBO ──
+        # Runs every Coin3D frame (cheap) so the SDF overlay never disappears.
         glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo[0])
         glViewport(0, 0, w, h)
         self._prog_comp.use()

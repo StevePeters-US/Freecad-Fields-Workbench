@@ -132,6 +132,7 @@ Specialized implementation patterns are in `.agents/skills/`. Before implementin
 - `dm_opengl33_shader/` — GLSL 330, float32 packing, SoTexture3
 - `dm_rclick_repeat/` — single-RMB close pattern
 - `dm_openvdb_migration/` — VDB sparse tree patterns, `to_vdb()`, CSG, meshing, import guard
+- `dm_vdb_bake_backend/` — VDB bake patterns: to_vdb() contract, vdb_grid_to_dense(), import guard
 
 ## Known Bugs
 
@@ -144,4 +145,4 @@ Specialized implementation patterns are in `.agents/skills/`. Before implementin
 
 - `todo_inputrefactor.md` — R-001..R-012: input/tool architecture refactor
 - `todo_input.md` — current input system work
-- `todo_openvdb.md` — VDB-001..VDB-016: OpenVDB sparse tree migration (meshing, booleans, export)
+- `todo_vdb.md` — VDB-001..VDB-011: OpenVDB sparse tree migration (bake backend, booleans, caching)

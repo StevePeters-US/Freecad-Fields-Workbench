@@ -49,6 +49,7 @@
 | Implement CPU hit testing | `dm_sdf_hit_test/SKILL.md` |
 | Create/Edit primitive tool | `dm_primitive_tool/SKILL.md` |
 | Work with OpenVDB grids, meshing, export | `dm_openvdb_migration/SKILL.md` |
+| Implement VDB bake backend tasks | `dm_vdb_bake_backend/SKILL.md` |
 
 ## 4. Known Bugs
 

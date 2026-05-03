@@ -135,6 +135,9 @@ class NoiseTool(DMBase, DragTimerMixin):
         self._is_editing = False
         self.terminate()
 
+    def update_preview(self):
+        pass
+
     def _do_terminate(self):
         if self.points_root and self.view and self.view.getSceneGraph():
             self.view.getSceneGraph().removeChild(self.points_root)
