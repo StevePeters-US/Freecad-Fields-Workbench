@@ -1331,20 +1331,26 @@ class VDBMesher(DMMesher):
         mesh_timer.stop("field_eval")
 
         mesh_timer.start("mesh_build")
-        points, quads = openvdb.tools.volumeToMesh(grid, isovalue=0.0,
-                                                    adaptivity=adaptivity)
-
-        # volumeToMesh returns quads (Mx4). Triangulate: each quad → 2 triangles.
-        tris = []
-        for q in quads:
-            tris.append([q[0], q[1], q[2]])
-            tris.append([q[0], q[2], q[3]])
-
-        if not tris:
+        
+        # Safety check: prevent OOM/hang on massive grids
+        n_active = grid.activeVoxelCount()
+        if n_active > 10_000_000:
+            dm_logger.error(f"VDBMesher: Grid is too dense ({n_active} active voxels). Increase cell_size.")
             mesh_timer.stop("mesh_build")
             return None
 
-        tri_arr = np.array(tris, dtype=np.int32)
+        points, quads = openvdb.tools.volumeToMesh(grid, isovalue=0.0,
+                                                    adaptivity=adaptivity)
+
+        if not quads:
+            mesh_timer.stop("mesh_build")
+            return None
+
+        # Vectorized triangulation: Mx4 quads -> 2*Mx3 triangles
+        quad_arr = np.array(quads, dtype=np.int32)
+        tri1 = quad_arr[:, [0, 1, 2]]
+        tri2 = quad_arr[:, [0, 2, 3]]
+        tri_arr = np.vstack([tri1, tri2])
         flat_verts = np.array(points, dtype=np.float32)  # (V, 3)
 
         # Expand indexed triangles to flat per-triangle vertices for Coin3D

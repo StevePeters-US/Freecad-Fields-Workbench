@@ -120,7 +120,8 @@ class _ExportDialog(QtGui.QDialog):
             "Marching Cubes (Standard)",
             "Adaptive Marching Cubes",
             "Surface Nets",
-            "Dual Contouring"
+            "Dual Contouring",
+            "VDB Mesher (Requires OpenVDB)"
         ])
         layout.addRow("Algorithm:", self._type_combo)
         

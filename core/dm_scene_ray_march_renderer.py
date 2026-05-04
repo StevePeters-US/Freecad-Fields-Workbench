@@ -1337,6 +1337,12 @@ class DMSceneRayMarchRenderer:
                     if has_openvdb():
                         from core.sdf.sdf_baker import bake_sdf_vdb
                         baked = bake_sdf_vdb(f, cs, bbox_override=bbox_override)
+                        # Log once per session per object type? No, just debug log is fine.
+                        # Actually, bake_sdf_vdb already logs to Console if profiler is on.
+                        # I'll add a one-time info log here.
+                        if not hasattr(self, "_vdb_logged"):
+                            dm_logger.info("SceneRayMarch: Using OpenVDB sparse bake path.")
+                            self._vdb_logged = True
                     else:
                         from core.sdf.sdf_baker import bake_sdf_to_volume
                         baked = bake_sdf_to_volume(f, cs, bbox_override=bbox_override)

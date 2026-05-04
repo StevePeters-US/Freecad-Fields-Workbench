@@ -18,8 +18,12 @@ def has_openvdb():
         try:
             import openvdb
             _openvdb_available = True
-        except ImportError:
+            from core import dm_logger
+            dm_logger.info("OpenVDB backend initialized.")
+        except ImportError as e:
             _openvdb_available = False
+            from core import dm_logger
+            dm_logger.debug(f"OpenVDB backend unavailable: {e}")
     return _openvdb_available
 
 

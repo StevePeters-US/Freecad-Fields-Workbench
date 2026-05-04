@@ -37,10 +37,10 @@ class SdfNoiseField(SdfField):
         base_glsl = self.base_field.to_glsl(ctx, point_var)
         amp_u = ctx.uniform("float", self.amplitude)
         freq_u = ctx.uniform("float", self.frequency)
-        
-        ctx.need_helper("sine_noise", """
-float sine_noise(vec3 p, float freq, float amp) {
-    return sin(p.x * freq) * sin(p.y * freq) * sin(p.z * freq) * amp;
-}
-""")
+
+        ctx.add_custom_helper("sine_noise",
+            "float sine_noise(vec3 p, float freq, float amp) {\n"
+            "    return sin(p.x * freq) * sin(p.y * freq) * sin(p.z * freq) * amp;\n"
+            "}"
+        )
         return f"({base_glsl} + sine_noise({point_var}, {freq_u}, {amp_u}))"
