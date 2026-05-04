@@ -60,12 +60,7 @@ class UnionField(ComposerField):
         # Bounding box of a union is the spatial union of both boxes
         return _bbox_union(self.a.bounding_box(), self.b.bounding_box())
 
-    def to_vdb(self, voxel_size=0.5, half_width=3.0):
-        import openvdb
-        a = self.a.to_vdb(voxel_size, half_width)
-        b = self.b.to_vdb(voxel_size, half_width)
-        openvdb.tools.csgUnion(a, b)
-        return a
+
 
 class IntersectionField(ComposerField):
     """Max(a, b)"""
@@ -84,12 +79,7 @@ class IntersectionField(ComposerField):
         # Bounding box of intersection is the spatial intersection of both boxes
         return _bbox_intersection(self.a.bounding_box(), self.b.bounding_box())
 
-    def to_vdb(self, voxel_size=0.5, half_width=3.0):
-        import openvdb
-        a = self.a.to_vdb(voxel_size, half_width)
-        b = self.b.to_vdb(voxel_size, half_width)
-        openvdb.tools.csgIntersection(a, b)
-        return a
+
 
 class SubtractionField(ComposerField):
     """Max(a, -b). A - B"""
@@ -108,12 +98,7 @@ class SubtractionField(ComposerField):
         # Subtracting B doesn't extend A's bounding box. We just keep A's bounds.
         return self.a.bounding_box()
 
-    def to_vdb(self, voxel_size=0.5, half_width=3.0):
-        import openvdb
-        a = self.a.to_vdb(voxel_size, half_width)
-        b = self.b.to_vdb(voxel_size, half_width)
-        openvdb.tools.csgDifference(a, b)
-        return a
+
 
 
 class SmoothUnionField(ComposerField):

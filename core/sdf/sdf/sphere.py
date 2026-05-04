@@ -87,14 +87,5 @@ class SdfSphereField(SdfField):
             
         return (self.center - r_vec, self.center + r_vec)
         
-    def to_vdb(self, voxel_size=0.5, half_width=3.0):
-        import openvdb
-        center = self.center
-        if self.placement is not None:
-            center = self.placement.multVec(center)
-        return openvdb.tools.createLevelSetSphere(
-            radius=float(self.radius),
-            center=(float(center.x), float(center.y), float(center.z)),
-            voxelSize=float(voxel_size),
-            halfWidth=float(half_width),
-        )
+
+
