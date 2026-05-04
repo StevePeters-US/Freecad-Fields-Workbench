@@ -188,6 +188,41 @@ def extract_bezier_segments_2d(obj):
     return segs
 
 
+def extract_bezier_segments_in_placement(obj, placement):
+    """
+    Extract Bezier control points from obj (stored in obj.Placement local space),
+    convert to world space, then project into `placement`'s local XY.
+    Returns list of (p0, p1, p2, p3) tuples, each point (x, y).
+    """
+    pts   = list(getattr(obj, "Points",    []))
+    h_in  = list(getattr(obj, "HandleIn",  []))
+    h_out = list(getattr(obj, "HandleOut", []))
+    obj_pl = obj.Placement
+    inv    = placement.inverse()
+
+    def to_2d(p):
+        world = obj_pl.multVec(p)
+        local = inv.multVec(world)
+        return (local.x, local.y)
+
+    n = len(pts)
+    segs = []
+    for i in range(n):
+        j = (i + 1) % n
+        p0 = to_2d(pts[i])
+        p3 = to_2d(pts[j])
+        if i < len(h_out) and (h_out[i] - pts[i]).Length > 0.001:
+            p1 = to_2d(h_out[i])
+        else:
+            p1 = (p0[0] + (p3[0] - p0[0]) / 3.0, p0[1] + (p3[1] - p0[1]) / 3.0)
+        if j < len(h_in) and (h_in[j] - pts[j]).Length > 0.001:
+            p2 = to_2d(h_in[j])
+        else:
+            p2 = (p0[0] + 2.0 * (p3[0] - p0[0]) / 3.0, p0[1] + 2.0 * (p3[1] - p0[1]) / 3.0)
+        segs.append((p0, p1, p2, p3))
+    return segs
+
+
 def compute_inflection_limit(pts_3d, z_threshold=1.0):
     """
     Return the max valid extrusion half-height for a 3D closed curve, or None if planar.

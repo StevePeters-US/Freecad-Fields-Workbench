@@ -214,13 +214,14 @@ float sdf_eval_{i}(vec3 p) {{
 }}
 
 vec3 sdf_normal_{i}(vec3 p) {{
-    vec2 e = vec2(0.001, 0.0);
-    vec3 n = sdf_eval_{i}(p) - vec3(
-        sdf_eval_{i}(p - e.xyy),
-        sdf_eval_{i}(p - e.yxy),
-        sdf_eval_{i}(p - e.yyx)
-    );
-    return normalize(n);
+    float h = 1.0;
+    vec2 k = vec2(1.0, -1.0);
+    vec3 n = k.xyy * sdf_eval_{i}(p + k.xyy*h)
+           + k.yyx * sdf_eval_{i}(p + k.yyx*h)
+           + k.yxy * sdf_eval_{i}(p + k.yxy*h)
+           + k.xxx * sdf_eval_{i}(p + k.xxx*h);
+    float len2 = dot(n, n);
+    return (len2 > 1e-10) ? n * inversesqrt(len2) : vec3(0.0, 0.0, 1.0);
 }}
 """
 

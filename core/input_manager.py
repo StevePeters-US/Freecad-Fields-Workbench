@@ -54,8 +54,6 @@ class DMInputManager(QtCore.QObject):
             # We track these BEFORE any 'return False' to ensure drag/modifier state is always correct,
             # even if the mouse leaves the viewport or the press started on a decoration.
             if is_key_event:
-                key_text = event.text().upper() if hasattr(event, "text") else "None"
-                dm_logger.debug(f"DMInputManager: {event.type()} key={event.key()} text='{key_text}'")
                 if event.key() == QtCore.Qt.Key_Shift:
                     self._shift_down = (event.type() == QtCore.QEvent.KeyPress)
                 elif event.key() == QtCore.Qt.Key_Control:

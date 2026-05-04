@@ -2272,11 +2272,22 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
                 break
 
         if self._curve_obj is not None:
-            from core.sdf.curve_sampler import extract_bezier_segments_2d
-            self._bezier_segs               = extract_bezier_segments_2d(self._curve_obj)
-            self.working_plane              = self._curve_obj.Placement
+            from core.sdf.curve_sampler import (
+                sample_curve_world_pts, compute_best_fit_placement,
+                extract_bezier_segments_in_placement,
+            )
+            world_pts = sample_curve_world_pts(self._curve_obj, n_samples=64)
+            best_fit  = compute_best_fit_placement(
+                world_pts, fallback_placement=self._curve_obj.Placement
+            )
+            if best_fit is None:
+                best_fit = self._curve_obj.Placement
+            self.working_plane              = best_fit
             self._working_plane_is_fallback = False
-            self._anchor_pt                 = self._curve_obj.Placement.Base
+            self._anchor_pt                 = best_fit.Base
+            self._bezier_segs               = extract_bezier_segments_in_placement(
+                self._curve_obj, best_fit
+            )
 
     # Prevent _detect_selected_workplane from overriding the curve's placement
     def _detect_selected_workplane(self):

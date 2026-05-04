@@ -52,8 +52,8 @@ int sd_solve_cubic(float a, float b, float c, float d,
 _GLSL_CUBIC_BEZ_2D = """
 float sd_cubic_bez_2d(vec2 p, vec2 a, vec2 b, vec2 c, vec2 d) {
     float md = 1e18;
-    for (int i = 0; i <= 4; i++) {
-        float t = float(i) * 0.25;
+    for (int i = 0; i <= 8; i++) {
+        float t = float(i) * 0.125;
         for (int j = 0; j < 4; j++) {
             float s = 1.0 - t;
             vec2 B  = s*s*s*a + 3.0*s*s*t*b + 3.0*s*t*t*c + t*t*t*d;
@@ -149,10 +149,47 @@ class Sdf2dBezierCurve(Sdf2dField):
 
     def evaluate_2d_grid(self, pts: np.ndarray) -> np.ndarray:
         n = len(pts)
-        result = np.empty(n, dtype=np.float32)
-        for i in range(n):
-            result[i] = self.evaluate_2d(float(pts[i, 0]), float(pts[i, 1]))
-        return result
+        if n == 0 or not self.segments:
+            return np.full(n, np.inf, dtype=np.float32)
+
+        t = np.linspace(0.0, 1.0, 65, dtype=np.float32)
+        s = 1.0 - t
+
+        min_dist_sq = np.full(n, np.inf, dtype=np.float32)
+        winding     = np.zeros(n, dtype=np.int32)
+        px = pts[:, 0]
+        py = pts[:, 1]
+
+        for p0, p1, p2, p3 in self.segments:
+            a = np.array(p0, dtype=np.float32)
+            b = np.array(p1, dtype=np.float32)
+            c = np.array(p2, dtype=np.float32)
+            d = np.array(p3, dtype=np.float32)
+
+            # Sample segment: B shape (65, 2)
+            B = ((s**3)[:, None] * a + (3 * s**2 * t)[:, None] * b
+                 + (3 * s * t**2)[:, None] * c + (t**3)[:, None] * d)
+
+            # Min squared distance from each query point to any sample on this segment
+            diff    = pts[:, None, :] - B[None, :, :]   # (N, 65, 2)
+            seg_dsq = np.min(np.sum(diff ** 2, axis=-1), axis=-1)  # (N,)
+            np.minimum(min_dist_sq, seg_dsq, out=min_dist_sq)
+
+            # Winding number via polyline edges
+            bx, by = B[:, 0], B[:, 1]
+            x0, y0 = bx[:-1], by[:-1]   # (64,)
+            x1, y1 = bx[1:],  by[1:]
+
+            up   = (y0[None, :] <= py[:, None]) & (y1[None, :] >  py[:, None])  # (N,64)
+            down = (y1[None, :] <= py[:, None]) & (y0[None, :] >  py[:, None])
+            cross = ((x1 - x0)[None, :] * (py[:, None] - y0[None, :])
+                     - (y1 - y0)[None, :] * (px[:, None] - x0[None, :]))  # (N,64)
+
+            winding += np.sum(up   & (cross > 0), axis=1).astype(np.int32)
+            winding -= np.sum(down & (cross < 0), axis=1).astype(np.int32)
+
+        sign = np.where(winding != 0, -1.0, 1.0).astype(np.float32)
+        return sign * np.sqrt(min_dist_sq)
 
     def bbox_2d(self):
         xs, ys = [], []
