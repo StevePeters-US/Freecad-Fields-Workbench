@@ -16,7 +16,6 @@ import FreeCAD
 import FreeCADGui
 import pivy.coin as coin
 from core import dm_logger
-from core.gl_texture3d import GLTexture3D
 
 _VERT_PASSTHROUGH = """
 #version 330 compatibility
@@ -300,16 +299,12 @@ class DMSceneRayMarchRenderer:
     def __init__(self):
         self._fields = {}          # label -> (field, visible)
         self._attached = False
-        self._u = {}               # uniform nodes
-        self._gl_tex = GLTexture3D(fmt='r32f')
-        self._bbox_coords = None
-        self._cam_sensor    = None
-        self._zoom_timer    = None
-        self._baked_cache  = {}    # label → baked metadata dict
-        self._dirty_fields = set() # labels needing rebake on next _rebuild()
+
+        self._dirty_fields = set()    # labels with pending shader recompile
+        self._bbox_coords  = None
 
         # Multi-pass SSAO renderer state
-        self._active_uniforms = {}    # populated by _rebuild(), consumed by render callback
+        self._active_uniforms  = {}   # populated by _rebuild(), consumed by render callback
         self._prog_gbuf  = None       # GLProgram: G-buffer ray march
         self._prog_ssao  = None       # GLProgram: SSAO
         self._prog_blur  = None       # GLProgram: blur
@@ -317,15 +312,11 @@ class DMSceneRayMarchRenderer:
         self._gbuf_fbo   = None       # GLFramebuffer: color0+vspos+vsnorm+depth
         self._ssao_fbo   = None       # GLFramebuffer: R16F occlusion
         self._blur_fbo   = None       # GLFramebuffer: R16F blurred occlusion
-        self._noise_tex_id = 0        # GL texture id: 4x4 random rotation vectors
-        self._ssao_kernel_flat = []   # 192 floats: 64 hemisphere samples (x,y,z each)
+        self._noise_tex_id      = 0   # GL texture id: 4x4 random rotation vectors
+        self._ssao_kernel_flat  = []  # 192 floats: 64 hemisphere samples (x,y,z each)
         self._vp_size    = (0, 0)     # Last known viewport (w, h) for resize detection
         self._last_render_t = 0.0     # Timestamp of last completed render pass
 
-        # GPU compute state
-        self._gpu_supported = None  # None = not yet checked, True/False after check
-        self._gpu_programs = {}     # label -> {"program": GLComputeShader, "source": str}
-        self._pending_dispatches = []  # queued for execution in GL callback
 
         self._root = coin.SoSeparator()
         for attr in ["renderCulling", "renderCaching", "cullCaching", "boundingBoxCaching"]:
@@ -346,28 +337,20 @@ class DMSceneRayMarchRenderer:
             sg = view.getSceneGraph()
             sg.addChild(self._switch)
             self._attached = True
-            self._attach_camera_sensor(view)
         except Exception:
             pass
 
     def _detach(self):
         if not self._attached:
             return
-        if self._cam_sensor is not None:
-            self._cam_sensor.detach()
-            self._cam_sensor = None
-        if self._zoom_timer is not None:
-            self._zoom_timer.stop()
-            self._zoom_timer = None
         try:
             view = FreeCADGui.ActiveDocument.ActiveView
             sg = view.getSceneGraph()
             sg.removeChild(self._switch)
         except Exception:
             pass
-        self._gl_tex.destroy()
 
-        # Destroy multi-pass GL resources (must be done in GL context; best-effort here)
+        # Destroy multi-pass GL resources (best-effort; called outside GL context)
         for prog in (self._prog_gbuf, self._prog_ssao, self._prog_blur, self._prog_comp):
             if prog is not None:
                 try:
@@ -394,70 +377,9 @@ class DMSceneRayMarchRenderer:
 
         self._active_uniforms = {}
         self._vp_size = (0, 0)
-
-        # Clean up GPU compute programs
-        for info in self._gpu_programs.values():
-            try:
-                info["program"].destroy()
-            except Exception:
-                pass
-        self._gpu_programs.clear()
-        self._pending_dispatches.clear()
         self._attached = False
 
-    def _attach_camera_sensor(self, view):
-        try:
-            from pivy.coin import SoNodeSensor
-            cam = view.getCameraNode()
-            if cam is None:
-                return
-            self._cam_sensor = SoNodeSensor(self._on_camera_changed, None)
-            self._cam_sensor.attach(cam)
-        except Exception as e:
-            dm_logger.debug(f"SceneRayMarch: Failed to attach camera sensor: {e}")
 
-    def _on_camera_changed(self, userdata, sensor):
-        """Immediately redraw with existing texture, then debounce a rebake."""
-        from PySide import QtCore
-        try:
-            if FreeCADGui.activeView():
-                FreeCADGui.activeView().redraw()
-        except Exception:
-            pass
-
-        if self._zoom_timer is not None:
-            self._zoom_timer.stop()
-        self._zoom_timer = QtCore.QTimer()
-        self._zoom_timer.setSingleShot(True)
-        self._zoom_timer.timeout.connect(self._on_zoom_settled)
-        self._zoom_timer.start(400)
-
-    def _on_zoom_settled(self):
-        self._zoom_timer = None
-        if not self._fields:
-            return
-        try:
-            view = FreeCADGui.ActiveDocument.ActiveView
-        except Exception:
-            return
-        for label, (f, vis) in self._fields.items():
-            if not vis or f is None:
-                continue
-            cached = self._baked_cache.get(label)
-            if cached is None:
-                self._dirty_fields.add(label)
-                continue
-            new_cs = self._compute_cell_size(f, view)
-            old_cs = cached.get("cell_size", new_cs)
-            if new_cs < old_cs * 0.5 or new_cs > old_cs * 2.0:
-                self._dirty_fields.add(label)
-        if self._dirty_fields:
-            self._rebuild()
-            try:
-                if FreeCADGui.activeView():
-                    FreeCADGui.activeView().redraw()
-            except Exception:
-                pass
 
     def _setup_nodes(self):
         # 1. Bounding-box debug wireframe (toggled by render debug mode)
@@ -497,14 +419,6 @@ class DMSceneRayMarchRenderer:
         quad_mat.transparency.setValue(0.0)
         self._shader_sep.addChild(quad_mat)
 
-        # 3D texture upload callback (binds SDF atlas to unit 0)
-        self._shader_sep.addChild(self._gl_tex.callback_node)
-
-        # GPU compute dispatch callback
-        self._compute_cb_node = coin.SoCallback()
-        self._compute_cb_node.setCallback(self._compute_gl_callback)
-        self._shader_sep.addChild(self._compute_cb_node)
-
         # Multi-pass SSAO render callback (replaces SoShaderProgram)
         self._render_cb_node = coin.SoCallback()
         self._render_cb_node.setCallback(self._render_gl_callback)
@@ -532,63 +446,6 @@ class DMSceneRayMarchRenderer:
 
     # -- Compute dispatch callback --
 
-    def _compute_gl_callback(self, userdata, action):
-        """Execute pending GPU compute dispatches within the GL context."""
-        if not action.isOfType(coin.SoGLRenderAction.getClassTypeId()):
-            return
-        if not self._pending_dispatches:
-            return
-
-        # Check GPU compute support on first call
-        if self._gpu_supported is None:
-            try:
-                from core.gl_compute import check_compute_support
-                self._gpu_supported = check_compute_support()
-                dm_logger.debug(
-                    f"SceneRayMarch: GPU compute {'supported' if self._gpu_supported else 'not available (need GL 4.3+)'}")
-            except Exception as e:
-                dm_logger.debug(f"SceneRayMarch: compute support check failed: {e}")
-                self._gpu_supported = False
-
-        if not self._gpu_supported:
-            # CPU fallback dispatches are already handled in _rebuild
-            self._pending_dispatches.clear()
-            return
-
-        from core.gl_compute import bind_image_texture, memory_barrier
-
-        dispatches = self._pending_dispatches
-        self._pending_dispatches = []
-
-        # Ensure texture is allocated (callback_node will do this,
-        # but we need tex_id NOW for image binding)
-        self._gl_tex._ensure_tex_id()
-
-        for d in dispatches:
-            try:
-                prog = d["program"]
-                if d["needs_compile"]:
-                    prog.compile(d["source"])
-
-                prog.use()
-                bind_image_texture(0, self._gl_tex.tex_id)
-                prog.set_vec3("u_grid_min", d["grid_min"])
-                prog.set_vec3("u_grid_step", d["grid_step"])
-                prog.set_ivec3("u_grid_count", d["grid_count"])
-                prog.set_int("u_z_offset", d["z_offset"])
-                prog.set_uniforms_from_ctx(d["uniforms"])
-
-                gx = (d["grid_count"][0] + 7) // 8
-                gy = (d["grid_count"][1] + 7) // 8
-                gz = (d["grid_count"][2] + 7) // 8
-                prog.dispatch(gx, gy, gz)
-            except Exception as e:
-                dm_logger.debug(f"SceneRayMarch: GPU dispatch failed for '{d.get('label','')}': {e}")
-
-        memory_barrier()
-
-    # -- Public API --
-
     def register_field(self, label, field):
         dm_logger.debug(f"SceneRayMarch: Registering field '{label}'")
         self._fields[label] = (field, True)
@@ -602,15 +459,7 @@ class DMSceneRayMarchRenderer:
         if label in self._fields:
             dm_logger.debug(f"SceneRayMarch: Unregistering field '{label}'")
             self._fields.pop(label)
-        self._baked_cache.pop(label, None)
         self._dirty_fields.discard(label)
-        # Clean up GPU program
-        gpu_info = self._gpu_programs.pop(label, None)
-        if gpu_info:
-            try:
-                gpu_info["program"].destroy()
-            except Exception:
-                pass
 
         if not self._fields:
             self._switch.whichChild = -1
@@ -684,147 +533,6 @@ class DMSceneRayMarchRenderer:
             self._dirty_fields = set(self._fields.keys())
             self._rebuild()
 
-    def _compute_cell_size(self, field, view):
-        from core.dm_object import get_ray_march_cell_size
-        base_cell  = get_ray_march_cell_size()
-        n_texels   = 2  # 2 screen pixels per texel; LOD only kicks in when object is small on screen
-        try:
-            bb_min, bb_max = field.bounding_box()
-            field_size = max(
-                abs(bb_max.x - bb_min.x),
-                abs(bb_max.y - bb_min.y),
-                abs(bb_max.z - bb_min.z),
-                1e-3
-            )
-            cam = view.getCameraNode()
-            vp_h = 800.0
-            try:
-                viewer = view.getViewer()
-                for method in ("getGlxSize", "getSize"):
-                    if hasattr(viewer, method):
-                        sz = getattr(viewer, method)()
-                        vp_h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
-                        break
-            except Exception:
-                pass
-            is_ortho = cam.isOfType(coin.SoOrthographicCamera.getClassTypeId())
-            if is_ortho:
-                cam_world_h = cam.height.getValue()
-            else:
-                dist = (cam.position.getValue() - coin.SbVec3f(0, 0, 0)).length()
-                cam_world_h = 2.0 * dist * math.tan(cam.heightAngle.getValue() / 2.0)
-
-            px_per_world = vp_h / max(cam_world_h, 1e-3)
-            field_screen_px = field_size * px_per_world
-            linear_cell  = field_size / max(field_screen_px / n_texels, 1.0)
-            linear_ratio = max(linear_cell / base_cell, 1.0)
-            LOD_EXPONENT = 0.5
-            MAX_RATIO    = 16.0
-            ratio = min(linear_ratio, MAX_RATIO) ** LOD_EXPONENT
-            return base_cell * ratio
-        except Exception:
-            return base_cell
-
-    MAX_FIELDS = 8
-
-    def _get_view_frustum_aabb(self, view):
-        import numpy as np
-        try:
-            cam = view.getCameraNode()
-            vp_w, vp_h = 1.0, 1.0
-            try:
-                viewer = view.getViewer()
-                for method in ("getGlxSize", "getSize"):
-                    if hasattr(viewer, method):
-                        sz = getattr(viewer, method)()
-                        vp_w = float(sz[0] if isinstance(sz, (list, tuple)) else sz.width())
-                        vp_h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
-                        break
-            except Exception:
-                pass
-            aspect = vp_w / max(vp_h, 1.0)
-            rot = cam.orientation.getValue()
-            right   = rot.multVec(coin.SbVec3f(1,  0,  0))
-            up      = rot.multVec(coin.SbVec3f(0,  1,  0))
-            forward = rot.multVec(coin.SbVec3f(0,  0, -1))
-            r = np.array([right[0],   right[1],   right[2]])
-            u = np.array([up[0],      up[1],      up[2]])
-            f = np.array([forward[0], forward[1], forward[2]])
-            p = np.array([cam.position.getValue()[0],
-                          cam.position.getValue()[1],
-                          cam.position.getValue()[2]])
-            near = cam.nearDistance.getValue()
-            far  = cam.farDistance.getValue()
-            is_ortho = cam.isOfType(coin.SoOrthographicCamera.getClassTypeId())
-            if is_ortho:
-                hh = cam.height.getValue() / 2.0
-                hw = hh * aspect
-                corners = np.array([
-                    p + f*n + r*sx*hw + u*sy*hh
-                    for sx in (-1, 1) for sy in (-1, 1) for n in (near, far)
-                ])
-            else:
-                hh_near = math.tan(cam.heightAngle.getValue() / 2.0) * near
-                hw_near = hh_near * aspect
-                hh_far  = math.tan(cam.heightAngle.getValue() / 2.0) * far
-                hw_far  = hh_far  * aspect
-                corners = np.array([
-                    p + f*near + r*sx*hw_near + u*sy*hh_near
-                    for sx in (-1, 1) for sy in (-1, 1)
-                ] + [
-                    p + f*far  + r*sx*hw_far  + u*sy*hh_far
-                    for sx in (-1, 1) for sy in (-1, 1)
-                ])
-            aabb_min = corners.min(axis=0)
-            aabb_max = corners.max(axis=0)
-            return (
-                FreeCAD.Vector(float(aabb_min[0]), float(aabb_min[1]), float(aabb_min[2])),
-                FreeCAD.Vector(float(aabb_max[0]), float(aabb_max[1]), float(aabb_max[2])),
-            )
-        except Exception as e:
-            dm_logger.debug(f"SceneRayMarch: _get_view_frustum_aabb failed: {e}")
-            return None
-
-    def _compute_cell_size_for_region(self, bbox_override, view):
-        from core.dm_object import get_ray_march_cell_size
-        base_cell = get_ray_march_cell_size()
-        n_texels  = 2
-        LOD_EXPONENT = 0.5
-        MAX_RATIO    = 16.0
-        try:
-            clip_min, clip_max = bbox_override
-            region_size = max(
-                abs(clip_max.x - clip_min.x),
-                abs(clip_max.y - clip_min.y),
-                abs(clip_max.z - clip_min.z),
-                1e-3
-            )
-            cam = view.getCameraNode()
-            vp_h = 800.0
-            try:
-                viewer = view.getViewer()
-                for method in ("getGlxSize", "getSize"):
-                    if hasattr(viewer, method):
-                        sz = getattr(viewer, method)()
-                        vp_h = float(sz[1] if isinstance(sz, (list, tuple)) else sz.height())
-                        break
-            except Exception:
-                pass
-            is_ortho = cam.isOfType(coin.SoOrthographicCamera.getClassTypeId())
-            if is_ortho:
-                cam_world_h = cam.height.getValue()
-            else:
-                dist = (cam.position.getValue() - coin.SbVec3f(0, 0, 0)).length()
-                cam_world_h = 2.0 * dist * math.tan(cam.heightAngle.getValue() / 2.0)
-            px_per_world  = vp_h / max(cam_world_h, 1e-3)
-            region_screen_px = region_size * px_per_world
-            linear_cell   = region_size / max(region_screen_px / n_texels, 1.0)
-            linear_ratio  = max(linear_cell / base_cell, 1.0)
-            ratio = min(linear_ratio, MAX_RATIO) ** LOD_EXPONENT
-            return base_cell * ratio
-        except Exception:
-            return get_ray_march_cell_size()
-
     def _get_is_subtractive(self, label):
         try:
             parts = label.split(".", 1)
@@ -835,73 +543,6 @@ class DMSceneRayMarchRenderer:
             return getattr(obj, "Group", "Group 1") == "Group 2"
         except Exception:
             return False
-
-    def _compute_grid_params(self, field, cell_size, bbox_override=None):
-        """Compute grid parameters for a field bake (shared by GPU and CPU paths).
-
-        Returns dict with keys: nx, ny, nz, bbox_min, bbox_max, cell_size,
-                                grid_min (tuple), grid_step (tuple), grid_count (tuple)
-        """
-        if bbox_override is not None:
-            mn, mx = bbox_override
-        else:
-            mn, mx = field.bounding_box()
-
-        from core.dm_object import get_max_sdf_render_size
-        max_size = get_max_sdf_render_size()
-        
-        # Clamp bounding box if it exceeds MaxSdfRenderSize
-        if mx.x - mn.x > max_size:
-            mid = (mx.x + mn.x) / 2
-            mn.x = mid - max_size / 2
-            mx.x = mid + max_size / 2
-        if mx.y - mn.y > max_size:
-            mid = (mx.y + mn.y) / 2
-            mn.y = mid - max_size / 2
-            mx.y = mid + max_size / 2
-        if mx.z - mn.z > max_size:
-            mid = (mx.z + mn.z) / 2
-            mn.z = mid - max_size / 2
-            mx.z = mid + max_size / 2
-
-        def _pad(lo, hi):
-            if hi - lo < 1e-4:
-                mid = (lo + hi) / 2
-                return mid - 1.0, mid + 1.0
-            return lo - cell_size, hi + cell_size
-
-        x0, x1 = _pad(mn.x, mx.x)
-        y0, y1 = _pad(mn.y, mx.y)
-        z0, z1 = _pad(mn.z, mx.z)
-
-        nx = max(1, int(math.ceil((x1 - x0) / cell_size)))
-        ny = max(1, int(math.ceil((y1 - y0) / cell_size)))
-        nz = max(1, int(math.ceil((z1 - z0) / cell_size)))
-
-        return {
-            "nx": nx, "ny": ny, "nz": nz,
-            "bbox_min": FreeCAD.Vector(x0, y0, z0),
-            "bbox_max": FreeCAD.Vector(
-                x0 + nx * cell_size,
-                y0 + ny * cell_size,
-                z0 + nz * cell_size),
-            "cell_size": cell_size,
-            "grid_min": (x0, y0, z0),
-            "grid_step": (cell_size, cell_size, cell_size),
-            "grid_count": (nx + 1, ny + 1, nz + 1),
-        }
-
-    def _try_gpu_compile(self, field):
-        """Try to compile a field's GLSL expression. Returns (expr, ctx) or None."""
-        try:
-            from core.sdf.glsl_compiler import compile_field_to_glsl
-            expr, ctx = compile_field_to_glsl(field)
-            return expr, ctx
-        except NotImplementedError:
-            return None
-        except Exception as e:
-            dm_logger.debug(f"SceneRayMarch: GLSL compile failed: {e}")
-            return None
 
     def _init_gl_programs(self):
         """Compile all 4 SSAO pipeline programs and upload noise texture.
@@ -995,26 +636,6 @@ class DMSceneRayMarchRenderer:
         # Blur: blurred occlusion float
         self._blur_fbo.create(w, h, ['r16f'])
 
-    def _set_gbuf_uniforms(self, prog):
-        """Upload per-field and scene uniforms to the G-buffer shader program."""
-        u = self._active_uniforms
-
-        prog.set_1i("u_sdf_vol",    0)           # texture unit 0
-        prog.set_1i("u_num_fields", u["n_fields"])
-        prog.set_1i("u_z_total",    u["z_total"])
-
-        # Fixed key light: normalize(1.0, 1.667, 1.105) ≈ 45° elevation
-        prog.set_3f("u_light_dir", 0.4472, 0.7454, 0.4943)
-
-        for fi, fd in enumerate(u["fields"]):
-            prog.set_1i(f"u_nx[{fi}]",             fd["nx"])
-            prog.set_1i(f"u_ny[{fi}]",             fd["ny"])
-            prog.set_1i(f"u_nz[{fi}]",             fd["nz"])
-            prog.set_1i(f"u_z_offset[{fi}]",       fd["z_offset"])
-            prog.set_1i(f"u_is_subtractive[{fi}]", fd["is_subtractive"])
-            prog.set_3f(f"u_bbox_min[{fi}]",       *fd["bbox_min"])
-            prog.set_3f(f"u_bbox_max[{fi}]",       *fd["bbox_max"])
-
     def _render_gl_callback(self, userdata, action):
         """Execute 4-pass SSAO render inside Coin3D's GL context."""
         import ctypes
@@ -1042,19 +663,8 @@ class DMSceneRayMarchRenderer:
                 self._active_is_analytical = True
                 self._pending_frag_gbuf_source = None
             except Exception as e:
-                dm_logger.error(f"SceneRayMarch: dynamic shader compile failed: {e}")
-                self._active_is_analytical = False
+                dm_logger.error(f"SceneRayMarch: analytical shader compile failed: {e}")
                 self._pending_frag_gbuf_source = None
-                # Analytical path skipped baking — force a CPU/GPU rebuild now
-                for lbl in list(self._fields.keys()):
-                    self._dirty_fields.add(lbl)
-                from PySide import QtCore as _QC
-                _QC.QTimer.singleShot(0, self._rebuild)
-        elif getattr(self, "_pending_restore_default_gbuf", False):
-            _had_pending = True
-            self._prog_gbuf.compile(_VERT_PASSTHROUGH, _FRAG_GBUF)
-            self._active_is_analytical = False
-            self._pending_restore_default_gbuf = False
 
         glGetIntegerv = _loader.get("glGetIntegerv",
             [ctypes.c_uint, ctypes.POINTER(ctypes.c_int)], None)
@@ -1117,12 +727,9 @@ class DMSceneRayMarchRenderer:
             # Fixed key light: normalize(1.0, 1.667, 1.105) ≈ 45° elevation
             self._prog_gbuf.set_3f("u_light_dir", 0.4472, 0.7454, 0.4943)
 
-            if getattr(self, "_active_is_analytical", False):
-                self._prog_gbuf.set_uniforms_from_ctx(self._active_frag_gbuf_uniforms)
-            else:
-                glActiveTexture(0x84C0)   # GL_TEXTURE0
-                glBindTexture(GL_TEXTURE_3D, self._gl_tex.tex_id)
-                self._set_gbuf_uniforms(self._prog_gbuf)
+            self._prog_gbuf.set_uniforms_from_ctx(
+                getattr(self, "_active_frag_gbuf_uniforms", [])
+            )
 
             self._prog_gbuf.draw_fullscreen_quad()
 
@@ -1176,319 +783,74 @@ class DMSceneRayMarchRenderer:
         for unit in (0x84C2, 0x84C1, 0x84C0):
             glActiveTexture(unit)
             glBindTexture(GL_TEXTURE_2D, 0)
-        glBindTexture(GL_TEXTURE_3D, 0)
         glUseProgram(0)
 
     def _rebuild(self):
-        """Bake dirty fields. Uses GPU compute if available, else CPU numpy."""
-        import numpy as np
-
-        _t0 = time.perf_counter()
-
+        """Compile all registered SDF fields to an analytical GLSL fragment shader.
+        All SDF fields must implement to_glsl(). Fields missing it are skipped with a warning.
+        """
         visible = [(label, f) for label, (f, vis) in self._fields.items()
                    if vis and f is not None]
 
         if not visible:
             self._switch.whichChild = -1
-            self._dirty_fields.clear()
             return
 
-        try:
-            view = FreeCADGui.ActiveDocument.ActiveView
-        except Exception:
-            view = None
+        from core.sdf.glsl_compiler import compile_field_to_glsl, build_multi_raymarch_fragment_shader
 
-        frustum = self._get_view_frustum_aabb(view) if view else None
-        _t_frustum = time.perf_counter()
-
-        fields_to_bake = []
-        all_analytical = True
         analytical_data = []
-        
         for label, f in visible:
-            if label in self._dirty_fields or label not in self._baked_cache:
-                fields_to_bake.append((label, f))
-                
-            # Attempt to gather analytical GLSL data
-            gpu_result = self._try_gpu_compile(f)
-            if gpu_result is None:
-                all_analytical = False
-            elif all_analytical:
-                expr, ctx = gpu_result
-                try:
-                    bmin, bmax = f.bounding_box()
-                except Exception:
-                    bmin, bmax = FreeCAD.Vector(-10, -10, -10), FreeCAD.Vector(10, 10, 10)
-                is_subtractive = self._get_is_subtractive(label)
-                analytical_data.append({
-                    "expr": expr,
-                    "ctx": ctx,
-                    "bbox_min": bmin,
-                    "bbox_max": bmax,
-                    "is_subtractive": is_subtractive
-                })
-
-        if all_analytical and analytical_data:
-            from core.sdf.glsl_compiler import build_multi_raymarch_fragment_shader
-            source = build_multi_raymarch_fragment_shader(analytical_data)
-            all_uniforms = []
-            for d in analytical_data:
-                all_uniforms.extend(d["ctx"].uniforms)
-
-            # Only recompile the fragment shader when the source structure changes.
-            # Uniform VALUES (e.g. placement matrices) change every frame during drag
-            # but the source text stays the same when field object identity is stable
-            # (stable id() names in to_glsl).  Skipping recompile here is the key
-            # performance fix for interactive rotation.
-            if source != getattr(self, "_last_analytical_source", None):
-                self._pending_frag_gbuf_source = source
-                self._last_analytical_source = source
-
-            # Always refresh uniform values so rotation / translation are reflected
-            self._pending_frag_gbuf_uniforms = all_uniforms
-            if getattr(self, "_active_is_analytical", False):
-                # Shader already loaded — push new uniform values directly so the
-                # next draw call picks them up without waiting for _pending_ processing
-                self._active_frag_gbuf_uniforms = all_uniforms
-
-            self._active_uniforms = {"n_fields": len(analytical_data)}
-            self._dirty_fields.clear()
-
-            # Compute combined bbox so Coin3D doesn't cull the quad
-            all_mn = [d["bbox_min"] for d in analytical_data]
-            all_mx = [d["bbox_max"] for d in analytical_data]
-            mn_all = FreeCAD.Vector(
-                min(v.x for v in all_mn), min(v.y for v in all_mn), min(v.z for v in all_mn))
-            mx_all = FreeCAD.Vector(
-                max(v.x for v in all_mx), max(v.y for v in all_mx), max(v.z for v in all_mx))
-            pts = [
-                (mn_all.x, mn_all.y, mn_all.z), (mx_all.x, mn_all.y, mn_all.z),
-                (mn_all.x, mx_all.y, mn_all.z), (mx_all.x, mx_all.y, mn_all.z),
-                (mn_all.x, mn_all.y, mx_all.z), (mx_all.x, mn_all.y, mx_all.z),
-                (mn_all.x, mx_all.y, mx_all.z), (mx_all.x, mx_all.y, mx_all.z),
-            ]
-            self._bbox_coords.point.setValues(0, 8, pts)
-            self._coords.point.setValues(0, 8, pts)
-
-            self._switch.whichChild = 0
-            return
-        elif getattr(self, "_active_is_analytical", False):
-            self._pending_restore_default_gbuf = True
-
-        # Compute grid params and try GPU compile for dirty fields
-        _n_baked = 0
-        use_gpu = (self._gpu_supported is not False)  # True or None (not yet checked)
-
-        for label, f in fields_to_bake:
             try:
-                # Frustum clipping
-                bbox_override = None
-                if frustum is not None:
-                    try:
-                        f_min, f_max = f.bounding_box()
-                        fr_min, fr_max = frustum
-                        clip_min = FreeCAD.Vector(
-                            max(f_min.x, fr_min.x), max(f_min.y, fr_min.y),
-                            max(f_min.z, fr_min.z))
-                        clip_max = FreeCAD.Vector(
-                            min(f_max.x, fr_max.x), min(f_max.y, fr_max.y),
-                            min(f_max.z, fr_max.z))
-                        if (clip_min.x < clip_max.x and clip_min.y < clip_max.y
-                                and clip_min.z < clip_max.z):
-                            bbox_override = (clip_min, clip_max)
-                        else:
-                            self._baked_cache.pop(label, None)
-                            continue
-                    except Exception:
-                        pass
-
-                cs = (self._compute_cell_size_for_region(bbox_override, view)
-                      if bbox_override else self._compute_cell_size(f, view))
-                params = self._compute_grid_params(f, cs, bbox_override)
-
-                # Try GPU path
-                gpu_result = self._try_gpu_compile(f) if use_gpu else None
-
-                if gpu_result is not None:
-                    expr, ctx = gpu_result
-                    from core.sdf.glsl_compiler import build_compute_shader
-                    source = build_compute_shader(expr, ctx)
-                    # Check if we can reuse compiled program
-                    cached_gpu = self._gpu_programs.get(label)
-                    if cached_gpu and cached_gpu["source"] == source:
-                        program = cached_gpu["program"]
-                        needs_compile = False
-                    else:
-                        from core.gl_compute import GLComputeShader
-                        program = GLComputeShader()
-                        needs_compile = True
-                        self._gpu_programs[label] = {
-                            "program": program, "source": source}
-
-                    # Store metadata (no volume_bytes for GPU path)
-                    params["gpu"] = True
-                    params["glsl_source"] = source
-                    params["ctx_uniforms"] = ctx.uniforms
-                    self._baked_cache[label] = params
-                    _n_baked += 1
-                else:
-                    # CPU bake: prefer VDB sparse path, fall back to dense numpy
-                    from core.sdf.sdf_baker import has_openvdb
-                    if has_openvdb():
-                        from core.sdf.sdf_baker import bake_sdf_vdb
-                        baked = bake_sdf_vdb(f, cs, bbox_override=bbox_override)
-                        # Log once per session per object type? No, just debug log is fine.
-                        # Actually, bake_sdf_vdb already logs to Console if profiler is on.
-                        # I'll add a one-time info log here.
-                        if not hasattr(self, "_vdb_logged"):
-                            dm_logger.info("SceneRayMarch: Using OpenVDB sparse bake path.")
-                            self._vdb_logged = True
-                    else:
-                        from core.sdf.sdf_baker import bake_sdf_to_volume
-                        baked = bake_sdf_to_volume(f, cs, bbox_override=bbox_override)
-                    baked["cell_size"] = cs
-                    baked["gpu"] = False
-                    self._baked_cache[label] = baked
-                    _n_baked += 1
-
+                expr, ctx = compile_field_to_glsl(f)
+            except NotImplementedError:
+                dm_logger.warn(
+                    f"SceneRayMarch: '{label}' ({type(f).__name__}) has no to_glsl() — skipped."
+                )
+                continue
             except Exception as e:
-                dm_logger.debug(f"SceneRayMarch: Bake failed for '{label}': {e}")
-                self._baked_cache.pop(label, None)
+                dm_logger.error(f"SceneRayMarch: GLSL compile failed for '{label}': {e}")
+                continue
 
-        self._dirty_fields.clear()
-        _t_bake = time.perf_counter()
+            try:
+                bmin, bmax = f.bounding_box()
+            except Exception:
+                bmin, bmax = FreeCAD.Vector(-10, -10, -10), FreeCAD.Vector(10, 10, 10)
 
-        # Collect baked results in visible order
-        baked_list = []
-        for label, _ in visible:
-            b = self._baked_cache.get(label)
-            if b is not None:
-                baked_list.append((label, b))
+            analytical_data.append({
+                "expr": expr,
+                "ctx": ctx,
+                "bbox_min": bmin,
+                "bbox_max": bmax,
+                "is_subtractive": self._get_is_subtractive(label),
+            })
 
-        if not baked_list:
+        if not analytical_data:
             self._switch.whichChild = -1
             return
 
-        n_fields = len(baked_list)
+        source = build_multi_raymarch_fragment_shader(analytical_data)
+        all_uniforms = []
+        for d in analytical_data:
+            all_uniforms.extend(d["ctx"].uniforms)
 
-        # Atlas dimensions
-        new_max_nx = max(b["nx"] for _, b in baked_list) + 1
-        new_max_ny = max(b["ny"] for _, b in baked_list) + 1
-        new_total_nz = sum(b["nz"] + 1 for _, b in baked_list)
+        # Only recompile when source structure changes; uniform values update every frame
+        if source != getattr(self, "_last_analytical_source", None):
+            self._pending_frag_gbuf_source = source
+            self._last_analytical_source = source
 
-        dims_changed = (
-            new_max_nx   != getattr(self, "_atlas_nx", 0) or
-            new_max_ny   != getattr(self, "_atlas_ny", 0) or
-            new_total_nz != getattr(self, "_atlas_nz", 0) or
-            n_fields     != getattr(self, "_atlas_n",  0)
-        )
+        self._pending_frag_gbuf_uniforms = all_uniforms
+        if getattr(self, "_active_is_analytical", False):
+            self._active_frag_gbuf_uniforms = all_uniforms
 
-        # Compute Z-offsets
-        z_offsets = []
-        z_cursor = 0
-        for _, b in baked_list:
-            z_offsets.append(z_cursor)
-            z_cursor += b["nz"] + 1
+        self._active_uniforms = {"n_fields": len(analytical_data)}
 
-        # Check if any field uses GPU
-        any_gpu = any(b.get("gpu", False) for _, b in baked_list)
-        all_gpu = all(b.get("gpu", False) for _, b in baked_list)
-
-        if any_gpu:
-            # GPU path: allocate texture, queue compute dispatches
-            if dims_changed:
-                self._gl_tex.allocate(new_max_nx, new_max_ny, new_total_nz)
-                self._atlas_nx = new_max_nx
-                self._atlas_ny = new_max_ny
-                self._atlas_nz = new_total_nz
-                self._atlas_n  = n_fields
-
-            # Queue GPU dispatches
-            # If dims changed, ALL fields must be re-dispatched (texture reallocated)
-            # If dims unchanged, only newly baked fields need dispatch
-            for fi, (label, b) in enumerate(baked_list):
-                if not b.get("gpu", False):
-                    continue
-                # Dispatch if this field was just baked, or dims changed (texture wiped)
-                was_just_baked = (label in [l for l, _ in fields_to_bake])
-                if was_just_baked or dims_changed:
-                    cached_gpu = self._gpu_programs.get(label)
-                    if cached_gpu:
-                        self._pending_dispatches.append({
-                            "label": label,
-                            "program": cached_gpu["program"],
-                            "needs_compile": not cached_gpu["program"].is_compiled,
-                            "source": cached_gpu["source"],
-                            "uniforms": b["ctx_uniforms"],
-                            "grid_min": b["grid_min"],
-                            "grid_step": b["grid_step"],
-                            "grid_count": b["grid_count"],
-                            "z_offset": z_offsets[fi],
-                        })
-
-            # For any CPU-baked fields in a mixed scenario, upload their data too
-            if not all_gpu:
-                combined = np.zeros((new_total_nz, new_max_ny, new_max_nx),
-                                    dtype=np.float32)
-                for fi, (label, b) in enumerate(baked_list):
-                    if b.get("gpu", False):
-                        continue  # GPU will fill this slice
-                    nx1, ny1, nz1 = b["nx"] + 1, b["ny"] + 1, b["nz"] + 1
-                    vol = np.frombuffer(b["volume_bytes"],
-                                        dtype=np.float32).reshape(nz1, ny1, nx1)
-                    combined[z_offsets[fi]:z_offsets[fi] + nz1, :ny1, :nx1] = vol
-                # Upload CPU portions (GPU dispatch will overwrite GPU portions)
-                self._gl_tex.upload_numpy(new_max_nx, new_max_ny,
-                                          new_total_nz, combined)
-
-        else:
-            # Pure CPU path
-            combined = np.zeros((new_total_nz, new_max_ny, new_max_nx),
-                                dtype=np.float32)
-            for fi, (label, b) in enumerate(baked_list):
-                nx1, ny1, nz1 = b["nx"] + 1, b["ny"] + 1, b["nz"] + 1
-                vol = np.frombuffer(b["volume_bytes"],
-                                    dtype=np.float32).reshape(nz1, ny1, nx1)
-                combined[z_offsets[fi]:z_offsets[fi] + nz1, :ny1, :nx1] = vol
-
-            self._gl_tex.upload_numpy(new_max_nx, new_max_ny,
-                                      new_total_nz, combined)
-            if dims_changed:
-                self._atlas_nx = new_max_nx
-                self._atlas_ny = new_max_ny
-                self._atlas_nz = new_total_nz
-                self._atlas_n  = n_fields
-
-        _t_atlas = time.perf_counter()
-
-        # Store uniform data for _render_gl_callback to consume each frame
-        fields_data = []
-        for fi, (label, b) in enumerate(baked_list):
-            mn, mx = b["bbox_min"], b["bbox_max"]
-            fields_data.append({
-                "nx": int(b["nx"]),
-                "ny": int(b["ny"]),
-                "nz": int(b["nz"]),
-                "z_offset": int(z_offsets[fi]),
-                "bbox_min": (mn.x, mn.y, mn.z),
-                "bbox_max": (mx.x, mx.y, mx.z),
-                "is_subtractive": 1 if self._get_is_subtractive(label) else 0,
-            })
-        self._active_uniforms = {
-            "n_fields": n_fields,
-            "z_total":  int(new_total_nz),
-            "fields":   fields_data,
-        }
-
-        # Combined bbox proxy
-        all_mn = [b["bbox_min"] for _, b in baked_list]
-        all_mx = [b["bbox_max"] for _, b in baked_list]
+        # Update Coin3D proxy geometry so the scene graph has a valid bbox
+        all_mn = [d["bbox_min"] for d in analytical_data]
+        all_mx = [d["bbox_max"] for d in analytical_data]
         mn_all = FreeCAD.Vector(
-            min(v.x for v in all_mn), min(v.y for v in all_mn),
-            min(v.z for v in all_mn))
+            min(v.x for v in all_mn), min(v.y for v in all_mn), min(v.z for v in all_mn))
         mx_all = FreeCAD.Vector(
-            max(v.x for v in all_mx), max(v.y for v in all_mx),
-            max(v.z for v in all_mx))
+            max(v.x for v in all_mx), max(v.y for v in all_mx), max(v.z for v in all_mx))
         pts = [
             (mn_all.x, mn_all.y, mn_all.z), (mx_all.x, mn_all.y, mn_all.z),
             (mn_all.x, mx_all.y, mn_all.z), (mx_all.x, mx_all.y, mn_all.z),
@@ -1499,16 +861,3 @@ class DMSceneRayMarchRenderer:
         self._coords.point.setValues(0, 8, pts)
         self._switch.whichChild = 0
 
-        from core.dm_object import get_perf_profiler_enabled
-        if get_perf_profiler_enabled():
-            _t_end = time.perf_counter()
-            bake_method = "GPU" if any_gpu else "CPU"
-            FreeCAD.Console.PrintMessage(
-                f"[rebuild] {n_fields} fields ({_n_baked} baked, {bake_method}) | "
-                f"atlas={new_max_nx}x{new_max_ny}x{new_total_nz} | "
-                f"frustum={1000*(_t_frustum-_t0):.1f}ms  "
-                f"compile+bake={1000*(_t_bake-_t_frustum):.1f}ms  "
-                f"atlas={1000*(_t_atlas-_t_bake):.1f}ms  "
-                f"uniforms={1000*(_t_end-_t_atlas):.1f}ms  "
-                f"TOTAL={1000*(_t_end-_t0):.1f}ms\n"
-            )
