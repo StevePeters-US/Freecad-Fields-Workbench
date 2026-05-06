@@ -32,66 +32,122 @@ import FreeCADGui
 import os
 import sys
 import inspect
-import FCDirectModeling
 
-# Ensure local imports work by adding the workbench directory to sys.path
-# This is often needed if FreeCAD doesn't add it automatically
-try:
-    # Use inspect to get the file path since __file__ might not be defined
-    wb_root = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe())))
-    if wb_root not in sys.path:
-        sys.path.append(wb_root)
-except Exception as e:
-    FreeCAD.Console.Error("DirectModeling: Error setting up sys.path: " + str(e) + "\n")
-
-# Register the icon path at module level so it's available immediately
-# Use FCDirectModeling module location to reliably find the workbench root
-wb_path = os.path.dirname(os.path.dirname(FCDirectModeling.__file__))
-icon_path = os.path.join(wb_path, 'Resources', 'icons')
-FreeCADGui.addIconPath(icon_path)
-
-class DirectModelingWorkbench(FreeCADGui.Workbench):
-    """
-    Defines the Direct Modeling Workbench.
-    """
+class DirectModelingWorkbench(Workbench):
+    "Direct Modeling workbench object"
+    Icon = os.path.join(os.path.dirname(inspect.getfile(inspect.currentframe())), 'Resources', 'icons', 'DirectModeling.svg')
     MenuText = "Direct Modeling"
-    ToolTip = "Direct Modeling workbench"
-    Icon = "DirectModeling.svg"
+    ToolTip = "Real-time NURBS and BRep modeling"
 
     def GetClassName(self):
         return "Gui::PythonWorkbench"
 
     def Initialize(self):
-        """This function is executed when the workbench is activated."""
-        # Import the command modules. This executes the FreeCADGui.addCommand()
-        # in each file, making the commands available to FreeCAD.
+        """This function is executed when the workbench is activated for the first time."""
+        # Add icon path
+        resource_path = os.path.join(os.path.dirname(inspect.getfile(inspect.currentframe())), 'Resources', 'icons')
+        FreeCADGui.addIconPath(resource_path)
+        
+        from core import dm_logger
+        dm_logger.log(f"DM: Loading from {os.path.dirname(inspect.getfile(inspect.currentframe()))}")
         try:
-            from dm_commands import command_create_box
-            from dm_commands import command_open_task_panel
-            from dm_commands import command_draw_box
+            # Import commands from the new commands/ directory
+            import commands.cmd_point
+            import commands.cmd_curve
+            import commands.cmd_workplane
+            import commands.cmd_boolean
+            import commands.cmd_settings
+            import commands.cmd_sketcher
+            import commands.cmd_translate
+            import commands.cmd_fill_curve
+            import commands.cmd_edit
+            import commands.cmd_primitive
+            import commands.cmd_curve_sdf
+            import commands.cmd_sdf_export
+            import commands.cmd_sdf_slice
+            import commands.cmd_noise
             
-            self.appendToolbar("Direct Modeling", [
-                'DM_DrawBox',
+            # Import core modules
+            import core as FCDirectModeling
+            import tools
+            
+            self.appendToolbar("DM - Edit", [
+                'DM_EditObject',
+                'DM_Settings',
+            ])
+            self.appendToolbar("DM - Constructive", [
+                'DM_WorkPlane',
+                'DM_CreatePoint',
+                'DM_CreateCurve',
                 'DM_CreateBox',
-                'DM_OpenTaskPanel',
+                'DM_CreateSphere',
+                'DM_CreateCylinder',
+                'DM_CreateTorus',
+                'DM_FillCurve',
+                'DM_ExtrudeCurve',
+            ])
+            self.appendToolbar("DM - Operations", [
+                'DM_Translate',
+                'DM_Add',
+                'DM_Subtract',
+                'DM_Intersection',
+                'DM_CreateNoiseModifier',
+                'DM_SDFSlice',
+                'DM_SDFToShape',
+                'DM_OpenSketcher',
             ])
             self.appendMenu("Direct Modeling", [
-                'DM_DrawBox',
+                'DM_EditObject',
+                'DM_Settings',
+                'Separator',
+                'DM_WorkPlane',
+                'DM_CreatePoint',
+                'DM_CreateCurve',
                 'DM_CreateBox',
-                'DM_OpenTaskPanel',
+                'DM_CreateSphere',
+                'DM_CreateCylinder',
+                'DM_CreateTorus',
+                'DM_FillCurve',
+                'DM_ExtrudeCurve',
+                'Separator',
+                'DM_Translate',
+                'DM_Add',
+                'DM_Subtract',
+                'DM_Intersection',
+                'DM_CreateNoiseModifier',
+                'DM_SDFSlice',
+                'DM_SDFToShape',
+                'DM_OpenSketcher',
             ])
         except Exception as e:
-            FreeCAD.Console.Error(f"Error importing Direct Modeling commands: {e}\n")
+            from core import dm_logger
+            dm_logger.error(f"Error importing Direct Modeling commands: {e}")
             import traceback
             traceback.print_exc()
 
     def Activated(self):
         """This function is executed when the workbench is activated."""
-        return
+        try:
+            from core.input_manager import DMInputManager
+            DMInputManager.get_instance().initialize()
+        except Exception as e:
+            from core import dm_logger
+            dm_logger.error(f"DM Activated Error: {e}")
 
     def Deactivated(self):
         """This function is executed when the workbench is deactivated."""
-        return
+        try:
+            from core.input_manager import DMInputManager
+            DMInputManager.get_instance().restore()
+        except Exception as e:
+            from core import dm_logger
+            dm_logger.error(f"DM Deactivated Error: {e}")
+        try:
+            from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+            DMSceneRayMarchRenderer.destroy()
+        except Exception as e:
+            from core import dm_logger
+            dm_logger.error(f"DM Deactivated SceneRM Error: {e}")
 
 # Add the workbench to FreeCAD's list of available workbenches
 FreeCADGui.addWorkbench(DirectModelingWorkbench())

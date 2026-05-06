@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" version="1.1">
+    <!-- Orange crescent: the surviving solid region (additive group) -->
+    <path d="M 36 16 A 18 18 0 1 0 36 48 A 18 18 0 0 1 36 16 Z"
+          style="fill:#e0e0e0;stroke:#ffaa00;stroke-width:2"/>
+    <!-- Blue dashed circle: the shape being subtracted (subtractive group) -->
+    <circle cx="44" cy="32" r="18"
+            style="fill:none;stroke:#4488ff;stroke-width:2;stroke-dasharray:4,4"/>
+</svg>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" version="1.1">
+    <defs>
+        <linearGradient id="cylGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#c0c0c0"/>
+            <stop offset="30%" stop-color="#ffffff"/>
+            <stop offset="100%" stop-color="#a0a0a0"/>
+        </linearGradient>
+    </defs>
+    <!-- Cylinder body -->
+    <path d="M 16 22 L 16 46 A 16 8 0 0 0 48 46 L 48 22 Z" style="fill:url(#cylGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    <!-- Top face highlight -->
+    <ellipse cx="32" cy="22" rx="16" ry="8" style="fill:#ffffff;stroke:#ffaa00;stroke-width:2"/>
+</svg>

@@ -2,5 +2,8 @@
 <qresource>
     <file alias="icons/DirectModeling.svg">icons/DirectModeling.svg</file>
     <file alias="icons/CreateBox.svg">icons/CreateBox.svg</file>
+    <file alias="icons/DM_WorkPlane.svg">icons/DM_WorkPlane.svg</file>
+    <file alias="icons/OpenSketcher.svg">icons/OpenSketcher.svg</file>
+    <file alias="icons/OpenTaskPanel.svg">icons/OpenTaskPanel.svg</file>
 </qresource>
 </RCC>
