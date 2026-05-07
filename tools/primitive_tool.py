@@ -1117,7 +1117,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     def handle_keyboard(self, event_dict):
         key = event_dict.get("Key")
         key_text = str(event_dict.get("Text", "None")).upper()
-        dm_logger.debug(f"PrimitiveCreatorBase.handle_keyboard: key={key}, text='{key_text}', is_editing={self._is_editing}")
+        # dm_logger.debug(f"PrimitiveCreatorBase.handle_keyboard: key={key}, text='{key_text}', is_editing={self._is_editing}")
 
         # ── Axis constraints (edit mode) ────────────────────────────────────────
         if self._is_editing and key in (QtCore.Qt.Key_X, QtCore.Qt.Key_Y, QtCore.Qt.Key_Z):

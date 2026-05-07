@@ -463,7 +463,7 @@ class EditTool(DMBase, DragTimerMixin):
 
     def handle_keyboard(self, event_dict):
         key_code = event_dict.get("Key")
-        dm_logger.debug(f"EditTool.handle_keyboard: key={key_code}, is_editing={self._is_editing}")
+        # dm_logger.debug(f"EditTool.handle_keyboard: key={key_code}, is_editing={self._is_editing}")
         
         if key_code == QtCore.Qt.Key_Escape:
             self.terminate()

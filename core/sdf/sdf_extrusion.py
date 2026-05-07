@@ -82,6 +82,41 @@ class SdfExtrusionField(SdfField):
         ctx.add_custom_helper(func_name, body)
         return f"{func_name}({point_var})"
 
+    def to_glsl_baked(self, ctx, point_var: str = "p", profile_bbox: tuple = None) -> str:
+        """Fast interactive variant: samples a pre-baked r32f profile texture instead of
+        evaluating the analytic formula. Same IQ extrusion SDF, but O(1) per step."""
+        func_name = ctx.get_unique_name("sdf_extrude_baked")
+        half_h = ctx.uniform("float", self.height * 0.5)
+
+        if profile_bbox is None:
+            from core.sdf.profile_tex import profile_bbox as compute_bbox
+            profile_bbox = compute_bbox(self)
+        x0, y0, x1, y1 = profile_bbox
+        pmin = ctx.uniform("vec2", [x0, y0])
+        psz  = ctx.uniform("vec2", [x1 - x0, y1 - y0])
+        tex  = ctx.sampler2d("ptex")
+
+        if self.inv_matrix is not None:
+            ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
+            m = ctx.uniform("mat4", self.inv_matrix.tolist())
+            lp_expr = f"apply_inv_mat({m}, p)"
+        else:
+            lp_expr = "p"
+
+        body = (
+            f"float {func_name}(vec3 p) {{\n"
+            f"    vec3 lp = {lp_expr};\n"
+            f"    vec2 uv = (lp.xy - {pmin}) / {psz};\n"
+            f"    vec2 uv_c = clamp(uv, 0.0, 1.0);\n"
+            f"    float _d2 = texture({tex}, uv_c).r + length((uv - uv_c) * {psz});\n"
+            f"    float _dz = abs(lp.z) - {half_h};\n"
+            f"    vec2 _w = vec2(_d2, _dz);\n"
+            f"    return min(max(_w.x, _w.y), 0.0) + length(max(_w, 0.0));\n"
+            f"}}"
+        )
+        ctx.add_custom_helper(func_name, body)
+        return f"{func_name}({point_var})"
+
     def bounding_box(self):
         half_h = self.height * 0.5
         if hasattr(self.profile, 'bbox_2d'):

@@ -672,7 +672,7 @@ class DMBase:
     def handle_keyboard(self, event_dict):
         key_code = event_dict.get("Key")
         key_text = str(event_dict.get("Text", "None")).upper()
-        dm_logger.debug(f"DMBase.handle_keyboard: key={key_code}, text='{key_text}', is_editing={getattr(self, '_is_editing', False)}")
+        # dm_logger.debug(f"DMBase.handle_keyboard: key={key_code}, text='{key_text}', is_editing={getattr(self, '_is_editing', False)}")
         
         # ESC to cancel
         if key_code == QtCore.Qt.Key_Escape:
