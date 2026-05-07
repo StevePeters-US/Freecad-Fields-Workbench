@@ -660,7 +660,10 @@ class DMSceneRayMarchRenderer:
         if getattr(self, "_pending_frag_gbuf_source", None):
             _had_pending = True
             try:
-                self._prog_gbuf.compile(_VERT_PASSTHROUGH, self._pending_frag_gbuf_source)
+                # Only recompile if the shader string actually changed!
+                if getattr(self, "_active_frag_gbuf_source", None) != self._pending_frag_gbuf_source:
+                    self._prog_gbuf.compile(_VERT_PASSTHROUGH, self._pending_frag_gbuf_source)
+                    self._active_frag_gbuf_source = self._pending_frag_gbuf_source
                 self._active_frag_gbuf_uniforms = self._pending_frag_gbuf_uniforms
                 self._active_is_analytical = True
                 self._pending_frag_gbuf_source = None

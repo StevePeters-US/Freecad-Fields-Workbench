@@ -2333,13 +2333,12 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
     def _extrude_field(self):
         if self._height < 0.01 or not self._curve_obj:
             return None
-        from core.sdf.sdf2d.nurbs_curve import Sdf2dNurbsCurveField
+        from core.sdf.sdf2d.bezier_curve import Sdf2dBezierCurve
         from core.sdf.sdf_extrusion import SdfExtrusionField
 
         if self._cached_profile is None:
-            from core.sdf.sdf2d.nurbs_curve import Sdf2dNurbsCurveField
-            if self._curve_obj and hasattr(self._curve_obj, "Shape") and len(self._curve_obj.Shape.Edges) > 0:
-                self._cached_profile = Sdf2dNurbsCurveField(self._curve_obj.Shape.Edges[0].Curve, sample_count=64)
+            if self._bezier_segs:
+                self._cached_profile = Sdf2dBezierCurve(self._bezier_segs)
             else:
                 return None
 
