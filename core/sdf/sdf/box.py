@@ -1,6 +1,13 @@
 import numpy as np
 import FreeCAD
-from core.sdf.sdf_field import SdfField
+from core.sdf.sdf_field import SdfField, _GLSL_APPLY_INV_MAT
+
+_GLSL_SDF_BOX = """
+float sdf_box(vec3 p, vec3 center, vec3 half_size) {
+    vec3 d = abs(p - center) - half_size;
+    return length(max(d, 0.0)) + min(max(d.x, max(d.y, d.z)), 0.0);
+}
+"""
 
 class SdfBoxField(SdfField):
     """An axis-aligned box SDF, optionally placed arbitrarily in space."""
@@ -53,11 +60,11 @@ class SdfBoxField(SdfField):
         return (out_dist + in_dist).astype(np.float32)
 
     def to_glsl(self, ctx, point_var="p"):
-        ctx.need_helper("sdf_box")
+        ctx.add_custom_helper("sdf_box", _GLSL_SDF_BOX)
         c = ctx.uniform("vec3", (self.center.x, self.center.y, self.center.z))
         h = ctx.uniform("vec3", (self.half_size.x, self.half_size.y, self.half_size.z))
         if self.inv_matrix is not None:
-            ctx.need_helper("apply_inv_mat")
+            ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
             m = ctx.uniform("mat4", self.inv_matrix.tolist())
             return f"sdf_box(apply_inv_mat({m}, {point_var}), {c}, {h})"
         return f"sdf_box({point_var}, {c}, {h})"

@@ -637,6 +637,12 @@ class DMSceneRayMarchRenderer:
 
     def _render_gl_callback(self, userdata, action):
         """Execute 4-pass SSAO render inside Coin3D's GL context."""
+        try:
+            self._render_gl_callback_inner(userdata, action)
+        except Exception as e:
+            dm_logger.error(f"SceneRayMarch: render callback exception: {e}")
+
+    def _render_gl_callback_inner(self, userdata, action):
         import ctypes
         if not action.isOfType(coin.SoGLRenderAction.getClassTypeId()):
             return
@@ -687,19 +693,50 @@ class DMSceneRayMarchRenderer:
         GL_TEXTURE_2D       = 0x0DE1
         GL_TEXTURE_3D       = 0x806F
 
-        # Viewport size
+        # Viewport size — check before modifying any GL state
         vp = (ctypes.c_int * 4)(0, 0, 0, 0)
         glGetIntegerv(0x0BA2, vp)   # GL_VIEWPORT
         w, h = vp[2], vp[3]
         if w <= 0 or h <= 0:
             return
 
-        # Resize FBOs if viewport changed — force a full expensive render on resize
+        # Save GL state that Coin3D needs to find intact after our passes
+        GL_DEPTH_TEST     = 0x0B71
+        GL_BLEND          = 0x0BE2
+        GL_DEPTH_WRITEMASK = 0x0B72
+        depth_enabled = (ctypes.c_uint * 1)(0)
+        blend_enabled = (ctypes.c_uint * 1)(0)
+        depth_write   = (ctypes.c_uint * 1)(0)
+        glGetIntegerv(GL_DEPTH_TEST,     ctypes.cast(depth_enabled, ctypes.POINTER(ctypes.c_int)))
+        glGetIntegerv(GL_BLEND,          ctypes.cast(blend_enabled, ctypes.POINTER(ctypes.c_int)))
+        glGetIntegerv(GL_DEPTH_WRITEMASK, ctypes.cast(depth_write,  ctypes.POINTER(ctypes.c_int)))
+
+        glEnable    = _loader.get("glEnable",    [ctypes.c_uint], None)
+        glDisable   = _loader.get("glDisable",   [ctypes.c_uint], None)
+        glDepthMask = _loader.get("glDepthMask", [ctypes.c_uint], None)
+
+        # Our passes need depth write and no blending
+        glEnable(GL_DEPTH_TEST)
+        glDepthMask(1)
+        glDisable(GL_BLEND)
+
+        # Half-res G-buffer during LMB drag to reduce ray-march cost per pixel
+        try:
+            from PySide2.QtWidgets import QApplication
+            from PySide2.QtCore import Qt
+        except ImportError:
+            from PySide.QtWidgets import QApplication
+            from PySide.QtCore import Qt
+        _interactive = bool(QApplication.mouseButtons() & Qt.LeftButton)
+        target_w = max(w // 2, 1) if _interactive else w
+        target_h = max(h // 2, 1) if _interactive else h
+
+        # Resize FBOs if effective render size changed — force full render on resize
         _force_full = False
-        if (w, h) != self._vp_size:
+        if (target_w, target_h) != self._vp_size:
             try:
-                self._resize_fbos(w, h)
-                self._vp_size = (w, h)
+                self._resize_fbos(target_w, target_h)
+                self._vp_size = (target_w, target_h)
                 _force_full = True
             except Exception as e:
                 dm_logger.debug(f"SceneRayMarch: _resize_fbos failed: {e}")
@@ -725,7 +762,7 @@ class DMSceneRayMarchRenderer:
 
             # ── Pass 1: G-buffer (ray march SDF) ──
             self._gbuf_fbo.bind()
-            glViewport(0, 0, w, h)
+            glViewport(0, 0, target_w, target_h)
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
             self._prog_gbuf.use()
 
@@ -743,7 +780,7 @@ class DMSceneRayMarchRenderer:
 
             # ── Pass 2: SSAO ──
             self._ssao_fbo.bind()
-            glViewport(0, 0, w, h)
+            glViewport(0, 0, target_w, target_h)
             glClear(GL_COLOR_BUFFER_BIT)
             self._prog_ssao.use()
             glActiveTexture(0x84C0)
@@ -755,20 +792,20 @@ class DMSceneRayMarchRenderer:
             glActiveTexture(0x84C2)
             glBindTexture(GL_TEXTURE_2D, self._noise_tex_id)
             self._prog_ssao.set_1i("u_noise", 2)
-            self._prog_ssao.set_2f("u_noise_scale", w / 4.0, h / 4.0)
+            self._prog_ssao.set_2f("u_noise_scale", target_w / 4.0, target_h / 4.0)
             self._prog_ssao.set_3fv("u_samples", 64, self._ssao_kernel_flat)
             self._prog_ssao.set_mat4("u_proj", list(proj_data))
             self._prog_ssao.draw_fullscreen_quad()
 
             # ── Pass 3: Blur ──
             self._blur_fbo.bind()
-            glViewport(0, 0, w, h)
+            glViewport(0, 0, target_w, target_h)
             glClear(GL_COLOR_BUFFER_BIT)
             self._prog_blur.use()
             glActiveTexture(0x84C0)
             glBindTexture(GL_TEXTURE_2D, self._ssao_fbo.color_texture(0))
             self._prog_blur.set_1i("u_ssao", 0)
-            self._prog_blur.set_2f("u_texel_size", 1.0 / w, 1.0 / h)
+            self._prog_blur.set_2f("u_texel_size", 1.0 / target_w, 1.0 / target_h)
             self._prog_blur.draw_fullscreen_quad()
             glFinish = _loader.get("glFinish", [], None)
             if glFinish: glFinish()
@@ -793,11 +830,22 @@ class DMSceneRayMarchRenderer:
         if glFinish2: glFinish2()
         _t4 = time.perf_counter()
 
-        # ── Cleanup: unbind textures, restore shader state ──
+        # ── Cleanup: unbind textures, restore shader + GL state ──
         for unit in (0x84C2, 0x84C1, 0x84C0):
             glActiveTexture(unit)
             glBindTexture(GL_TEXTURE_2D, 0)
         glUseProgram(0)
+
+        # Restore depth test / blend / depth-write to what Coin3D had
+        if depth_enabled[0]:
+            glEnable(GL_DEPTH_TEST)
+        else:
+            glDisable(GL_DEPTH_TEST)
+        if blend_enabled[0]:
+            glEnable(GL_BLEND)
+        else:
+            glDisable(GL_BLEND)
+        glDepthMask(depth_write[0])
 
         if getattr(self, "_run_expensive_last", False):
             dm_logger.debug(f"Render frame (w={w}, h={h}): Pass1={1000*(_t2-_t1):.1f}ms, Pass2+3={1000*(_t3-_t2):.1f}ms, Pass4={1000*(_t4-_t3):.1f}ms")

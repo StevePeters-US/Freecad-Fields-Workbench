@@ -6,8 +6,89 @@ SDF field for a NURBS surface (solid boundary — negative inside, positive outs
 import numpy as np
 import FreeCAD
 import Part
-from core.sdf.sdf_field import SdfField
+from core.sdf.sdf_field import SdfField, _GLSL_APPLY_INV_MAT
 from core import dm_logger
+
+_GLSL_SDF_NURBS_SURFACE = """
+vec3 evaluate_bspline_surf(vec2 uv, vec3 poles[256], float u_knots[32], float v_knots[32], int u_deg, int v_deg, int nu, int nv) {
+    int ku = u_deg;
+    for (int i = u_deg; i < nu; i++) if (uv.x >= u_knots[i]) ku = i;
+    int kv = v_deg;
+    for (int i = v_deg; i < nv; i++) if (uv.y >= v_knots[i]) kv = i;
+
+    vec3 temp_v[4];
+    for (int j = 0; j <= 3; j++) {
+        if (j > v_deg) break;
+        int v_idx = clamp(kv - v_deg + j, 0, nv - 1);
+
+        vec3 d[4];
+        for (int i = 0; i <= 3; i++) {
+            if (i > u_deg) break;
+            int u_idx = clamp(ku - u_deg + i, 0, nu - 1);
+            d[i] = poles[u_idx * 16 + v_idx];
+        }
+
+        for (int r = 1; r <= 3; r++) {
+            if (r > u_deg) break;
+            for (int i = 3; i >= 1; i--) {
+                if (i < r || i > u_deg) continue;
+                float den = u_knots[ku + 1 + i - r] - u_knots[ku - u_deg + i];
+                float alpha = (den > 1e-8) ? (uv.x - u_knots[ku - u_deg + i]) / den : 0.0;
+                d[i] = mix(d[i-1], d[i], alpha);
+            }
+        }
+        temp_v[j] = d[clamp(u_deg, 0, 3)];
+    }
+
+    for (int r = 1; r <= 3; r++) {
+        if (r > v_deg) break;
+        for (int j = 3; j >= 1; j--) {
+            if (j < r || j > v_deg) continue;
+            float den = v_knots[kv + 1 + j - r] - v_knots[kv - v_deg + j];
+            float alpha = (den > 1e-8) ? (uv.y - v_knots[kv - v_deg + j]) / den : 0.0;
+            temp_v[j] = mix(temp_v[j-1], temp_v[j], alpha);
+        }
+    }
+    return temp_v[clamp(v_deg, 0, 3)];
+}
+
+float sdf_nurbs_surface(vec3 p, vec3 poles[256], float u_knots[32], float v_knots[32], int u_deg, int v_deg, int nu, int nv, vec2 uv0, vec2 uv1) {
+    float min_d2 = 1e18;
+    vec2 best_uv = uv0;
+    for (int i = 0; i <= 8; i++) {
+        for (int j = 0; j <= 8; j++) {
+            vec2 uv = uv0 + (uv1 - uv0) * vec2(float(i)/8.0, float(j)/8.0);
+            vec3 q = evaluate_bspline_surf(uv, poles, u_knots, v_knots, u_deg, v_deg, nu, nv);
+            float d2 = dot(p - q, p - q);
+            if (d2 < min_d2) { min_d2 = d2; best_uv = uv; }
+        }
+    }
+
+    vec2 uv = best_uv;
+    for (int i = 0; i < 4; i++) {
+        vec3 q = evaluate_bspline_surf(uv, poles, u_knots, v_knots, u_deg, v_deg, nu, nv);
+        float eps = 1e-4;
+        vec3 qu = (evaluate_bspline_surf(uv + vec2(eps, 0), poles, u_knots, v_knots, u_deg, v_deg, nu, nv) - q) / eps;
+        vec3 qv = (evaluate_bspline_surf(uv + vec2(0, eps), poles, u_knots, v_knots, u_deg, v_deg, nu, nv) - q) / eps;
+
+        vec2 b = vec2(dot(p - q, qu), dot(p - q, qv));
+        mat2 A = mat2(dot(qu, qu), dot(qv, qu), dot(qu, qv), dot(qv, qv));
+        float det = A[0][0]*A[1][1] - A[0][1]*A[1][0];
+        if (abs(det) > 1e-10) {
+            vec2 duv = vec2(A[1][1]*b.x - A[0][1]*b.y, -A[1][0]*b.x + A[0][0]*b.y) / det;
+            uv = clamp(uv + duv, uv0, uv1);
+        }
+    }
+
+    vec3 final_q = evaluate_bspline_surf(uv, poles, u_knots, v_knots, u_deg, v_deg, nu, nv);
+    vec3 final_normal = normalize(cross(
+        (evaluate_bspline_surf(uv + vec2(1e-4, 0), poles, u_knots, v_knots, u_deg, v_deg, nu, nv) - final_q),
+        (evaluate_bspline_surf(uv + vec2(0, 1e-4), poles, u_knots, v_knots, u_deg, v_deg, nu, nv) - final_q)
+    ));
+    float dist = length(p - final_q);
+    return (dot(p - final_q, final_normal) >= 0.0 ? 1.0 : -1.0) * dist;
+}
+"""
 
 
 class SdfNurbsSurfaceField(SdfField):
@@ -85,8 +166,8 @@ class SdfNurbsSurfaceField(SdfField):
             return FreeCAD.Vector(-10, -10, -10), FreeCAD.Vector(10, 10, 10)
 
     def to_glsl(self, ctx, point_var="p"):
-        ctx.need_helper("apply_inv_mat")
-        ctx.need_helper("sdf_nurbs_surface")
+        ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
+        ctx.add_custom_helper("sdf_nurbs_surface", _GLSL_SDF_NURBS_SURFACE)
 
         # Extract B-Spline surface data
         poles = self.surface.getPoles() # List of lists of FreeCAD.Vector

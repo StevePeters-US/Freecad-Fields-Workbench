@@ -188,3 +188,11 @@ class SdfField:
 
         return None
 
+
+# Shared GLSL helper: apply an inverted placement matrix.
+# Register via: ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
+_GLSL_APPLY_INV_MAT = """
+vec3 apply_inv_mat(mat4 m, vec3 p) {
+    return (m * vec4(p, 1.0)).xyz;
+}
+"""

@@ -1,6 +1,12 @@
 import numpy as np
 import FreeCAD
-from core.sdf.sdf_field import SdfField
+from core.sdf.sdf_field import SdfField, _GLSL_APPLY_INV_MAT
+
+_GLSL_SDF_SPHERE = """
+float sdf_sphere(vec3 p, vec3 center, float radius) {
+    return length(p - center) - radius;
+}
+"""
 
 class SdfSphereField(SdfField):
     """An exact analytical sphere SDF."""
@@ -39,11 +45,11 @@ class SdfSphereField(SdfField):
         return (np.linalg.norm(local_pts - c, axis=1) - self.radius).astype(np.float32)
 
     def to_glsl(self, ctx, point_var="p"):
-        ctx.need_helper("sdf_sphere")
+        ctx.add_custom_helper("sdf_sphere", _GLSL_SDF_SPHERE)
         c = ctx.uniform("vec3", (self.center.x, self.center.y, self.center.z))
         r = ctx.uniform("float", self.radius)
         if self.inv_matrix is not None:
-            ctx.need_helper("apply_inv_mat")
+            ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
             m = ctx.uniform("mat4", self.inv_matrix.tolist())
             return f"sdf_sphere(apply_inv_mat({m}, {point_var}), {c}, {r})"
         return f"sdf_sphere({point_var}, {c}, {r})"

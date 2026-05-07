@@ -21,15 +21,15 @@ This file covers three coupled work items:
    only knows how to assemble uniforms + helpers + expression into a final
    shader source, and adding a new primitive never requires editing the compiler.
 
-2. **SVG path importer.** Currently the only way to author a 2D profile for
-   extrusion is to click points in the curve tool. Users want to import
-   pre-authored SVG paths. **Rasterization is forbidden** — accuracy must be
-   exact. The importer parses SVG path commands (`M L H V C S Q T A Z`) and
-   produces cubic Bezier segments compatible with `Sdf2dBezierCurve`
-   (`core/sdf/sdf2d/bezier_curve.py`). Other SVG primitives (`<rect>`, `<circle>`,
-   `<ellipse>`, `<line>`, `<polyline>`, `<polygon>`) are converted to cubic
-   Beziers as well so a single import returns a list of `Sdf2dBezierCurve`
-   instances (one per closed subpath).
+2. **SVG path parser library.** A standalone module at
+   `core/sdf/sdf2d/svg_importer.py` that parses SVG path commands
+   (`M L H V C S Q T A Z`) and shape elements (`<rect>`, `<circle>`,
+   `<ellipse>`, `<line>`, `<polyline>`, `<polygon>`) into cubic Bezier
+   segments compatible with `Sdf2dBezierCurve`
+   (`core/sdf/sdf2d/bezier_curve.py`). **Rasterization is forbidden** —
+   accuracy must be exact. **No FreeCAD command, no menu entry, no
+   workbench UI integration** in this scope; the library is consumed
+   programmatically (test scripts, future tools, or the Python console).
 
 3. **Curve render performance.** During curve-extrusion editing the G-buffer
    ray march pass climbs from ~28 ms to >140 ms (see session log for
@@ -742,12 +742,18 @@ shading). Check the FreeCAD console for any "GLSL compile failed" errors.
 
 ---
 
-## Tier 2 — SVG Path Importer (No Rasterization)
+## Tier 2 — SVG Path Importer Library (No Rasterization)
 
-Adds an SVG → `Sdf2dBezierCurve` importer. Every SVG path becomes one or
-more closed cubic-Bezier subpaths, with all primitive shapes (`<rect>`,
-`<circle>`, `<ellipse>`, `<line>`, `<polyline>`, `<polygon>`) converted to
-cubic Beziers analytically. No rasterization. No texture bake.
+Adds an SVG → `Sdf2dBezierCurve` parser library at
+`core/sdf/sdf2d/svg_importer.py`. Every SVG path becomes one or more
+closed cubic-Bezier subpaths, with all primitive shapes (`<rect>`,
+`<circle>`, `<ellipse>`, `<line>`, `<polyline>`, `<polygon>`) converted
+to cubic Beziers analytically. No rasterization. No texture bake.
+
+**Scope note:** This tier adds a parser library only — no FreeCAD command,
+no menu entry, no workbench UI integration. Callers (test scripts,
+future tools, or the user via the FreeCAD Python console) consume the
+returned `Sdf2dBezierCurve` instances directly.
 
 ### OPT-020: Create `core/sdf/sdf2d/svg_importer.py` skeleton
 
@@ -810,7 +816,7 @@ def parse_svg(source):
     """Parse an SVG file path or XML string into a list of Sdf2dBezierCurve.
     Each closed subpath becomes one Sdf2dBezierCurve.
     """
-    raise NotImplementedError("filled in by OPT-026")
+    raise NotImplementedError("filled in by OPT-025")
 ```
 
 ### OPT-021: Implement straight-line path commands (M, L, H, V, Z)
@@ -1136,122 +1142,10 @@ def parse_svg(source):
 ```
 
 **Note on Y axis:** SVG Y points down; FreeCAD profiles use Y up. The
-caller (OPT-026) decides whether to flip Y. By convention in this importer,
-we leave Y as-is — coordinate flipping happens at the import command level.
+parser leaves coordinates as-is — callers are responsible for any axis
+flip.
 
 **Depends on:** OPT-024
-
-### OPT-026: Add `Import SVG as Curve` command
-
-**File:** `commands/cmd_import_svg.py` — new file
-
-**What:** A FreeCAD command that opens a file dialog, parses the SVG with
-`parse_svg`, flips the Y axis (SVG → FreeCAD convention), and creates one
-DM curve object per imported `Sdf2dBezierCurve`. The created object stores
-the curve segments so the existing curve-tool edit flow works on it.
-
-**Implementation:**
-
-```python
-import FreeCAD
-import FreeCADGui
-from PySide import QtGui
-
-
-class CommandDMImportSVG:
-    def GetResources(self):
-        return {
-            'Pixmap': 'CreateCurve',  # reuse curve icon for now
-            'MenuText': 'Import SVG as Curve',
-            'ToolTip': 'Import an SVG file as one or more 2D bezier curves (no rasterization).'
-        }
-
-    def IsActive(self):
-        return FreeCAD.activeDocument() is not None
-
-    def Activated(self):
-        path, _ = QtGui.QFileDialog.getOpenFileName(
-            None, "Import SVG", "", "SVG Files (*.svg)"
-        )
-        if not path:
-            return
-
-        from core.sdf.sdf2d.svg_importer import parse_svg
-        from core.dm_object import create_dm_object
-
-        try:
-            curves = parse_svg(path)
-        except Exception as e:
-            QtGui.QMessageBox.critical(None, "Import SVG", f"Parse failed: {e}")
-            return
-
-        if not curves:
-            QtGui.QMessageBox.warning(None, "Import SVG", "No shapes found in SVG.")
-            return
-
-        # SVG Y points down; FreeCAD profiles assume Y up.
-        flipped = []
-        for c in curves:
-            new_segs = [
-                tuple((p[0], -p[1]) for p in seg)
-                for seg in c.segments
-            ]
-            from core.sdf.sdf2d.bezier_curve import Sdf2dBezierCurve
-            flipped.append(Sdf2dBezierCurve(new_segs))
-
-        for i, curve in enumerate(flipped):
-            obj = create_dm_object(name=f'SvgCurve_{i+1}', shape_type='curve')
-            # Convert curve.segments → (Points, HandleIn, HandleOut) form expected by DM curve.
-            # NOTE: The DM curve object stores N control points + N handle-in + N handle-out.
-            # Each Bezier segment k uses (Points[k], HandleOut[k], HandleIn[k+1], Points[k+1]).
-            n_segs = len(curve.segments)
-            pts, hi, ho = [], [], []
-            for k, seg in enumerate(curve.segments):
-                p0, p1, p2, p3 = seg
-                if k == 0:
-                    pts.append(FreeCAD.Vector(p0[0], p0[1], 0.0))
-                    hi.append(FreeCAD.Vector(p0[0], p0[1], 0.0))
-                ho.append(FreeCAD.Vector(p1[0], p1[1], 0.0))
-                pts.append(FreeCAD.Vector(p3[0], p3[1], 0.0))
-                hi.append(FreeCAD.Vector(p2[0], p2[1], 0.0))
-            # Last point's handle-out is itself (curve is closed by repeating the start).
-            ho.append(FreeCAD.Vector(pts[-1].x, pts[-1].y, 0.0))
-
-            obj.Points = pts
-            obj.HandleIn = hi
-            obj.HandleOut = ho
-            obj.Closed = True
-            obj.touch()
-
-        FreeCAD.activeDocument().recompute()
-
-
-FreeCADGui.addCommand('DM_ImportSVG', CommandDMImportSVG())
-```
-
-**Note:** The handle indexing here mirrors the convention used in
-`tools/curve_tool.py:_get_auto_handles` — verify against that file when
-implementing.
-
-**Depends on:** OPT-025
-
-### OPT-027: Register `DM_ImportSVG` command in `InitGui.py`
-
-**File:** `InitGui.py` — find the workbench's `Initialize` method (where other commands are imported and added to the menu/toolbar)
-
-**What:** Import `commands.cmd_import_svg` and add `'DM_ImportSVG'` to the
-appropriate command list (likely the curve toolbar or a new "Import" group).
-
-**Implementation:**
-
-```python
-# In Initialize(), in the same block where other curve commands are imported:
-import commands.cmd_import_svg  # noqa: F401  (registers DM_ImportSVG)
-
-# In the toolbar/menu definition, append "DM_ImportSVG" to the curve commands list.
-```
-
-**Depends on:** OPT-026
 
 ---
 

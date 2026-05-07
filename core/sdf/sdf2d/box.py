@@ -1,6 +1,13 @@
 import numpy as np
 from .sdf2d_field import Sdf2dField
 
+_GLSL_SDF_BOX2D = """
+float sdf_box2d(vec2 p, vec2 h) {
+    vec2 d = abs(p) - h;
+    return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0);
+}
+"""
+
 
 class Sdf2dBox(Sdf2dField):
     """2D axis-aligned box SDF centered at origin with half-extents hx, hy."""
@@ -22,7 +29,7 @@ class Sdf2dBox(Sdf2dField):
         return (outer + inner).astype(np.float32)
 
     def to_glsl_2d(self, ctx, pvar: str = "q") -> str:
-        ctx.need_helper("sdf_box2d")
+        ctx.add_custom_helper("sdf_box2d", _GLSL_SDF_BOX2D)
         hx = ctx.uniform("float", self.hx)
         hy = ctx.uniform("float", self.hy)
         return f"sdf_box2d({pvar}, vec2({hx}, {hy}))"

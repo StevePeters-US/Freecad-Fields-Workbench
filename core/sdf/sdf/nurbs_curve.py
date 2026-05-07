@@ -6,7 +6,75 @@ any point to the closest point on the curve.
 """
 import numpy as np
 import FreeCAD
-from core.sdf.sdf_field import SdfField
+from core.sdf.sdf_field import SdfField, _GLSL_APPLY_INV_MAT
+
+_GLSL_SDF_NURBS_CURVE = """
+vec3 evaluate_bspline(float t, vec3 poles[32], float knots[32], int degree, int n) {
+    int k = degree;
+    for (int i = degree; i < n; i++) {
+        if (t >= knots[i]) k = i;
+    }
+    vec3 d[4];
+    for (int i = 0; i <= 3; i++) {
+        if (i <= degree) d[i] = poles[clamp(k - degree + i, 0, n-1)];
+    }
+    for (int r = 1; r <= 3; r++) {
+        if (r > degree) break;
+        for (int i = 3; i >= 1; i--) {
+            if (i < r || i > degree) continue;
+            float den = knots[k + 1 + i - r] - knots[k - degree + i];
+            float alpha = (den > 1e-8) ? (t - knots[k - degree + i]) / den : 0.0;
+            d[i] = mix(d[i-1], d[i], alpha);
+        }
+    }
+    return d[clamp(degree, 0, 3)];
+}
+
+vec3 bspline_deriv(float t, vec3 poles[32], float knots[32], int degree, int n) {
+    if (degree < 1) return vec3(0.0);
+    int k = degree;
+    for (int i = degree; i < n; i++) {
+        if (t >= knots[i]) k = i;
+    }
+    vec3 d[4];
+    for (int i = 0; i < degree; i++) {
+        float den = knots[k - degree + i + degree + 1] - knots[k - degree + i + 1];
+        float alpha = (den > 1e-8) ? float(degree) / den : 0.0;
+        d[i] = (poles[k - degree + i + 1] - poles[k - degree + i]) * alpha;
+    }
+    int deg1 = degree - 1;
+    for (int r = 1; r <= 2; r++) {
+        if (r > deg1) break;
+        for (int i = 2; i >= 1; i--) {
+            if (i < r || i > deg1) continue;
+            float den = knots[k + 1 + i - r] - knots[k - deg1 + i];
+            float alpha = (den > 1e-8) ? (t - knots[k - deg1 + i]) / den : 0.0;
+            d[i] = mix(d[i-1], d[i], alpha);
+        }
+    }
+    return d[clamp(deg1, 0, 2)];
+}
+
+float sdf_nurbs_curve(vec3 p, vec3 poles[32], float knots[32], int degree, int n, float u0, float u1, float r) {
+    float min_d2 = 1e18;
+    float best_t = u0;
+    for (int i = 0; i <= 16; i++) {
+        float ut = u0 + (u1 - u0) * float(i) / 16.0;
+        vec3 q = evaluate_bspline(ut, poles, knots, degree, n);
+        float d2 = dot(p - q, p - q);
+        if (d2 < min_d2) { min_d2 = d2; best_t = ut; }
+    }
+    float t = best_t;
+    for (int i = 0; i < 4; i++) {
+        vec3 q = evaluate_bspline(t, poles, knots, degree, n);
+        vec3 dq = bspline_deriv(t, poles, knots, degree, n);
+        float d2 = dot(dq, dq);
+        if (d2 > 1e-8) t = clamp(t - dot(q - p, dq) / d2, u0, u1);
+    }
+    vec3 final_q = evaluate_bspline(t, poles, knots, degree, n);
+    return length(p - final_q) - r;
+}
+"""
 
 
 class SdfNurbsCurveField(SdfField):
@@ -84,8 +152,8 @@ class SdfNurbsCurveField(SdfField):
             return FreeCAD.Vector(-10, -10, -10), FreeCAD.Vector(10, 10, 10)
 
     def to_glsl(self, ctx, point_var="p"):
-        ctx.need_helper("apply_inv_mat")
-        ctx.need_helper("sdf_nurbs_curve")
+        ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
+        ctx.add_custom_helper("sdf_nurbs_curve", _GLSL_SDF_NURBS_CURVE)
 
         # Extract B-Spline data
         poles = [FreeCAD.Vector(p) for p in self.curve.getPoles()]

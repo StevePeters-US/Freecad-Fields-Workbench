@@ -2,7 +2,7 @@ import uuid
 import math
 import numpy as np
 import FreeCAD
-from .sdf_field import SdfField
+from .sdf_field import SdfField, _GLSL_APPLY_INV_MAT
 from .sdf2d.sdf2d_field import Sdf2dField
 
 
@@ -71,7 +71,7 @@ class SdfRevolutionField(SdfField):
         expr_2d = self.profile.to_glsl_2d(ctx, sub_p)
 
         if self.inv_matrix is not None:
-            ctx.need_helper("apply_inv_mat")
+            ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
             m = ctx.uniform("mat4", self.inv_matrix.tolist())
             lp_expr = f"apply_inv_mat({m}, p)"
         else:

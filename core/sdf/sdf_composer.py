@@ -2,6 +2,27 @@ import FreeCAD
 import numpy as np
 from core.sdf.sdf_field import SdfField
 
+_GLSL_SMOOTH_UNION = """
+float smooth_union(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5*(b-a)/k, 0.0, 1.0);
+    return mix(b, a, h) - k*h*(1.0-h);
+}
+"""
+
+_GLSL_SMOOTH_SUBTRACTION = """
+float smooth_subtraction(float a, float b, float k) {
+    float h = clamp(0.5 - 0.5*(a+b)/k, 0.0, 1.0);
+    return mix(a, -b, h) + k*h*(1.0-h);
+}
+"""
+
+_GLSL_SMOOTH_INTERSECTION = """
+float smooth_intersection(float a, float b, float k) {
+    float h = clamp(0.5 - 0.5*(b-a)/k, 0.0, 1.0);
+    return mix(b, a, h) + k*h*(1.0-h);
+}
+"""
+
 
 def _smooth_union_scalar(a, b, k):
     h = max(0.0, min(1.0, 0.5 + 0.5 * (b - a) / k))
@@ -111,7 +132,7 @@ class SmoothUnionField(ComposerField):
         a = self.a.to_glsl(ctx, point_var)
         b = self.b.to_glsl(ctx, point_var)
         k_u = ctx.uniform("float", self.k)
-        ctx.need_helper("smooth_union")
+        ctx.add_custom_helper("smooth_union", _GLSL_SMOOTH_UNION)
         return f"smooth_union({a}, {b}, {k_u})"
 
     def evaluate(self, point: FreeCAD.Vector) -> float:
@@ -137,7 +158,7 @@ class SmoothSubtractionField(ComposerField):
         a = self.a.to_glsl(ctx, point_var)
         b = self.b.to_glsl(ctx, point_var)
         k_u = ctx.uniform("float", self.k)
-        ctx.need_helper("smooth_subtraction")
+        ctx.add_custom_helper("smooth_subtraction", _GLSL_SMOOTH_SUBTRACTION)
         return f"smooth_subtraction({a}, {b}, {k_u})"
 
     def evaluate(self, point: FreeCAD.Vector) -> float:
@@ -168,7 +189,7 @@ class SmoothIntersectionField(ComposerField):
         a = self.a.to_glsl(ctx, point_var)
         b = self.b.to_glsl(ctx, point_var)
         k_u = ctx.uniform("float", self.k)
-        ctx.need_helper("smooth_intersection")
+        ctx.add_custom_helper("smooth_intersection", _GLSL_SMOOTH_INTERSECTION)
         return f"smooth_intersection({a}, {b}, {k_u})"
 
     def evaluate(self, point: FreeCAD.Vector) -> float:

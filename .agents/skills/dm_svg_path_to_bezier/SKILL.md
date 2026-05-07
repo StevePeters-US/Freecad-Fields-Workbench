@@ -27,8 +27,8 @@ by appending a degenerate-cubic line from end → start.
 ## Coordinate Conventions
 
 - **SVG Y axis points down**, FreeCAD profiles assume Y up.
-  The importer leaves coordinates as-is; the **import command** does
-  the Y-flip (`y → -y`).
+  The parser leaves coordinates as-is; callers are responsible for any
+  axis flip (`y → -y`).
 - Numbers may be space-, comma-, or sign-delimited:
   `M10,20 L-5.3.2` is `M 10 20 L -5.3 0.2`.
 - A command letter may be followed by multiple coordinate sets, which
@@ -251,8 +251,5 @@ Path + Flatten Transforms" before importing.
 ## Files to Read Before Editing
 
 1. `core/sdf/sdf2d/bezier_curve.py:130-200` — the `Sdf2dBezierCurve`
-   constructor signature; the importer must produce data shaped like
+   constructor signature; the parser must produce data shaped like
    `[(p0, p1, p2, p3), ...]` where each `pi` is a 2-tuple of floats.
-2. `tools/curve_tool.py:_get_auto_handles` — defines how the DM curve
-   object stores Points/HandleIn/HandleOut, which the import command
-   must populate to make the imported curve editable.
