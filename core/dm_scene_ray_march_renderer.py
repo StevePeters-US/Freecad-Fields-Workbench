@@ -301,6 +301,7 @@ class DMSceneRayMarchRenderer:
         self._attached = False
 
         self._dirty_fields = set()    # labels with pending shader recompile
+        self._compiled_fields = {}    # label -> (expr, ctx, bbox_min, bbox_max)
         self._bbox_coords  = None
 
         # Multi-pass SSAO renderer state
@@ -459,6 +460,7 @@ class DMSceneRayMarchRenderer:
         if label in self._fields:
             dm_logger.debug(f"SceneRayMarch: Unregistering field '{label}'")
             self._fields.pop(label)
+        self._compiled_fields.pop(label, None)
         self._dirty_fields.discard(label)
 
         if not self._fields:
@@ -800,21 +802,26 @@ class DMSceneRayMarchRenderer:
 
         analytical_data = []
         for label, f in visible:
-            try:
-                expr, ctx = compile_field_to_glsl(f)
-            except NotImplementedError:
-                dm_logger.warn(
-                    f"SceneRayMarch: '{label}' ({type(f).__name__}) has no to_glsl() — skipped."
-                )
-                continue
-            except Exception as e:
-                dm_logger.error(f"SceneRayMarch: GLSL compile failed for '{label}': {e}")
-                continue
-
-            try:
-                bmin, bmax = f.bounding_box()
-            except Exception:
-                bmin, bmax = FreeCAD.Vector(-10, -10, -10), FreeCAD.Vector(10, 10, 10)
+            # Use cached compilation if not dirty
+            if label in self._compiled_fields and label not in self._dirty_fields:
+                expr, ctx, bmin, bmax = self._compiled_fields[label]
+            else:
+                try:
+                    expr, ctx = compile_field_to_glsl(f, prefix=label)
+                    try:
+                        bmin, bmax = f.bounding_box()
+                    except Exception:
+                        bmin, bmax = FreeCAD.Vector(-10, -10, -10), FreeCAD.Vector(10, 10, 10)
+                    # Cache it
+                    self._compiled_fields[label] = (expr, ctx, bmin, bmax)
+                except NotImplementedError:
+                    dm_logger.warn(
+                        f"SceneRayMarch: '{label}' ({type(f).__name__}) has no to_glsl() — skipped."
+                    )
+                    continue
+                except Exception as e:
+                    dm_logger.error(f"SceneRayMarch: GLSL compile failed for '{label}': {e}")
+                    continue
 
             analytical_data.append({
                 "expr": expr,
@@ -823,6 +830,9 @@ class DMSceneRayMarchRenderer:
                 "bbox_max": bmax,
                 "is_subtractive": self._get_is_subtractive(label),
             })
+        
+        # Clear dirty flags after rebuild
+        self._dirty_fields.clear()
 
         if not analytical_data:
             self._switch.whichChild = -1

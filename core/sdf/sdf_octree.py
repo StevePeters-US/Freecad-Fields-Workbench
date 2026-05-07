@@ -193,3 +193,29 @@ class SdfOctreeCache:
         if not pts_list:
             return np.empty((0, 3), dtype=np.float64)
         return np.array(pts_list, dtype=np.float64)
+
+
+def make_freecad_progress_callback(label: str = "Building SDF octree..."):
+    """
+    Returns a progress_callback(fraction) that updates a FreeCAD progress bar.
+    Call the returned function with 1.0 to close the bar.
+    """
+    try:
+        import FreeCADGui
+        seq = FreeCAD.Base.ProgressIndicator()
+        seq.start(label, 100)
+        started = [True]
+        last_val = [0]
+        def callback(fraction):
+            if not started[0]: return
+            val = int(fraction * 100)
+            if val > last_val[0]:
+                for _ in range(val - last_val[0]):
+                    seq.next(True)
+                last_val[0] = val
+            if fraction >= 1.0:
+                seq.stop()
+                started[0] = False
+        return callback
+    except Exception:
+        return lambda f: None  # no-op if FreeCAD GUI not available

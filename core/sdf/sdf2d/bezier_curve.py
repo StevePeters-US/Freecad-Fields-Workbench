@@ -205,8 +205,7 @@ class Sdf2dBezierCurve(Sdf2dField):
         ctx.add_custom_helper("sd_cubic_bez_2d", _GLSL_CUBIC_BEZ_2D)
         ctx.add_custom_helper("sd_cubic_winding", _GLSL_CUBIC_WINDING)
 
-        uid = f"{id(self) & 0xFFFFFFFF:08x}"
-        func_name = f"sdf_bezier_{uid}"
+        func_name = ctx.get_unique_name("sdf_bezier")
 
         lines = [f"float {func_name}(vec2 p) {{"]
         lines.append("    float d = 1e18;")

@@ -932,7 +932,8 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         # Schedule parent boolean recompute deferred (must not run inside drag timer)
         if getattr(self, "_is_editing", False) and self._preview_obj and self._preview_obj.Document:
             obj = self._preview_obj
-            QtCore.QTimer.singleShot(0, lambda: self._recompute_boolean_parents(obj))
+            if not getattr(self, "_is_dragging", False):
+                QtCore.QTimer.singleShot(0, lambda: self._recompute_boolean_parents(obj))
         if self.view:
             self.view.redraw()
 
@@ -2262,7 +2263,7 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
         self._height         = 5.0   # full extrusion height in mm
         self._bezier_segs    = None
         # GLSL-stable field cache: id() must stay constant to avoid shader recompiles
-        self._cached_profile = None   # Sdf2dBezierCurve
+        self._cached_profile = None   # Sdf2dNurbsCurveField
         self._cached_extrude = None   # SdfExtrusionField
 
         import FreeCADGui
@@ -2330,13 +2331,17 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
         ], dtype=np.float32)
 
     def _extrude_field(self):
-        if not self._bezier_segs or self._height < 0.01:
+        if self._height < 0.01 or not self._curve_obj:
             return None
-        from core.sdf.sdf2d.bezier_curve import Sdf2dBezierCurve
+        from core.sdf.sdf2d.nurbs_curve import Sdf2dNurbsCurveField
         from core.sdf.sdf_extrusion import SdfExtrusionField
 
         if self._cached_profile is None:
-            self._cached_profile = Sdf2dBezierCurve(self._bezier_segs)
+            from core.sdf.sdf2d.nurbs_curve import Sdf2dNurbsCurveField
+            if self._curve_obj and hasattr(self._curve_obj, "Shape") and len(self._curve_obj.Shape.Edges) > 0:
+                self._cached_profile = Sdf2dNurbsCurveField(self._curve_obj.Shape.Edges[0].Curve, sample_count=64)
+            else:
+                return None
 
         if self._cached_extrude is None:
             self._cached_extrude = SdfExtrusionField(
@@ -2345,7 +2350,6 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
                 placement=self._offset_placement(),
             )
         else:
-            # Update height + placement in-place: id() stays constant → GLSL unchanged → no recompile
             self._update_field_inplace(self._cached_extrude)
 
         return self._cached_extrude

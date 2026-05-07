@@ -333,7 +333,7 @@ def bake_sdf_to_volume(field, cell_size: float, bbox_override=None) -> dict:
 
 ---
 
-### MG-006: Update cmd_sdf_export.py to pass cell_size through mesher
+### [x] MG-006: Update cmd_sdf_export.py to pass cell_size through mesher
 
 **File:** `commands/cmd_sdf_export.py` — `Activated()` method (lines 42–100)
 
@@ -365,7 +365,7 @@ This tier can proceed in parallel with Tiers 2–3 as it creates new files only.
 See `.agents/skills/dm_nurbs_sdf/SKILL.md` for FreeCAD NURBS API reference and
 the `to_glsl()` contract.
 
-### NS-001: Create SdfNurbsCurveField (CPU only)
+### [x] NS-001: Create SdfNurbsCurveField (CPU only)
 
 **File:** New file `core/sdf/sdf/nurbs_curve.py` — create from scratch
 
@@ -450,7 +450,7 @@ class SdfNurbsCurveField(SdfField):
 
 ---
 
-### NS-002: Create Sdf2dNurbsCurveField (CPU only)
+### [x] NS-002: Create Sdf2dNurbsCurveField (CPU only)
 
 **File:** New file `core/sdf/sdf2d/nurbs_curve.py` — create from scratch
 
@@ -543,7 +543,7 @@ def _winding_number_2d(point, polygon: np.ndarray) -> int:
 
 ---
 
-### NS-003: Create SdfNurbsSurfaceField (CPU only)
+### [x] NS-003: Create SdfNurbsSurfaceField (CPU only)
 
 **File:** New file `core/sdf/sdf/nurbs_surface.py` — create from scratch
 
@@ -630,7 +630,7 @@ class SdfNurbsSurfaceField(SdfField):
 
 ---
 
-### NS-004: Add to_glsl() for SdfNurbsCurveField
+### [x] NS-004: Add to_glsl() for SdfNurbsCurveField
 
 **File:** `core/sdf/sdf/nurbs_curve.py` — replace the `to_glsl()` stub in `SdfNurbsCurveField`
 
@@ -721,7 +721,7 @@ float nurbs_curve_sdf(vec3 p, vec3 poles[32], int n, float r) {
 
 ---
 
-### NS-005: Add to_glsl_2d() for Sdf2dNurbsCurveField
+### [x] NS-005: Add to_glsl_2d() for Sdf2dNurbsCurveField
 
 **File:** `core/sdf/sdf2d/nurbs_curve.py` — replace the `to_glsl_2d()` stub
 
@@ -772,7 +772,7 @@ float nurbs_profile_sdf_2d(vec2 p, vec2 pts[64], int n) {
 
 ---
 
-### NS-006: Add to_glsl() for SdfNurbsSurfaceField (triangle proxy approach)
+### [x] NS-006: Add to_glsl() for SdfNurbsSurfaceField (triangle proxy approach)
 
 **File:** `core/sdf/sdf/nurbs_surface.py` — replace the `to_glsl()` stub
 
@@ -840,7 +840,7 @@ float sdf_tri_proxy(vec3 p, vec3 tv[192], int n) {
 
 ---
 
-### NS-007: Wire NURBS SDF fields to DMObjectProxy
+### [x] NS-007: Wire NURBS SDF fields to DMObjectProxy
 
 **File:** `core/dm_object.py` — `DMObjectProxy.execute()` method
 
@@ -873,7 +873,7 @@ elif shape_type == "surface":
 
 ---
 
-### NS-008: Add NurbsProfileExtrusion convenience in cmd_curve_sdf.py
+### [x] NS-008: Add NurbsProfileExtrusion convenience in cmd_curve_sdf.py
 
 **File:** `commands/cmd_curve_sdf.py` — `Activated()` method
 
@@ -906,7 +906,7 @@ profile = Sdf2dNurbsCurveField(curve.Curve, sample_count=64)
 
 Wire the octree into all tool paths and add shared caching.
 
-### PI-001: Create SdfCacheManager singleton
+### [x] PI-001: Create SdfCacheManager singleton
 
 **File:** New file `core/sdf/sdf_cache_manager.py` — create from scratch
 
@@ -970,7 +970,7 @@ class SdfCacheManager:
 
 ---
 
-### PI-002: Update sdf_slicer.py to accept SdfOctreeCache
+### [x] PI-002: Update sdf_slicer.py to accept SdfOctreeCache
 
 **File:** `core/sdf/sdf_slicer.py` — `slice_sdf()` function (around line 81)
 
@@ -1006,7 +1006,7 @@ before writing the patch.
 
 ---
 
-### PI-003: Add SdfOctreeCache acceleration to SdfField.ray_march()
+### [x] PI-003: Add SdfOctreeCache acceleration to SdfField.ray_march()
 
 **File:** `core/sdf/sdf_field.py` — `ray_march()` method (starts at line 77)
 
@@ -1047,7 +1047,7 @@ complete AABB slab test and step-size logic before writing the patch.
 
 ---
 
-### PI-004: Add progress callback to SdfOctreeCache.build()
+### [x] PI-004: Add progress callback to SdfOctreeCache.build()
 
 **File:** `core/sdf/sdf_octree.py` — `build()` method
 

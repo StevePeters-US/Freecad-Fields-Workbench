@@ -32,11 +32,13 @@ class DragTimerMixin:
         self._drag_timer = QtCore.QTimer()
         self._drag_timer.timeout.connect(self._drag_update)
         self._drag_timer.start(interval_ms)
+        self._is_dragging = True
 
     def _stop_drag_timer(self):
         if hasattr(self, "_drag_timer") and self._drag_timer:
             self._drag_timer.stop()
             self._drag_timer = None
+        self._is_dragging = False
 
     def _drag_update(self):
         """Override in subclasses."""
@@ -49,6 +51,11 @@ class DragTimerMixin:
             self.state = getattr(self, '_drag_return_state', ToolState.IDLE)
             if hasattr(self, "_selected_element"): self._selected_element = None
             if hasattr(self, "_dragging_idx"): self._dragging_idx = None
+            
+            # Trigger final full update if supported (e.g. PrimitiveCreatorBase)
+            if hasattr(self, "_do_full_preview_update"):
+                self._do_full_preview_update()
+            
             return True
         return False
 
@@ -90,6 +97,7 @@ class DMBase:
                 dm_logger.debug(f"DMBase.__init__: Failed to terminate previous tool: {e}")
                 
         self._terminated = False
+        self._is_dragging = False
         self.view = FreeCADGui.activeView()
         self.doc = FreeCAD.ActiveDocument
         
@@ -1037,7 +1045,7 @@ class NURBSPrimitiveCreator(DMBase):
             
             self._active_obj.touch()
             if self.doc:
-                self.doc.recompute()
+                self.doc.recompute([self._active_obj])
 
         # Note: Legacy DM_Cursor (Part::Feature) has been removed in favor of 
         # more efficient Coin3D overlays or can be re-implemented as a pure 

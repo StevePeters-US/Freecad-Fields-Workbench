@@ -11,12 +11,24 @@ import uuid
 class GlslContext:
     """Collects uniforms and helper functions during SDF→GLSL compilation."""
 
-    def __init__(self):
+    def __init__(self, prefix=None):
         self._uniforms = []   # [(name, glsl_type, value)]
         self._counter = 0
         self._helpers = set()
         self._custom_helpers = {}  # name → GLSL function body string
-        self._prefix = f"u_{uuid.uuid4().hex[:8]}_"
+        self._helper_counter = 0   # Separate counter for unique helper names
+        if prefix is None:
+            self._prefix = f"u_{uuid.uuid4().hex[:8]}_"
+        else:
+            # Sanitize prefix for GLSL (no dots, etc)
+            clean_prefix = prefix.replace(".", "_").replace(" ", "_").replace("-", "_")
+            self._prefix = f"u_{clean_prefix}_"
+
+    def get_unique_name(self, base_name: str) -> str:
+        """Returns a unique name for a helper or variable, tied to this context's prefix."""
+        name = f"{self._prefix}{base_name}_{self._helper_counter}"
+        self._helper_counter += 1
+        return name
 
     def uniform(self, glsl_type, value):
         """Register a uniform and return its GLSL name."""
@@ -104,6 +116,154 @@ float smooth_intersection(float a, float b, float k) {
     return mix(b, a, h) + k*h*(1.0-h);
 }
 """,
+    "sdf_nurbs_curve": """
+vec3 evaluate_bspline(float t, vec3 poles[32], float knots[32], int degree, int n) {
+    int k = degree;
+    for (int i = degree; i < n; i++) {
+        if (t >= knots[i]) k = i;
+    }
+    vec3 d[4]; 
+    for (int i = 0; i <= 3; i++) {
+        if (i <= degree) d[i] = poles[clamp(k - degree + i, 0, n-1)];
+    }
+    for (int r = 1; r <= 3; r++) {
+        if (r > degree) break;
+        for (int i = 3; i >= 1; i--) {
+            if (i < r || i > degree) continue;
+            float den = knots[k + 1 + i - r] - knots[k - degree + i];
+            float alpha = (den > 1e-8) ? (t - knots[k - degree + i]) / den : 0.0;
+            d[i] = mix(d[i-1], d[i], alpha);
+        }
+    }
+    return d[clamp(degree, 0, 3)];
+}
+
+vec3 bspline_deriv(float t, vec3 poles[32], float knots[32], int degree, int n) {
+    if (degree < 1) return vec3(0.0);
+    int k = degree;
+    for (int i = degree; i < n; i++) {
+        if (t >= knots[i]) k = i;
+    }
+    vec3 d[4];
+    for (int i = 0; i < degree; i++) {
+        float den = knots[k - degree + i + degree + 1] - knots[k - degree + i + 1];
+        float alpha = (den > 1e-8) ? float(degree) / den : 0.0;
+        d[i] = (poles[k - degree + i + 1] - poles[k - degree + i]) * alpha;
+    }
+    // Now evaluate this B-spline of degree-1
+    int deg1 = degree - 1;
+    for (int r = 1; r <= 2; r++) {
+        if (r > deg1) break;
+        for (int i = 2; i >= 1; i--) {
+            if (i < r || i > deg1) continue;
+            float den = knots[k + 1 + i - r] - knots[k - deg1 + i];
+            float alpha = (den > 1e-8) ? (t - knots[k - deg1 + i]) / den : 0.0;
+            d[i] = mix(d[i-1], d[i], alpha);
+        }
+    }
+    return d[clamp(deg1, 0, 2)];
+}
+
+float sdf_nurbs_curve(vec3 p, vec3 poles[32], float knots[32], int degree, int n, float u0, float u1, float r) {
+    float min_d2 = 1e18;
+    float best_t = u0;
+    for (int i = 0; i <= 16; i++) {
+        float ut = u0 + (u1 - u0) * float(i) / 16.0;
+        vec3 q = evaluate_bspline(ut, poles, knots, degree, n);
+        float d2 = dot(p - q, p - q);
+        if (d2 < min_d2) { min_d2 = d2; best_t = ut; }
+    }
+    float t = best_t;
+    for (int i = 0; i < 4; i++) {
+        vec3 q = evaluate_bspline(t, poles, knots, degree, n);
+        vec3 dq = bspline_deriv(t, poles, knots, degree, n);
+        float d2 = dot(dq, dq);
+        if (d2 > 1e-8) t = clamp(t - dot(q - p, dq) / d2, u0, u1);
+    }
+    vec3 final_q = evaluate_bspline(t, poles, knots, degree, n);
+    return length(p - final_q) - r;
+}
+""",
+    "sdf_nurbs_surface": """
+vec3 evaluate_bspline_surf(vec2 uv, vec3 poles[256], float u_knots[32], float v_knots[32], int u_deg, int v_deg, int nu, int nv) {
+    int ku = u_deg;
+    for (int i = u_deg; i < nu; i++) if (uv.x >= u_knots[i]) ku = i;
+    int kv = v_deg;
+    for (int i = v_deg; i < nv; i++) if (uv.y >= v_knots[i]) kv = i;
+
+    vec3 temp_v[4];
+    for (int j = 0; j <= 3; j++) {
+        if (j > v_deg) break;
+        int v_idx = clamp(kv - v_deg + j, 0, nv - 1);
+        
+        vec3 d[4];
+        for (int i = 0; i <= 3; i++) {
+            if (i > u_deg) break;
+            int u_idx = clamp(ku - u_deg + i, 0, nu - 1);
+            d[i] = poles[u_idx * 16 + v_idx]; // Assuming max_v = 16
+        }
+        
+        for (int r = 1; r <= 3; r++) {
+            if (r > u_deg) break;
+            for (int i = 3; i >= 1; i--) {
+                if (i < r || i > u_deg) continue;
+                float den = u_knots[ku + 1 + i - r] - u_knots[ku - u_deg + i];
+                float alpha = (den > 1e-8) ? (uv.x - u_knots[ku - u_deg + i]) / den : 0.0;
+                d[i] = mix(d[i-1], d[i], alpha);
+            }
+        }
+        temp_v[j] = d[clamp(u_deg, 0, 3)];
+    }
+
+    for (int r = 1; r <= 3; r++) {
+        if (r > v_deg) break;
+        for (int j = 3; j >= 1; j--) {
+            if (j < r || j > v_deg) continue;
+            float den = v_knots[kv + 1 + j - r] - v_knots[kv - v_deg + j];
+            float alpha = (den > 1e-8) ? (uv.y - v_knots[kv - v_deg + j]) / den : 0.0;
+            temp_v[j] = mix(temp_v[j-1], temp_v[j], alpha);
+        }
+    }
+    return temp_v[clamp(v_deg, 0, 3)];
+}
+
+float sdf_nurbs_surface(vec3 p, vec3 poles[256], float u_knots[32], float v_knots[32], int u_deg, int v_deg, int nu, int nv, vec2 uv0, vec2 uv1) {
+    float min_d2 = 1e18;
+    vec2 best_uv = uv0;
+    for (int i = 0; i <= 8; i++) {
+        for (int j = 0; j <= 8; j++) {
+            vec2 uv = uv0 + (uv1 - uv0) * vec2(float(i)/8.0, float(j)/8.0);
+            vec3 q = evaluate_bspline_surf(uv, poles, u_knots, v_knots, u_deg, v_deg, nu, nv);
+            float d2 = dot(p - q, p - q);
+            if (d2 < min_d2) { min_d2 = d2; best_uv = uv; }
+        }
+    }
+    
+    vec2 uv = best_uv;
+    for (int i = 0; i < 4; i++) {
+        vec3 q = evaluate_bspline_surf(uv, poles, u_knots, v_knots, u_deg, v_deg, nu, nv);
+        float eps = 1e-4;
+        vec3 qu = (evaluate_bspline_surf(uv + vec2(eps, 0), poles, u_knots, v_knots, u_deg, v_deg, nu, nv) - q) / eps;
+        vec3 qv = (evaluate_bspline_surf(uv + vec2(0, eps), poles, u_knots, v_knots, u_deg, v_deg, nu, nv) - q) / eps;
+        
+        vec2 b = vec2(dot(p - q, qu), dot(p - q, qv));
+        mat2 A = mat2(dot(qu, qu), dot(qv, qu), dot(qu, qv), dot(qv, qv));
+        float det = A[0][0]*A[1][1] - A[0][1]*A[1][0];
+        if (abs(det) > 1e-10) {
+            vec2 duv = vec2(A[1][1]*b.x - A[0][1]*b.y, -A[1][0]*b.x + A[0][0]*b.y) / det;
+            uv = clamp(uv + duv, uv0, uv1);
+        }
+    }
+    
+    vec3 final_q = evaluate_bspline_surf(uv, poles, u_knots, v_knots, u_deg, v_deg, nu, nv);
+    vec3 final_normal = normalize(cross(
+        (evaluate_bspline_surf(uv + vec2(1e-4, 0), poles, u_knots, v_knots, u_deg, v_deg, nu, nv) - final_q),
+        (evaluate_bspline_surf(uv + vec2(0, 1e-4), poles, u_knots, v_knots, u_deg, v_deg, nu, nv) - final_q)
+    ));
+    float dist = length(p - final_q);
+    return (dot(p - final_q, final_normal) >= 0.0 ? 1.0 : -1.0) * dist;
+}
+""",
     "sdf_box2d": """
 float sdf_box2d(vec2 p, vec2 h) {
     vec2 d = abs(p) - h;
@@ -113,13 +273,13 @@ float sdf_box2d(vec2 p, vec2 h) {
 }
 
 
-def compile_field_to_glsl(field):
+def compile_field_to_glsl(field, prefix=None):
     """Compile an SDF field tree to a GLSL expression.
 
     Returns:
         (glsl_expression: str, ctx: GlslContext)
     """
-    ctx = GlslContext()
+    ctx = GlslContext(prefix=prefix)
     expr = field.to_glsl(ctx, "p")
     return expr, ctx
 
@@ -192,10 +352,13 @@ def build_multi_raymarch_fragment_shader(fields_data):
         all_helpers.update(fd["ctx"].helpers)
         all_custom_helpers.update(fd["ctx"]._custom_helpers)
 
-    uniform_decls = "\n".join(
-        f"uniform {glsl_type} {name};"
-        for name, glsl_type, _ in all_uniforms
-    )
+    seen_uniforms = set()
+    uniform_decls_list = []
+    for name, glsl_type, _ in all_uniforms:
+        if name not in seen_uniforms:
+            uniform_decls_list.append(f"uniform {glsl_type} {name};")
+            seen_uniforms.add(name)
+    uniform_decls = "\n".join(uniform_decls_list)
 
     all_helper_bodies = {**GLSL_HELPERS, **all_custom_helpers}
     # Static helpers in any order; custom helpers in insertion order (topological).

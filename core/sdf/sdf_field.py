@@ -1,6 +1,12 @@
 import FreeCAD
 import numpy as np
 class SdfField:
+    _octree_cache = None
+    _is_subtractive = False
+
+    def __init__(self):
+        self._octree_cache = None
+        self._is_subtractive = False
     """
     Abstract base class for all SDF (Signed Distance Field) fields.
     A field evaluates to a negative number inside the solid, positive outside, and 0 on the surface.
@@ -59,6 +65,20 @@ class SdfField:
         # Stack into (N,3) array and ensure float64 output
         return np.column_stack([gx, gy, gz]).astype(np.float64)
 
+    @property
+    def octree_cache(self):
+        """On-demand SdfOctreeCache for this field. Automatically builds at 2.0mm res."""
+        if self._octree_cache is None:
+            from core.sdf.sdf_octree import SdfOctreeCache
+            # Default leaf size 2.0mm for snapping is enough
+            self._octree_cache = SdfOctreeCache(self, leaf_size=2.0)
+            self._octree_cache.build()
+        return self._octree_cache
+
+    def invalidate_cache(self):
+        """Must be called when field parameters change."""
+        self._octree_cache = None
+
     def curvature_grid(self, points: np.ndarray, h: float = 1e-3) -> np.ndarray:
         """Approximate mean curvature via Laplacian of SDF. Returns (N,) float64."""
         f0 = self.evaluate_grid(points)
@@ -74,7 +94,7 @@ class SdfField:
         
         return np.abs(lap) / grad_mag
 
-    def ray_march(self, ray_origin, ray_direction, max_steps=256, surface_eps=0.001):
+    def ray_march(self, ray_origin, ray_direction, max_steps=256, surface_eps=0.001, octree_cache=None):
         """
         Sphere-trace a ray against this SDF field.
         Returns (hit_point, hit_normal) as FreeCAD.Vector pair, or None if no hit.
@@ -83,6 +103,7 @@ class SdfField:
         ray_direction: world-space direction (will be normalized internally)
         max_steps:     maximum sphere-trace iterations (default 256)
         surface_eps:   surface hit threshold in mm (default 0.001)
+        octree_cache:  optional SdfOctreeCache — if provided, use to skip empty space.
         """
         # Normalize direction
         d = FreeCAD.Vector(ray_direction)
@@ -123,11 +144,7 @@ class SdfField:
         # is often past the object, so valid intersections have negative t values.
         t = t_near  # start at AABB entry (may be negative)
 
-        # Use AABB diagonal as march budget, not t_far.
-        # t_far can be deceptively close to t_near when the ray clips an AABB corner
-        # (a rotated/transformed box has a larger AABB than the shape itself), causing
-        # one SDF step to overshoot the interval.  Marching for a full diagonal from
-        # the entry point guarantees we cover the whole object.
+        # Use AABB diagonal as march budget
         aabb_diag = (bb_max - bb_min).Length
         max_dist = t_near + max(aabb_diag, 1.0)
 
@@ -136,11 +153,25 @@ class SdfField:
             if t > max_dist:
                 break
             pos = ray_origin + d * t
-            dist = self.evaluate(pos)
+            
+            # ── Spatial Acceleration (Octree) ──
+            if octree_cache is None:
+                octree_cache = self._octree_cache # Use internal cache if available
+            
+            if octree_cache is not None:
+                dist = octree_cache.query(pos)
+                if dist == float('inf'):
+                    # Skip empty space by advancing by the leaf size
+                    t += octree_cache.leaf_size
+                    continue
+            else:
+                dist = self.evaluate(pos)
+                
             if dist < surface_eps:
                 # Hit — final refinement to snap exactly to theoretical surface
-                # (only if dist is positive; if we are already inside, stay at pos)
                 if dist > 0:
+                    # Final analytical check if we were using cache
+                    dist = self.evaluate(pos)
                     pos = pos + d * dist
                 
                 # Compute outward normal via gradient
@@ -151,7 +182,8 @@ class SdfField:
                 else:
                     normal = FreeCAD.Vector(0, 0, 1)
                 return pos, normal
-            # Advance by the SDF value; min step prevents stalling at a near-zero surface
+                
+            # Advance by the SDF value
             t += max(dist, surface_eps * 0.1)
 
         return None

@@ -57,15 +57,11 @@ class SdfExtrusionField(SdfField):
         return (inner + outer).astype(np.float32)
 
     def to_glsl(self, ctx, point_var: str = "p") -> str:
-        uid = f"{id(self) & 0xFFFFFFFF:08x}"
-        func_name = f"sdf_extrude_{uid}"
+        func_name = ctx.get_unique_name("sdf_extrude")
 
         half_h = ctx.uniform("float", self.height * 0.5)
 
-        # Build the 2D expression — use a fresh sub-pvar to avoid name collision
-        sub_p = f"_ep_{uid}"
-        expr_2d = self.profile.to_glsl_2d(ctx, sub_p)
-
+        # The 2D expression is generated directly inside the body.
         if self.inv_matrix is not None:
             ctx.need_helper("apply_inv_mat")
             m = ctx.uniform("mat4", self.inv_matrix.tolist())
@@ -76,8 +72,8 @@ class SdfExtrusionField(SdfField):
         body = (
             f"float {func_name}(vec3 p) {{\n"
             f"    vec3 lp = {lp_expr.replace(point_var, 'p')};\n"
-            f"    vec2 {sub_p} = lp.xy;\n"
-            f"    float _d2 = {expr_2d};\n"
+            f"    vec2 _sp = lp.xy;\n"
+            f"    float _d2 = {self.profile.to_glsl_2d(ctx, '_sp')};\n"
             f"    float _dz = abs(lp.z) - {half_h};\n"
             f"    vec2 _w = vec2(_d2, _dz);\n"
             f"    return min(max(_w.x, _w.y), 0.0) + length(max(_w, 0.0));\n"

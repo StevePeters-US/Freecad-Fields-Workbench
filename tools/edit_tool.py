@@ -19,6 +19,7 @@ class EditTool(DMBase, DragTimerMixin):
         self._is_editing = True
 
         self._selected_element = None # (index, type)
+        self._is_dragging = False
         self._wp_drag_start = None
 
         # State
@@ -127,11 +128,18 @@ class EditTool(DMBase, DragTimerMixin):
     def on_button1_down(self, event_dict):
         result = self.handle_click(event_dict)
         if self.state in [1, 2]:
+            self._is_dragging = True
             self._start_drag_timer()
         return result
 
     def on_button1_up(self, _event_dict):
         self._stop_drag_timer()
+        was_dragging = self._is_dragging
+        self._is_dragging = False
+        
+        if was_dragging and self._target_obj and self._target_obj.Document:
+            self._target_obj.Document.recompute()
+
         if self.state in [1, 2]:
             self.state = 0
             self._selected_element = None
@@ -317,8 +325,18 @@ class EditTool(DMBase, DragTimerMixin):
         self._target_obj.HandleIn = h_in
         self._target_obj.HandleOut = h_out
         self._target_obj.touch()
-        if self._target_obj.Document:
-            self._target_obj.Document.recompute()
+        
+        if not self._is_dragging:
+            if self._target_obj.Document:
+                self._target_obj.Document.recompute()
+        else:
+            # Interactive update: bypass recompute, update renderer directly
+            vp = self._target_obj.ViewObject
+            if vp and hasattr(vp, "Proxy") and vp.Proxy:
+                # Trigger ViewProvider.updateData manually for visual update
+                vp.Proxy.updateData(self._target_obj, "Points")
+                if self.view:
+                    self.view.redraw()
 
     def _insert_point(self, pos_global):
         """Insert a point into the curve at the given global position."""
