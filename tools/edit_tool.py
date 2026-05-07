@@ -513,3 +513,68 @@ def activate():
             return
 
     dm_logger.error(f"edit_tool.activate: Not editable (proxy={proxy_name}, ShapeType={shape_type}).")
+
+class SdfEditTool(DMBase):
+    """
+    Generic dispatcher for editing SDF primitives and modifier objects.
+    Identifies the selected SDF object and launches the corresponding Creator tool in edit mode.
+    """
+    def get_command_id(self):
+        return "DM_EditObject"
+
+    def activate(self):
+        sel = FreeCADGui.Selection.getSelection()
+        if not sel:
+            dm_logger.error("No object selected to edit.")
+            self.terminate()
+            return
+            
+        obj = sel[0]
+        proxy = getattr(obj, "Proxy", None)
+        if not proxy:
+            dm_logger.error("Selected object has no Proxy.")
+            self.terminate()
+            return
+
+        # 1. Handle Noise Objects
+        proxy_name = proxy.__class__.__name__
+        if proxy_name == "DMNoiseProxy":
+            from tools.noise_tool import NoiseTool
+            tool = NoiseTool()
+            tool.edit_object(obj)
+            return
+
+        # 2. Handle SDF Primitives
+        # All SDF primitives use DMObjectProxy, but they have different SdfField subclasses
+        from tools import primitive_tool
+        
+        # Mapping from SdfField class name to Creator class
+        field_to_creator = {
+            "SdfBoxField": primitive_tool.BoxCreator,
+            "SdfSphereField": primitive_tool.SphereCreator,
+            "SdfCylinderField": primitive_tool.CylinderCreator,
+            "SdfTorusField": primitive_tool.TorusCreator,
+            "SdfExtrusionField": primitive_tool.CurveExtrudeCreator,
+            "SdfRevolutionField": primitive_tool.RevolveCreator,
+        }
+        
+        sdf_field = getattr(proxy, "SdfField", None)
+        if sdf_field:
+            field_class = sdf_field.__class__.__name__
+            creator_cls = field_to_creator.get(field_class)
+            if creator_cls:
+                dm_logger.info(f"SdfEditTool: Dispatching to {creator_cls.__name__} for {obj.Label}")
+                tool = creator_cls()
+                tool.edit_object(obj)
+                return
+            else:
+                dm_logger.warn(f"SdfEditTool: No specialized editor for SdfField '{field_class}'")
+        else:
+            dm_logger.warn(f"SdfEditTool: Object '{obj.Label}' has no SdfField.")
+
+        self.terminate()
+
+def activate():
+    """Dispatch function for input_manager."""
+    tool = SdfEditTool()
+    tool.activate()

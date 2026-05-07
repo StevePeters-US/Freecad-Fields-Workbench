@@ -50,15 +50,14 @@
 | Create/Edit primitive tool | `dm_primitive_tool/SKILL.md` |
 | Work with OpenVDB grids, meshing, export | `dm_openvdb_migration/SKILL.md` |
 | Implement VDB bake backend tasks | `dm_vdb_bake_backend/SKILL.md` |
+| Implement SdfOctreeCache or rewrite a mesher | `dm_sdf_octree/SKILL.md` |
+| Add SdfNurbsCurveField or SdfNurbsSurfaceField | `dm_nurbs_sdf/SKILL.md` |
 
 ## 4. Known Bugs
 
 | File | Bug | Fix hint |
 |------|-----|----------|
-| `core/input_manager.py` | `get_projected_point()` returns undefined `result` | Rename return var |
-| `tools/edit_tool.py` | `_hit_test_edge` refs `event_dict` (not a param) | Pass `event_dict` correctly |
 | `core/dm_scene_ray_march_renderer.py` | label lookup `doc.getObject("DocName.ObjName")` always returns None | Split on `.` first |
-| `core/input_manager.py` | E-key handler only dispatches `EditTool` for `curve` | Add `SdfEditTool` branch |
 
 ## 5. Development Patterns
 

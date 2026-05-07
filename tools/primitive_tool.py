@@ -232,7 +232,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self._preview_obj = None     # Live FreeCAD object for preview
         self._update_pending = False  # Throttle rapid updates
         self._creating_obj = False    # Re-entrancy guard
-        self._create_is_subtractive = False  # DEPRECATED — use _create_group
+        self._create_is_subtractive = False  # DEPRECATED - use _create_group
         self._create_group = "Group 1"  # Z hotkey toggle during creation
         # Reset the shared timer so preview calls for this tool session are isolated
         mesh_timer.reset()
@@ -261,7 +261,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self._constraint_axis  = None   # 'x' | 'y' | 'z' | None
         self._constraint_plane = None   # 'yz' | 'xz' | 'xy' | None
         self._constraint_space = 'global'  # 'global' | 'local'
-        self._constraint_last_key = None   # last key pressed — enables global→local cycle
+        self._constraint_last_key = None   # last key pressed - enables global→local cycle
         self._drag_constraint_base = None  # handle world pos at drag-start
 
         # Snap mode for edit drag (mirrors first-point snap pipeline when active)
@@ -390,7 +390,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         if not ray_p or not ray_d:
             return True
 
-        # Test center/rot handles first — center dot always gives free drag
+        # Test center/rot handles first - center dot always gives free drag
         special_pts = []
         if getattr(self, "_center_handle", None): special_pts.append(self._center_handle.position)
         if getattr(self, "_rot_handle", None): special_pts.append(self._rot_handle.position)
@@ -442,7 +442,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         return False
 
     # ------------------------------------------------------------------
-    # Creation state machine — driven by CREATION_STEPS
+    # Creation state machine - driven by CREATION_STEPS
     # ------------------------------------------------------------------
 
     def _primitive_name(self):
@@ -747,7 +747,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             self.terminate()
 
     def _commit_edit_deferred(self, obj):
-        """Deferred recompute after editing — required for Shape assignment safety."""
+        """Deferred recompute after editing - required for Shape assignment safety."""
         try:
             obj.touch()
             obj.Document.recompute([obj])
@@ -961,7 +961,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 return
             proxy.SdfField = field
 
-            # Direct GPU update — skip FreeCAD recompute cycle
+            # Direct GPU update - skip FreeCAD recompute cycle
             from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
             label = f"{self._preview_obj.Document.Name}.{self._preview_obj.Name}"
             DMSceneRayMarchRenderer.get_instance().update_field(label, field)
@@ -2309,7 +2309,7 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
             self._height = self._clamp_height((pos - self._anchor_pt).dot(norm))
 
     def _offset_placement(self):
-        """Working plane shifted height/2 along its normal — centers the ±height/2 extrusion."""
+        """Working plane shifted height/2 along its normal - centers the ±height/2 extrusion."""
         wp   = self.working_plane
         norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
         return FreeCAD.Placement(wp.Base + norm * (self._height * 0.5), wp.Rotation)

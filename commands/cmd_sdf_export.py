@@ -117,11 +117,9 @@ class _ExportDialog(QtGui.QDialog):
         # Meshing Type
         self._type_combo = QtGui.QComboBox()
         self._type_combo.addItems([
-            "Marching Cubes (Standard)",
-            "Adaptive Marching Cubes",
+            "Marching Cubes",
             "Surface Nets",
-            "Dual Contouring",
-            "VDB Mesher (Requires OpenVDB)"
+            "Dual Contouring"
         ])
         layout.addRow("Algorithm:", self._type_combo)
         
@@ -133,14 +131,6 @@ class _ExportDialog(QtGui.QDialog):
         self._res_spin.setValue(1.0)
         self._res_spin.setToolTip("Cell size in mm (smaller = more detail). 0.1mm is high quality.")
         layout.addRow("Resolution (mm):", self._res_spin)
-        
-        # Curvature (for AMC)
-        self._curv_spin = QtGui.QDoubleSpinBox()
-        self._curv_spin.setRange(0.01, 1.0)
-        self._curv_spin.setSingleStep(0.05)
-        self._curv_spin.setValue(0.1)
-        self._curv_spin.setToolTip("Curvature threshold (AMC only). Lower = more detail on edges.")
-        layout.addRow("Curvature Threshold:", self._curv_spin)
         
         # Decimate
         self._decimate_check = QtGui.QCheckBox()
@@ -166,7 +156,6 @@ class _ExportDialog(QtGui.QDialog):
         return {
             'meshing_type': self._type_combo.currentIndex(),
             'cell_size': self._res_spin.value(),
-            'curvature_threshold': self._curv_spin.value(),
             'decimate': self._decimate_check.isChecked(),
             'deduplicate': self._dedup_check.isChecked()
         }

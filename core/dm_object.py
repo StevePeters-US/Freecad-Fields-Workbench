@@ -20,6 +20,8 @@ try:
 except ImportError:
     coin = None
 
+from . import dm_logger
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DM Settings helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,8 +71,8 @@ def get_perf_profiler_enabled():
 def set_perf_profiler_enabled(val):
     try: # ParamGet might fail in some contexts
         FreeCAD.ParamGet(_PARAM_PATH).SetBool("EnablePerfProfiler", bool(val))
-    except:
-        pass
+    except Exception as e:
+        dm_logger.debug(f"set_perf_profiler_enabled failed: {e}")
 
 def get_render_debug_mode():
     """Return whether render debug mode is enabled."""

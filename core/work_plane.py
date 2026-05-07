@@ -150,7 +150,8 @@ class WorkPlaneManager:
                     fov = cam_node.heightAngle.getValue() if hasattr(cam_node, 'heightAngle') else 0.785
                     scale = (2.0 * dist * math.tan(fov / 2.0)) / 50.0
                 self.transform.scaleFactor.setValue(scale, scale, scale)
-        except: pass
+        except Exception as e:
+            dm_logger.debug(f"WorkPlane scale update failed: {e}")
         
         self._update_transform()
         self.show()
