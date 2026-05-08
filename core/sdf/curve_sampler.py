@@ -223,6 +223,51 @@ def extract_bezier_segments_in_placement(obj, placement):
     return segs
 
 
+def extract_bezier_segments_3d(obj, closed=None):
+    """
+    Extract cubic Bezier segments from a curve object in world space (3D).
+    closed: if None, uses obj.Closed. Closed curves loop the last segment back to start.
+    Returns list of (p0, p1, p2, p3) tuples, each point (x, y, z).
+    """
+    pts   = list(getattr(obj, "Points",    []))
+    h_in  = list(getattr(obj, "HandleIn",  []))
+    h_out = list(getattr(obj, "HandleOut", []))
+    pl = obj.Placement
+    is_closed = getattr(obj, "Closed", False) if closed is None else closed
+
+    def to_world(p):
+        w = pl.multVec(p)
+        return (w.x, w.y, w.z)
+
+    n = len(pts)
+    if n < 2:
+        return []
+    num_segs = n if is_closed else n - 1
+    segs = []
+    for i in range(num_segs):
+        j = (i + 1) % n
+        p0 = to_world(pts[i])
+        p3 = to_world(pts[j])
+        if i < len(h_out) and (h_out[i] - pts[i]).Length > 0.001:
+            p1 = to_world(h_out[i])
+        else:
+            p1 = (
+                p0[0] + (p3[0] - p0[0]) / 3.0,
+                p0[1] + (p3[1] - p0[1]) / 3.0,
+                p0[2] + (p3[2] - p0[2]) / 3.0,
+            )
+        if j < len(h_in) and (h_in[j] - pts[j]).Length > 0.001:
+            p2 = to_world(h_in[j])
+        else:
+            p2 = (
+                p0[0] + 2*(p3[0] - p0[0]) / 3.0,
+                p0[1] + 2*(p3[1] - p0[1]) / 3.0,
+                p0[2] + 2*(p3[2] - p0[2]) / 3.0,
+            )
+        segs.append((p0, p1, p2, p3))
+    return segs
+
+
 def compute_inflection_limit(pts_3d, z_threshold=1.0):
     """
     Return the max valid extrusion half-height for a 3D closed curve, or None if planar.

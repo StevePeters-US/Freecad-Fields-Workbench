@@ -85,6 +85,7 @@ class DirectModelingWorkbench(Workbench):
                 'DM_CreateTorus',
                 'DM_FillCurve',
                 'DM_ExtrudeCurve',
+                'DM_CurvePipe',
             ])
             self.appendToolbar("DM - Operations", [
                 'DM_Translate',
@@ -109,6 +110,7 @@ class DirectModelingWorkbench(Workbench):
                 'DM_CreateTorus',
                 'DM_FillCurve',
                 'DM_ExtrudeCurve',
+                'DM_CurvePipe',
                 'Separator',
                 'DM_Translate',
                 'DM_Add',

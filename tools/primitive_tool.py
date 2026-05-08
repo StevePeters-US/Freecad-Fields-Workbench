@@ -2494,3 +2494,186 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
             self._finalize_object(self._primitive_name(), terminate=True)
         else:
             self.terminate()
+
+
+class CurveExtrude3DCreator(PrimitiveCreatorBase):
+    """
+    Creates a round tube/pipe swept along a selected 3D curve path.
+    Works with open and closed curves of any 3D shape.
+    The user drags to set the tube radius.
+    """
+
+    CREATION_STEPS = [ToolState.DRAG_Z]
+
+    def get_command_id(self):
+        return "DM_CurvePipe"
+
+    def __init__(self):
+        super().__init__()
+        self._curve_obj   = None
+        self._radius      = 3.0
+        self._segs_3d     = None   # list of (p0,p1,p2,p3), each pi = (x,y,z) world
+        self._cached_pipe = None   # SdfPipeField — kept stable to avoid recompile
+
+        # Visuals
+        self._path_wire     = None  # DMLineSet: sampled curve path
+        self._ctrl_dm_pts   = []    # DMPoint spheres at control points
+        self._radius_circle = None  # DMLineSet: cross-section circle at path start
+
+        import FreeCADGui
+        for obj in FreeCADGui.Selection.getSelection():
+            if getattr(obj, "ShapeType", None) == "curve":
+                self._curve_obj = obj
+                break
+
+        if self._curve_obj is not None:
+            from core.sdf.curve_sampler import extract_bezier_segments_3d
+            self._segs_3d = extract_bezier_segments_3d(self._curve_obj)
+
+            # Working plane: horizontal at the centroid of all control points
+            pts = list(getattr(self._curve_obj, "Points", []))
+            pl  = self._curve_obj.Placement
+            world_pts = [pl.multVec(p) for p in pts]
+            if world_pts:
+                cx = sum(p.x for p in world_pts) / len(world_pts)
+                cy = sum(p.y for p in world_pts) / len(world_pts)
+                cz = sum(p.z for p in world_pts) / len(world_pts)
+                centroid = FreeCAD.Vector(cx, cy, cz)
+            else:
+                centroid = FreeCAD.Vector(0, 0, 0)
+            self.working_plane              = FreeCAD.Placement(centroid, FreeCAD.Rotation())
+            self._working_plane_is_fallback = False
+            self._anchor_pt                 = centroid
+            self._update_pipe_handles()
+
+    def _detect_selected_workplane(self):
+        pass
+
+    def _clamp_radius(self, r):
+        return max(0.1, r)
+
+    def _on_stage_accept(self, state, pos):
+        if state == ToolState.DRAG_Z and pos and self._anchor_pt:
+            self._radius = self._clamp_radius((pos - self._anchor_pt).Length)
+            if self._cached_pipe is not None:
+                self._cached_pipe.radius = self._radius
+            self._update_pipe_handles()
+
+    def _on_stage_preview(self, state, pos):
+        if state == ToolState.DRAG_Z and pos and self._anchor_pt:
+            self._radius = self._clamp_radius((pos - self._anchor_pt).Length)
+            if self._cached_pipe is not None:
+                self._cached_pipe.radius = self._radius
+            self._update_pipe_handles()
+
+    @staticmethod
+    def _sample_seg_3d_world(p0, p1, p2, p3, n=12):
+        """Sample n evenly-spaced points on a 3D cubic Bezier (excludes t=1)."""
+        pts = []
+        for i in range(n):
+            t = i / n
+            s = 1.0 - t
+            x = s**3*p0[0] + 3*s**2*t*p1[0] + 3*s*t**2*p2[0] + t**3*p3[0]
+            y = s**3*p0[1] + 3*s**2*t*p1[1] + 3*s*t**2*p2[1] + t**3*p3[1]
+            z = s**3*p0[2] + 3*s**2*t*p1[2] + 3*s*t**2*p2[2] + t**3*p3[2]
+            pts.append(FreeCAD.Vector(x, y, z))
+        return pts
+
+    @staticmethod
+    def _circle_pts(center, tangent, radius, n=24):
+        """Sample a circle of `radius` at `center` in the plane perpendicular to `tangent`."""
+        import math
+        n_vec = FreeCAD.Vector(tangent).normalize() if tangent.Length > 1e-6 else FreeCAD.Vector(0, 0, 1)
+        if abs(n_vec.z) < 0.9:
+            u = FreeCAD.Vector(0, 0, 1).cross(n_vec)
+        else:
+            u = FreeCAD.Vector(1, 0, 0).cross(n_vec)
+        if u.Length < 1e-6:
+            u = FreeCAD.Vector(1, 0, 0)
+        u.normalize()
+        v = n_vec.cross(u)
+        pts = []
+        for i in range(n + 1):
+            a = 2.0 * math.pi * i / n
+            pts.append(center + u * (radius * math.cos(a)) + v * (radius * math.sin(a)))
+        return pts
+
+    def _update_pipe_handles(self):
+        if not self._segs_3d:
+            return
+        r = self._compute_handle_radius()
+
+        # Control points (one per segment start)
+        ctrl_world = [FreeCAD.Vector(*seg[0]) for seg in self._segs_3d]
+        if not getattr(self._curve_obj, "Closed", False):
+            ctrl_world.append(FreeCAD.Vector(*self._segs_3d[-1][3]))
+
+        while len(self._ctrl_dm_pts) < len(ctrl_world):
+            dm = DMPoint(ctrl_world[len(self._ctrl_dm_pts)])
+            dm.draw_point(self.points_root, r, color=(0.3, 0.8, 1.0))
+            self._ctrl_dm_pts.append(dm)
+        for i, pt in enumerate(ctrl_world):
+            self._ctrl_dm_pts[i].position = pt
+            self._ctrl_dm_pts[i].update_draw(radius=r)
+
+        # Path wire
+        is_closed = getattr(self._curve_obj, "Closed", False)
+        wire_pts = []
+        for seg in self._segs_3d:
+            wire_pts.extend(self._sample_seg_3d_world(*seg))
+        if is_closed and wire_pts:
+            wire_pts.append(wire_pts[0])
+
+        if self._path_wire is None:
+            self._path_wire = DMLineSet(self.points_root, color=(0.3, 0.8, 1.0), width=2.0)
+        self._path_wire.update_lines(wire_pts)
+
+        # Radius circle at the start of the first segment, perpendicular to its tangent
+        p0 = FreeCAD.Vector(*self._segs_3d[0][0])
+        p1 = FreeCAD.Vector(*self._segs_3d[0][1])
+        tangent = p1 - p0
+        circle = self._circle_pts(p0, tangent, self._radius)
+        if self._radius_circle is None:
+            self._radius_circle = DMLineSet(self.points_root, color=(0.3, 0.8, 1.0), width=1.5)
+        self._radius_circle.update_lines(circle)
+
+    def _pipe_field(self):
+        if not self._segs_3d:
+            return None
+        from core.sdf.sdf_pipe import SdfPipeField
+        if self._cached_pipe is None:
+            self._cached_pipe = SdfPipeField(self._segs_3d, self._radius)
+        else:
+            self._cached_pipe.radius = self._radius
+        return self._cached_pipe
+
+    def _get_preview_field(self):      return self._pipe_field()
+    def _get_edit_preview_field(self): return self._pipe_field()
+    def _get_final_field(self):        return self._pipe_field()
+
+    def _get_final_points(self):
+        return [FreeCAD.Vector(self._radius, 0.0, 0.0)] if self._curve_obj else None
+
+    def get_parameters(self):
+        return {"Radius": self._radius}
+
+    def set_parameters(self, params):
+        self._radius = self._clamp_radius(params.get("Radius", 3.0))
+        if self._cached_pipe is not None:
+            self._cached_pipe.radius = self._radius
+        self._update_pipe_handles()
+        self.update_preview()
+
+    def _primitive_name(self):
+        return "CurvePipe"
+
+    def finish(self):
+        """One-shot tool: commit then terminate."""
+        if getattr(self, "_is_editing", False):
+            super().finish()
+            self._finished = True
+            self.terminate()
+        elif self.is_in_progress():
+            self._finalize_object(self._primitive_name(), terminate=True)
+        else:
+            self.terminate()
