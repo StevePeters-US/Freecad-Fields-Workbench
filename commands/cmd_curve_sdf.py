@@ -64,3 +64,35 @@ class CommandDMCurvePipe:
 
 
 FreeCADGui.addCommand('DM_CurvePipe', CommandDMCurvePipe())
+
+
+class CommandDMCurve3DExtrude:
+    def GetResources(self):
+        return {
+            'Pixmap':   'Part_Sweep',
+            'MenuText': 'Sweep Profile Along Curve',
+            'ToolTip':  'Sweep a 2D profile curve along a selected 3D path curve.',
+        }
+
+    def IsActive(self):
+        if FreeCAD.activeDocument() is None:
+            return False
+        return any(
+            getattr(o, "ShapeType", None) == "curve"
+            for o in FreeCADGui.Selection.getSelection()
+        )
+
+    def Activated(self):
+        from tools.primitive_tool import Curve3DExtrudeCreator
+        from core.input_manager import DMInputManager
+        DMInputManager.get_instance()
+        self.tool = Curve3DExtrudeCreator()
+
+    def getIsChecked(self):
+        from core.dm_tool_manager import DMToolManager
+        from tools.primitive_tool import Curve3DExtrudeCreator
+        tool = DMToolManager.get_instance().get_active_tool()
+        return isinstance(tool, Curve3DExtrudeCreator)
+
+
+FreeCADGui.addCommand('DM_Curve3DExtrude', CommandDMCurve3DExtrude())

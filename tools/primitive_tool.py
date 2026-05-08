@@ -2677,3 +2677,26 @@ class CurveExtrude3DCreator(PrimitiveCreatorBase):
             self._finalize_object(self._primitive_name(), terminate=True)
         else:
             self.terminate()
+
+
+class Curve3DExtrudeCreator(PrimitiveCreatorBase):
+    """
+    Sweeps a 2D profile curve along a selected 3D path curve.
+    (Not yet implemented — stub only.)
+    """
+
+    CREATION_STEPS = [ToolState.DRAG_Z]
+
+    def get_command_id(self):
+        return "DM_Curve3DExtrude"
+
+    def __init__(self):
+        super().__init__()
+
+    def _get_preview_field(self):      return None
+    def _get_edit_preview_field(self): return None
+    def _get_final_field(self):        return None
+    def _get_final_points(self):       return None
+    def get_parameters(self):          return {}
+    def set_parameters(self, params):  pass
+    def _primitive_name(self):         return "Curve3DExtrude"
