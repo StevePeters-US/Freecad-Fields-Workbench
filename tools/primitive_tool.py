@@ -2298,6 +2298,13 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
         self._cached_profile = None   # Sdf2dNurbsCurveField
         self._cached_extrude = None   # SdfExtrusionField
 
+        # Visual handle state
+        self._base_dm_pts     = []    # DMPoint spheres on base curve
+        self._top_dm_pts      = []    # DMPoint spheres on top curve
+        self._base_wire       = None  # DMLineSet: base curve outline
+        self._top_wire        = None  # DMLineSet: top curve outline
+        self._connector_lines = None  # DMLineSet: vertical edges between rings
+
         import FreeCADGui
         for obj in FreeCADGui.Selection.getSelection():
             if getattr(obj, "ShapeType", None) == "curve" and getattr(obj, "Closed", False):
@@ -2321,6 +2328,7 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
             self._bezier_segs               = extract_bezier_segments_in_placement(
                 self._curve_obj, best_fit
             )
+            self._update_extrude_handles()
 
     # Prevent _detect_selected_workplane from overriding the curve's placement
     def _detect_selected_workplane(self):
@@ -2334,12 +2342,83 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
             wp   = self.working_plane
             norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
             self._height = self._clamp_height((pos - self._anchor_pt).dot(norm))
+            self._update_extrude_handles()
 
     def _on_stage_preview(self, state, pos):
         if state == ToolState.DRAG_Z and pos and self._anchor_pt:
             wp   = self.working_plane
             norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
             self._height = self._clamp_height((pos - self._anchor_pt).dot(norm))
+            self._update_extrude_handles()
+
+    @staticmethod
+    def _sample_seg_world(p0, p1, p2, p3, wp, n=12):
+        """Sample n points on a cubic Bezier segment (2D local) → world FreeCAD.Vectors.
+        Excludes the endpoint (t=1) so segments can be concatenated without duplicates."""
+        pts = []
+        for i in range(n):
+            t = i / n
+            s = 1.0 - t
+            x = s**3*p0[0] + 3*s**2*t*p1[0] + 3*s*t**2*p2[0] + t**3*p3[0]
+            y = s**3*p0[1] + 3*s**2*t*p1[1] + 3*s*t**2*p2[1] + t**3*p3[1]
+            pts.append(wp.multVec(FreeCAD.Vector(x, y, 0)))
+        return pts
+
+    def _update_extrude_handles(self):
+        """Draw/update base + top curve rings and vertical connector lines."""
+        if not self._bezier_segs or not self.working_plane:
+            return
+        wp   = self.working_plane
+        norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
+        offset = norm * self._height
+        r = self._compute_handle_radius()
+
+        # Control points = first endpoint of each segment (closed curve, so they cover all nodes)
+        base_ctrl = [wp.multVec(FreeCAD.Vector(p0[0], p0[1], 0))
+                     for p0, p1, p2, p3 in self._bezier_segs]
+        top_ctrl  = [p + offset for p in base_ctrl]
+
+        # Ensure enough DMPoint spheres exist for both rings
+        while len(self._base_dm_pts) < len(base_ctrl):
+            dm = DMPoint(base_ctrl[len(self._base_dm_pts)])
+            dm.draw_point(self.points_root, r, color=(1.0, 0.5, 0.0))
+            self._base_dm_pts.append(dm)
+        while len(self._top_dm_pts) < len(top_ctrl):
+            dm = DMPoint(top_ctrl[len(self._top_dm_pts)])
+            dm.draw_point(self.points_root, r, color=(1.0, 0.5, 0.0))
+            self._top_dm_pts.append(dm)
+
+        for i, pt in enumerate(base_ctrl):
+            self._base_dm_pts[i].position = pt
+            self._base_dm_pts[i].update_draw(radius=r)
+        for i, pt in enumerate(top_ctrl):
+            self._top_dm_pts[i].position = pt
+            self._top_dm_pts[i].update_draw(radius=r)
+
+        # Sample the closed bezier wire (n points per segment, no duplicate joints)
+        wire_base = []
+        for seg in self._bezier_segs:
+            wire_base.extend(self._sample_seg_world(*seg, wp=wp))
+        wire_base.append(wire_base[0])   # close the loop
+        wire_top = [p + offset for p in wire_base]
+
+        if self._base_wire is None:
+            self._base_wire = DMLineSet(self.points_root, color=(1.0, 0.5, 0.0), width=2.0)
+        self._base_wire.update_lines(wire_base)
+
+        if self._top_wire is None:
+            self._top_wire = DMLineSet(self.points_root, color=(1.0, 0.5, 0.0), width=2.0)
+        self._top_wire.update_lines(wire_top)
+
+        # Vertical connectors: one 2-point line per control point pair
+        conn_pts    = []
+        conn_counts = []
+        for b, t in zip(base_ctrl, top_ctrl):
+            conn_pts.extend([b, t])
+            conn_counts.append(2)
+        if self._connector_lines is None:
+            self._connector_lines = DMLineSet(self.points_root, color=(0.8, 0.8, 0.8), width=1.0)
+        self._connector_lines.update_lines(conn_pts, conn_counts)
 
     def _offset_placement(self):
         """Working plane shifted height/2 along its normal - centers the ±height/2 extrusion."""
@@ -2399,6 +2478,7 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
         self._height = self._clamp_height(params.get("Height", 10.0))
         if self._cached_extrude is not None:
             self._update_field_inplace(self._cached_extrude)
+        self._update_extrude_handles()
         self.update_preview()
 
     def _primitive_name(self):
