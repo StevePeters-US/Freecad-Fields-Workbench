@@ -632,6 +632,47 @@ class DMViewProvider:
     def __setstate__(self, state):
         return None
 
+    def doubleClicked(self, vobj):
+        import FreeCADGui
+        from core import dm_logger
+        
+        obj = vobj.Object
+        
+        # Ensure the object is selected
+        sel = FreeCADGui.Selection.getSelection()
+        if not sel or sel[0] != obj:
+            FreeCADGui.Selection.clearSelection()
+            FreeCADGui.Selection.addSelection(obj)
+            
+        dm_logger.info(f"DMViewProvider: double-clicked {obj.Label}")
+        
+        st = getattr(obj, "ShapeType", None)
+        if st == "curve":
+            from tools.edit_tool import EditTool
+            EditTool().activate()
+        elif st == "sdf":
+            from tools.edit_tool import SdfEditTool
+            SdfEditTool().activate()
+        else:
+            # Fallback to general activate just in case
+            from tools import edit_tool
+            edit_tool.activate()
+            
+        # Return True to indicate the double-click was handled,
+        # preventing FreeCAD from opening the default transform tool.
+        return True
+
+    def setEdit(self, vobj, mode=0):
+        # Called when FreeCAD tries to put the object into Edit mode
+        # We redirect this to our custom edit_tool instead of FreeCAD's default task panels
+        self.doubleClicked(vobj)
+        return True
+
+    def unsetEdit(self, vobj, mode=0):
+        # Called when leaving edit mode. We just return True.
+        return True
+
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Factory

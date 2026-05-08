@@ -216,7 +216,7 @@ class DMInputManager(QtCore.QObject):
                     DMSelectionManager.get_instance().try_sdf_selection(self._last_qt_pos)
                     # Let through to FreeCAD
 
-                # Double-click to edit SDF
+                # Double-click to edit objects
                 elif event.type() == QtCore.QEvent.MouseButtonDblClick and event.button() == QtCore.Qt.LeftButton:
                     from core.dm_selection_manager import DMSelectionManager
                     sel_mgr = DMSelectionManager.get_instance()
@@ -225,10 +225,21 @@ class DMInputManager(QtCore.QObject):
                     if sel:
                         obj = sel[0]
                         proxy_name = getattr(getattr(obj, "Proxy", None), "__class__", type(None)).__name__
-                        if proxy_name == "DMObjectProxy" and getattr(obj, "ShapeType", "") == "sdf":
-                            from tools import edit_tool
-                            edit_tool.activate()
-                            return True
+                        is_wp = getattr(obj.Proxy, "is_dm_workplane", False)
+                        if is_wp:
+                            from tools.work_plane_tool import WorkPlaneCreator
+                            WorkPlaneCreator(); return True
+                        elif proxy_name == "DMObjectProxy":
+                            st = getattr(obj, "ShapeType", "")
+                            if st == "curve":
+                                from tools.edit_tool import EditTool
+                                EditTool().activate(); return True
+                            elif st == "sdf":
+                                from tools.edit_tool import SdfEditTool
+                                SdfEditTool().activate(); return True
+                        elif proxy_name == "DMNoiseProxy":
+                            from tools.edit_tool import SdfEditTool
+                            SdfEditTool().activate(); return True
 
                 # Global hotkeys
                 elif event.type() == QtCore.QEvent.KeyPress:
