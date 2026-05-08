@@ -925,23 +925,49 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
         self._schedule_update(lambda: self._do_full_preview_update(field))
 
-    def _do_full_preview_update(self, field):
+    def _do_full_preview_update(self, field=None):
         """Throttled update of both the mesh and the ghost visuals."""
-        import time
-        _t0 = time.perf_counter()
+        if field is None:
+            field = (self._get_edit_preview_field()
+                     if getattr(self, "_is_editing", False)
+                     else self._get_preview_field())
         self._apply_preview_field(field)
-        _t1 = time.perf_counter()
         self._update_ghost_visuals()
-        # Schedule parent boolean recompute deferred (must not run inside drag timer)
         if getattr(self, "_is_editing", False) and self._preview_obj and self._preview_obj.Document:
             obj = self._preview_obj
+            # Always push recomposed boolean fields to renderer so the result updates live.
+            self._update_boolean_parents_in_renderer()
+            # Full FreeCAD doc recompute only on drag release (too slow to do every frame).
             if not getattr(self, "_is_dragging", False):
                 QtCore.QTimer.singleShot(0, lambda: self._recompute_boolean_parents(obj))
         if self.view:
             self.view.redraw()
-        _t2 = time.perf_counter()
-        from core import dm_logger
-        dm_logger.debug(f"Drag update: apply_field={1000*(_t1-_t0):.1f}ms, redraw={1000*(_t2-_t1):.1f}ms")
+
+    def _update_boolean_parents_in_renderer(self):
+        """Push recomposed boolean fields directly to the renderer for real-time updates.
+        Called every preview frame including during drags — avoids FreeCAD doc recompute.
+        """
+        if self._preview_obj is None or not self._preview_obj.Document:
+            return
+        try:
+            from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+            from commands.cmd_boolean import _recompose_boolean
+            doc = self._preview_obj.Document
+            renderer = DMSceneRayMarchRenderer.get_instance()
+            for obj in doc.Objects:
+                if getattr(obj, "ShapeType", None) != "sdf":
+                    continue
+                inputs = getattr(obj, "BooleanInputs", None) or []
+                if self._preview_obj not in inputs:
+                    continue
+                new_field = _recompose_boolean(obj)
+                if new_field is not None:
+                    if hasattr(obj, "Proxy"):
+                        obj.Proxy.SdfField = new_field
+                    label = f"{doc.Name}.{obj.Name}"
+                    renderer.update_field(label, new_field)
+        except Exception as e:
+            dm_logger.debug(f"Boolean parent renderer update error: {e}")
 
     def _recompute_boolean_parents(self, obj):
         """Deferred: recompute the primitive and its boolean parent dependents."""

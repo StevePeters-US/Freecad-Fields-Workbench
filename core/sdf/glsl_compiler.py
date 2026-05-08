@@ -158,11 +158,15 @@ vec3 sdf_normal_{i}(vec3 p) {{
 
     num_fields = len(fields_data)
 
-    # bbox as uniforms — keeps GLSL source stable across value changes (no recompile on drag)
+    # bbox + subtractive flag as uniforms — keeps GLSL source stable across value changes
+    # (no GPU shader recompile when bbox or group changes; only uniform value updates)
     bbox_uniform_decls = "\n".join(
         f"uniform vec3 u_bmin_{i};\nuniform vec3 u_bmax_{i};" for i in range(num_fields))
+    sub_uniform_decls = "\n".join(f"uniform int u_sub_{i};" for i in range(num_fields))
     if bbox_uniform_decls:
         uniform_decls = uniform_decls + "\n" + bbox_uniform_decls
+    if sub_uniform_decls:
+        uniform_decls = uniform_decls + "\n" + sub_uniform_decls
 
     field_bboxes = ""
     for i in range(num_fields):
@@ -192,9 +196,8 @@ vec3 sdf_normal_{i}(vec3 p) {{
         normal_switch += f"    if (hit_field == {i}) n = sdf_normal_{i}(hp);\n"
 
     color_switch = "    vec3 base_color = vec3(1.0, 0.5, 0.0);\n"
-    for i, fd in enumerate(fields_data):
-        color = "vec3(0.3, 0.5, 1.0)" if fd["is_subtractive"] else "vec3(1.0, 0.5, 0.0)"
-        color_switch += f"    if (hit_field == {i}) base_color = {color};\n"
+    for i in range(num_fields):
+        color_switch += f"    if (hit_field == {i}) base_color = (u_sub_{i} != 0) ? vec3(0.3, 0.5, 1.0) : vec3(1.0, 0.5, 0.0);\n"
 
     scene_bbox_lines = "\n".join(
         f"    scene_min = min(scene_min, bmin_{i});\n    scene_max = max(scene_max, bmax_{i});"
@@ -360,11 +363,14 @@ vec3 sdf_normal_{i}(vec3 p) {{
 
     num_fields = len(fields_data)
 
-    # bbox as uniforms — keeps GLSL source stable across value changes (no recompile on drag)
+    # bbox + subtractive flag as uniforms — keeps GLSL source stable across value changes
     bbox_uniform_decls = "\n".join(
         f"uniform vec3 u_bmin_{i};\nuniform vec3 u_bmax_{i};" for i in range(num_fields))
+    sub_uniform_decls = "\n".join(f"uniform int u_sub_{i};" for i in range(num_fields))
     if bbox_uniform_decls:
         uniform_decls = uniform_decls + "\n" + bbox_uniform_decls
+    if sub_uniform_decls:
+        uniform_decls = uniform_decls + "\n" + sub_uniform_decls
 
     field_bboxes = ""
     for i in range(num_fields):
@@ -394,9 +400,8 @@ vec3 sdf_normal_{i}(vec3 p) {{
         normal_switch += f"    if (hit_field == {i}) n = sdf_normal_{i}(hp);\n"
 
     color_switch = "    vec3 base_color = vec3(1.0, 0.5, 0.0);\n"
-    for i, fd in enumerate(fields_data):
-        color = "vec3(0.3, 0.5, 1.0)" if fd["is_subtractive"] else "vec3(1.0, 0.5, 0.0)"
-        color_switch += f"    if (hit_field == {i}) base_color = {color};\n"
+    for i in range(num_fields):
+        color_switch += f"    if (hit_field == {i}) base_color = (u_sub_{i} != 0) ? vec3(0.3, 0.5, 1.0) : vec3(1.0, 0.5, 0.0);\n"
 
     scene_bbox_lines = "\n".join(
         f"    scene_min = min(scene_min, bmin_{i});\n    scene_max = max(scene_max, bmax_{i});"

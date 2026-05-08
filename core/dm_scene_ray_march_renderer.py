@@ -393,6 +393,7 @@ class DMSceneRayMarchRenderer:
         self._fast_sampler_map         = {}    # label -> sampler uniform name in fast shader
         self._active_fast_sampler_bindings = []  # [(sampler_name, tex_id), ...]
         self._active_bboxes            = []    # [(bmin, bmax), ...] per field — set each _rebuild
+        self._active_subtractive_flags = []    # [bool, ...] per field — set each _rebuild
 
         self._render_state          = _RS_QUALITY   # _RS_QUALITY or _RS_INTERACTIVE
         self._prev_interactive_state = False         # for transition detection
@@ -612,8 +613,6 @@ class DMSceneRayMarchRenderer:
             self._rebuild()
 
     def update_field(self, label, field):
-        import time
-        _t0 = time.perf_counter()
         visible = self._fields.get(label, (None, True))[1]
         self._fields[label] = (field, visible)
         self._dirty_fields.add(label)
@@ -625,8 +624,6 @@ class DMSceneRayMarchRenderer:
                 FreeCADGui.activeView().redraw()
         except Exception:
             pass
-        _t1 = time.perf_counter()
-        dm_logger.debug(f"SceneRayMarch: update_field '{label}' took {1000*(_t1-_t0):.1f}ms")
 
     def gc_fields(self):
         if not self._fields:
@@ -972,8 +969,6 @@ class DMSceneRayMarchRenderer:
             proj_data = (ctypes.c_float * 16)()
             glGetFloatv(0x0BA7, proj_data)    # GL_PROJECTION_MATRIX
 
-            _t1 = time.perf_counter()
-
             # Read camera matrices (needed for both paths and for depth computation)
             mv_data   = (ctypes.c_float * 16)()
             glGetFloatv(0x0BA6, mv_data)   # GL_MODELVIEW_MATRIX (column-major)
@@ -1066,6 +1061,8 @@ class DMSceneRayMarchRenderer:
                     for _i, (_bmin, _bmax) in enumerate(self._active_bboxes):
                         _prog.set_3f(f"u_bmin_{_i}", _bmin.x, _bmin.y, _bmin.z)
                         _prog.set_3f(f"u_bmax_{_i}", _bmax.x, _bmax.y, _bmax.z)
+                    for _i, _sub in enumerate(self._active_subtractive_flags):
+                        _prog.set_1i(f"u_sub_{_i}", 1 if _sub else 0)
 
                     # Bind profile textures (fast path only); use high units to avoid conflicts
                     GL_TEXTURE0 = 0x84C0
@@ -1105,7 +1102,6 @@ class DMSceneRayMarchRenderer:
 
             glFinish0 = _loader.get("glFinish", [], None)
             if glFinish0: glFinish0()
-            _t2 = time.perf_counter()
 
             # ── Pass 2: SSAO ──
             self._ssao_fbo.bind()
@@ -1138,7 +1134,6 @@ class DMSceneRayMarchRenderer:
             self._prog_blur.draw_fullscreen_quad()
             glFinish = _loader.get("glFinish", [], None)
             if glFinish: glFinish()
-            _t3 = time.perf_counter()
 
         # ── Pass 4: Composite cached FBO results → restore main FBO ──
         # Runs every Coin3D frame (cheap) so the SDF overlay never disappears.
@@ -1161,7 +1156,6 @@ class DMSceneRayMarchRenderer:
         self._prog_comp.draw_fullscreen_quad()
         glFinish2 = _loader.get("glFinish", [], None)
         if glFinish2: glFinish2()
-        _t4 = time.perf_counter()
 
         # ── Cleanup: unbind textures, restore shader + GL state ──
         for unit in (0x84C2, 0x84C1, 0x84C0):
@@ -1181,7 +1175,6 @@ class DMSceneRayMarchRenderer:
         glDepthMask(depth_write[0])
 
         if getattr(self, "_run_expensive_last", False):
-            dm_logger.debug(f"Render frame (w={w}, h={h}): Pass1={1000*(_t2-_t1):.1f}ms, Pass2+3={1000*(_t3-_t2):.1f}ms, Pass4={1000*(_t4-_t3):.1f}ms")
             self._run_expensive_last = False
 
     def _draw_scene_bbox_solid(self):
@@ -1287,6 +1280,7 @@ class DMSceneRayMarchRenderer:
 
         self._active_uniforms = {"n_fields": len(analytical_data)}
         self._active_bboxes = [(d["bbox_min"], d["bbox_max"]) for d in analytical_data]
+        self._active_subtractive_flags = [d["is_subtractive"] for d in analytical_data]
 
         # ── Fast (baked-texture) compute path ──
         # Build a second compute shader where extrusion/revolution profiles are
