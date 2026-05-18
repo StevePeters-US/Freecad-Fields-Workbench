@@ -473,7 +473,10 @@ class DMViewProvider:
             vobj.PointSize = 0.0
             vobj.LineWidth = 0.0
         elif shape_type == "surface":
-            vobj.DisplayMode = "Shaded"
+            try:
+                vobj.DisplayMode = "Shaded"
+            except Exception:
+                pass
             vobj.PointSize = 0.0
             vobj.LineWidth = 0.0
         elif shape_type == "sdf":
@@ -730,8 +733,7 @@ def create_dm_object(name, shape_type, params=None, placement=None):
                 obj.ViewObject.ShapeColor = (1.0, 0.5, 0.0)
             obj.ViewObject.LineWidth = get_line_width()
             obj.ViewObject.PointSize = get_point_size()
-            # Disable wireframe for SDF mesh objects - reduces render overhead
-            if shape_type == "sdf":
+            if shape_type in ("sdf", "surface"):
                 try:
                     obj.ViewObject.DisplayMode = "Shaded"
                 except Exception:
