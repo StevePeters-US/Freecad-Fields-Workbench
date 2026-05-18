@@ -85,91 +85,85 @@ Freecad-Direct-Modeling/
 ├── arch_report.md                 # Architecture report & task roadmap
 │
 ├── core/                          # Core logic
-│   ├── __init__.py
+│   ├── dm_curve.py                # DMCurve — NURBS curve primitive
+│   ├── dm_gizmo.py                # 3D interactive gizmo handles
+│   ├── dm_line.py                 # DM line primitive
 │   ├── dm_logger.py               # Centralized logging (FreeCAD Console + file)
+│   ├── dm_menu.py                 # Context menu helpers
+│   ├── dm_mesher.py               # Isosurface extraction (MC, Surface Nets, DC)
+│   ├── dm_noise_object.py         # DMNoiseProxy FeaturePython object
 │   ├── dm_object.py               # DMObjectProxy, DMViewProvider, factory
 │   ├── dm_part.py                 # DM_Part FeaturePython wrapper
-│   ├── dm_curve.py                # DMCurve — NURBS curve primitive
-│   ├── dm_line.py                 # DM line primitive
 │   ├── dm_point.py                # DMPoint — control point primitive
-│   ├── dm_surface.py              # DMSurface — NURBS surface primitive
-│   ├── dm_workplane.py            # DMWorkPlane FeaturePython object
-│   ├── dm_noise_object.py         # DMNoiseProxy FeaturePython object
-│   ├── dm_mesher.py               # Isosurface extraction (MC, Surface Nets, DC, Adaptive MC)
-│   ├── dm_renderer.py             # Coin3D control cage (spheres, lines)
 │   ├── dm_ray_march_renderer.py   # Per-object GPU ray march renderer
+│   ├── dm_renderer.py             # Coin3D control cage (spheres, lines)
 │   ├── dm_scene_ray_march_renderer.py  # Scene-level SSAO GPU ray march compositor (singleton)
-│   ├── dm_gizmo.py                # 3D interactive gizmo handles
 │   ├── dm_selection_manager.py    # Selection state management
+│   ├── dm_surface.py              # DMSurface — NURBS surface primitive
 │   ├── dm_tool_manager.py         # Tool lifecycle management
-│   ├── dm_menu.py                 # Context menu helpers
+│   ├── dm_workplane.py            # DMWorkPlane FeaturePython object
+│   ├── gl_compute.py              # GL compute shader dispatch (ctypes OpenGL)
+│   ├── gl_framebuffer.py          # GLFramebuffer — FBO management (ctypes OpenGL)
+│   ├── gl_program.py              # GLProgram — GLSL shader wrapper (ctypes OpenGL)
+│   ├── gl_texture3d.py            # GL 3D texture upload (ctypes OpenGL)
 │   ├── input_manager.py           # Global input event routing (Qt event filter)
 │   ├── view_projector.py          # Ray-casting, geometry picking, workplane projection
 │   ├── work_plane.py              # WorkPlaneManager — Coin3D grid & snapping
-│   ├── gl_program.py              # GLProgram — GLSL shader wrapper (ctypes OpenGL)
-│   ├── gl_framebuffer.py          # GLFramebuffer — FBO management (ctypes OpenGL)
-│   ├── gl_texture3d.py            # GL 3D texture upload (ctypes OpenGL)
-│   ├── gl_compute.py              # GL compute shader dispatch (ctypes OpenGL)
 │   └── sdf/                       # Signed Distance Field Engine
-│       ├── sdf_field.py           # Abstract base SdfField
-│       ├── sdf_composer.py        # Boolean composition tree (min/max/smooth blend)
-│       ├── sdf_baker.py           # Dense grid SDF baking (to be replaced by octree)
-│       ├── sdf_slicer.py          # 2D cross-section extraction (marching squares + DC)
-│       ├── sdf_extrusion.py       # 2D profile → 3D extrusion field
-│       ├── sdf_revolution.py      # 2D profile → 3D revolution field
 │       ├── curve_sampler.py       # NURBS curve discretization & Bezier extraction
 │       ├── glsl_compiler.py       # SDF tree → GLSL shader compiler
+│       ├── sdf_baker.py           # Octree-based narrow-band SDF baking
+│       ├── sdf_composer.py        # Boolean composition tree (min/max/smooth blend)
+│       ├── sdf_extrusion.py       # 2D profile → 3D extrusion field
+│       ├── sdf_field.py           # Abstract base SdfField
+│       ├── sdf_octree.py          # Sparse hierarchical SDF evaluator (Octree)
+│       ├── sdf_revolution.py      # 2D profile → 3D revolution field
+│       ├── sdf_slicer.py          # 2D cross-section extraction (marching squares)
 │       ├── marching_cubes/        # MC lookup tables
 │       ├── sdf/                   # 3D SDF primitives
 │       │   ├── box.py             # SdfBoxField
-│       │   ├── sphere.py          # SdfSphereField
 │       │   ├── cylinder.py        # SdfCylinderField
-│       │   ├── torus.py           # SdfTorusField
+│       │   ├── noise.py           # SdfNoiseField (fBm modifier)
 │       │   ├── plane.py           # SdfPlaneField
-│       │   └── noise.py           # SdfNoiseField (fBm modifier)
+│       │   ├── sphere.py          # SdfSphereField
+│       │   └── torus.py           # SdfTorusField
 │       └── sdf2d/                 # 2D SDF primitives (for profiles)
-│           ├── sdf2d_field.py     # Abstract base Sdf2dField
 │           ├── bezier_curve.py    # Sdf2dBezierCurve (exact cubic Bezier SDF)
-│           ├── polygon.py         # Sdf2dPolygon (sharp-corner polygon SDF)
+│           ├── box.py             # Sdf2dBox
 │           ├── circle.py          # Sdf2dCircle
-│           └── box.py             # Sdf2dBox
+│           ├── polygon.py         # Sdf2dPolygon
+│           └── sdf2d_field.py     # Abstract base Sdf2dField
 │
 ├── tools/                         # Interactive creation tools
-│   ├── __init__.py
-│   ├── dm_base.py                 # Base class for all interactive tools
 │   ├── curve_tool.py              # BSpline curve drawing
-│   ├── edit_tool.py               # Control point editing (NURBS + SDF)
+│   ├── dm_base.py                 # Base class for all interactive tools
+│   ├── edit_tool.py               # Control point editing (NURBS + SDF dispatcher)
 │   ├── noise_tool.py              # Interactive noise modifier
 │   ├── point_tool.py              # Point placement
-│   ├── primitive_tool.py          # Parametric primitives (box, sphere, cylinder, torus)
+│   ├── primitive_tool.py          # Parametric primitives (box, sphere, cylinder, torus, extrude)
 │   ├── translate_tool.py          # Move/translate
 │   └── work_plane_tool.py         # Workplane creation & scaling
 │
 ├── commands/                      # FreeCADGui command definitions
-│   ├── __init__.py
-│   ├── cmd_boolean.py             # DM_Fuse / DM_Cut / DM_Common / DM_SmoothFuse / etc.
+│   ├── cmd_boolean.py             # DM_Add / DM_Subtract / DM_Intersection
 │   ├── cmd_curve.py               # DM_CreateCurve
-│   ├── cmd_curve_sdf.py           # DM_CreateCurveSdf (curve → extrusion)
+│   ├── cmd_curve_sdf.py           # DM_ExtrudeCurve (curve → extrusion)
 │   ├── cmd_edit.py                # DM_EditObject
 │   ├── cmd_fill_curve.py          # DM_FillCurve
 │   ├── cmd_install_deps.py        # Dependency installation script
-│   ├── cmd_noise.py               # DM_CreateNoise
+│   ├── cmd_noise.py               # DM_CreateNoiseModifier
 │   ├── cmd_point.py               # DM_CreatePoint
-│   ├── cmd_primitive.py           # DM_CreateBox / Sphere / Cylinder / Torus
-│   ├── cmd_sdf_export.py          # DM_SdfExport (SDF → mesh)
-│   ├── cmd_sdf_slice.py           # DM_SdfSlice (SDF → 2D contours)
+│   ├── cmd_primitive.py           # DM_CreateBox / Sphere / Cylinder / Torus / Prism / Revolve
+│   ├── cmd_sdf_export.py          # DM_SDFToShape (SDF → mesh)
+│   ├── cmd_sdf_slice.py           # DM_SDFSlice (SDF → 2D contours)
 │   ├── cmd_settings.py            # DM_Settings dialog
 │   ├── cmd_sketcher.py            # DM_OpenSketcher
 │   ├── cmd_translate.py           # DM_Translate
 │   └── cmd_workplane.py           # DM_WorkPlane
 │
 ├── tests/                         # Ad-hoc test scripts
-│
-└── resources/
-    ├── resources.qrc
-    └── icons/                     # SVG icons for toolbar buttons
+└── Resources/                     # SVG icons
 ```
-
 
 ---
 
@@ -181,25 +175,25 @@ Freecad-Direct-Modeling/
 | Place Point | `DM_CreatePoint` | `P` | ✅ |
 | Draw Curve | `DM_CreateCurve` | `C` | ✅ |
 | Fill Curve | `DM_FillCurve` | — | ✅ |
-| Create Curve SDF | `DM_CreateCurveSdf` | — | ✅ |
+| Extrude Curve | `DM_ExtrudeCurve` | — | ✅ |
 | Create Box | `DM_CreateBox` | `B` | ✅ |
 | Create Sphere | `DM_CreateSphere` | — | ✅ |
 | Create Cylinder | `DM_CreateCylinder` | — | ✅ |
 | Create Torus | `DM_CreateTorus` | — | ✅ |
-| Create Noise | `DM_CreateNoise` | — | ✅ |
+| Create Noise | `DM_CreateNoiseModifier` | — | ✅ |
 
 ### Operations
 | Command | ID | Hotkey | Status |
 |---------|----|--------|--------|
-| Field Union | `DM_Fuse` | — | ✅ |
-| Field Cut | `DM_Cut` | — | ✅ |
-| Field Intersect | `DM_Common` | — | ✅ |
-| Smooth Union | `DM_SmoothFuse` | — | ✅ |
-| Smooth Cut | `DM_SmoothCut` | — | ✅ |
-| Smooth Intersect | `DM_SmoothCommon` | — | ✅ |
+| Field Union | `DM_Add` | — | ✅ |
+| Field Cut | `DM_Subtract` | — | ✅ |
+| Field Intersect | `DM_Intersection` | — | ✅ |
+| Smooth Union | `DM_Add` (Dialog) | — | ✅ |
+| Smooth Cut | `DM_Subtract` (Dialog) | — | ✅ |
+| Smooth Intersect | `DM_Intersection` (Dialog) | — | ✅ |
 | Translate | `DM_Translate` | `T` | ✅ |
-| SDF Export (Mesh) | `DM_SdfExport` | — | ✅ |
-| SDF Slice | `DM_SdfSlice` | — | ✅ |
+| SDF Export (Mesh) | `DM_SDFToShape` | — | ✅ |
+| SDF Slice | `DM_SDFSlice` | — | ✅ |
 
 ### Utilities
 | Command | ID | Status |

@@ -203,6 +203,32 @@ class ViewProviderDMWorkPlane:
     def __setstate__(self, state):
         return None
 
+    def doubleClicked(self, vobj):
+        import FreeCADGui
+        from core import dm_logger
+        
+        obj = vobj.Object
+        
+        # Ensure the object is selected
+        sel = FreeCADGui.Selection.getSelection()
+        if not sel or sel[0] != obj:
+            FreeCADGui.Selection.clearSelection()
+            FreeCADGui.Selection.addSelection(obj)
+            
+        dm_logger.info(f"ViewProviderDMWorkPlane: double-clicked {obj.Label}")
+        from tools.work_plane_tool import WorkPlaneCreator
+        WorkPlaneCreator()
+        
+        return True
+
+    def setEdit(self, vobj, mode=0):
+        self.doubleClicked(vobj)
+        return True
+
+    def unsetEdit(self, vobj, mode=0):
+        return True
+
+
 def create_dm_workplane(name="DM_WorkPlane", placement=None):
     doc = FreeCAD.activeDocument()
     if not doc:

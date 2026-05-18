@@ -92,7 +92,7 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
             try:
                 self._active_obj.EditMode = False
                 self._active_obj.touch()
-                self._active_obj.Document.recompute()
+                self._active_obj.Document.recompute([self._active_obj])
             except Exception as e:
                 pass
         
@@ -280,10 +280,6 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
                 self.handle_out[self._edit_sel_idx] = new_pos
                 
             self._update_edit_object()
-            
-            # Fast recompute only for this object to improve drag performance
-            if self._active_obj and self._active_obj.Document:
-                self._active_obj.Document.recompute([self._active_obj])
 
     def _edit_hover(self, event_dict):
         """Update cursor when hovering over a handle in edit mode."""
@@ -472,7 +468,7 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
                 try:
                     self._active_obj.EditMode = False
                     self._active_obj.touch()
-                    self._active_obj.Document.recompute()
+                    self._active_obj.Document.recompute([self._active_obj])
                 except Exception:
                     pass
             self._active_obj = None
@@ -498,7 +494,7 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
                 try:
                     self._active_obj.EditMode = False
                     self._active_obj.touch()
-                    self._active_obj.Document.recompute()
+                    self._active_obj.Document.recompute([self._active_obj])
                 except Exception:
                     pass
             # Clear tool visuals

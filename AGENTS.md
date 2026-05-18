@@ -133,6 +133,8 @@ Specialized implementation patterns are in `.agents/skills/`. Before implementin
 - `dm_rclick_repeat/` — single-RMB close pattern
 - `dm_openvdb_migration/` — VDB sparse tree patterns, `to_vdb()`, CSG, meshing, import guard
 - `dm_vdb_bake_backend/` — VDB bake patterns: to_vdb() contract, vdb_grid_to_dense(), import guard
+- `dm_sdf_octree/` — SdfOctreeCache interface, walk_leaves() contract, mesher integration pattern
+- `dm_nurbs_sdf/` — FreeCAD BSpline API, to_glsl() contract for NURBS curve/surface fields
 
 ## Known Bugs
 
@@ -143,6 +145,7 @@ Specialized implementation patterns are in `.agents/skills/`. Before implementin
 
 ## Active Task Files
 
+- `todo_arch_refactor.md` — CQ/SP/MG/NS/PI phases: code quality, sparse octree, mesher migration, NURBS SDF, pipeline integration
 - `todo_inputrefactor.md` — R-001..R-012: input/tool architecture refactor
 - `todo_input.md` — current input system work
 - `todo_vdb.md` — VDB-001..VDB-011: OpenVDB sparse tree migration (bake backend, booleans, caching)

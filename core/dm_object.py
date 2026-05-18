@@ -20,6 +20,8 @@ try:
 except ImportError:
     coin = None
 
+from . import dm_logger
+
 # ─────────────────────────────────────────────────────────────────────────────
 # DM Settings helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,8 +71,8 @@ def get_perf_profiler_enabled():
 def set_perf_profiler_enabled(val):
     try: # ParamGet might fail in some contexts
         FreeCAD.ParamGet(_PARAM_PATH).SetBool("EnablePerfProfiler", bool(val))
-    except:
-        pass
+    except Exception as e:
+        dm_logger.debug(f"set_perf_profiler_enabled failed: {e}")
 
 def get_render_debug_mode():
     """Return whether render debug mode is enabled."""
@@ -347,6 +349,58 @@ class DMObjectProxy:
 
 
 
+    def get_sdf_field(self, fp):
+        """Returns an SdfField representation of this object."""
+        st = getattr(fp, "ShapeType", None)
+        
+        if st == "sdf":
+            return getattr(self, "SdfField", None)
+            
+        if st == "curve":
+            from core.sdf.sdf.nurbs_curve import SdfNurbsCurveField
+            try:
+                # During interactive dragging, Shape may be stale (recompute deferred).
+                # Build curve directly from Points/Handles if possible.
+                pts = getattr(fp, "Points", [])
+                if pts:
+                    from core.dm_curve import DMCurve
+                    from core.dm_point import DMPoint
+                    h_in = getattr(fp, "HandleIn", [])
+                    h_out = getattr(fp, "HandleOut", [])
+                    dm_pts = []
+                    for i, p in enumerate(pts):
+                        hi = h_in[i] if i < len(h_in) else None
+                        ho = h_out[i] if i < len(h_out) else None
+                        dm_pts.append(DMPoint(p, handle_in=hi, handle_out=ho))
+                    
+                    is_closed = getattr(fp, "Closed", False)
+                    bs = DMCurve(dm_pts, is_closed=is_closed).bspline
+                    if bs:
+                        rad = getattr(fp, "Radius", 1.0)
+                        return SdfNurbsCurveField(bs, tube_radius=rad, placement=fp.Placement)
+
+                # Fallback to Shape
+                if fp.Shape and fp.Shape.Edges:
+                    curve = fp.Shape.Edges[0].Curve
+                    rad = getattr(fp, "Radius", 1.0)
+                    return SdfNurbsCurveField(curve, tube_radius=rad, placement=fp.Placement)
+            except Exception as e:
+                from core import dm_logger
+                dm_logger.debug(f"get_sdf_field(curve) failed: {e}")
+            
+        if st == "surface":
+            from core.sdf.sdf.nurbs_surface import SdfNurbsSurfaceField
+            try:
+                if fp.Shape and fp.Shape.Faces:
+                    surf = fp.Shape.Faces[0].Surface
+                    return SdfNurbsSurfaceField(surf, placement=fp.Placement)
+            except Exception as e:
+                from core import dm_logger
+                dm_logger.debug(f"get_sdf_field(surface) failed: {e}")
+
+        # Fallback for primitives stored as points
+        return self._recompute_primitive_field(fp)
+
     def _recompute_primitive_field(self, fp):
         """Reconstruct a primitive SDF field from the 'Points' vector list."""
         pts = getattr(fp, "Points", [])
@@ -419,7 +473,10 @@ class DMViewProvider:
             vobj.PointSize = 0.0
             vobj.LineWidth = 0.0
         elif shape_type == "surface":
-            vobj.DisplayMode = "Shaded"
+            try:
+                vobj.DisplayMode = "Shaded"
+            except Exception:
+                pass
             vobj.PointSize = 0.0
             vobj.LineWidth = 0.0
         elif shape_type == "sdf":
@@ -578,6 +635,47 @@ class DMViewProvider:
     def __setstate__(self, state):
         return None
 
+    def doubleClicked(self, vobj):
+        import FreeCADGui
+        from core import dm_logger
+        
+        obj = vobj.Object
+        
+        # Ensure the object is selected
+        sel = FreeCADGui.Selection.getSelection()
+        if not sel or sel[0] != obj:
+            FreeCADGui.Selection.clearSelection()
+            FreeCADGui.Selection.addSelection(obj)
+            
+        dm_logger.info(f"DMViewProvider: double-clicked {obj.Label}")
+        
+        st = getattr(obj, "ShapeType", None)
+        if st == "curve":
+            from tools.edit_tool import EditTool
+            EditTool().activate()
+        elif st == "sdf":
+            from tools.edit_tool import SdfEditTool
+            SdfEditTool().activate()
+        else:
+            # Fallback to general activate just in case
+            from tools import edit_tool
+            edit_tool.activate()
+            
+        # Return True to indicate the double-click was handled,
+        # preventing FreeCAD from opening the default transform tool.
+        return True
+
+    def setEdit(self, vobj, mode=0):
+        # Called when FreeCAD tries to put the object into Edit mode
+        # We redirect this to our custom edit_tool instead of FreeCAD's default task panels
+        self.doubleClicked(vobj)
+        return True
+
+    def unsetEdit(self, vobj, mode=0):
+        # Called when leaving edit mode. We just return True.
+        return True
+
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Factory
@@ -635,8 +733,7 @@ def create_dm_object(name, shape_type, params=None, placement=None):
                 obj.ViewObject.ShapeColor = (1.0, 0.5, 0.0)
             obj.ViewObject.LineWidth = get_line_width()
             obj.ViewObject.PointSize = get_point_size()
-            # Disable wireframe for SDF mesh objects - reduces render overhead
-            if shape_type == "sdf":
+            if shape_type in ("sdf", "surface"):
                 try:
                     obj.ViewObject.DisplayMode = "Shaded"
                 except Exception:

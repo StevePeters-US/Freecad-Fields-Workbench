@@ -1,6 +1,13 @@
 import FreeCAD
 from core.sdf.sdf_field import SdfField
 
+_GLSL_SDF_PLANE = """
+float sdf_plane(vec3 p, vec3 origin, vec3 normal) {
+    return dot(p - origin, normal);
+}
+"""
+
+
 class SdfPlaneField(SdfField):
     """A half-space field divided by an infinite plane."""
     def __init__(self, normal: FreeCAD.Vector, origin: FreeCAD.Vector):
@@ -12,7 +19,7 @@ class SdfPlaneField(SdfField):
         return (point - self.origin).dot(self.normal)
 
     def to_glsl(self, ctx, point_var="p"):
-        ctx.need_helper("sdf_plane")
+        ctx.add_custom_helper("sdf_plane", _GLSL_SDF_PLANE)
         o = ctx.uniform("vec3", (self.origin.x, self.origin.y, self.origin.z))
         n = ctx.uniform("vec3", (self.normal.x, self.normal.y, self.normal.z))
         return f"sdf_plane({point_var}, {o}, {n})"

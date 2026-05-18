@@ -46,16 +46,16 @@ At 0.05mm resolution over 1m³, a dense uniform grid would require **20,000³ = 
 
 ### 2.2 What is Broken or Missing
 
-| Issue | Severity | Files Affected |
-|-------|----------|----------------|
-| **Dense grid memory explosion** | 🔴 Critical | `dm_mesher.py` (4 meshers), `sdf_baker.py` |
-| **No SdfNurbsSurfaceField** | 🔴 Critical | Missing — no way to create SDF from arbitrary NURBS surface |
-| **No SdfNurbsCurveField** (3D) | 🟠 High | Missing — only 2D Bezier profile exists |
-| **No sparse/octree CPU evaluator** | 🟠 High | Missing — all CPU paths use `np.meshgrid` |
-| **Silent `except: pass` blocks** | 🟡 Medium | `work_plane.py:153`, `view_projector.py:454`, `input_manager.py:464` |
-| **Known bugs** (3 unfixed) | 🟡 Medium | See §5 below |
-| **`sdf_baker.py` uses `FreeCAD.Console.PrintMessage`** | 🟡 Medium | Should use `dm_logger` |
-| **README folder structure out of date** | 🟡 Medium | Does not reflect actual file tree |
+| Issue | Severity | Status |
+|-------|----------|--------|
+| **Dense grid memory explosion** | ✅ Fixed | Resolved via `SdfOctreeCache` (SP/MG tasks) |
+| **No SdfNurbsSurfaceField** | 🔴 Critical | **NEXT GOAL** — Missing (NS-003) |
+| **No SdfNurbsCurveField** (3D) | 🟠 High | **NEXT GOAL** — Missing (NS-001) |
+| **No sparse/octree CPU evaluator** | ✅ Fixed | Implemented `core/sdf/sdf_octree.py` |
+| **Silent `except: pass` blocks** | ✅ Fixed | Replaced with `dm_logger` (CQ-001..002) |
+| **Known bugs** (Fixed) | ✅ Fixed | Resolved BUG-1, BUG-2, BUG-3 (CQ-004..006) |
+| **`sdf_baker.py` logging** | ✅ Fixed | Switched to `dm_logger` (CQ-003) |
+| **README drift** | ✅ Fixed | Fully updated (CQ-007..008) |
 
 ---
 

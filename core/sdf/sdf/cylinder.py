@@ -1,7 +1,21 @@
 import numpy as np
 import FreeCAD
 import math
-from core.sdf.sdf_field import SdfField
+from core.sdf.sdf_field import SdfField, _GLSL_APPLY_INV_MAT
+
+_GLSL_SDF_CYLINDER = """
+float sdf_cylinder(vec3 p, vec3 base_center, vec3 axis, float radius, float height) {
+    vec3 pa = p - base_center;
+    float h = dot(pa, axis);
+    vec3 radial = pa - axis * h;
+    float d_radial = length(radial) - radius;
+    float h_center = h - height * 0.5;
+    float d_axial = abs(h_center) - abs(height) * 0.5;
+    float d_r_pos = max(d_radial, 0.0);
+    float d_a_pos = max(d_axial, 0.0);
+    return sqrt(d_r_pos * d_r_pos + d_a_pos * d_a_pos) + min(max(d_radial, d_axial), 0.0);
+}
+"""
 
 class SdfCylinderField(SdfField):
     """A finite cylinder exact SDF."""
@@ -66,13 +80,13 @@ class SdfCylinderField(SdfField):
         return (out_dist + in_dist).astype(np.float32)
 
     def to_glsl(self, ctx, point_var="p"):
-        ctx.need_helper("sdf_cylinder")
+        ctx.add_custom_helper("sdf_cylinder", _GLSL_SDF_CYLINDER)
         c = ctx.uniform("vec3", (self.base_center.x, self.base_center.y, self.base_center.z))
         ax = ctx.uniform("vec3", (self.axis.x, self.axis.y, self.axis.z))
-        r = ctx.uniform("float", self.radius)
-        h = ctx.uniform("float", self.height)
+        r  = ctx.uniform("float", self.radius)
+        h  = ctx.uniform("float", self.height)
         if self.inv_matrix is not None:
-            ctx.need_helper("apply_inv_mat")
+            ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
             m = ctx.uniform("mat4", self.inv_matrix.tolist())
             return f"sdf_cylinder(apply_inv_mat({m}, {point_var}), {c}, {ax}, {r}, {h})"
         return f"sdf_cylinder({point_var}, {c}, {ax}, {r}, {h})"

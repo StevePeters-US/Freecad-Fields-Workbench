@@ -19,6 +19,7 @@ class EditTool(DMBase, DragTimerMixin):
         self._is_editing = True
 
         self._selected_element = None # (index, type)
+        self._is_dragging = False
         self._wp_drag_start = None
 
         # State
@@ -127,11 +128,18 @@ class EditTool(DMBase, DragTimerMixin):
     def on_button1_down(self, event_dict):
         result = self.handle_click(event_dict)
         if self.state in [1, 2]:
+            self._is_dragging = True
             self._start_drag_timer()
         return result
 
     def on_button1_up(self, _event_dict):
         self._stop_drag_timer()
+        was_dragging = self._is_dragging
+        self._is_dragging = False
+        
+        if was_dragging and self._target_obj and self._target_obj.Document:
+            self._target_obj.Document.recompute()
+
         if self.state in [1, 2]:
             self.state = 0
             self._selected_element = None
@@ -317,8 +325,18 @@ class EditTool(DMBase, DragTimerMixin):
         self._target_obj.HandleIn = h_in
         self._target_obj.HandleOut = h_out
         self._target_obj.touch()
-        if self._target_obj.Document:
-            self._target_obj.Document.recompute()
+        
+        if not self._is_dragging:
+            if self._target_obj.Document:
+                self._target_obj.Document.recompute()
+        else:
+            # Interactive update: bypass recompute, update renderer directly
+            vp = self._target_obj.ViewObject
+            if vp and hasattr(vp, "Proxy") and vp.Proxy:
+                # Trigger ViewProvider.updateData manually for visual update
+                vp.Proxy.updateData(self._target_obj, "Points")
+                if self.view:
+                    self.view.redraw()
 
     def _insert_point(self, pos_global):
         """Insert a point into the curve at the given global position."""
@@ -445,7 +463,7 @@ class EditTool(DMBase, DragTimerMixin):
 
     def handle_keyboard(self, event_dict):
         key_code = event_dict.get("Key")
-        dm_logger.debug(f"EditTool.handle_keyboard: key={key_code}, is_editing={self._is_editing}")
+        # dm_logger.debug(f"EditTool.handle_keyboard: key={key_code}, is_editing={self._is_editing}")
         
         if key_code == QtCore.Qt.Key_Escape:
             self.terminate()
@@ -513,3 +531,68 @@ def activate():
             return
 
     dm_logger.error(f"edit_tool.activate: Not editable (proxy={proxy_name}, ShapeType={shape_type}).")
+
+class SdfEditTool(DMBase):
+    """
+    Generic dispatcher for editing SDF primitives and modifier objects.
+    Identifies the selected SDF object and launches the corresponding Creator tool in edit mode.
+    """
+    def get_command_id(self):
+        return "DM_EditObject"
+
+    def activate(self):
+        sel = FreeCADGui.Selection.getSelection()
+        if not sel:
+            dm_logger.error("No object selected to edit.")
+            self.terminate()
+            return
+            
+        obj = sel[0]
+        proxy = getattr(obj, "Proxy", None)
+        if not proxy:
+            dm_logger.error("Selected object has no Proxy.")
+            self.terminate()
+            return
+
+        # 1. Handle Noise Objects
+        proxy_name = proxy.__class__.__name__
+        if proxy_name == "DMNoiseProxy":
+            from tools.noise_tool import NoiseTool
+            tool = NoiseTool()
+            tool.edit_object(obj)
+            return
+
+        # 2. Handle SDF Primitives
+        # All SDF primitives use DMObjectProxy, but they have different SdfField subclasses
+        from tools import primitive_tool
+        
+        # Mapping from SdfField class name to Creator class
+        field_to_creator = {
+            "SdfBoxField": primitive_tool.BoxCreator,
+            "SdfSphereField": primitive_tool.SphereCreator,
+            "SdfCylinderField": primitive_tool.CylinderCreator,
+            "SdfTorusField": primitive_tool.TorusCreator,
+            "SdfExtrusionField": primitive_tool.CurveExtrudeCreator,
+            "SdfRevolutionField": primitive_tool.RevolveCreator,
+        }
+        
+        sdf_field = getattr(proxy, "SdfField", None)
+        if sdf_field:
+            field_class = sdf_field.__class__.__name__
+            creator_cls = field_to_creator.get(field_class)
+            if creator_cls:
+                dm_logger.info(f"SdfEditTool: Dispatching to {creator_cls.__name__} for {obj.Label}")
+                tool = creator_cls()
+                tool.edit_object(obj)
+                return
+            else:
+                dm_logger.warn(f"SdfEditTool: No specialized editor for SdfField '{field_class}'")
+        else:
+            dm_logger.warn(f"SdfEditTool: Object '{obj.Label}' has no SdfField.")
+
+        self.terminate()
+
+def activate():
+    """Dispatch function for input_manager."""
+    tool = SdfEditTool()
+    tool.activate()

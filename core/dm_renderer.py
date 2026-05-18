@@ -390,14 +390,20 @@ class DMRendererStrategy:
         pass
 
 class NURBSRendererStrategy(DMRendererStrategy):
+    def __init__(self):
+        self.label = None
+
     def setup(self, renderer, vobj):
-        st = getattr(vobj.Object, "ShapeType", None)
+        obj = vobj.Object
+        self.label = f"{obj.Document.Name}.{obj.Name}"
+        
+        st = getattr(obj, "ShapeType", None)
         if st == "curve":
             renderer.setup_coin_overlay()
-            renderer.rebuild_control_cage(vobj.Object)
+            renderer.rebuild_control_cage(obj)
         elif st == "point":
             renderer.setup_point_marker_nodes()
-            renderer.update_point_marker(vobj.Object)
+            renderer.update_point_marker(obj)
 
     def update(self, renderer, fp, prop):
         st = getattr(fp, "ShapeType", None)
@@ -418,19 +424,20 @@ class SdfRendererStrategy(DMRendererStrategy):
     def setup(self, renderer, vobj):
         obj = vobj.Object
         self.label = f"{obj.Document.Name}.{obj.Name}"
+        self.update(renderer, obj, None)
 
     def update(self, renderer, fp, prop):
-        if prop == "Shape" or not prop:
+        if prop == "Shape" or not prop or prop in ["Points", "ControlGrid", "Position"]:
             proxy = getattr(fp, "Proxy", None)
-            # Support both names during transition (SdfField for old documents)
-            field = getattr(proxy, "SdfField", None) or getattr(proxy, "SdfField", None)
-            if self.label and field is not None:
-                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
-                sr = DMSceneRayMarchRenderer.get_instance()
-                sr.update_field(self.label, field)
-                import FreeCADGui
-                if FreeCADGui.activeView():
-                    FreeCADGui.activeView().redraw()
+            if proxy and hasattr(proxy, "get_sdf_field"):
+                field = proxy.get_sdf_field(fp)
+                if self.label and field is not None:
+                    from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                    sr = DMSceneRayMarchRenderer.get_instance()
+                    sr.update_field(self.label, field)
+                    import FreeCADGui
+                    if FreeCADGui.activeView():
+                        FreeCADGui.activeView().redraw()
 
     def set_display_mode(self, renderer, mode):
         renderer.set_sdf_display_mode(mode)

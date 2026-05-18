@@ -232,7 +232,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self._preview_obj = None     # Live FreeCAD object for preview
         self._update_pending = False  # Throttle rapid updates
         self._creating_obj = False    # Re-entrancy guard
-        self._create_is_subtractive = False  # DEPRECATED — use _create_group
+        self._create_is_subtractive = False  # DEPRECATED - use _create_group
         self._create_group = "Group 1"  # Z hotkey toggle during creation
         # Reset the shared timer so preview calls for this tool session are isolated
         mesh_timer.reset()
@@ -261,7 +261,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         self._constraint_axis  = None   # 'x' | 'y' | 'z' | None
         self._constraint_plane = None   # 'yz' | 'xz' | 'xy' | None
         self._constraint_space = 'global'  # 'global' | 'local'
-        self._constraint_last_key = None   # last key pressed — enables global→local cycle
+        self._constraint_last_key = None   # last key pressed - enables global→local cycle
         self._drag_constraint_base = None  # handle world pos at drag-start
 
         # Snap mode for edit drag (mirrors first-point snap pipeline when active)
@@ -390,7 +390,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         if not ray_p or not ray_d:
             return True
 
-        # Test center/rot handles first — center dot always gives free drag
+        # Test center/rot handles first - center dot always gives free drag
         special_pts = []
         if getattr(self, "_center_handle", None): special_pts.append(self._center_handle.position)
         if getattr(self, "_rot_handle", None): special_pts.append(self._rot_handle.position)
@@ -442,7 +442,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         return False
 
     # ------------------------------------------------------------------
-    # Creation state machine — driven by CREATION_STEPS
+    # Creation state machine - driven by CREATION_STEPS
     # ------------------------------------------------------------------
 
     def _primitive_name(self):
@@ -747,7 +747,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             self.terminate()
 
     def _commit_edit_deferred(self, obj):
-        """Deferred recompute after editing — required for Shape assignment safety."""
+        """Deferred recompute after editing - required for Shape assignment safety."""
         try:
             obj.touch()
             obj.Document.recompute([obj])
@@ -925,16 +925,49 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
         self._schedule_update(lambda: self._do_full_preview_update(field))
 
-    def _do_full_preview_update(self, field):
+    def _do_full_preview_update(self, field=None):
         """Throttled update of both the mesh and the ghost visuals."""
+        if field is None:
+            field = (self._get_edit_preview_field()
+                     if getattr(self, "_is_editing", False)
+                     else self._get_preview_field())
         self._apply_preview_field(field)
         self._update_ghost_visuals()
-        # Schedule parent boolean recompute deferred (must not run inside drag timer)
         if getattr(self, "_is_editing", False) and self._preview_obj and self._preview_obj.Document:
             obj = self._preview_obj
-            QtCore.QTimer.singleShot(0, lambda: self._recompute_boolean_parents(obj))
+            # Always push recomposed boolean fields to renderer so the result updates live.
+            self._update_boolean_parents_in_renderer()
+            # Full FreeCAD doc recompute only on drag release (too slow to do every frame).
+            if not getattr(self, "_is_dragging", False):
+                QtCore.QTimer.singleShot(0, lambda: self._recompute_boolean_parents(obj))
         if self.view:
             self.view.redraw()
+
+    def _update_boolean_parents_in_renderer(self):
+        """Push recomposed boolean fields directly to the renderer for real-time updates.
+        Called every preview frame including during drags — avoids FreeCAD doc recompute.
+        """
+        if self._preview_obj is None or not self._preview_obj.Document:
+            return
+        try:
+            from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+            from commands.cmd_boolean import _recompose_boolean
+            doc = self._preview_obj.Document
+            renderer = DMSceneRayMarchRenderer.get_instance()
+            for obj in doc.Objects:
+                if getattr(obj, "ShapeType", None) != "sdf":
+                    continue
+                inputs = getattr(obj, "BooleanInputs", None) or []
+                if self._preview_obj not in inputs:
+                    continue
+                new_field = _recompose_boolean(obj)
+                if new_field is not None:
+                    if hasattr(obj, "Proxy"):
+                        obj.Proxy.SdfField = new_field
+                    label = f"{doc.Name}.{obj.Name}"
+                    renderer.update_field(label, new_field)
+        except Exception as e:
+            dm_logger.debug(f"Boolean parent renderer update error: {e}")
 
     def _recompute_boolean_parents(self, obj):
         """Deferred: recompute the primitive and its boolean parent dependents."""
@@ -961,7 +994,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 return
             proxy.SdfField = field
 
-            # Direct GPU update — skip FreeCAD recompute cycle
+            # Direct GPU update - skip FreeCAD recompute cycle
             from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
             label = f"{self._preview_obj.Document.Name}.{self._preview_obj.Name}"
             DMSceneRayMarchRenderer.get_instance().update_field(label, field)
@@ -1110,7 +1143,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
     def handle_keyboard(self, event_dict):
         key = event_dict.get("Key")
         key_text = str(event_dict.get("Text", "None")).upper()
-        dm_logger.debug(f"PrimitiveCreatorBase.handle_keyboard: key={key}, text='{key_text}', is_editing={self._is_editing}")
+        # dm_logger.debug(f"PrimitiveCreatorBase.handle_keyboard: key={key}, text='{key_text}', is_editing={self._is_editing}")
 
         # ── Axis constraints (edit mode) ────────────────────────────────────────
         if self._is_editing and key in (QtCore.Qt.Key_X, QtCore.Qt.Key_Y, QtCore.Qt.Key_Z):
@@ -2262,8 +2295,15 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
         self._height         = 5.0   # full extrusion height in mm
         self._bezier_segs    = None
         # GLSL-stable field cache: id() must stay constant to avoid shader recompiles
-        self._cached_profile = None   # Sdf2dBezierCurve
+        self._cached_profile = None   # Sdf2dNurbsCurveField
         self._cached_extrude = None   # SdfExtrusionField
+
+        # Visual handle state
+        self._base_dm_pts     = []    # DMPoint spheres on base curve
+        self._top_dm_pts      = []    # DMPoint spheres on top curve
+        self._base_wire       = None  # DMLineSet: base curve outline
+        self._top_wire        = None  # DMLineSet: top curve outline
+        self._connector_lines = None  # DMLineSet: vertical edges between rings
 
         import FreeCADGui
         for obj in FreeCADGui.Selection.getSelection():
@@ -2288,6 +2328,7 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
             self._bezier_segs               = extract_bezier_segments_in_placement(
                 self._curve_obj, best_fit
             )
+            self._update_extrude_handles()
 
     # Prevent _detect_selected_workplane from overriding the curve's placement
     def _detect_selected_workplane(self):
@@ -2301,15 +2342,86 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
             wp   = self.working_plane
             norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
             self._height = self._clamp_height((pos - self._anchor_pt).dot(norm))
+            self._update_extrude_handles()
 
     def _on_stage_preview(self, state, pos):
         if state == ToolState.DRAG_Z and pos and self._anchor_pt:
             wp   = self.working_plane
             norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
             self._height = self._clamp_height((pos - self._anchor_pt).dot(norm))
+            self._update_extrude_handles()
+
+    @staticmethod
+    def _sample_seg_world(p0, p1, p2, p3, wp, n=12):
+        """Sample n points on a cubic Bezier segment (2D local) → world FreeCAD.Vectors.
+        Excludes the endpoint (t=1) so segments can be concatenated without duplicates."""
+        pts = []
+        for i in range(n):
+            t = i / n
+            s = 1.0 - t
+            x = s**3*p0[0] + 3*s**2*t*p1[0] + 3*s*t**2*p2[0] + t**3*p3[0]
+            y = s**3*p0[1] + 3*s**2*t*p1[1] + 3*s*t**2*p2[1] + t**3*p3[1]
+            pts.append(wp.multVec(FreeCAD.Vector(x, y, 0)))
+        return pts
+
+    def _update_extrude_handles(self):
+        """Draw/update base + top curve rings and vertical connector lines."""
+        if not self._bezier_segs or not self.working_plane:
+            return
+        wp   = self.working_plane
+        norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
+        offset = norm * self._height
+        r = self._compute_handle_radius()
+
+        # Control points = first endpoint of each segment (closed curve, so they cover all nodes)
+        base_ctrl = [wp.multVec(FreeCAD.Vector(p0[0], p0[1], 0))
+                     for p0, p1, p2, p3 in self._bezier_segs]
+        top_ctrl  = [p + offset for p in base_ctrl]
+
+        # Ensure enough DMPoint spheres exist for both rings
+        while len(self._base_dm_pts) < len(base_ctrl):
+            dm = DMPoint(base_ctrl[len(self._base_dm_pts)])
+            dm.draw_point(self.points_root, r, color=(1.0, 0.5, 0.0))
+            self._base_dm_pts.append(dm)
+        while len(self._top_dm_pts) < len(top_ctrl):
+            dm = DMPoint(top_ctrl[len(self._top_dm_pts)])
+            dm.draw_point(self.points_root, r, color=(1.0, 0.5, 0.0))
+            self._top_dm_pts.append(dm)
+
+        for i, pt in enumerate(base_ctrl):
+            self._base_dm_pts[i].position = pt
+            self._base_dm_pts[i].update_draw(radius=r)
+        for i, pt in enumerate(top_ctrl):
+            self._top_dm_pts[i].position = pt
+            self._top_dm_pts[i].update_draw(radius=r)
+
+        # Sample the closed bezier wire (n points per segment, no duplicate joints)
+        wire_base = []
+        for seg in self._bezier_segs:
+            wire_base.extend(self._sample_seg_world(*seg, wp=wp))
+        wire_base.append(wire_base[0])   # close the loop
+        wire_top = [p + offset for p in wire_base]
+
+        if self._base_wire is None:
+            self._base_wire = DMLineSet(self.points_root, color=(1.0, 0.5, 0.0), width=2.0)
+        self._base_wire.update_lines(wire_base)
+
+        if self._top_wire is None:
+            self._top_wire = DMLineSet(self.points_root, color=(1.0, 0.5, 0.0), width=2.0)
+        self._top_wire.update_lines(wire_top)
+
+        # Vertical connectors: one 2-point line per control point pair
+        conn_pts    = []
+        conn_counts = []
+        for b, t in zip(base_ctrl, top_ctrl):
+            conn_pts.extend([b, t])
+            conn_counts.append(2)
+        if self._connector_lines is None:
+            self._connector_lines = DMLineSet(self.points_root, color=(0.8, 0.8, 0.8), width=1.0)
+        self._connector_lines.update_lines(conn_pts, conn_counts)
 
     def _offset_placement(self):
-        """Working plane shifted height/2 along its normal — centers the ±height/2 extrusion."""
+        """Working plane shifted height/2 along its normal - centers the ±height/2 extrusion."""
         wp   = self.working_plane
         norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
         return FreeCAD.Placement(wp.Base + norm * (self._height * 0.5), wp.Rotation)
@@ -2330,13 +2442,16 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
         ], dtype=np.float32)
 
     def _extrude_field(self):
-        if not self._bezier_segs or self._height < 0.01:
+        if self._height < 0.01 or not self._curve_obj:
             return None
         from core.sdf.sdf2d.bezier_curve import Sdf2dBezierCurve
         from core.sdf.sdf_extrusion import SdfExtrusionField
 
         if self._cached_profile is None:
-            self._cached_profile = Sdf2dBezierCurve(self._bezier_segs)
+            if self._bezier_segs:
+                self._cached_profile = Sdf2dBezierCurve(self._bezier_segs)
+            else:
+                return None
 
         if self._cached_extrude is None:
             self._cached_extrude = SdfExtrusionField(
@@ -2345,7 +2460,6 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
                 placement=self._offset_placement(),
             )
         else:
-            # Update height + placement in-place: id() stays constant → GLSL unchanged → no recompile
             self._update_field_inplace(self._cached_extrude)
 
         return self._cached_extrude
@@ -2364,6 +2478,7 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
         self._height = self._clamp_height(params.get("Height", 10.0))
         if self._cached_extrude is not None:
             self._update_field_inplace(self._cached_extrude)
+        self._update_extrude_handles()
         self.update_preview()
 
     def _primitive_name(self):
@@ -2379,3 +2494,209 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
             self._finalize_object(self._primitive_name(), terminate=True)
         else:
             self.terminate()
+
+
+class CurveExtrude3DCreator(PrimitiveCreatorBase):
+    """
+    Creates a round tube/pipe swept along a selected 3D curve path.
+    Works with open and closed curves of any 3D shape.
+    The user drags to set the tube radius.
+    """
+
+    CREATION_STEPS = [ToolState.DRAG_Z]
+
+    def get_command_id(self):
+        return "DM_CurvePipe"
+
+    def __init__(self):
+        super().__init__()
+        self._curve_obj   = None
+        self._radius      = 3.0
+        self._segs_3d     = None   # list of (p0,p1,p2,p3), each pi = (x,y,z) world
+        self._cached_pipe = None   # SdfPipeField — kept stable to avoid recompile
+
+        # Visuals
+        self._path_wire     = None  # DMLineSet: sampled curve path
+        self._ctrl_dm_pts   = []    # DMPoint spheres at control points
+        self._radius_circle = None  # DMLineSet: cross-section circle at path start
+
+        import FreeCADGui
+        for obj in FreeCADGui.Selection.getSelection():
+            if getattr(obj, "ShapeType", None) == "curve":
+                self._curve_obj = obj
+                break
+
+        if self._curve_obj is not None:
+            from core.sdf.curve_sampler import extract_bezier_segments_3d
+            self._segs_3d = extract_bezier_segments_3d(self._curve_obj)
+
+            # Working plane: horizontal at the centroid of all control points
+            pts = list(getattr(self._curve_obj, "Points", []))
+            pl  = self._curve_obj.Placement
+            world_pts = [pl.multVec(p) for p in pts]
+            if world_pts:
+                cx = sum(p.x for p in world_pts) / len(world_pts)
+                cy = sum(p.y for p in world_pts) / len(world_pts)
+                cz = sum(p.z for p in world_pts) / len(world_pts)
+                centroid = FreeCAD.Vector(cx, cy, cz)
+            else:
+                centroid = FreeCAD.Vector(0, 0, 0)
+            self.working_plane              = FreeCAD.Placement(centroid, FreeCAD.Rotation())
+            self._working_plane_is_fallback = False
+            self._anchor_pt                 = centroid
+            self._update_pipe_handles()
+
+    def _detect_selected_workplane(self):
+        pass
+
+    def _clamp_radius(self, r):
+        return max(0.1, r)
+
+    def _on_stage_accept(self, state, pos):
+        if state == ToolState.DRAG_Z and pos and self._anchor_pt:
+            self._radius = self._clamp_radius((pos - self._anchor_pt).Length)
+            if self._cached_pipe is not None:
+                self._cached_pipe.radius = self._radius
+            self._update_pipe_handles()
+
+    def _on_stage_preview(self, state, pos):
+        if state == ToolState.DRAG_Z and pos and self._anchor_pt:
+            self._radius = self._clamp_radius((pos - self._anchor_pt).Length)
+            if self._cached_pipe is not None:
+                self._cached_pipe.radius = self._radius
+            self._update_pipe_handles()
+
+    @staticmethod
+    def _sample_seg_3d_world(p0, p1, p2, p3, n=12):
+        """Sample n evenly-spaced points on a 3D cubic Bezier (excludes t=1)."""
+        pts = []
+        for i in range(n):
+            t = i / n
+            s = 1.0 - t
+            x = s**3*p0[0] + 3*s**2*t*p1[0] + 3*s*t**2*p2[0] + t**3*p3[0]
+            y = s**3*p0[1] + 3*s**2*t*p1[1] + 3*s*t**2*p2[1] + t**3*p3[1]
+            z = s**3*p0[2] + 3*s**2*t*p1[2] + 3*s*t**2*p2[2] + t**3*p3[2]
+            pts.append(FreeCAD.Vector(x, y, z))
+        return pts
+
+    @staticmethod
+    def _circle_pts(center, tangent, radius, n=24):
+        """Sample a circle of `radius` at `center` in the plane perpendicular to `tangent`."""
+        import math
+        n_vec = FreeCAD.Vector(tangent).normalize() if tangent.Length > 1e-6 else FreeCAD.Vector(0, 0, 1)
+        if abs(n_vec.z) < 0.9:
+            u = FreeCAD.Vector(0, 0, 1).cross(n_vec)
+        else:
+            u = FreeCAD.Vector(1, 0, 0).cross(n_vec)
+        if u.Length < 1e-6:
+            u = FreeCAD.Vector(1, 0, 0)
+        u.normalize()
+        v = n_vec.cross(u)
+        pts = []
+        for i in range(n + 1):
+            a = 2.0 * math.pi * i / n
+            pts.append(center + u * (radius * math.cos(a)) + v * (radius * math.sin(a)))
+        return pts
+
+    def _update_pipe_handles(self):
+        if not self._segs_3d:
+            return
+        r = self._compute_handle_radius()
+
+        # Control points (one per segment start)
+        ctrl_world = [FreeCAD.Vector(*seg[0]) for seg in self._segs_3d]
+        if not getattr(self._curve_obj, "Closed", False):
+            ctrl_world.append(FreeCAD.Vector(*self._segs_3d[-1][3]))
+
+        while len(self._ctrl_dm_pts) < len(ctrl_world):
+            dm = DMPoint(ctrl_world[len(self._ctrl_dm_pts)])
+            dm.draw_point(self.points_root, r, color=(0.3, 0.8, 1.0))
+            self._ctrl_dm_pts.append(dm)
+        for i, pt in enumerate(ctrl_world):
+            self._ctrl_dm_pts[i].position = pt
+            self._ctrl_dm_pts[i].update_draw(radius=r)
+
+        # Path wire
+        is_closed = getattr(self._curve_obj, "Closed", False)
+        wire_pts = []
+        for seg in self._segs_3d:
+            wire_pts.extend(self._sample_seg_3d_world(*seg))
+        if is_closed and wire_pts:
+            wire_pts.append(wire_pts[0])
+
+        if self._path_wire is None:
+            self._path_wire = DMLineSet(self.points_root, color=(0.3, 0.8, 1.0), width=2.0)
+        self._path_wire.update_lines(wire_pts)
+
+        # Radius circle at the start of the first segment, perpendicular to its tangent
+        p0 = FreeCAD.Vector(*self._segs_3d[0][0])
+        p1 = FreeCAD.Vector(*self._segs_3d[0][1])
+        tangent = p1 - p0
+        circle = self._circle_pts(p0, tangent, self._radius)
+        if self._radius_circle is None:
+            self._radius_circle = DMLineSet(self.points_root, color=(0.3, 0.8, 1.0), width=1.5)
+        self._radius_circle.update_lines(circle)
+
+    def _pipe_field(self):
+        if not self._segs_3d:
+            return None
+        from core.sdf.sdf_pipe import SdfPipeField
+        if self._cached_pipe is None:
+            self._cached_pipe = SdfPipeField(self._segs_3d, self._radius)
+        else:
+            self._cached_pipe.radius = self._radius
+        return self._cached_pipe
+
+    def _get_preview_field(self):      return self._pipe_field()
+    def _get_edit_preview_field(self): return self._pipe_field()
+    def _get_final_field(self):        return self._pipe_field()
+
+    def _get_final_points(self):
+        return [FreeCAD.Vector(self._radius, 0.0, 0.0)] if self._curve_obj else None
+
+    def get_parameters(self):
+        return {"Radius": self._radius}
+
+    def set_parameters(self, params):
+        self._radius = self._clamp_radius(params.get("Radius", 3.0))
+        if self._cached_pipe is not None:
+            self._cached_pipe.radius = self._radius
+        self._update_pipe_handles()
+        self.update_preview()
+
+    def _primitive_name(self):
+        return "CurvePipe"
+
+    def finish(self):
+        """One-shot tool: commit then terminate."""
+        if getattr(self, "_is_editing", False):
+            super().finish()
+            self._finished = True
+            self.terminate()
+        elif self.is_in_progress():
+            self._finalize_object(self._primitive_name(), terminate=True)
+        else:
+            self.terminate()
+
+
+class Curve3DExtrudeCreator(PrimitiveCreatorBase):
+    """
+    Sweeps a 2D profile curve along a selected 3D path curve.
+    (Not yet implemented — stub only.)
+    """
+
+    CREATION_STEPS = [ToolState.DRAG_Z]
+
+    def get_command_id(self):
+        return "DM_Curve3DExtrude"
+
+    def __init__(self):
+        super().__init__()
+
+    def _get_preview_field(self):      return None
+    def _get_edit_preview_field(self): return None
+    def _get_final_field(self):        return None
+    def _get_final_points(self):       return None
+    def get_parameters(self):          return {}
+    def set_parameters(self, params):  pass
+    def _primitive_name(self):         return "Curve3DExtrude"

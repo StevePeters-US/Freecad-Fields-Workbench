@@ -216,7 +216,7 @@ class DMInputManager(QtCore.QObject):
                     DMSelectionManager.get_instance().try_sdf_selection(self._last_qt_pos)
                     # Let through to FreeCAD
 
-                # Double-click to edit SDF
+                # Double-click to edit objects
                 elif event.type() == QtCore.QEvent.MouseButtonDblClick and event.button() == QtCore.Qt.LeftButton:
                     from core.dm_selection_manager import DMSelectionManager
                     sel_mgr = DMSelectionManager.get_instance()
@@ -225,10 +225,21 @@ class DMInputManager(QtCore.QObject):
                     if sel:
                         obj = sel[0]
                         proxy_name = getattr(getattr(obj, "Proxy", None), "__class__", type(None)).__name__
-                        if proxy_name == "DMObjectProxy" and getattr(obj, "ShapeType", "") == "sdf":
-                            from tools import edit_tool
-                            edit_tool.activate()
-                            return True
+                        is_wp = getattr(obj.Proxy, "is_dm_workplane", False)
+                        if is_wp:
+                            from tools.work_plane_tool import WorkPlaneCreator
+                            WorkPlaneCreator(); return True
+                        elif proxy_name == "DMObjectProxy":
+                            st = getattr(obj, "ShapeType", "")
+                            if st == "curve":
+                                from tools.edit_tool import EditTool
+                                EditTool().activate(); return True
+                            elif st == "sdf":
+                                from tools.edit_tool import SdfEditTool
+                                SdfEditTool().activate(); return True
+                        elif proxy_name == "DMNoiseProxy":
+                            from tools.edit_tool import SdfEditTool
+                            SdfEditTool().activate(); return True
 
                 # Global hotkeys
                 elif event.type() == QtCore.QEvent.KeyPress:
@@ -273,8 +284,11 @@ class DMInputManager(QtCore.QObject):
                                     from tools.edit_tool import EditTool
                                     EditTool().activate(); return True
                                 elif st == "sdf":
-                                    from tools import edit_tool as _et
-                                    _et.activate(); return True
+                                    from tools.edit_tool import SdfEditTool
+                                    SdfEditTool().activate(); return True
+                            elif proxy_name == "DMNoiseProxy":
+                                from tools.edit_tool import SdfEditTool
+                                SdfEditTool().activate(); return True
 
                 # ShortcutOverride for 'E' when no tool
                 elif event.type() == QtCore.QEvent.ShortcutOverride:
@@ -401,7 +415,7 @@ class DMInputManager(QtCore.QObject):
         except Exception:
             pass
 
-        # Method 3: Coin3D SoRenderManager — authoritative GL framebuffer size (physical pixels)
+        # Method 3: Coin3D SoRenderManager - authoritative GL framebuffer size (physical pixels)
         try:
             viewer = view.getViewer()
             if hasattr(viewer, "getSoRenderManager"):
@@ -460,8 +474,9 @@ class DMInputManager(QtCore.QObject):
             # 2. Support view.getPoint fallback (used by WorkPlaneManager)
             # We synthesize a ray direction from camera to focus point if getPoint is used
             scene_pt = None
-            try: scene_pt = view.getPoint(x, y)
-            except: pass
+            try: scene_pt = view.getPoint(x_phys, y_phys)
+            except Exception as e:
+                dm_logger.debug(f"view.getPoint fallback failed: {e}")
 
             cam = view.getCameraNode()
             if not cam: return None, None
@@ -516,7 +531,7 @@ class DMInputManager(QtCore.QObject):
                 # Path 3 NDC formula expects y-from-top (Qt convention), use y_qt not flipped y
                 ndc_x, ndc_y = (x/w)*2.0 - 1.0, 1.0 - (y_qt/h)*2.0
                 ray_p_ortho = ray_p + right*(ndc_x*width/2.0) + up*(ndc_y*height/2.0)
-                forward.normalize()  # modifies in-place; returns None — do not use return value
+                forward.normalize()  # modifies in-place; returns None - do not use return value
                 return ray_p_ortho, forward
 
         except Exception as e:
@@ -643,7 +658,7 @@ class DMInputManager(QtCore.QObject):
             denom = 1.0 - b * b       # sin²(angle); zero when parallel
 
             if abs(denom) < 1e-8:
-                # Axis is pointing straight at the camera — no depth info.
+                # Axis is pointing straight at the camera - no depth info.
                 return base
 
             e = w.dot(n)

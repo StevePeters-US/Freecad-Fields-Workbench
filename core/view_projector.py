@@ -289,7 +289,7 @@ class ViewProjector:
                 if geom_pt is not None:
                     geom_t = (geom_pt - cam_pos).dot(ray_d)
 
-            # 2b. SDF surface hit (always tested — not gated by place_on_geometry).
+            # 2b. SDF surface hit (always tested - not gated by place_on_geometry).
             sdf_pt = None
             sdf_t = float('inf')
             sdf_result = self.get_sdf_hit(event_dict, skip_objects=skip_objects)
@@ -418,7 +418,7 @@ class ViewProjector:
                     gpl = obj.getGlobalPlacement() if hasattr(obj, "getGlobalPlacement") else obj.Placement
                     gpl_inv = gpl.inverse()
 
-                    # 2. Hit position — prefer FreeCAD's pick coordinates (world space,
+                    # 2. Hit position - prefer FreeCAD's pick coordinates (world space,
                     # always on the visible front surface). Fall back to ray-section.
                     world_hit = None
                     if 'Point' in info:
@@ -451,7 +451,8 @@ class ViewProjector:
                     if not local_n: # Fallback parameter pick
                         try:
                             u, v = face.Surface.parameter(local_hit); local_n = face.Surface.normal(u, v)
-                        except: pass
+                        except Exception as e:
+                            dm_logger.debug(f"face normal parameter fallback failed: {e}")
                     
                     if local_n:
                         if face.Orientation == "Reversed": local_n.multiply(-1.0)

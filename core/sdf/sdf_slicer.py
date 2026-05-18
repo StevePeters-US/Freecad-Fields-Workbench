@@ -31,17 +31,18 @@ _MS_EDGES = [
 ]
 
 
-def slice_sdf(field, origin, normal, resolution=1.0, extent=None):
+def slice_sdf(field, origin, normal, resolution=1.0, extent=None, octree_cache=None):
     """
     Extract zero-crossing contours of an SDF field on a plane.
 
     Args:
-        field:      Any SdfField subclass.
-        origin:     FreeCAD.Vector — point on the slice plane.
-        normal:     FreeCAD.Vector — plane normal (will be normalized).
-        resolution: float — grid spacing in mm on the plane.
-        extent:     float or None — half-size of the sampling grid. If None,
-                    computed from field.bounding_box().
+        field:        Any SdfField subclass.
+        origin:       FreeCAD.Vector — point on the slice plane.
+        normal:       FreeCAD.Vector — plane normal (will be normalized).
+        resolution:   float — grid spacing in mm on the plane.
+        extent:       float or None — half-size of the sampling grid. If None,
+                      computed from field.bounding_box().
+        octree_cache: optional SdfOctreeCache instance for accelerated lookup.
 
     Returns:
         list[list[FreeCAD.Vector]] — one list of ordered 3D points per contour.
@@ -86,16 +87,27 @@ def slice_sdf(field, origin, normal, resolution=1.0, extent=None):
     pts_3d_flat[:, 1] = projected_center.y + U.ravel() * u_axis.y + V.ravel() * v_axis.y
     pts_3d_flat[:, 2] = projected_center.z + U.ravel() * u_axis.z + V.ravel() * v_axis.z
 
-    vals = field.evaluate_grid(pts_3d_flat).reshape(n + 1, n + 1)
+    if octree_cache is not None:
+        # Accelerated evaluation from cache
+        all_pts = [FreeCAD.Vector(p[0], p[1], p[2]) for p in pts_3d_flat]
+        vals = np.array([octree_cache.query(p) for p in all_pts], dtype=np.float32).reshape(n + 1, n + 1)
+    else:
+        # Standard analytical evaluation
+        vals = field.evaluate_grid(pts_3d_flat).reshape(n + 1, n + 1)
 
     # ── 2D Dual Contouring (Pass 1: Find & Refine Crossings) ──
     crossings = {}
     active_cells = set()
     
     # Precise crossing finder (Newton steps on grid edges)
-    def refine_crossing(pA, pB, field, iters=3):
-        v0 = field.evaluate(pA)
-        v1 = field.evaluate(pB)
+    def refine_crossing(pA, pB, field, iters=3, cache=None):
+        if cache is not None:
+            v0 = cache.query(pA)
+            v1 = cache.query(pB)
+        else:
+            v0 = field.evaluate(pA)
+            v1 = field.evaluate(pB)
+
         if (v0 < 0) == (v1 < 0): return None, None
         t = v0 / (v0 - v1)
         p = pA + (pB - pA) * t
@@ -105,10 +117,15 @@ def slice_sdf(field, origin, normal, resolution=1.0, extent=None):
         direction.normalize()
         
         for _ in range(iters):
-            fval = field.evaluate(p)
-            # Estimate derivative along edge using small step
-            eps = 1e-4
-            df = (field.evaluate(p + direction * eps) - fval) / eps
+            if cache is not None:
+                fval = cache.query(p)
+                eps = 1e-4
+                df = (cache.query(p + direction * eps) - fval) / eps
+            else:
+                fval = field.evaluate(p)
+                eps = 1e-4
+                df = (field.evaluate(p + direction * eps) - fval) / eps
+            
             if abs(df) > 1e-9:
                 p = p - direction * (fval / df)
         
@@ -126,7 +143,7 @@ def slice_sdf(field, origin, normal, resolution=1.0, extent=None):
 
             # Right edge: (v1, v2) connects i,j and i+1,j
             if (v1 < 0) != (v2 < 0):
-                p_ref, _ = refine_crossing(p1, p2, field)
+                p_ref, _ = refine_crossing(p1, p2, field, cache=octree_cache)
                 if p_ref:
                     # Map p_ref back to UV
                     rel = p_ref - projected_center
@@ -137,7 +154,7 @@ def slice_sdf(field, origin, normal, resolution=1.0, extent=None):
                 
             # Top edge: (v3, v2) connects i,j and i,j+1
             if (v3 < 0) != (v2 < 0):
-                p_ref, _ = refine_crossing(p3, p2, field)
+                p_ref, _ = refine_crossing(p3, p2, field, cache=octree_cache)
                 if p_ref:
                     rel = p_ref - projected_center
                     u, v = rel.dot(u_axis), rel.dot(v_axis)
@@ -158,7 +175,12 @@ def slice_sdf(field, origin, normal, resolution=1.0, extent=None):
         pts_to_eval.append([p3.x, p3.y + eps, p3.z])
         pts_to_eval.append([p3.x, p3.y, p3.z + eps])
 
-    all_vals = field.evaluate_grid(np.array(pts_to_eval, dtype=np.float32))
+    all_pts_to_eval = np.array(pts_to_eval, dtype=np.float32)
+    if octree_cache is not None:
+        all_vals = np.array([octree_cache.query(FreeCAD.Vector(p[0],p[1],p[2])) for p in all_pts_to_eval], dtype=np.float32)
+    else:
+        all_vals = field.evaluate_grid(all_pts_to_eval)
+        
     uv_grads = []
     for k in range(len(crossing_keys)):
         v0 = all_vals[k*4]
@@ -201,11 +223,16 @@ def slice_sdf(field, origin, normal, resolution=1.0, extent=None):
                 
                 # Newton-Raphson refinement: snap vertex to surface
                 for _ in range(3):
-                    fval = field.evaluate(p_final)
-                    # Use 3D gradient for snapping
-                    g_x = (field.evaluate(p_final + FreeCAD.Vector(eps,0,0)) - fval)/eps
-                    g_y = (field.evaluate(p_final + FreeCAD.Vector(0,eps,0)) - fval)/eps
-                    g_z = (field.evaluate(p_final + FreeCAD.Vector(0,0,eps)) - fval)/eps
+                    if octree_cache is not None:
+                        fval = octree_cache.query(p_final)
+                        g_x = (octree_cache.query(p_final + FreeCAD.Vector(eps,0,0)) - fval)/eps
+                        g_y = (octree_cache.query(p_final + FreeCAD.Vector(0,eps,0)) - fval)/eps
+                        g_z = (octree_cache.query(p_final + FreeCAD.Vector(0,0,eps)) - fval)/eps
+                    else:
+                        fval = field.evaluate(p_final)
+                        g_x = (field.evaluate(p_final + FreeCAD.Vector(eps,0,0)) - fval)/eps
+                        g_y = (field.evaluate(p_final + FreeCAD.Vector(0,eps,0)) - fval)/eps
+                        g_z = (field.evaluate(p_final + FreeCAD.Vector(0,0,eps)) - fval)/eps
                     grad = FreeCAD.Vector(g_x, g_y, g_z)
                     gl2 = grad.Length ** 2
                     if gl2 > 1e-9:

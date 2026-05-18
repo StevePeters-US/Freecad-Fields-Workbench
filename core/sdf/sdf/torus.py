@@ -1,7 +1,15 @@
 import math
 import numpy as np
 import FreeCAD
-from core.sdf.sdf_field import SdfField
+from core.sdf.sdf_field import SdfField, _GLSL_APPLY_INV_MAT
+
+_GLSL_SDF_TORUS = """
+float sdf_torus(vec3 p, vec3 center, float major_r, float tube_r) {
+    vec3 lp = p - center;
+    vec2 q = vec2(length(lp.xy) - major_r, lp.z);
+    return length(q) - tube_r;
+}
+"""
 
 
 class SdfTorusField(SdfField):
@@ -58,17 +66,17 @@ class SdfTorusField(SdfField):
 
     def to_glsl(self, ctx, point_var="p"):
         """Returns GLSL snippet for the torus."""
-        ctx.need_helper("sdf_torus")
+        ctx.add_custom_helper("sdf_torus", _GLSL_SDF_TORUS)
         c = ctx.uniform("vec3", (self.center.x, self.center.y, self.center.z))
         R = ctx.uniform("float", self.major_radius)
         r = ctx.uniform("float", self.tube_radius)
-        
+
         p = point_var
         if self.inv_matrix is not None:
-            ctx.need_helper("apply_inv_mat")
+            ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
             m = ctx.uniform("mat4", self.inv_matrix.tolist())
             p = f"apply_inv_mat({m}, {point_var})"
-            
+
         return f"sdf_torus({p}, {c}, {R}, {r})"
 
     def bounding_box(self):

@@ -1,6 +1,6 @@
 import numpy as np
 import FreeCAD
-from .sdf_field import SdfField
+from .sdf_field import SdfField, _GLSL_APPLY_INV_MAT
 from .sdf2d.sdf2d_field import Sdf2dField
 
 
@@ -57,17 +57,13 @@ class SdfExtrusionField(SdfField):
         return (inner + outer).astype(np.float32)
 
     def to_glsl(self, ctx, point_var: str = "p") -> str:
-        uid = f"{id(self) & 0xFFFFFFFF:08x}"
-        func_name = f"sdf_extrude_{uid}"
+        func_name = ctx.get_unique_name("sdf_extrude")
 
         half_h = ctx.uniform("float", self.height * 0.5)
 
-        # Build the 2D expression — use a fresh sub-pvar to avoid name collision
-        sub_p = f"_ep_{uid}"
-        expr_2d = self.profile.to_glsl_2d(ctx, sub_p)
-
+        # The 2D expression is generated directly inside the body.
         if self.inv_matrix is not None:
-            ctx.need_helper("apply_inv_mat")
+            ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
             m = ctx.uniform("mat4", self.inv_matrix.tolist())
             lp_expr = f"apply_inv_mat({m}, {point_var})"
         else:
@@ -76,8 +72,43 @@ class SdfExtrusionField(SdfField):
         body = (
             f"float {func_name}(vec3 p) {{\n"
             f"    vec3 lp = {lp_expr.replace(point_var, 'p')};\n"
-            f"    vec2 {sub_p} = lp.xy;\n"
-            f"    float _d2 = {expr_2d};\n"
+            f"    vec2 _sp = lp.xy;\n"
+            f"    float _d2 = {self.profile.to_glsl_2d(ctx, '_sp')};\n"
+            f"    float _dz = abs(lp.z) - {half_h};\n"
+            f"    vec2 _w = vec2(_d2, _dz);\n"
+            f"    return min(max(_w.x, _w.y), 0.0) + length(max(_w, 0.0));\n"
+            f"}}"
+        )
+        ctx.add_custom_helper(func_name, body)
+        return f"{func_name}({point_var})"
+
+    def to_glsl_baked(self, ctx, point_var: str = "p", profile_bbox: tuple = None) -> str:
+        """Fast interactive variant: samples a pre-baked r32f profile texture instead of
+        evaluating the analytic formula. Same IQ extrusion SDF, but O(1) per step."""
+        func_name = ctx.get_unique_name("sdf_extrude_baked")
+        half_h = ctx.uniform("float", self.height * 0.5)
+
+        if profile_bbox is None:
+            from core.sdf.profile_tex import profile_bbox as compute_bbox
+            profile_bbox = compute_bbox(self)
+        x0, y0, x1, y1 = profile_bbox
+        pmin = ctx.uniform("vec2", [x0, y0])
+        psz  = ctx.uniform("vec2", [x1 - x0, y1 - y0])
+        tex  = ctx.sampler2d("ptex")
+
+        if self.inv_matrix is not None:
+            ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
+            m = ctx.uniform("mat4", self.inv_matrix.tolist())
+            lp_expr = f"apply_inv_mat({m}, p)"
+        else:
+            lp_expr = "p"
+
+        body = (
+            f"float {func_name}(vec3 p) {{\n"
+            f"    vec3 lp = {lp_expr};\n"
+            f"    vec2 uv = (lp.xy - {pmin}) / {psz};\n"
+            f"    vec2 uv_c = clamp(uv, 0.0, 1.0);\n"
+            f"    float _d2 = texture({tex}, uv_c).r + length((uv - uv_c) * {psz});\n"
             f"    float _dz = abs(lp.z) - {half_h};\n"
             f"    vec2 _w = vec2(_d2, _dz);\n"
             f"    return min(max(_w.x, _w.y), 0.0) + length(max(_w, 0.0));\n"

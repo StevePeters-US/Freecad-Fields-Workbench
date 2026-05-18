@@ -52,9 +52,9 @@ int sd_solve_cubic(float a, float b, float c, float d,
 _GLSL_CUBIC_BEZ_2D = """
 float sd_cubic_bez_2d(vec2 p, vec2 a, vec2 b, vec2 c, vec2 d) {
     float md = 1e18;
-    for (int i = 0; i <= 8; i++) {
-        float t = float(i) * 0.125;
-        for (int j = 0; j < 4; j++) {
+    for (int i = 0; i <= 6; i++) {
+        float t = float(i) / 6.0;
+        for (int j = 0; j < 2; j++) {
             float s = 1.0 - t;
             vec2 B  = s*s*s*a + 3.0*s*s*t*b + 3.0*s*t*t*c + t*t*t*d;
             vec2 dB = 3.0*(s*s*(b-a) + 2.0*s*t*(c-b) + t*t*(d-c));
@@ -200,25 +200,33 @@ class Sdf2dBezierCurve(Sdf2dField):
         return min(xs), min(ys), max(xs), max(ys)
 
     def to_glsl_2d(self, ctx, pvar: str = "q") -> str:
-        # Register shared helpers (deduplicated by name in ctx._custom_helpers dict)
         ctx.add_custom_helper("sd_solve_cubic", _GLSL_SOLVE_CUBIC)
         ctx.add_custom_helper("sd_cubic_bez_2d", _GLSL_CUBIC_BEZ_2D)
         ctx.add_custom_helper("sd_cubic_winding", _GLSL_CUBIC_WINDING)
 
-        uid = f"{id(self) & 0xFFFFFFFF:08x}"
-        func_name = f"sdf_bezier_{uid}"
+        func_name = ctx.get_unique_name("sdf_bezier")
 
         lines = [f"float {func_name}(vec2 p) {{"]
         lines.append("    float d = 1e18;")
         lines.append("    int w = 0;")
+        lines.append("    float d_aabb;")
 
         for k, (p0, p1, p2, p3) in enumerate(self.segments):
+            xs = [p0[0], p1[0], p2[0], p3[0]]
+            ys = [p0[1], p1[1], p2[1], p3[1]]
+            bx0, bx1 = min(xs), max(xs)
+            by0, by1 = min(ys), max(ys)
             lines.append(
                 f"    {{ vec2 a{k}=vec2({p0[0]},{p0[1]}), b{k}=vec2({p1[0]},{p1[1]}),"
                 f" c{k}=vec2({p2[0]},{p2[1]}), d{k}=vec2({p3[0]},{p3[1]});"
             )
-            lines.append(f"      d = min(d, sd_cubic_bez_2d(p, a{k}, b{k}, c{k}, d{k}));")
-            lines.append(f"      w += sd_cubic_winding(p, a{k}, b{k}, c{k}, d{k}); }}")
+            lines.append(
+                f"      vec2 cl{k} = clamp(p, vec2({bx0},{by0}), vec2({bx1},{by1}));"
+            )
+            lines.append(f"      d_aabb = length(p - cl{k});")
+            lines.append(f"      if (d_aabb < d) d = min(d, sd_cubic_bez_2d(p, a{k}, b{k}, c{k}, d{k}));")
+            lines.append(f"      if (p.y >= {by0} - 1e-6 && p.y <= {by1} + 1e-6)")
+            lines.append(f"          w += sd_cubic_winding(p, a{k}, b{k}, c{k}, d{k}); }}")
 
         lines.append("    return (w == 0 ? 1.0 : -1.0) * d;")
         lines.append("}")
