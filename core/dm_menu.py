@@ -22,7 +22,7 @@ class DMMenuManager:
 
     def _build_dynamic_menu(self, menu, items):
         for item in items:
-            if item == "-":
+            if item == "-" or item is None:
                 menu.addSeparator()
             elif isinstance(item, tuple):
                 if len(item) == 2:

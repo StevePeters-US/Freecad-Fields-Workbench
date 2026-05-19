@@ -40,10 +40,12 @@ class DMPoint:
         self._point_parent = parent_node
         self._point_sep = coin.SoSeparator()
 
+        lm = coin.SoLightModel()
+        lm.model.setValue(coin.SoLightModel.BASE_COLOR)
+
         self._point_mat = coin.SoMaterial()
         self._point_mat.diffuseColor.setValue(*color)
-        self._point_mat.specularColor.setValue(0.8, 0.8, 0.8)
-        self._point_mat.shininess.setValue(0.7)
+        self._point_mat.emissiveColor.setValue(*color)
 
         self._point_xf = coin.SoTransform()
         self._point_xf.translation.setValue(
@@ -53,6 +55,7 @@ class DMPoint:
         self._point_sphere = coin.SoSphere()
         self._point_sphere.radius = radius
 
+        self._point_sep.addChild(lm)
         self._point_sep.addChild(self._point_mat)
         self._point_sep.addChild(self._point_xf)
         self._point_sep.addChild(self._point_sphere)
