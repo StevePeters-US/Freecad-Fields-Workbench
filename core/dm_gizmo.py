@@ -68,6 +68,46 @@ class DMTransformGizmo:
     def _cone_h(self):
         return self._length * 0.20
 
+    def _ring_radius(self):
+        return self._length * 0.85
+
+    def _draw_ring(self, axis, center):
+        from pivy import coin
+        ax_vec       = self._axes[axis]
+        ref, tang    = _perp_pair(ax_vec)
+        R            = self._ring_radius()
+        color        = self.AXIS_COLORS[axis]
+        N            = _RING_SEGMENTS
+
+        ring_pts = []
+        for i in range(N + 1):
+            theta = 2.0 * _math.pi * i / N
+            pt = center + ref * (_math.cos(theta) * R) + tang * (_math.sin(theta) * R)
+            ring_pts.append((pt.x, pt.y, pt.z))
+
+        coords = coin.SoCoordinate3()
+        coords.point.setValues(0, len(ring_pts), ring_pts)
+
+        ls = coin.SoLineSet()
+        ls.numVertices.setValue(len(ring_pts))
+
+        ds = coin.SoDrawStyle()
+        ds.lineWidth.setValue(2.5)
+
+        mat = coin.SoMaterial()
+        mat.diffuseColor.setValue(*color)
+        mat.emissiveColor.setValue(*color)
+
+        ring_sep = coin.SoSeparator()
+        ring_sep.addChild(mat)
+        ring_sep.addChild(ds)
+        ring_sep.addChild(coords)
+        ring_sep.addChild(ls)
+
+        self._root.addChild(ring_sep)
+        self._ring_seps[axis]   = ring_sep
+        self._ring_coords[axis] = coords
+
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
@@ -133,6 +173,9 @@ class DMTransformGizmo:
             self._shaft_xforms[axis] = xf_shaft
             self._cone_xforms[axis]  = xf_cone
 
+        for axis in ('x', 'y', 'z'):
+            self._draw_ring(axis, self._center)
+
     def update(self, center, axes=None):
         if not self._root:
             return
@@ -157,6 +200,21 @@ class DMTransformGizmo:
             xf_c.translation.setValue(cone_ctr.x, cone_ctr.y, cone_ctr.z)
             xf_c.rotation.setValue(sb_rot)
 
+        for axis in ('x', 'y', 'z'):
+            coords = self._ring_coords.get(axis)
+            if coords is None:
+                continue
+            ax_vec = self._axes[axis]
+            ref, tang = _perp_pair(ax_vec)
+            R = self._ring_radius()
+            N = _RING_SEGMENTS
+            ring_pts = []
+            for i in range(N + 1):
+                theta = 2.0 * _math.pi * i / N
+                pt = center + ref * (_math.cos(theta) * R) + tang * (_math.sin(theta) * R)
+                ring_pts.append((pt.x, pt.y, pt.z))
+            coords.point.setValues(0, len(ring_pts), ring_pts)
+
     def undraw(self):
         if self._parent and self._root:
             try:
@@ -166,6 +224,8 @@ class DMTransformGizmo:
         self._root = None
         self._shaft_xforms.clear()
         self._cone_xforms.clear()
+        self._ring_seps.clear()
+        self._ring_coords.clear()
         self._parent = None
 
     def hit_test(self, ray_p, ray_d, tolerance):
@@ -179,6 +239,15 @@ class DMTransformGizmo:
             if dist < best_dist:
                 best_dist = dist
                 best_axis = axis
+
+        # Test rotation rings (lower priority than shafts)
+        ring_r = self._ring_radius()
+        for axis in ('x', 'y', 'z'):
+            dist = _ray_ring_dist(ray_p, ray_d, self._center,
+                                  self._axes[axis], ring_r)
+            if dist < best_dist:
+                best_dist = dist
+                best_axis = f'rot_{axis}'
         return best_axis
 
 
@@ -209,3 +278,15 @@ def _ray_segment_dist(ray_p, ray_d, seg_a, seg_b):
     t      = (seg_pt - ray_p).dot(ray_d)
     ray_pt = ray_p + ray_d * t
     return (ray_pt - seg_pt).Length
+
+
+def _ray_ring_dist(ray_p, ray_d, center, ax_vec, ring_r):
+    """Signed distance from ray to a circle: |radial_distance - ring_radius|."""
+    denom = ray_d.dot(ax_vec)
+    if abs(denom) < 1e-8:
+        return float('inf')
+    t = (center - ray_p).dot(ax_vec) / denom
+    if t < 0.0:
+        return float('inf')
+    pt = ray_p + ray_d * t
+    return abs((pt - center).Length - ring_r)

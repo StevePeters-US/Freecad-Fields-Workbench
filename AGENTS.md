@@ -87,6 +87,13 @@ SdfField subclass (core/sdf/sdf/*.py)
 
 ## Code Conventions
 
+### Style
+- **Python 3.8+** (FreeCAD 0.21+ / 1.0 / 1.2)
+- **PEP 8**: 4-space indent, 100-char soft limit
+- `snake_case` functions, `PascalCase` classes, `_` prefix for private
+- **Imports**: FreeCAD → PySide → project → stdlib
+- **Docstrings**: Google-style on all public classes and functions
+
 ### Logging
 Use `dm_logger` — never bare `print()` or stdlib `logging`:
 ```python
@@ -149,3 +156,4 @@ Specialized implementation patterns are in `.agents/skills/`. Before implementin
 - `todo_inputrefactor.md` — R-001..R-012: input/tool architecture refactor
 - `todo_input.md` — current input system work
 - `todo_vdb.md` — VDB-001..VDB-011: OpenVDB sparse tree migration (bake backend, booleans, caching)
+- `todo_cam.md` — CAM-001..CAM-003: CNC tool path generation from SDF
