@@ -121,17 +121,30 @@ to `create_dm_object` or set them in `cmd_boolean._sdf_boolean()`).
 
 ## Field Attribute Name
 
-The SDF field on a proxy is stored as `proxy.SdfField`. This is a plain Python
-attribute (not a FreeCAD property). It survives only for the session.
+`proxy.SdfField` is a plain Python attribute — not a FreeCAD property. It is lost on document save/load.
+
+**Always use `get_sdf_field(obj)` to obtain a child's field**, never access `.SdfField` directly.
+This triggers lazy reconstruction on load:
 
 ```python
-proxy = obj.Proxy
-field = getattr(proxy, "SdfField", None)
+proxy = getattr(child, "Proxy", None)
+field = (proxy.get_sdf_field(child) if proxy and hasattr(proxy, "get_sdf_field")
+         else getattr(proxy, "SdfField", None))
 ```
 
-> **Bug note**: The current `cmd_boolean.py` reads `proxy.SdfField` but labels
-> it `proxy.SdfField`. That is correct — primitive tools store the field as
-> `self.SdfField = field` on the proxy.
+## Serialization Requirements
+
+Boolean result objects must store `SdfType = "boolean"` so they can be reconstructed on load:
+
+```python
+if not hasattr(result, "SdfType"):
+    result.addProperty("App::PropertyString", "SdfType", "Sdf", "SDF primitive type")
+result.SdfType = "boolean"
+```
+
+`DMObjectProxy._reconstruct_field()` has a `"boolean"` branch that calls `_recompose_boolean(fp)`.
+`_recompose_boolean` uses `get_sdf_field(child)` on each input, which recursively reconstructs
+primitive inputs if they are not yet loaded. No ordering dependency between parent and children.
 
 ---
 

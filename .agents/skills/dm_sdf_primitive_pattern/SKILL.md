@@ -134,6 +134,19 @@ FreeCADGui.addCommand('DM_Create{Name}', CommandDM{Name}())
 
 ---
 
+## Serialization
+
+When a new `SdfField` type is paired with a new `PrimitiveCreatorBase` subclass:
+
+1. Override `get_sdf_type()` in the creator to return a unique lowercase string (e.g. `"capsule"`).
+2. Add a matching `elif sdf_type == "capsule":` branch in `DMObjectProxy._reconstruct_field()`
+   in `core/dm_object.py`. Reconstruct the field from `fp.Points` (a `FreeCAD.Vector` list)
+   and `fp.Placement`. The `Points` list must contain exactly the control points stored
+   by `_get_final_points()` in the creator.
+
+The commit methods (`__do_commit` and `_do_commit_and_edit` in `PrimitiveCreatorBase`) store
+`SdfType` and `Points` automatically — no extra work needed in the creator.
+
 ## Files to Read Before Editing
 
 1. `core/sdf/sdf/sphere.py` — simplest complete example
@@ -141,3 +154,4 @@ FreeCADGui.addCommand('DM_Create{Name}', CommandDM{Name}())
 3. `core/sdf/sdf/cylinder.py` — example with axis-aligned projection
 4. `core/sdf/sdf/sdf_field.py` — base class (just `pass`)
 5. `core/sdf/sdf_field.py` — abstract base with `evaluate_grid` fallback
+6. `core/dm_object.py:_reconstruct_field` — add your branch here

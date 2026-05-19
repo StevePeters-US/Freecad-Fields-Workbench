@@ -289,6 +289,12 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
         # Panel is shown after _post_init runs (after edit_object detection)
         self.panel = None
 
+    def get_sdf_type(self):
+        return ""
+
+    def _get_source_curve_link(self):
+        return None
+
     def _post_init(self):
         """Override: detect selected object first, THEN show the task panel."""
         super()._post_init()  # runs _detect_selected_object() + updateGui()
@@ -1043,7 +1049,26 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
             except Exception:
                 pass
 
-        # Resolution is now handled globally by the GPU renderer settings.
+        # Store SdfType for load-time field reconstruction
+        sdf_type = self.get_sdf_type()
+        if sdf_type:
+            try:
+                if not hasattr(obj, "SdfType"):
+                    obj.addProperty("App::PropertyString", "SdfType", "Sdf", "SDF primitive type")
+                obj.SdfType = sdf_type
+            except Exception:
+                pass
+
+        # Store source curve link for curve-based types
+        source_curve = self._get_source_curve_link()
+        if source_curve is not None:
+            try:
+                if not hasattr(obj, "SourceCurveLink"):
+                    obj.addProperty("App::PropertyLink", "SourceCurveLink", "Sdf", "Source curve")
+                obj.SourceCurveLink = source_curve
+            except Exception:
+                pass
+
         proxy = obj.Proxy
         proxy.SdfField = field
         
@@ -1097,6 +1122,24 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
                 if not hasattr(obj, "Points"):
                     obj.addProperty("App::PropertyVectorList", "Points", "Sdf", "Control Points")
                 obj.Points = points
+            except Exception:
+                pass
+
+        sdf_type = self.get_sdf_type()
+        if sdf_type:
+            try:
+                if not hasattr(obj, "SdfType"):
+                    obj.addProperty("App::PropertyString", "SdfType", "Sdf", "SDF primitive type")
+                obj.SdfType = sdf_type
+            except Exception:
+                pass
+
+        source_curve = self._get_source_curve_link()
+        if source_curve is not None:
+            try:
+                if not hasattr(obj, "SourceCurveLink"):
+                    obj.addProperty("App::PropertyLink", "SourceCurveLink", "Sdf", "Source curve")
+                obj.SourceCurveLink = source_curve
             except Exception:
                 pass
 
@@ -1287,6 +1330,9 @@ class BoxCreator(PrimitiveCreatorBase):
 
     def get_command_id(self):
         return "DM_CreateBox"
+
+    def get_sdf_type(self):
+        return "box"
 
     def __init__(self):
         super().__init__()
@@ -1602,6 +1648,9 @@ class SphereCreator(PrimitiveCreatorBase):
     def get_command_id(self):
         return "DM_CreateSphere"
 
+    def get_sdf_type(self):
+        return "sphere"
+
     def __init__(self):
         super().__init__()
         self.points = []
@@ -1699,6 +1748,9 @@ class CylinderCreator(PrimitiveCreatorBase):
 
     def get_command_id(self):
         return "DM_CreateCylinder"
+
+    def get_sdf_type(self):
+        return "cylinder"
 
     def __init__(self):
         super().__init__()
@@ -1834,6 +1886,9 @@ class TorusCreator(PrimitiveCreatorBase):
 
     def get_command_id(self):
         return "DM_CreateTorus"
+
+    def get_sdf_type(self):
+        return "torus"
 
     def __init__(self):
         super().__init__()
@@ -2021,6 +2076,9 @@ class PrismCreator(PrimitiveCreatorBase):
     def get_command_id(self):
         return "DM_CreatePrism"
 
+    def get_sdf_type(self):
+        return "prism"
+
     def __init__(self):
         super().__init__()
         self.points = []
@@ -2153,6 +2211,9 @@ class RevolveCreator(PrimitiveCreatorBase):
 
     def get_command_id(self):
         return "DM_CreateRevolve"
+
+    def get_sdf_type(self):
+        return "revolve"
 
     def __init__(self):
         super().__init__()
@@ -2288,6 +2349,12 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
 
     def get_command_id(self):
         return "DM_ExtrudeCurve"
+
+    def get_sdf_type(self):
+        return "curve_extrude"
+
+    def _get_source_curve_link(self):
+        return self._curve_obj
 
     def __init__(self):
         super().__init__()
@@ -2507,6 +2574,12 @@ class CurveExtrude3DCreator(PrimitiveCreatorBase):
 
     def get_command_id(self):
         return "DM_CurvePipe"
+
+    def get_sdf_type(self):
+        return "curve_pipe"
+
+    def _get_source_curve_link(self):
+        return self._curve_obj
 
     def __init__(self):
         super().__init__()

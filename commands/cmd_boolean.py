@@ -60,7 +60,9 @@ class CommandDMBoolean:
         """Return (orange_fields, blue_fields) from a list of SDF objects, or (None, None) on error."""
         orange, blue = [], []
         for obj in objects:
-            field = getattr(getattr(obj, "Proxy", None), "SdfField", None)
+            proxy = getattr(obj, "Proxy", None)
+            field = (proxy.get_sdf_field(obj) if proxy and hasattr(proxy, "get_sdf_field")
+                     else getattr(proxy, "SdfField", None))
             if field is None:
                 dm_logger.error(f"DM_{self.operation}: '{obj.Label}' has no SdfField.")
                 return None, None
@@ -127,6 +129,10 @@ class CommandDMBoolean:
             result = create_dm_object(name=self.operation, shape_type="sdf")
             result.Proxy.SdfField = initial_field
             result.Group = "Group 1"
+
+            if not hasattr(result, "SdfType"):
+                result.addProperty("App::PropertyString", "SdfType", "Sdf", "SDF primitive type")
+            result.SdfType = "boolean"
 
             for prop, cat, desc, val in [
                 ("BooleanOp",     "Boolean", "Operation type",              self.operation),
@@ -261,7 +267,11 @@ def _recompose_boolean(fp):
     for child in inputs:
         if child is None:
             continue
-        field = getattr(getattr(child, "Proxy", None), "SdfField", None)
+        proxy = getattr(child, "Proxy", None)
+        if proxy is None:
+            continue
+        field = (proxy.get_sdf_field(child) if hasattr(proxy, "get_sdf_field")
+                 else getattr(proxy, "SdfField", None))
         if field is None:
             continue
         if getattr(child, "Group", "Group 1") == "Group 2":

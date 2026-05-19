@@ -25,33 +25,48 @@ class DMNoiseProxy:
             
         self.SdfField = None
 
-    def execute(self, fp):
+    def get_sdf_field(self, fp):
+        """Return the noise SdfField, reconstructing from source if needed."""
+        field = getattr(self, "SdfField", None)
+        if field is None:
+            self._build_field(fp)
+            field = getattr(self, "SdfField", None)
+        return field
+
+    def _build_field(self, fp):
         from core.sdf.sdf.noise import SdfNoiseField
-        from core.dm_renderer import SdfRendererStrategy
-        
-        if fp.Source and hasattr(fp.Source, "Proxy") and hasattr(fp.Source.Proxy, "SdfField"):
-            base_field = fp.Source.Proxy.SdfField
-            if base_field:
-                self.SdfField = SdfNoiseField(base_field, fp.Amplitude, fp.Frequency)
-                
-                # Push updated field to renderer
-                vp = getattr(fp, "ViewObject", None)
-                vp_proxy = getattr(vp, "Proxy", None) if vp else None
-                strategy = getattr(vp_proxy, "_strategy", None) if vp_proxy else None
-                if strategy and hasattr(strategy, "label") and strategy.label:
-                    from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
-                    DMSceneRayMarchRenderer.get_instance().update_field(
-                        strategy.label, self.SdfField
-                    )
-                    
+        source = getattr(fp, "Source", None)
+        if not source:
+            return
+        proxy = getattr(source, "Proxy", None)
+        if proxy is None:
+            return
+        base_field = (proxy.get_sdf_field(source) if hasattr(proxy, "get_sdf_field")
+                      else getattr(proxy, "SdfField", None))
+        if base_field:
+            self.SdfField = SdfNoiseField(base_field, fp.Amplitude, fp.Frequency)
+
+    def execute(self, fp):
+        self.SdfField = None  # force rebuild from current properties
+        self._build_field(fp)
+
+        field = getattr(self, "SdfField", None)
+        if field is not None:
+            vp = getattr(fp, "ViewObject", None)
+            vp_proxy = getattr(vp, "Proxy", None) if vp else None
+            strategy = getattr(vp_proxy, "_strategy", None) if vp_proxy else None
+            if strategy and hasattr(strategy, "label") and strategy.label:
+                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                DMSceneRayMarchRenderer.get_instance().update_field(strategy.label, field)
+
         import Part
         fp.Shape = Part.Shape()
 
     def __getstate__(self):
-        return None
+        return {}
 
     def __setstate__(self, state):
-        return None
+        pass
 
 def create_noise_modifier(name, source_obj):
     doc = FreeCAD.activeDocument()
