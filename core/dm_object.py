@@ -335,7 +335,22 @@ class DMObjectProxy:
                     except Exception as e:
                         from . import dm_logger
                         dm_logger.error(f"Boolean recompute failed for {fp.Label}: {e}")
-                
+
+                elif not getattr(self, "SdfField", None):
+                    # Reconstruct primitive field after document load
+                    field = self._reconstruct_field(fp)
+                    if field is not None:
+                        self.SdfField = field
+                        vp = getattr(fp, "ViewObject", None)
+                        vp_proxy = getattr(vp, "Proxy", None) if vp else None
+                        strategy = getattr(vp_proxy, "_strategy", None) if vp_proxy else None
+                        if strategy and hasattr(strategy, "label") and strategy.label:
+                            try:
+                                from core.dm_scene_ray_march_renderer import DMSceneRayMarchRenderer
+                                DMSceneRayMarchRenderer.get_instance().update_field(strategy.label, field)
+                            except Exception:
+                                pass
+
                 # SDF objects bypass native B-Rep meshing.
                 fp.Shape = Part.Shape()
                 return
@@ -352,9 +367,19 @@ class DMObjectProxy:
     def get_sdf_field(self, fp):
         """Returns an SdfField representation of this object."""
         st = getattr(fp, "ShapeType", None)
-        
+
         if st == "sdf":
-            return getattr(self, "SdfField", None)
+            field = getattr(self, "SdfField", None)
+            if field is None and not getattr(self, "_reconstruct_failed", False):
+                dm_logger.debug(f"get_sdf_field: '{getattr(fp, 'Label', '?')}' SdfField is None, attempting reconstruction")
+                field = self._reconstruct_field(fp)
+                if field is not None:
+                    self.SdfField = field
+                    dm_logger.debug(f"get_sdf_field: '{getattr(fp, 'Label', '?')}' reconstructed as {type(field).__name__}")
+                else:
+                    self._reconstruct_failed = True
+                    dm_logger.debug(f"get_sdf_field: '{getattr(fp, 'Label', '?')}' reconstruction returned None (no SdfType stored)")
+            return field
             
         if st == "curve":
             from core.sdf.sdf.nurbs_curve import SdfNurbsCurveField
@@ -385,9 +410,8 @@ class DMObjectProxy:
                     rad = getattr(fp, "Radius", 1.0)
                     return SdfNurbsCurveField(curve, tube_radius=rad, placement=fp.Placement)
             except Exception as e:
-                from core import dm_logger
                 dm_logger.debug(f"get_sdf_field(curve) failed: {e}")
-            
+
         if st == "surface":
             from core.sdf.sdf.nurbs_surface import SdfNurbsSurfaceField
             try:
@@ -395,61 +419,121 @@ class DMObjectProxy:
                     surf = fp.Shape.Faces[0].Surface
                     return SdfNurbsSurfaceField(surf, placement=fp.Placement)
             except Exception as e:
-                from core import dm_logger
                 dm_logger.debug(f"get_sdf_field(surface) failed: {e}")
 
-        # Fallback for primitives stored as points
-        return self._recompute_primitive_field(fp)
-
-    def _recompute_primitive_field(self, fp):
-        """Reconstruct a primitive SDF field from the 'Points' vector list."""
-        pts = getattr(fp, "Points", [])
-        if not pts:
-            return None
-            
-        try:
-            from core.sdf.sdf.box import SdfBoxField
-            from core.sdf.sdf.sphere import SdfSphereField
-            from core.sdf.sdf.cylinder import SdfCylinderField
-            
-            # Use original placement as field coordinate system
-            placement = fp.Placement
-            
-            import math
-            if len(pts) == 8:
-                # Box reconstruction: 8 corners (already mapped locally)
-                local_pts = pts
-                min_v = FreeCAD.Vector(min(p.x for p in local_pts), min(p.y for p in local_pts), min(p.z for p in local_pts))
-                max_v = FreeCAD.Vector(max(p.x for p in local_pts), max(p.y for p in local_pts), max(p.z for p in local_pts))
-                center = (min_v + max_v) / 2.0
-                size = (max_v - min_v)
-                return SdfBoxField(center, size, placement=placement)
-                
-            elif len(pts) == 2:
-                # Sphere: center and radius point
-                c_local = pts[0]
-                r_local = pts[1]
-                radius = (r_local - c_local).Length
-                return SdfSphereField(c_local, radius, placement=placement)
-                
-            elif len(pts) == 3:
-                # Cylinder: base, radius point, height point
-                base_loc = pts[0]
-                r_loc = pts[1]
-                h_loc = pts[2]
-                radius = math.sqrt((r_loc.x - base_loc.x)**2 + (r_loc.y - base_loc.y)**2)
-                height = (h_loc - base_loc).z
-                return SdfCylinderField(base_loc, FreeCAD.Vector(0,0,1), radius, height, placement=placement)
-                
-        except Exception as e:
-            from . import dm_logger
-            dm_logger.debug(f"Primitive field reconstruction failed for {fp.Label}: {e}")
         return None
 
+    def _reconstruct_field(self, fp):
+        """Reconstruct an SdfField from stored FreeCAD properties after document load."""
+        import math
+        pts = list(getattr(fp, "Points", []))
+        placement = getattr(fp, "Placement", None)
+        sdf_type = getattr(fp, "SdfType", None)
+
+        dm_logger.debug(f"_reconstruct_field: '{getattr(fp, 'Label', '?')}' sdf_type={sdf_type!r} pts={len(pts)}")
+
+        try:
+            if sdf_type == "box":
+                from core.sdf.sdf.box import SdfBoxField
+                min_v = FreeCAD.Vector(min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts))
+                max_v = FreeCAD.Vector(max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts))
+                center = (min_v + max_v) / 2.0
+                size = max_v - min_v
+                return SdfBoxField(center, size, placement=placement)
+
+            elif sdf_type == "sphere":
+                from core.sdf.sdf.sphere import SdfSphereField
+                radius = (pts[1] - pts[0]).Length
+                return SdfSphereField(pts[0], radius, placement=placement)
+
+            elif sdf_type == "cylinder":
+                from core.sdf.sdf.cylinder import SdfCylinderField
+                base, r_pt, h_pt = pts[0], pts[1], pts[2]
+                radius = math.sqrt((r_pt.x - base.x)**2 + (r_pt.y - base.y)**2)
+                height = (h_pt - base).z
+                return SdfCylinderField(base, FreeCAD.Vector(0, 0, 1), radius, height, placement=placement)
+
+            elif sdf_type == "torus" and len(pts) >= 3:
+                from core.sdf.sdf.torus import SdfTorusField
+                loc_c, loc_r, loc_t = pts[0], pts[1], pts[2]
+                major_r = math.sqrt((loc_r.x - loc_c.x)**2 + (loc_r.y - loc_c.y)**2)
+                dist_t = math.sqrt((loc_t.x - loc_c.x)**2 + (loc_t.y - loc_c.y)**2)
+                tube_r = max(abs(dist_t - major_r), 0.5)
+                return SdfTorusField(loc_c, major_r, tube_r, placement=placement)
+
+            elif sdf_type == "prism" and len(pts) >= 4:
+                from core.sdf.sdf_extrusion import SdfExtrusionField
+                from core.sdf.sdf2d.polygon import Sdf2dPolygon
+                loc_center, loc_rad, loc_h = pts[0], pts[1], pts[2]
+                n = max(3, int(round(pts[3].x)))
+                radius = math.sqrt((loc_rad.x - loc_center.x)**2 + (loc_rad.y - loc_center.y)**2)
+                half_h = abs(loc_h.z - loc_center.z)
+                if radius < 0.1:
+                    return None
+                vertices = [
+                    (loc_center.x + radius * math.cos(2.0 * math.pi * i / n),
+                     loc_center.y + radius * math.sin(2.0 * math.pi * i / n))
+                    for i in range(n)
+                ]
+                return SdfExtrusionField(Sdf2dPolygon(vertices), height=2.0 * half_h, placement=placement)
+
+            elif sdf_type == "revolve" and len(pts) >= 2:
+                from core.sdf.sdf2d.circle import Sdf2dCircle
+                from core.sdf.sdf_revolution import SdfRevolutionField
+                loc_c, loc_r = pts[0], pts[1]
+                ring_d = math.sqrt((loc_r.x - loc_c.x)**2 + (loc_r.y - loc_c.y)**2)
+                if len(pts) >= 3:
+                    loc_t = pts[2]
+                    dt = math.sqrt((loc_t.x - loc_c.x)**2 + (loc_t.y - loc_c.y)**2)
+                    tube_r = max(abs(dt - ring_d), 0.5)
+                else:
+                    tube_r = max(ring_d * 0.15, 1.0)
+                return SdfRevolutionField(Sdf2dCircle(tube_r), offset=ring_d, placement=placement)
+
+            elif sdf_type == "curve_extrude" and pts:
+                source = getattr(fp, "SourceCurveLink", None)
+                if source:
+                    height = pts[0].z
+                    from core.sdf.curve_sampler import (
+                        sample_curve_world_pts, compute_best_fit_placement,
+                        extract_bezier_segments_in_placement,
+                    )
+                    from core.sdf.sdf2d.bezier_curve import Sdf2dBezierCurve
+                    from core.sdf.sdf_extrusion import SdfExtrusionField
+                    world_pts = sample_curve_world_pts(source, n_samples=64)
+                    best_fit = compute_best_fit_placement(world_pts, fallback_placement=source.Placement)
+                    if best_fit is None:
+                        best_fit = source.Placement
+                    segs = extract_bezier_segments_in_placement(source, best_fit)
+                    if segs:
+                        norm = best_fit.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
+                        center_pl = FreeCAD.Placement(best_fit.Base + norm * (height * 0.5), best_fit.Rotation)
+                        return SdfExtrusionField(Sdf2dBezierCurve(segs), height=height, placement=center_pl)
+
+            elif sdf_type == "curve_pipe" and pts:
+                source = getattr(fp, "SourceCurveLink", None)
+                if source:
+                    radius = pts[0].x
+                    from core.sdf.curve_sampler import extract_bezier_segments_3d
+                    from core.sdf.sdf_pipe import SdfPipeField
+                    segs = extract_bezier_segments_3d(source)
+                    if segs:
+                        return SdfPipeField(segs, radius)
+
+            elif sdf_type == "boolean":
+                from commands.cmd_boolean import _recompose_boolean
+                return _recompose_boolean(fp)
+
+        except Exception as e:
+            dm_logger.debug(f"_reconstruct_field exception for '{getattr(fp, 'Label', '?')}' (type={sdf_type}): {e}")
+
+        dm_logger.debug(f"_reconstruct_field: no match for '{getattr(fp, 'Label', '?')}' (type={sdf_type!r})")
+        return None
+
+    def __getstate__(self):
+        return {}
 
     def __setstate__(self, state):
-        from . import dm_logger
-        # dm_logger.debug(f"DMObjectProxy.__setstate__: {state}")
         pass
 
 class DMViewProvider:
@@ -630,10 +714,10 @@ class DMViewProvider:
         return self.Object.OutList
 
     def __getstate__(self):
-        return None
+        return {}
 
     def __setstate__(self, state):
-        return None
+        pass
 
     def doubleClicked(self, vobj):
         import FreeCADGui

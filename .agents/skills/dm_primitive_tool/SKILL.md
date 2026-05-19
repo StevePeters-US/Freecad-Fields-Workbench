@@ -52,5 +52,23 @@ def _do_terminate(self):
     super()._do_terminate()
 ```
 
+## Serialization (Required for Load-Time Reconstruction)
+
+Every `PrimitiveCreatorBase` subclass **must** override `get_sdf_type()` to return a unique
+lowercase string identifying the primitive type:
+
+```python
+def get_sdf_type(self):
+    return "sphere"   # or "box", "cylinder", "torus", etc.
+```
+
+The base class returns `""`, which suppresses saving. Both commit paths (`__do_commit` and
+`_do_commit_and_edit`) call `self.get_sdf_type()` and store the result as `obj.SdfType`
+(an `App::PropertyString`). This property is read by `DMObjectProxy._reconstruct_field()`
+on document load to rebuild the `SdfField`.
+
+After adding a new primitive type, also add a matching branch in `DMObjectProxy._reconstruct_field()`
+in `core/dm_object.py` that reconstructs the field from `fp.Points` and `fp.Placement`.
+
 ## Reference Implementation
 See `BoxCreator` in `tools/primitive_tool.py` as the "Gold Standard" implementation.

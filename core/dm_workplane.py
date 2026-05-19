@@ -42,10 +42,10 @@ class DMWorkPlane:
             pass
 
     def __getstate__(self):
-        return None
+        return {}
 
     def __setstate__(self, state):
-        return None
+        self.is_dm_workplane = True
 
 class ViewProviderDMWorkPlane:
     def __init__(self, vobj):
@@ -198,10 +198,10 @@ class ViewProviderDMWorkPlane:
         pass
 
     def __getstate__(self):
-        return None
+        return {}
 
     def __setstate__(self, state):
-        return None
+        pass
 
     def doubleClicked(self, vobj):
         import FreeCADGui

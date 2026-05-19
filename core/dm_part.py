@@ -21,10 +21,10 @@ class DMPart:
         pass
 
     def __getstate__(self):
-        return None
+        return {}
 
     def __setstate__(self, state):
-        return None
+        pass
 
 
 class ViewProviderDMPart:
@@ -99,10 +99,10 @@ class ViewProviderDMPart:
         return mode
 
     def __getstate__(self):
-        return None
+        return {}
 
     def __setstate__(self, state):
-        return None
+        pass
 
 
 def create_dm_part(name="DM_Part"):

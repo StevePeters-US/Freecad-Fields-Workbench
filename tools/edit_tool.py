@@ -236,17 +236,26 @@ class EditTool(DMBase, DragTimerMixin):
             pt_local = self._target_obj.Placement.inverse().multVec(pt_global)
             self._update_element(self._selected_element, pt_local)
         elif self.state == 2:
-            # WorkPlane dragging
-            pt_global = self.projector.get_mouse_world_pos(
-                event_dict, self.drag_plane_n, self.drag_plane_o,
-                place_on_geometry=False
-            )
+            # WorkPlane origin dragging — full snap pipeline (workplane → SDF → geometry → camera plane)
+            snap_result = self.projector.get_mouse_plane_pt(
+                event_dict, place_on_geometry=True,
+                working_plane=self.working_plane)
+            pt_global = snap_result[0] if snap_result else None
             if pt_global:
                 delta = pt_global - self._wp_drag_start
                 self.working_plane.Base += delta
                 self._wp_drag_start = pt_global
-                # If we have a WorkPlane object in selection, we should probably update its property too
-                # for now just the tool's working_plane.
+                # Move the object's placement so all control-point handles follow
+                if self._target_obj:
+                    plac = self._target_obj.Placement
+                    plac.Base = plac.Base + delta
+                    self._target_obj.Placement = plac
+                    self._target_obj.touch()
+                    vp = self._target_obj.ViewObject
+                    if vp and hasattr(vp, "Proxy") and vp.Proxy:
+                        vp.Proxy.updateData(self._target_obj, "Points")
+                    if self.view:
+                        self.view.redraw()
         else:
             # Hover check
             ray_p, ray_d = self._get_ray(event_dict)

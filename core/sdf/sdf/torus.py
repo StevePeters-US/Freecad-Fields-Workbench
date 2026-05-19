@@ -13,7 +13,7 @@ float sdf_torus(vec3 p, vec3 center, float major_r, float tube_r) {
 
 
 class SdfTorusField(SdfField):
-    """Exact analytical torus SDF, ring in XZ plane, Y axis up. 
+    """Exact analytical torus SDF, ring in XY plane, Z up.
     Reference: sdTorus() in iquilezles.org/articles/distfunctions/
     """
 
@@ -36,15 +36,14 @@ class SdfTorusField(SdfField):
             ], dtype=np.float32)
 
     def evaluate(self, point: FreeCAD.Vector) -> float:
-        """Scalar SDF at a single point. Ring in XZ plane."""
+        """Scalar SDF at a single point. Ring in XY plane, Z up (matches GLSL)."""
         local = point
         if self.placement is not None:
             local = self.placement.inverse().multVec(point)
-        
+
         lp = local - self.center
-        # IQ: vec2 q = vec2(length(p.xz)-t.x, p.y); return length(q)-t.y;
-        q_x = math.sqrt(lp.x ** 2 + lp.z ** 2) - self.major_radius
-        q_y = lp.y
+        q_x = math.sqrt(lp.x ** 2 + lp.y ** 2) - self.major_radius
+        q_y = lp.z
         return math.sqrt(q_x ** 2 + q_y ** 2) - self.tube_radius
 
     def evaluate_grid(self, points: np.ndarray) -> np.ndarray:
@@ -58,10 +57,10 @@ class SdfTorusField(SdfField):
 
         c = np.array([self.center.x, self.center.y, self.center.z], dtype=np.float32)
         lp = local_pts - c
-        
-        # IQ: vec2 q = vec2(length(p.xz)-t.x, p.y); return length(q)-t.y;
-        q_x = np.sqrt(lp[:, 0] ** 2 + lp[:, 2] ** 2) - self.major_radius
-        q_y = lp[:, 1]
+
+        # Ring in XY plane, Z up — matches GLSL sdf_torus
+        q_x = np.sqrt(lp[:, 0] ** 2 + lp[:, 1] ** 2) - self.major_radius
+        q_y = lp[:, 2]
         return (np.sqrt(q_x ** 2 + q_y ** 2) - self.tube_radius).astype(np.float32)
 
     def to_glsl(self, ctx, point_var="p"):
@@ -82,8 +81,8 @@ class SdfTorusField(SdfField):
     def bounding_box(self):
         """Conservative bounding box: (center-ext, center+ext)."""
         R, r = self.major_radius, self.tube_radius
-        # Ring in XZ plane, thickness r in all dirs
-        extent = FreeCAD.Vector(R + r, r, R + r)
+        # Ring in XY plane, Z up — matches GLSL and evaluate
+        extent = FreeCAD.Vector(R + r, R + r, r)
         
         corners_local = []
         for sx in (-1, 1):
