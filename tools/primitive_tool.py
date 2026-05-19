@@ -1903,10 +1903,13 @@ class TorusCreator(PrimitiveCreatorBase):
                 loc_c = field.center
                 R = field.major_radius
                 r = field.tube_radius
+                # Anchor stored at the bottom of the torus (center minus tube_r in Z)
+                # so _torus_field_from_points can re-apply the offset consistently
+                loc_anchor = FreeCAD.Vector(loc_c.x, loc_c.y, loc_c.z - r)
                 self.points = [
-                    self.to_global(loc_c),
-                    self.to_global(loc_c + FreeCAD.Vector(R, 0, 0)),
-                    self.to_global(loc_c + FreeCAD.Vector(R + r, 0, 0)),
+                    self.to_global(loc_anchor),
+                    self.to_global(loc_anchor + FreeCAD.Vector(R, 0, 0)),
+                    self.to_global(loc_anchor + FreeCAD.Vector(R + r, 0, 0)),
                 ]
         self.state = ToolState.IDLE
         hr = self._compute_handle_radius()
@@ -1970,6 +1973,8 @@ class TorusCreator(PrimitiveCreatorBase):
             return None
         dist_t = math.sqrt((loc_t.x - loc_c.x) ** 2 + (loc_t.y - loc_c.y) ** 2)
         tube_r = max(abs(dist_t - major_r), 0.5)
+        # Raise center by tube_r so the torus rests on the workplane rather than clipping through it
+        loc_c = FreeCAD.Vector(loc_c.x, loc_c.y, loc_c.z + tube_r)
         fp = self._get_placement()
         return SdfTorusField(loc_c, major_r, tube_r, placement=fp)
 
