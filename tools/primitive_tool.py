@@ -239,7 +239,7 @@ class PrimitiveCreatorBase(DMBase, DragTimerMixin):
 
         self.dm_points = []
         self.dm_line_set = None
-        self.points_root = coin.SoSeparator()
+        self.points_root = coin.SoAnnotation()
         if self.view and self.view.getSceneGraph():
             self.view.getSceneGraph().addChild(self.points_root)
 

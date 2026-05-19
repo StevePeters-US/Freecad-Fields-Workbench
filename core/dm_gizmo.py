@@ -1,4 +1,19 @@
 import FreeCAD
+import math as _math
+
+_RING_SEGMENTS = 48   # polyline vertices per ring
+
+
+def _perp_pair(ax_vec):
+    """Return two unit vectors perpendicular to ax_vec and to each other."""
+    up = FreeCAD.Vector(0, 0, 1)
+    if abs(ax_vec.dot(up)) > 0.98:
+        up = FreeCAD.Vector(1, 0, 0)
+    ref  = ax_vec.cross(up)
+    ref.normalize()
+    tang = ref.cross(ax_vec)
+    tang.normalize()
+    return ref, tang
 
 
 class DMTransformGizmo:
@@ -25,6 +40,8 @@ class DMTransformGizmo:
         self._root = None
         self._shaft_xforms = {}
         self._cone_xforms = {}
+        self._ring_seps   = {}   # axis → SoSeparator
+        self._ring_coords = {}   # axis → SoCoordinate3
 
     # ------------------------------------------------------------------
     # Coin3D helpers
