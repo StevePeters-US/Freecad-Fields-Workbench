@@ -1,5 +1,7 @@
 # FreeCAD Direct Modeling Workbench
 
+[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?style=flat&logo=github-sponsors)](https://github.com/sponsors/StevePeters-US)
+
 A Python workbench for FreeCAD that provides fast, interactive direct modeling using **Signed Distance Fields (Implicit Geometry)** driven by NURBS control geometry. The source of truth is always NURBS — points, curves, and surfaces — stored as lightweight `Part::FeaturePython` properties. The SDF is never stored; it is generated in two separate pipelines:
 
 1. **GPU Analytical Preview** — Each SDF field compiles to GLSL and is ray-marched in realtime on the GPU via a multi-pass SSAO fragment shader. Zero memory overhead, unlimited resolution.
