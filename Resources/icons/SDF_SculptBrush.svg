@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <defs>
+        <linearGradient id="brushGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#ffaa00"/>
+            <stop offset="100%" stop-color="#cc7700"/>
+        </linearGradient>
+        <linearGradient id="handleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#64748b"/>
+            <stop offset="100%" stop-color="#334155"/>
+        </linearGradient>
+    </defs>
+    <!-- Sphere target surface -->
+    <circle cx="26" cy="38" r="18" style="fill:#3b82f6;fill-opacity:0.3;stroke:#2563eb;stroke-width:2"/>
+    <circle cx="26" cy="38" r="10" style="fill:#3b82f6;fill-opacity:0.6;stroke:#1d4ed8;stroke-width:1.5;stroke-dasharray:3,2"/>
+    
+    <!-- Sculpt Brush Tool Head -->
+    <circle cx="40" cy="24" r="12" style="fill:url(#brushGrad);fill-opacity:0.7;stroke:#ffaa00;stroke-width:2"/>
+    <!-- Brush Handle -->
+    <path d="M 46,18 L 56,8 C 58,6 60,8 58,10 L 48,20 Z" style="fill:url(#handleGrad);stroke:#1e293b;stroke-width:1.5;stroke-linejoin:round"/>
+    
+    <!-- Active Dab Sparks -->
+    <circle cx="33" cy="31" r="2.5" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1"/>
+    <path d="M 33,26 L 33,23 M 33,36 L 33,39 M 28,31 L 25,31 M 38,31 L 41,31" style="stroke:#ffffff;stroke-width:1.5;stroke-linecap:round"/>
+</svg>

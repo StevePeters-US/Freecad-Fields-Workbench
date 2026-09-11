@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <!-- Workpiece (Part) at the bottom -->
+    <path d="M 12 42 A 20 20 0 0 1 52 42 L 52 56 L 12 56 Z" style="fill:#e0e0e0;stroke:#000000;stroke-width:2;stroke-linejoin:round"/>
+    
+    <!-- Offset Toolpath layers -->
+    <!-- First layer (dashed) -->
+    <path d="M 6 36 A 26 26 0 0 1 58 36" style="fill:none;stroke:#ffaa00;stroke-width:2.5;stroke-linecap:round;stroke-dasharray:4,3"/>
+    <!-- Second layer (solid cutter center path) -->
+    <path d="M 10 32 A 22 22 0 0 1 42 22" style="fill:none;stroke:#ffaa00;stroke-width:2.5;stroke-linecap:round"/>
+
+    <!-- Cutter Tool (Ball-end mill) touching the second layer at (42, 22) -->
+    <!-- Tool center at (42, 18), radius 4, so bottom touch point is (42, 22) -->
+    <path d="M 38 6 L 38 18 A 4 4 0 0 0 46 18 L 46 6 Z" style="fill:#ffffff;stroke:#000000;stroke-width:2;stroke-linejoin:round"/>
+    <!-- Cutter center line -->
+    <path d="M 42 3 L 42 18" style="fill:none;stroke:#ffaa00;stroke-width:1;stroke-dasharray:2,2"/>
+</svg>

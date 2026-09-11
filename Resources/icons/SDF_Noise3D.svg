@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <defs>
+        <radialGradient id="gridGrad" cx="30%" cy="30%" r="70%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="100%" stop-color="#e0e0e0"/>
+        </radialGradient>
+    </defs>
+    
+    <!-- 3D Heightmap Surface Boundary with Gradient Fill -->
+    <path d="M 32.0,48.0 L 26.5,44.8 L 20.9,41.6 L 15.4,38.4 L 9.8,35.2 L 4.3,32.0 L 9.8,28.8 L 15.4,25.6 L 20.9,22.4 L 26.5,19.2 L 32.0,16.0 L 37.5,19.2 L 43.1,22.4 L 48.6,25.6 L 54.2,28.8 L 59.7,32.0 L 54.2,35.2 L 48.6,38.4 L 43.1,41.6 L 37.5,44.8 Z" style="fill:url(#gridGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round" />
+    
+    <!-- X-direction grid lines -->
+    <path d="M 32.0,48.0 L 26.5,44.8 L 20.9,41.6 L 15.4,38.4 L 9.8,35.2 L 4.3,32.0" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round" />
+    <path d="M 37.5,44.8 L 32.0,40.5 L 26.5,39.7 L 20.9,36.0 L 15.4,30.8 L 9.8,28.8" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round" />
+    <path d="M 43.1,41.6 L 37.5,35.6 L 32.0,38.4 L 26.5,33.9 L 20.9,25.8 L 15.4,25.6" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round" />
+    <path d="M 48.6,38.4 L 43.1,38.7 L 37.5,27.9 L 32.0,26.3 L 26.5,29.5 L 20.9,22.4" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round" />
+    <path d="M 54.2,35.2 L 48.6,32.2 L 43.1,28.5 L 37.5,25.4 L 32.0,22.6 L 26.5,19.2" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round" />
+    <path d="M 59.7,32.0 L 54.2,28.8 L 48.6,25.6 L 43.1,22.4 L 37.5,19.2 L 32.0,16.0" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round" />
+    
+    <!-- Y-direction grid lines -->
+    <path d="M 32.0,48.0 L 37.5,44.8 L 43.1,41.6 L 48.6,38.4 L 54.2,35.2 L 59.7,32.0" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round" />
+    <path d="M 26.5,44.8 L 32.0,40.5 L 37.5,35.6 L 43.1,38.7 L 48.6,32.2 L 54.2,28.8" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round" />
+    <path d="M 20.9,41.6 L 26.5,39.7 L 32.0,38.4 L 37.5,27.9 L 43.1,28.5 L 48.6,25.6" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round" />
+    <path d="M 15.4,38.4 L 20.9,36.0 L 26.5,33.9 L 32.0,26.3 L 37.5,25.4 L 43.1,22.4" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round" />
+    <path d="M 9.8,35.2 L 15.4,30.8 L 20.9,25.8 L 26.5,29.5 L 32.0,22.6 L 37.5,19.2" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round" />
+    <path d="M 4.3,32.0 L 9.8,28.8 L 15.4,25.6 L 20.9,22.4 L 26.5,19.2 L 32.0,16.0" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round" />
+</svg>

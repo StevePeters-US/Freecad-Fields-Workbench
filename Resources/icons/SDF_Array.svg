@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <defs>
+        <radialGradient id="arrayGrad" cx="30%" cy="30%" r="70%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="100%" stop-color="#e0e0e0"/>
+        </radialGradient>
+    </defs>
+    <!-- Array grid of 4 repeated shapes -->
+    <rect x="10" y="10" width="18" height="18" rx="3" style="fill:url(#arrayGrad);stroke:#ffaa00;stroke-width:2"/>
+    <rect x="36" y="10" width="18" height="18" rx="3" style="fill:url(#arrayGrad);stroke:#ffaa00;stroke-width:2"/>
+    <rect x="10" y="36" width="18" height="18" rx="3" style="fill:url(#arrayGrad);stroke:#ffaa00;stroke-width:2"/>
+    <rect x="36" y="36" width="18" height="18" rx="3" style="fill:url(#arrayGrad);stroke:#ffaa00;stroke-width:2"/>
+    
+    <!-- Connection lines indicating array pattern -->
+    <path d="M 28 19 L 36 19" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:2,2"/>
+    <path d="M 28 45 L 36 45" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:2,2"/>
+    <path d="M 19 28 L 19 36" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:2,2"/>
+    <path d="M 45 28 L 45 36" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:2,2"/>
+</svg>

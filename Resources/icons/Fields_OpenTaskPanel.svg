@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+  <defs>
+    <linearGradient id="panelHeader" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#475569"/>
+      <stop offset="100%" stop-color="#334155"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Panel Window Frame -->
+  <rect x="10" y="6" width="44" height="52" rx="4" style="fill:#f8fafc;stroke:#1e293b;stroke-width:2"/>
+
+  <!-- Panel Header / Titlebar -->
+  <path d="M 10 10 C 10 7.8 11.8 6 14 6 L 50 6 C 52.2 6 54 7.8 54 10 L 54 18 L 10 18 Z" style="fill:url(#panelHeader);stroke:#1e293b;stroke-width:2"/>
+  <!-- Header control dots -->
+  <circle cx="16" cy="12" r="1.8" style="fill:#ef4444"/>
+  <circle cx="22" cy="12" r="1.8" style="fill:#f59e0b"/>
+  <circle cx="28" cy="12" r="1.8" style="fill:#10b981"/>
+
+  <!-- Modifier Stack Items (Layers) -->
+  <!-- Top Active Modifier Card (Orange highlight) -->
+  <rect x="14" y="22" width="36" height="10" rx="2" style="fill:#ffffff;stroke:#ffaa00;stroke-width:2"/>
+  <circle cx="19" cy="27" r="2" style="fill:#ffaa00"/>
+  <line x1="25" y1="27" x2="44" y2="27" style="stroke:#1e293b;stroke-width:2;stroke-linecap:round"/>
+
+  <!-- Middle Modifier Card -->
+  <rect x="14" y="35" width="36" height="10" rx="2" style="fill:#ffffff;stroke:#94a3b8;stroke-width:1.5"/>
+  <circle cx="19" cy="40" r="1.8" style="fill:#94a3b8"/>
+  <line x1="25" y1="40" x2="40" y2="40" style="stroke:#64748b;stroke-width:1.8;stroke-linecap:round"/>
+
+  <!-- Bottom Base Shape Card -->
+  <rect x="14" y="47" width="36" height="8" rx="2" style="fill:#e2e8f0;stroke:#94a3b8;stroke-width:1.5"/>
+  <circle cx="19" cy="51" r="1.5" style="fill:#64748b"/>
+  <line x1="25" y1="51" x2="36" y2="51" style="stroke:#94a3b8;stroke-width:1.5;stroke-linecap:round"/>
+</svg>

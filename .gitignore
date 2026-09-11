@@ -1,34 +1,25 @@
+# Published tree gitignore — installed as .gitignore by publish.sh.
+# The public repo is built by publish.sh; these are backstops for anything
+# that is created while running or testing in the published directory.
+
+# Bytecode
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-.pytest_cache/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
 
-# FreeCAD backups
+# FreeCAD transient files
 *.FCBak
+*.FCStd1
+Fields.FCStd.lock
+DirectModeling.FCStd.lock
+
+# Test runner / IDE output
+.pytest_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+
+# Never ship dev-only material if a developer creates it in-place
+tests/
+private/

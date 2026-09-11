@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
+  <name>Fields</name>
+  <description>Implicit modeling for FreeCAD: sculpt solids as GPU-accelerated signed distance fields (SDF) built from NURBS, cages and B-Rep, with topology-free booleans, deformation and CAM-ready slicing.</description>
+  <version>1.0.0</version>
+  <date>2026-08-11</date>
+  <maintainer email="petersfinewoodcraft@gmail.com">Steve Peters</maintainer>
+  <license file="LICENSE">CC-BY-NC-SA-4.0</license>
+  <url type="repository" branch="main">https://github.com/StevePeters-US/Freecad-Fields-Workbench</url>
+  <url type="readme">https://raw.githubusercontent.com/StevePeters-US/Freecad-Fields-Workbench/main/README.md</url>
+  <url type="bugtracker">https://github.com/StevePeters-US/Freecad-Fields-Workbench/issues</url>
+  <icon>Resources/icons/Fields.svg</icon>
+
+  <content>
+    <workbench>
+      <name>Fields</name>
+      <classname>FieldsWorkbench</classname>
+      <description>Implicit/SDF modeling: real-time GPU ray-marched signed distance fields from NURBS, cage and B-Rep geometry.</description>
+      <version>1.0.0</version>
+      <subdirectory>./</subdirectory>
+      <icon>Resources/icons/Fields.svg</icon>
+      <freecadmin>1.1.0</freecadmin>
+      <pythonmin>3.11</pythonmin>
+      <depend type="python">numpy</depend>
+      <depend type="python">scipy</depend>
+      <depend type="python">shapely</depend>
+      <depend type="internal">Part</depend>
+      <depend type="internal">Mesh</depend>
+      <depend type="internal">CAM</depend>
+      <tag>modeling</tag>
+      <tag>sdf</tag>
+      <tag>implicit</tag>
+      <tag>signed-distance-field</tag>
+      <tag>nurbs</tag>
+      <tag>cage</tag>
+      <tag>sculpting</tag>
+    </workbench>
+  </content>
+
+</package>

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <!-- Ruled Surface face (Saddle shape) -->
+    <path d="M 12 16 Q 32 28, 52 16 L 52 48 Q 32 36, 12 48 Z" style="fill:#e0e0e0;stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    
+    <!-- Intermediate rulings (dashed lines showing construction rules) -->
+    <line x1="20" y1="20" x2="20" y2="44" style="stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:3,3"/>
+    <line x1="28" y1="22" x2="28" y2="42" style="stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:3,3"/>
+    <line x1="32" y1="22" x2="32" y2="42" style="stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:3,3"/>
+    <line x1="36" y1="22" x2="36" y2="42" style="stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:3,3"/>
+    <line x1="44" y1="20" x2="44" y2="44" style="stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:3,3"/>
+</svg>

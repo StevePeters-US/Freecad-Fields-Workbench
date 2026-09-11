@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <defs>
+        <radialGradient id="extrudeGrad" cx="30%" cy="30%" r="70%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="100%" stop-color="#e0e0e0"/>
+        </radialGradient>
+    </defs>
+    <!-- Extruded solid side walls -->
+    <path d="M 14 48 L 14 20 A 18 8 0 0 0 50 20 L 50 48 A 18 8 0 0 1 14 48 Z" style="fill:url(#extrudeGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    
+    <!-- Extruded solid top cap -->
+    <ellipse cx="32" cy="20" rx="18" ry="8" style="fill:#ffffff;stroke:#ffaa00;stroke-width:2"/>
+    
+    <!-- Original profile curve (dashed ellipse at bottom) -->
+    <ellipse cx="32" cy="48" rx="18" ry="8" style="fill:none;stroke:#ffaa00;stroke-width:2;stroke-dasharray:4,4"/>
+    
+    <!-- Upward extrusion vector / arrow in the center -->
+    <path d="M 32 44 L 32 10" style="fill:none;stroke:#ffaa00;stroke-width:2;stroke-linecap:round"/>
+    <path d="M 28 15 L 32 10 L 36 15" style="fill:none;stroke:#ffaa00;stroke-width:2;stroke-linecap:round;stroke-linejoin:round"/>
+</svg>

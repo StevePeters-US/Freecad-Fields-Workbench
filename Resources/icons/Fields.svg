@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+  <defs>
+    <linearGradient id="dmTop" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#e2e8f0"/>
+    </linearGradient>
+    <linearGradient id="dmLeft" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#cbd5e1"/>
+      <stop offset="100%" stop-color="#94a3b8"/>
+    </linearGradient>
+    <linearGradient id="dmRight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e2e8f0"/>
+      <stop offset="100%" stop-color="#cbd5e1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 3D Deformed NURBS/SDF Solid Body -->
+  <!-- Left Face -->
+  <path d="M 32 34 L 14 24 C 14 24 13 36 14 44 C 14 44 22 51 32 55 L 32 34 Z"
+        style="fill:url(#dmLeft);stroke:#1e293b;stroke-width:1.8;stroke-linejoin:round;stroke-linecap:round"/>
+
+  <!-- Right Face -->
+  <path d="M 32 34 L 50 24 C 50 24 51 36 50 44 C 50 44 42 51 32 55 L 32 34 Z"
+        style="fill:url(#dmRight);stroke:#1e293b;stroke-width:1.8;stroke-linejoin:round;stroke-linecap:round"/>
+
+  <!-- Top Surface (Sculpted / Pulled upward towards top vertex) -->
+  <path d="M 32 34 C 23 29 17 26 14 24 C 20 18 26 14 32 10 C 38 14 44 18 50 24 C 47 26 41 29 32 34 Z"
+        style="fill:url(#dmTop);stroke:#1e293b;stroke-width:1.8;stroke-linejoin:round;stroke-linecap:round"/>
+
+  <!-- Iso-parametric Surface Curvature Flow Lines -->
+  <path d="M 23 19 C 27 24 30 28 32 34" style="fill:none;stroke:#94a3b8;stroke-width:1;stroke-linecap:round"/>
+  <path d="M 41 19 C 37 24 34 28 32 34" style="fill:none;stroke:#94a3b8;stroke-width:1;stroke-linecap:round"/>
+  <path d="M 23 29 C 28 26 36 26 41 29" style="fill:none;stroke:#94a3b8;stroke-width:1;stroke-linecap:round"/>
+
+  <!-- Direct Modeling Control Cage / Lattice (Active DM Orange) -->
+  <!-- Back Cage Grid (Dashed) -->
+  <path d="M 10 20 L 32 6 L 54 20" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:2.5,2;stroke-linecap:round"/>
+
+  <!-- Front Cage Grid (Solid) -->
+  <path d="M 10 20 L 32 32 L 54 20" style="fill:none;stroke:#ffaa00;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"/>
+  <path d="M 10 46 L 32 58 L 54 46" style="fill:none;stroke:#ffaa00;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"/>
+
+  <!-- Vertical Cage Struts -->
+  <path d="M 10 20 L 10 46" style="fill:none;stroke:#ffaa00;stroke-width:1.8;stroke-linecap:round"/>
+  <path d="M 54 20 L 54 46" style="fill:none;stroke:#ffaa00;stroke-width:1.8;stroke-linecap:round"/>
+  <path d="M 32 32 L 32 58" style="fill:none;stroke:#ffaa00;stroke-width:1.8;stroke-linecap:round"/>
+
+  <!-- Direct Pull Vector at Top Control Point -->
+  <path d="M 32 10 L 32 4" style="fill:none;stroke:#ff8800;stroke-width:2.2;stroke-linecap:round"/>
+  <path d="M 29 7 L 32 3 L 35 7" style="fill:none;stroke:#ff8800;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round"/>
+
+  <!-- Control Vertices / Handles (Interactive Spheres) -->
+  <circle cx="10" cy="20" r="2.8" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1.6"/>
+  <circle cx="54" cy="20" r="2.8" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1.6"/>
+  <circle cx="32" cy="32" r="3" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1.8"/>
+
+  <circle cx="10" cy="46" r="2.2" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1.5"/>
+  <circle cx="54" cy="46" r="2.2" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1.5"/>
+  <circle cx="32" cy="58" r="2.5" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1.6"/>
+
+  <!-- Actively Dragged / Transformed Apex Handle -->
+  <circle cx="32" cy="10" r="3.5" style="fill:#ffaa00;stroke:#ffffff;stroke-width:1.5"/>
+  <circle cx="32" cy="10" r="1.5" style="fill:#ffffff"/>
+</svg>

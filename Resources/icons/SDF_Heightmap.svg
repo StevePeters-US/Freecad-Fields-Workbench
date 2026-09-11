@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <defs>
+        <radialGradient id="heightmapGrad" cx="30%" cy="30%" r="70%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="100%" stop-color="#e0e0e0"/>
+        </radialGradient>
+    </defs>
+    <!-- Original flat surface boundary (dashed) -->
+    <path d="M 8 48 L 56 48" style="fill:none;stroke:#ffaa00;stroke-width:2;stroke-dasharray:4,4"/>
+    <!-- Displaced surface/mountain profile (solid) -->
+    <path d="M 8 48 L 8 42 C 16 42, 20 16, 28 16 C 36 16, 40 32, 48 32 C 52 32, 54 48, 56 48 Z" style="fill:url(#heightmapGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    <!-- Vertical displacement lines representing projection/height vectors -->
+    <line x1="28" y1="48" x2="28" y2="16" style="stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:3,3"/>
+    <line x1="48" y1="48" x2="48" y2="32" style="stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:3,3"/>
+</svg>

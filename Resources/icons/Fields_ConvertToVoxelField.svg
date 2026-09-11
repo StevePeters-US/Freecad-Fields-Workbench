@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <defs>
+        <linearGradient id="topGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="100%" stop-color="#e2e8f0"/>
+        </linearGradient>
+        <linearGradient id="leftGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#e2e8f0"/>
+            <stop offset="100%" stop-color="#cbd5e1"/>
+        </linearGradient>
+        <linearGradient id="rightGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#cbd5e1"/>
+            <stop offset="100%" stop-color="#94a3b8"/>
+        </linearGradient>
+    </defs>
+
+    <!-- Base 3D Voxel Grid Volume (Isometric 3x3x3) -->
+    <!-- Top Face -->
+    <polygon points="32,10 53,22 32,34 11,22" style="fill:url(#topGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    <!-- Left Face -->
+    <polygon points="11,22 32,34 32,58 11,46" style="fill:url(#leftGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    <!-- Right Face -->
+    <polygon points="32,34 53,22 53,46 32,58" style="fill:url(#rightGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+
+    <!-- Top Face Voxel Grid Lines -->
+    <path d="M 25,14 L 46,26" style="fill:none;stroke:#ffaa00;stroke-width:1.2;stroke-linecap:round"/>
+    <path d="M 18,18 L 39,30" style="fill:none;stroke:#ffaa00;stroke-width:1.2;stroke-linecap:round"/>
+    <path d="M 39,14 L 18,26" style="fill:none;stroke:#ffaa00;stroke-width:1.2;stroke-linecap:round"/>
+    <path d="M 46,18 L 25,30" style="fill:none;stroke:#ffaa00;stroke-width:1.2;stroke-linecap:round"/>
+
+    <!-- Left Face Voxel Grid Lines -->
+    <path d="M 18,26 L 18,50" style="fill:none;stroke:#ffaa00;stroke-width:1.2;stroke-linecap:round"/>
+    <path d="M 25,30 L 25,54" style="fill:none;stroke:#ffaa00;stroke-width:1.2;stroke-linecap:round"/>
+    <path d="M 11,30 L 32,42" style="fill:none;stroke:#ffaa00;stroke-width:1.2;stroke-linecap:round"/>
+    <path d="M 11,38 L 32,50" style="fill:none;stroke:#ffaa00;stroke-width:1.2;stroke-linecap:round"/>
+
+    <!-- Right Face Voxel Grid Lines -->
+    <path d="M 39,30 L 39,54" style="fill:none;stroke:#ffaa00;stroke-width:1.2;stroke-linecap:round"/>
+    <path d="M 46,26 L 46,50" style="fill:none;stroke:#ffaa00;stroke-width:1.2;stroke-linecap:round"/>
+    <path d="M 32,42 L 53,30" style="fill:none;stroke:#ffaa00;stroke-width:1.2;stroke-linecap:round"/>
+    <path d="M 32,50 L 53,38" style="fill:none;stroke:#ffaa00;stroke-width:1.2;stroke-linecap:round"/>
+
+    <!-- Highlight / Active Voxel Elements (Subdivision / Discretization sample nodes) -->
+    <circle cx="32" cy="10" r="1.8" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1"/>
+    <circle cx="53" cy="22" r="1.8" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1"/>
+    <circle cx="32" cy="34" r="2.2" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1.2"/>
+    <circle cx="11" cy="22" r="1.8" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1"/>
+    <circle cx="32" cy="58" r="1.8" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1"/>
+    <circle cx="11" cy="46" r="1.8" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1"/>
+    <circle cx="53" cy="46" r="1.8" style="fill:#ffffff;stroke:#ffaa00;stroke-width:1"/>
+</svg>

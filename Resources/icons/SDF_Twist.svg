@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <defs>
+        <linearGradient id="twistGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="100%" stop-color="#e0e0e0"/>
+        </linearGradient>
+    </defs>
+    
+    <!-- 1. FILLS ONLY (No strokes on these, prevents overlapping background lines) -->
+    <!-- Bottom Face Fill -->
+    <path d="M 20 52 L 32 46 L 44 52 L 32 58 Z" style="fill:#e0e0e0;stroke:none"/>
+    <!-- Far-Right Face Fill -->
+    <path d="M 44 16 L 32 10 C 38 24, 44 38, 44 52 L 32 58 C 38 46, 42 34, 44 16 Z" style="fill:#f0f0f0;stroke:none"/>
+    <!-- Front-Left Face Fill -->
+    <path d="M 20 16 L 32 22 C 26 34, 24 40, 20 52 L 32 46 C 24 38, 20 28, 20 16 Z" style="fill:#d0d0d0;stroke:none"/>
+    <!-- Front-Right Face Fill -->
+    <path d="M 32 22 L 44 16 C 42 34, 38 46, 32 58 L 20 52 C 24 40, 26 34, 32 22 Z" style="fill:url(#twistGrad);stroke:none"/>
+    <!-- Top Face Fill -->
+    <path d="M 20 16 L 32 10 L 44 16 L 32 22 Z" style="fill:#ffffff;stroke:none"/>
+    
+    <!-- 2. STROKES ONLY (Explicitly draws only visible 3D lines) -->
+    <!-- Top Face Outline -->
+    <path d="M 20 16 L 32 10 L 44 16 L 32 22 Z" style="fill:none;stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    <!-- Bottom Face Front Outline -->
+    <path d="M 20 52 L 32 58 L 44 52" style="fill:none;stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    
+    <!-- Corner Twist Ridges of the Cube (Visible parts only) -->
+    <!-- Front-Left Ridge -->
+    <path d="M 32 22 Q 24 34, 20 52" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-linecap:round"/>
+    <!-- Front-Right Ridge -->
+    <path d="M 44 16 Q 40 34, 32 58" style="fill:none;stroke:#ffaa00;stroke-width:2;stroke-linecap:round"/>
+    
+    <!-- Top-Left Silhouette Border (Back-left ridge, stops where it goes behind the front-left face) -->
+    <path d="M 20 16 Q 20 26, 24 34" style="fill:none;stroke:#ffaa00;stroke-width:2;stroke-linecap:round"/>
+    <!-- Bottom-Right Silhouette Border (Back-right ridge, emerges from behind the front-right face) -->
+    <path d="M 40 34 Q 44 42, 44 52" style="fill:none;stroke:#ffaa00;stroke-width:2;stroke-linecap:round"/>
+</svg>

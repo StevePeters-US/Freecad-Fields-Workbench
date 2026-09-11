@@ -1,162 +1,157 @@
-# FreeCAD Direct Modeling Workbench
+# FreeCAD Fields Workbench
 
-[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?style=flat&logo=github-sponsors)](https://github.com/sponsors/StevePeters-US)
+> **Support the Project:** If you find this workbench useful, consider supporting its development on [Patreon](https://www.patreon.com/cw/AttackPotato).
 
-A Python workbench for FreeCAD that provides fast, interactive direct modeling using **Signed Distance Fields (Implicit Geometry)** driven by NURBS control geometry. The source of truth is always NURBS — points, curves, and surfaces — stored as lightweight `Part::FeaturePython` properties. The SDF is never stored; it is generated in two separate pipelines:
+> [!WARNING]
+> **Active Development:** This workbench is an experimental work in progress. Tools, underlying data structures, and file storage formats are subject to change. **Backwards compatibility is not guaranteed** across updates.
 
-1. **GPU Analytical Preview** — Each SDF field compiles to GLSL and is ray-marched in realtime on the GPU via a multi-pass SSAO fragment shader. Zero memory overhead, unlimited resolution.
-2. **CPU On-Demand Cache** — When a tool needs direct SDF access (meshing, slicing, hit-testing), a sparse octree evaluator generates the field only in a narrow band around the surface. This scales with surface area, not volume.
+The **Fields Workbench** is a companion workbench for FreeCAD that provides implicit modeling, sculpting, and volumetric deformation tools using **Signed Distance Fields (SDF)**.
 
-This dual-pipeline design enables topology-free modeling accurate to **0.05mm** within a **1m³** work area — a resolution that would require 32 TB of RAM with a naive dense grid, but is tractable with hierarchical evaluation.
-
----
-
-## Core Concept: Signed Distance Fields from NURBS
-
-Traditional CAD uses B-Rep (boundary representation): shells of faces, edges, and vertices that must form watertight manifolds. This workbench takes a different approach — **each NURBS point, curve, or surface is evaluated as a spatial discriminator**: a function `f(P)` that returns a signed scalar for any point in space, denoting inside/outside.
-
-```
-                    NURBS Geometry (Points/Curves/Surfaces)
-                         │
-              ┌──────────┴──────────┐
-              │  Signed Distance Field     │
-              │  Evaluation (GPU Realtime) │
-              └──────────┬──────────┘
-                         │
-               sign = analytic_eval(P)
-              ┌──────────┴──────────┐
-              │  f(P) > 0  outside  │
-              │  f(P) = 0  on surf  │
-              │  f(P) < 0  inside   │
-              └─────────────────────┘
-```
-
-**How it works:**
-
-1. **Evaluation** — For any query point `P`, the signed distance field assesses its position relative to the root geometry.
-2. **Realtime Preview** — GPU Fragment shaders ray-march the analytic distance to render the surface instantly without meshing.
-3. **On-Demand Caching** — When meshing or slicing is required, a sparse hierarchical distance field is evaluated exactly where needed in local CPU memory to support 0.05mm precision over 1m³ areas.
-4. **Composition** — Combine multiple bounded fields using min/max trees:
-   - **Union**: `min(f_A, f_B)`
-   - **Intersection**: `max(f_A, f_B)`
-   - **Subtraction**: `max(f_A, −f_B)`
-   - **Smooth blend (R-Union)**: parametric blending function for fillets and transitions
-
-This gives you **NURBS-quality surface control** with **SDF operational flexibility** — enabling lattice infills, smooth blends, and hollowing operations that are mathematically impossible or crash-prone in standard B-Rep CAD.
+Designed to accompany FreeCAD's parametric toolsets, it provides an alternative way to model organic shapes, soft transitions, and volumetric textures without relying on boundary face stitching or traditional B-Rep boolean operations.
 
 ---
 
-## Architecture
+## 1. What Are Signed Distance Fields (SDF)?
 
-```
-Workplane (tangent to surface or camera-aligned)
-    ↓
-Point / Curve tools (draw geometry on the workplane)
-    ↓
-NURBS Surfaces (patches from curves, primitives, lofts)
-    ↓
-Signed Distance Field Engine (NURBS → SDF function per surface)
-    ↓
-Field Composition (boolean union/cut/intersect via min/max)
-    ↓
-Isosurface Extraction (field → mesh/BRep for display)
-    ↓
-Part::FeaturePython → FreeCAD viewport
-```
+Most CAD modeling tools represent an object by its boundary surface—such as stitched parametric faces or polygonal meshes.
 
-### Key Components
+An **SDF** instead represents a shape as a continuous spatial field. For any point in 3D space, the field returns the distance to the nearest surface of the object:
 
-| Component | Role |
-|-----------|------|
-| **NURBS Surface** | Defines local curvature and the "face" of the object |
-| **Field Function** | Converts the surface + normal into a signed scalar field |
-| **Bounding Planes** | Restricts each surface's influence to a finite region |
-| **Composition Operator** | Decides how segments combine (sharp seam, smooth fillet, etc.) |
-| **Isosurface Extractor** | Samples the composed field and extracts a renderable mesh |
+- **Inside the solid:** Distance values are **negative**.
+- **On the surface boundary:** Distance is **zero**.
+- **Outside in empty space:** Distance values are **positive**.
+
+<!-- Place screenshot of an SDF shape with distance contours here -->
+<!-- ![Signed Distance Field Concept](docs/images/sdf_concept.png) -->
+
+### Practical Characteristics:
+
+- **Continuous Blending:** Intersecting shapes can blend together smoothly with an adjustable transition radius.
+- **Robust Booleans:** Union, cut, and intersection operations evaluate the field directly, avoiding topological failures or degenerate trimmed edges.
+- **Volumetric Modifiers:** Procedural noise, space deformations, lattices, and digital sculpting can be applied directly to the field.
+- **Companion to FreeCAD:** Shapes created in Fields can be converted to standard meshes or sliced into 2D profile curves for use with standard FreeCAD workbenches.
 
 ---
 
-## Folder Structure
+## 2. Integrated into FreeCAD
 
-The project structure is organized as follows:
+Fields objects integrate directly into the FreeCAD environment:
 
-- **`core/`**: Central Signed Distance Field (SDF) and NURBS geometry engine, including dual-pipeline rendering (GPU ray marcher & CPU octree cache) and isosurface extractors (meshing/slicing).
-- **`tools/`**: Interactive creation and editing tools (e.g., curves, primitives, workplane placement).
-- **`commands/`**: FreeCAD command bindings and toolbar/menu integrations.
-- **`tests/`**: Ad-hoc scripts for mathematics, pipeline, and integration verification.
-- **`Resources/`**: UI icons and visual assets.
-- **`InitGui.py`**: FreeCAD workbench startup and registration logic.
+<!-- Place FreeCAD interface screenshot showing the 3D viewport, Tree View, and Modifier Stack here -->
+<!-- ![FreeCAD Fields Workbench Overview](docs/images/freecad_fields_overview.png) -->
 
----
+- **Document Objects:** Fields objects live in the FreeCAD Tree View as standard `Part::FeaturePython` objects. Their parameters and placements can be adjusted in the Property view.
+- **Modifier Stack:** Deformations, noise layers, sculpt data, and booleans are organized in a non-destructive stack. Modifiers can be toggled, reordered, or edited at any time.
+- **Interactive Viewport Controls:** Edit objects using on-screen 3D gizmos, cage handles, and a dynamic workplane.
+- **Two-Color Grouping:** Press **`Q`** to toggle an object between **Group 1 (Additive)** and **Group 2 (Subtractive)** for quick visual booleans.
 
-## Features & Toolbar Commands
+### Viewport Display vs. Internal Evaluation
 
-### Creation Tools
-| Tool | Command ID | Hotkey | Description |
-|---|---|---|---|
-| **Place Point** | `DM_CreatePoint` | `P` | Places interactive control points |
-| **Draw Curve** | `DM_CreateCurve` | `C` | Draws NURBS BSpline curves |
-| **Fill Curve** | `DM_FillCurve` | — | Fills a closed curve to create a surface patch |
-| **Extrude Curve** | `DM_ExtrudeCurve` | — | Extrudes a profile along an axis |
-| **Create Box** | `DM_CreateBox` | `B` | Creates an interactive SDF box primitive |
-| **Create Sphere** | `DM_CreateSphere` | — | Creates an interactive SDF sphere primitive |
-| **Create Cylinder** | `DM_CreateCylinder` | — | Creates an interactive SDF cylinder primitive |
-| **Create Torus** | `DM_CreateTorus` | — | Creates an interactive SDF torus primitive |
-| **Create Noise** | `DM_CreateNoiseModifier` | — | Adds a 3D fractional Brownian motion (fBm) noise modifier |
+Evaluating continuous distance fields across 3D space is computationally demanding. To maintain usable viewport frame rates while preserving modeling accuracy, Fields separates display from exact calculation:
 
-### Operations & Transformations
-| Tool | Command ID | Hotkey | Description |
-|---|---|---|---|
-| **Field Union** | `DM_Add` | — | Combine fields with sharp seams or parametric fillets |
-| **Field Cut** | `DM_Subtract` | — | Subtract/cut a field from another |
-| **Field Intersect** | `DM_Intersection` | — | Keep the intersection of two fields |
-| **Translate** | `DM_Translate` | `T` | Translate/move geometry |
-| **SDF Export (Mesh)** | `DM_SDFToShape` | — | Convert function-based SDF to a standard polygon mesh |
-| **SDF Slice** | `DM_SDFSlice` | — | Slice the SDF to extract 2D contours |
-
-### Utilities
-- **Work Plane** (`DM_WorkPlane`): Custom workplane creation and scaling.
-- **Open Sketcher** (`DM_OpenSketcher`): Integrate with FreeCAD's Sketcher.
-- **DM Settings** (`DM_Settings`): Configure settings like ray marching step sizes and quality thresholds.
+1. **Real-Time Viewport Render:** A lightweight GPU preview rendered directly in FreeCAD's 3D viewport for interactive navigation, handle dragging, and previewing edits.
+2. **Exact Internal Model:** A high-precision representation evaluated on demand when an operation requires exact geometric values—such as generating a mesh or calculating 2D slice contours.
 
 ---
 
-## Interactive Modeling Workflow
+## 3. Major Tool Families
 
-### Dynamic Workplane System
-All geometry creation is driven by a custom, dynamic workplane that auto-orients to geometry under the cursor:
-- **Hover over a face**: The workplane aligns normal to the face at the hit point (indicated by a green tint).
-- **Hover over empty space**: The workplane falls back to the camera-facing viewport plane (indicated by a blue tint).
+The workbench organizes modeling tools into several families:
 
-### Interaction Flow
-1. **First Click**: Locks the workplane in place.
-2. **Second Click**: Starts drawing/placing geometry using the active tool.
-3. **Subsequent Clicks**: Continues placement/drawing of control points.
-4. **Right Click / Enter**: Completes the tool's action.
-5. **Esc**: Cancels the active tool.
+### 1. Primitives
+<!-- ![Primitives](docs/images/tools_primitives.png) -->
+Basic analytical 3D shapes:
+- **Box**, **Sphere**, **Cylinder**, and **Torus**.
 
-### Editing Geometry
-Activate the **Edit Tool** (`T` or via the toolbar) to modify existing curves and primitives:
-- Interactive control handles (points/gizmos) will appear.
-- Click to select a handle, move the mouse to transform, and click again to place.
-- Movement is automatically projected and constrained to the current workplane or the view plane.
+### 2. Procedural Noise *(Node Graph in Progress)*
+<!-- ![Procedural Noise & Node Graph](docs/images/tools_noise.png) -->
+- A **visual node graph editor** in progress 
+
+### 3. Heightmap Displacement
+<!-- ![Heightmap Displacement](docs/images/tools_heightmap.png) -->
+Import grayscale images or elevation data to create 3D relief surfaces and embossed textures with adjustable depth and smoothing.
+
+### 4. Spatial Deformers
+<!-- ![Spatial Deformers](docs/images/tools_deformers.png) -->
+Non-destructively alter coordinate space across the field:
+- **Twist:** Rotational torsion along a chosen axis.
+- **Bend:** Curvature along a radius.
+- **Array:** Linear or circular repetition.
+
+### 5. Lattice and Cage Deform
+<!-- ![Lattice and Cage Deform](docs/images/tools_cage.png) -->
+Enclose a shape in a 3D cage or lattice grid. Moving the cage vertices deforms the enclosed volume, useful for shaping organic silhouettes and ergonomic contours.
+
+### 6. Voxel Sculpt
+<!-- ![Voxel Sculpt](docs/images/tools_sculpt.png) -->
+Sculpt volumetric details directly on objects using voxel layers and interactive 3D brushes
+- Adjustable radius, strength, and falloff profiles via the Brush Editor panel.
+
+### 7. SDF to Mesh
+<!-- ![SDF to Mesh](docs/images/tools_sdf_to_mesh.png) -->
+Extract a standard polygon mesh from the implicit field (via Surface Nets, Marching Cubes, or Dual Contouring) for export (STL/OBJ) or downstream operations in FreeCAD.
+
+### 8. Slice SDF
+<!-- ![SDF Slice Toolpath Contours](docs/images/tools_sdf_slice.png) -->
+Cut an SDF with a plane to extract 2D cross-section contour curves as FreeCAD `BSplineCurve` objects.
+---
+
+## 4. Interactive Modeling & Keyboard Reference
+
+### Dynamic Workplane
+All geometry creation snaps to a dynamic workplane:
+- **Hovering over a face:** Aligns normal to the hovered surface (green tint).
+- **Hovering in empty space:** Falls back to the camera-facing viewport plane (blue tint).
+- **First Click:** Locks the workplane in place.
+- **Second Click:** Drag to size
+
+### Keyboard Shortcuts
+
+**Object Selection / Navigation**
+| Key | Action |
+|---|---|
+| `Tab` / `E` | Enter edit mode for the selected object |
+| `Q` | Toggle Group 1 (Additive) ↔ Group 2 (Subtractive) |
+| `D` | Open Fields context menu (or right-click) |
+| `Ctrl + Space` | Toggle viewport maximize |
+
+**While a Tool is Active**
+| Key | Action |
+|---|---|
+| `Esc` | Cancel tool and restore original state |
+| `Enter` | Commit and finish tool |
+| `Tab` | Exit edit mode / close tool |
+| `X` / `Y` / `Z` | Constrain movement to world X, Y, or Z axis |
+| `Shift + X/Y/Z` | Constrain movement to perpendicular plane (`Shift+Z` → XY plane) |
+| `D` | Tool options menu |
+
+**Modal Transforms (Blender-style)**
+Press `G`, `R`, or `S` in edit mode. Middle-mouse view navigation remains live throughout:
+| Key | Action |
+|---|---|
+| `G` | Grab (translate / move) |
+| `R` | Rotate |
+| `S` | Scale |
+| `X` / `Y` / `Z` | Lock to axis |
+| `Shift + X/Y/Z` | Lock to perpendicular plane |
+| `0`–`9`, `.`, `-` | Type exact numeric value (mm, degrees, factor) |
+| `Backspace` | Delete last typed digit |
+| `Enter` or Left-Click | Apply transform |
+| `Esc` or Right-Click | Cancel transform and restore original position |
 
 ---
 
-## Installation
+## 5. Installation
 
-1. Clone or symlink this repo into your FreeCAD `Mod` directory:
-   - **Linux**: `~/.FreeCAD/Mod/`
-   - **macOS**: `~/Library/Application Support/FreeCAD/Mod/`
-   - **Windows**: `%APPDATA%\FreeCAD\Mod\`
-2. Restart FreeCAD
-3. Select **Direct Modeling** from the workbench dropdown
+1. Clone or symlink this repository into your FreeCAD `Mod` directory:
+   - **Linux**: `~/.FreeCAD/Mod/Fields`
+   - **macOS**: `~/Library/Application Support/FreeCAD/Mod/Fields`
+   - **Windows**: `%APPDATA%\FreeCAD\Mod\Fields`
+2. Restart FreeCAD.
+3. Select **Fields** from the workbench dropdown menu.
 
-### Dependencies
+---
 
-| Package | Required | Purpose |
-|---------|----------|---------|
-| FreeCAD 0.21+ / 1.0 / 1.2 | ✅ | Host application |
-| NumPy | ✅ (bundled) | Linear algebra, field sampling |
-| Shapely | ✅ | 2D geometric operations |
-| SciPy | Optional | Accelerated closest-point queries (KD-tree) |
+## Attributions
+
+- **Inigo Quilez** ([iquilezles.org](https://iquilezles.org/)) — Foundational mathematical formulations for distance primitives, GLSL raymarching algorithms, and smooth boolean operators (`smoothMin`/`smoothMax`).

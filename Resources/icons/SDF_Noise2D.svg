@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <defs>
+        <radialGradient id="noise2dGrad" cx="30%" cy="30%" r="70%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="100%" stop-color="#e0e0e0"/>
+        </radialGradient>
+    </defs>
+    
+    <!-- Base Shape Outline before modifier (dashed rectangle) -->
+    <rect x="14" y="24" width="36" height="26" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:3,3"/>
+    
+    <!-- 2D Shape deformed by sine wave noise (solid with gradient fill) -->
+    <path d="M 14 50 L 14 32 Q 18.5 24, 23 32 T 32 32 T 41 32 T 50 32 L 50 50 Z" style="fill:url(#noise2dGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+</svg>

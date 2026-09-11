@@ -1,2 +1,10 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Auto detect text files, normalize to LF on commit, and check out LF everywhere
+# (including Windows -- the editors, Python and FreeCAD used here are all LF-safe).
+* text=auto eol=lf
+
+# Never touch these. Fields.FCStd ships at the repo root per PUBLISH_MAP.md,
+# and a normalization pass would corrupt it.
+*.png binary
+*.npy binary
+*.npz binary
+*.FCStd binary

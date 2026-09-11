@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <defs>
+        <radialGradient id="sweepGrad" cx="30%" cy="30%" r="70%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="100%" stop-color="#e0e0e0"/>
+        </radialGradient>
+    </defs>
+    
+    <!-- Swept solid tube body -->
+    <path d="M 10 48 C 10 26, 26 14, 46 14 L 52 20 C 34 20, 22 34, 22 48 Z" style="fill:url(#sweepGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    
+    <!-- Start profile cap -->
+    <ellipse cx="16" cy="48" rx="6" ry="3" style="fill:#ffffff;stroke:#ffaa00;stroke-width:2"/>
+    
+    <!-- End profile cap (rotated/aligned to curve end) -->
+    <ellipse cx="49" cy="17" rx="3" ry="5" transform="rotate(45 49 17)" style="fill:#ffffff;stroke:#ffaa00;stroke-width:2"/>
+    
+    <!-- Intermediate cross-section (dashed guide rib) -->
+    <ellipse cx="27" cy="27" rx="5.5" ry="3" transform="rotate(45 27 27)" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:2,2"/>
+    
+    <!-- Central guide spine (dashed) -->
+    <path d="M 16 48 C 16 31, 31 17, 49 17" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:3,3"/>
+</svg>

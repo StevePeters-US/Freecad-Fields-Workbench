@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <defs>
+        <radialGradient id="bendGrad" cx="30%" cy="30%" r="70%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="100%" stop-color="#e0e0e0"/>
+        </radialGradient>
+    </defs>
+    <!-- Original straight horizontal bar (dashed) -->
+    <rect x="12" y="38" width="40" height="12" style="fill:none;stroke:#ffaa00;stroke-width:1.5;stroke-dasharray:3,3"/>
+    <!-- Bent arching bar -->
+    <path d="M 12 50 C 12 50, 20 22, 32 22 C 44 22, 52 50, 52 50 L 46 50 C 46 50, 40 32, 32 32 C 24 32, 18 50, 18 50 Z" style="fill:url(#bendGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    <!-- Bend indicator arrow -->
+    <path d="M 32 44 Q 32 20, 32 14" style="fill:none;stroke:#ffaa00;stroke-width:2;stroke-linecap:round"/>
+    <path d="M 28 18 L 32 14 L 36 18" style="fill:none;stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+</svg>
