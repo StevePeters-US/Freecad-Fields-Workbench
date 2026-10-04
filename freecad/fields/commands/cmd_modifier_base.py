@@ -35,7 +35,7 @@ def require_sdf_selection(op_name: str):
 
 class CommandFldModifierBase:
     """
-    Base for SDF modifier commands (Twist, Bend, Lattice, Noise3D, Noise2D,
+    Base for SDF modifier commands (Twist, Bend, Lattice, Noise,
     Heightmap): validates an SDF selection, creates the modifier document
     object, hides the source, and opens the edit tool.
     """
@@ -53,7 +53,8 @@ class CommandFldModifierBase:
         self.tool_class = tool_class
 
     def GetResources(self):
-        return {'Pixmap': self.pixmap, 'MenuText': self.menu_text, 'ToolTip': self.tooltip}
+        from freecad.fields.ui_helpers import rich_tooltip
+        return {'Pixmap': self.pixmap, 'MenuText': self.menu_text, 'ToolTip': rich_tooltip("Fields", self.tooltip)}
 
     def IsActive(self):
         return FreeCAD.activeDocument() is not None
@@ -63,11 +64,11 @@ class CommandFldModifierBase:
         if obj is None:
             return
 
-        if hasattr(obj, "ViewObject") and obj.ViewObject:
-            obj.ViewObject.Visibility = False
-
         create_modifier = getattr(importlib.import_module(self.creator_module), self.creator_func)
         mod_obj = create_modifier(f"{obj.Name}{self.name_suffix}", obj)
+
+        if hasattr(obj, "ViewObject") and obj.ViewObject:
+            obj.ViewObject.Visibility = False
 
         # The creators only touch (IF-016): a factory has no way to know whether its
         # caller is a command or an event callback, so the recompute lives here, on
@@ -79,42 +80,3 @@ class CommandFldModifierBase:
 
         tool_cls = getattr(importlib.import_module(self.tool_module), self.tool_class)
         tool_cls().edit_object_from_creation(mod_obj, obj)
-
-
-class CommandFldTransformBase:
-    """Base for transform-tool commands (Translate, Rotate, Scale).
-
-    These commands do not create a document object — they just launch the
-    corresponding interactive tool.  Subclasses supply only menu_text,
-    tooltip, tool_class, and optionally accel.
-    """
-
-    def __init__(self, menu_text, tooltip, tool_module, tool_class, accel=None):
-        self.menu_text = menu_text
-        self.tooltip = tooltip
-        self.tool_module = tool_module
-        self.tool_class = tool_class
-        self.accel = accel
-
-    def GetResources(self):
-        res = {
-            'Pixmap': 'view-unselectable',
-            'MenuText': self.menu_text,
-            'ToolTip': self.tooltip,
-        }
-        if self.accel:
-            res['Accel'] = self.accel
-        return res
-
-    def IsActive(self):
-        return FreeCAD.activeDocument() is not None
-
-    def Activated(self):
-        tool_cls = getattr(importlib.import_module(self.tool_module), self.tool_class)
-        tool_cls()
-
-    def getIsChecked(self):
-        from freecad.fields.core.input.fld_tool_manager import FldToolManager
-        tool_cls = getattr(importlib.import_module(self.tool_module), self.tool_class)
-        active_tool = FldToolManager.get_instance().get_active_tool()
-        return isinstance(active_tool, tool_cls)

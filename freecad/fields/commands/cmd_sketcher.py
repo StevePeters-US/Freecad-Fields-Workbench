@@ -68,10 +68,11 @@ class CommandFldOpenSketcher:
     watchers = []
 
     def GetResources(self):
+        from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
         return {
             "Pixmap":  "SketcherWorkbench",
             "MenuText": "Open Sketcher",
-            "ToolTip":  "Switch to Sketcher workbench to draw profiles for SDF extrusions",
+            "ToolTip":  rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Switches to the Sketcher workbench to draw a profile for an SDF extrusion.")),
             "Accel":    "S, K",
         }
 
@@ -147,27 +148,30 @@ class CommandFldOpenSketcher:
                 placement = FreeCAD.Placement()
 
         # 3. Create Sketch
-        try:
-            sketch = doc.addObject("Sketcher::SketchObject", "Sketch")
-            sketch.Placement = placement
-            doc.recompute()
-            
-            # Switch workbench
-            FreeCADGui.activateWorkbench("SketcherWorkbench")
-            
-            # Open for editing
-            # Note: ActiveDocument here is FreeCADGui.ActiveDocument
-            FreeCADGui.ActiveDocument.setEdit(sketch.Name)
-            
-            # Start watcher to return to Fields workbench
-            watcher = SketchWatcher(sketch.Name, "FieldsWorkbench")
-            CommandFldOpenSketcher.watchers.append(watcher)
-            
-            fld_logger.info(f"Fields_OpenSketcher: Created sketch '{sketch.Label}' at {placement.Base}")
-            
-        except Exception as e:
-            fld_logger.error(f"Fields_OpenSketcher: Failed to create/open Sketcher: {e}")
-            fld_logger.exception("Fields_OpenSketcher failure")
+        def _create_and_edit_sketch():
+            try:
+                sketch = doc.addObject("Sketcher::SketchObject", "Sketch")
+                sketch.Placement = placement
+                doc.recompute()
+                
+                # Switch workbench
+                FreeCADGui.activateWorkbench("SketcherWorkbench")
+                
+                # Open for editing
+                # Note: ActiveDocument here is FreeCADGui.ActiveDocument
+                FreeCADGui.ActiveDocument.setEdit(sketch.Name)
+                
+                # Start watcher to return to Fields workbench
+                watcher = SketchWatcher(sketch.Name, "FieldsWorkbench")
+                CommandFldOpenSketcher.watchers.append(watcher)
+                
+                fld_logger.info(f"Fields_OpenSketcher: Created sketch '{sketch.Label}' at {placement.Base}")
+                
+            except Exception as e:
+                fld_logger.error(f"Fields_OpenSketcher: Failed to create/open Sketcher: {e}")
+                fld_logger.exception("Fields_OpenSketcher failure")
+
+        QtCore.QTimer.singleShot(0, _create_and_edit_sketch)
 
 
 FreeCADGui.addCommand("Fields_OpenSketcher", CommandFldOpenSketcher())

@@ -2,6 +2,7 @@
 import FreeCAD
 import FreeCADGui
 from freecad.fields.tools.point_tool import PointCreator
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 class CommandFldCreatePoint:
     """Command to activate the PointCreator tool."""
@@ -10,7 +11,7 @@ class CommandFldCreatePoint:
         return {
             'Pixmap': 'Draft_Point',
             'MenuText': 'Create Point',
-            'ToolTip': 'Place a Fields point',
+            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Places a point on the work plane.")),
             'Accel': 'P'
         }
 

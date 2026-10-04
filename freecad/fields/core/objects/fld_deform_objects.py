@@ -228,18 +228,7 @@ class FldArrayProxy(FldModifierProxyBase):
     SOURCE_GROUP = "Array"
 
     def _ensure_array_properties(self, obj):
-        old_mode = None
-        if hasattr(obj, "Mode"):
-            try:
-                curr_val = str(obj.Mode)
-            except Exception:
-                curr_val = ""
-            if curr_val in ("Linear", "Radial"):
-                old_mode = curr_val
-                # Only touch the enumeration list when a legacy value is present.
-                obj.Mode = ["Grid", "Step"]
-                obj.Mode = "Grid" if old_mode == "Linear" else "Step"
-        else:
+        if not hasattr(obj, "Mode"):
             obj.addProperty("App::PropertyEnumeration", "Mode", "Array", "Array mode (Grid or Step)")
             obj.Mode = ["Grid", "Step"]
             obj.Mode = "Grid"
@@ -316,21 +305,8 @@ class FldArrayProxy(FldModifierProxyBase):
             obj.OverlapMode = ["Auto", "Always", "Never"]
             obj.OverlapMode = "Auto"
 
-        # Apply migration if old_mode was present
-        if old_mode == "Radial":
-            if hasattr(obj, "RadialAxis"):
-                obj.StepAxis = getattr(obj, "RadialAxis", "Z")
-            rad_cnt = getattr(obj, "RadialCount", 6)
-            rad_span = getattr(obj, "RadialSpan", 360.0)
-            obj.StepCount = rad_cnt
-            obj.StepAngle = rad_span / max(rad_cnt, 1)
-
     def __init__(self, obj):
         super().__init__(obj)
-        self._ensure_array_properties(obj)
-
-    def onDocumentRestored(self, obj):
-        super().onDocumentRestored(obj)
         self._ensure_array_properties(obj)
 
     def _build_field(self, fp):
@@ -397,10 +373,6 @@ class FldArrayProxy(FldModifierProxyBase):
             "ScaleFormula",
             "SkipIndices",
             "OverlapMode",
-            "OverlapSafe",
-            "RadialAxis",
-            "RadialCount",
-            "RadialSpan",
             "Source",
             "Enabled",
         ):
@@ -434,6 +406,8 @@ class FldDeformCageProxy(FldModifierProxyBase):
             obj.addProperty("App::PropertyIntegerList", "HandleTypes", "DeformCage", "Handle types")
         if not hasattr(obj, "EdgeStraight"):
             obj.addProperty("App::PropertyIntegerList", "EdgeStraight", "DeformCage", "Straight edge flags")
+        if not hasattr(obj, "EdgeSharpness"):
+            obj.addProperty("App::PropertyFloatList", "EdgeSharpness", "DeformCage", "Edge sharpness values")
         if not hasattr(obj, "Displacements"):
             obj.addProperty("App::PropertyVectorList", "Displacements", "DeformCage", "Control point displacements")
         if not hasattr(obj, "Points"):
@@ -701,7 +675,7 @@ class FldDeformCageProxy(FldModifierProxyBase):
         if getattr(self, "_suspend_rebuild", False):
             return
         if prop in ("Source", "Vertices", "Handles", "FaceVertices", "FaceSizes",
-                    "EdgeVertices", "HandleTypes", "EdgeStraight", "Displacements",
+                    "EdgeVertices", "HandleTypes", "EdgeStraight", "EdgeSharpness", "Displacements",
                     "Points", "Placement", "ExtrudeRingSizes", "ExtrudeBaseRings",
                     "ExtrudeTopRings", "ExtrudeBaseHandles", "Enabled"):
             self.SdfField = None
@@ -815,6 +789,11 @@ def create_deform_cage_modifier(doc, source_obj, name: str = None) -> object:
         mod_obj.EdgeVertices = ev_flat
         mod_obj.HandleTypes = list(desc["handle_types"])
         mod_obj.EdgeStraight = [1 if es else 0 for es in (desc["edge_straight"] or [])]
+        n_edges = len(desc["edges"])
+        raw_sharp = list(desc.get("edge_sharpness") or [])
+        if len(raw_sharp) < n_edges:
+            raw_sharp += [0.0] * (n_edges - len(raw_sharp))
+        mod_obj.EdgeSharpness = [float(s) for s in raw_sharp]
         mod_obj.Displacements = [FreeCAD.Vector(0, 0, 0)] * (len(verts_vec) + len(handles_vec))
         mod_obj.Points = list(verts_vec) + list(handles_vec)
         mod_obj.Placement = FreeCAD.Placement()

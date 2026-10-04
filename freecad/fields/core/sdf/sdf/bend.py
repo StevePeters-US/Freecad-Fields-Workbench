@@ -211,8 +211,7 @@ class SdfBendField(SdfField):
                 
         return self.source.lipschitz() * (1.0 + abs(kappa) * r_max)
 
-    def evaluate(self, point: FreeCAD.Vector) -> float:
-        import math
+    def _axis_extent(self) -> float:
         try:
             bbox = self.source.bounding_box()
             min_c, max_c = bbox[0], bbox[1]
@@ -226,7 +225,11 @@ class SdfBendField(SdfField):
             L = 100.0
         if L < 1e-6:
             L = 100.0
-            
+        return float(L)
+
+    def evaluate(self, point: FreeCAD.Vector) -> float:
+        import math
+        L = self._axis_extent()
         rate = math.radians(self.bend_angle) / L
         x, y, z = point.x, point.y, point.z
         
@@ -252,20 +255,7 @@ class SdfBendField(SdfField):
         return self.source.evaluate(p_rot)
 
     def evaluate_grid(self, points: np.ndarray) -> np.ndarray:
-        try:
-            bbox = self.source.bounding_box()
-            min_c, max_c = bbox[0], bbox[1]
-            if self.axis == "X":
-                L = max_c.x - min_c.x
-            elif self.axis == "Y":
-                L = max_c.y - min_c.y
-            else:
-                L = max_c.z - min_c.z
-        except Exception:
-            L = 100.0
-        if L < 1e-6:
-            L = 100.0
-            
+        L = self._axis_extent()
         rate = np.radians(self.bend_angle) / L
         x = points[:, 0]
         y = points[:, 1]
@@ -300,69 +290,28 @@ class SdfBendField(SdfField):
             
         return self.source.evaluate_grid(pts_rot).astype(np.float32)
 
-    def to_glsl(self, ctx, point_var="p"):
+    def _deformed_var(self, ctx, point_var="p") -> str:
         import math
-        try:
-            bbox = self.source.bounding_box()
-            min_c, max_c = bbox[0], bbox[1]
-            if self.axis == "X":
-                L = max_c.x - min_c.x
-            elif self.axis == "Y":
-                L = max_c.y - min_c.y
-            else:
-                L = max_c.z - min_c.z
-        except Exception:
-            L = 100.0
-        if L < 1e-6:
-            L = 100.0
-            
+        L = self._axis_extent()
         rate_val = math.radians(self.bend_angle) / L
         rate_u = ctx.uniform("float", rate_val)
         origin_u = ctx.uniform("float", self.bend_origin)
         
         if self.axis == "X":
             ctx.add_custom_helper("bend_x", _GLSL_BEND_X)
-            deformed_var = f"bend_x({point_var}, {rate_u}, {origin_u})"
+            return f"bend_x({point_var}, {rate_u}, {origin_u})"
         elif self.axis == "Y":
             ctx.add_custom_helper("bend_y", _GLSL_BEND_Y)
-            deformed_var = f"bend_y({point_var}, {rate_u}, {origin_u})"
+            return f"bend_y({point_var}, {rate_u}, {origin_u})"
         else: # Z
             ctx.add_custom_helper("bend_z", _GLSL_BEND_Z)
-            deformed_var = f"bend_z({point_var}, {rate_u}, {origin_u})"
-            
-        return self.source.to_glsl(ctx, deformed_var)
+            return f"bend_z({point_var}, {rate_u}, {origin_u})"
+
+    def to_glsl(self, ctx, point_var="p"):
+        return self.source.to_glsl(ctx, self._deformed_var(ctx, point_var))
 
     def to_glsl_sample(self, ctx, point_var="p"):
-        import math
-        try:
-            bbox = self.source.bounding_box()
-            min_c, max_c = bbox[0], bbox[1]
-            if self.axis == "X":
-                L = max_c.x - min_c.x
-            elif self.axis == "Y":
-                L = max_c.y - min_c.y
-            else:
-                L = max_c.z - min_c.z
-        except Exception:
-            L = 100.0
-        if L < 1e-6:
-            L = 100.0
-            
-        rate_val = math.radians(self.bend_angle) / L
-        rate_u = ctx.uniform("float", rate_val)
-        origin_u = ctx.uniform("float", self.bend_origin)
-        
-        if self.axis == "X":
-            ctx.add_custom_helper("bend_x", _GLSL_BEND_X)
-            deformed_var = f"bend_x({point_var}, {rate_u}, {origin_u})"
-        elif self.axis == "Y":
-            ctx.add_custom_helper("bend_y", _GLSL_BEND_Y)
-            deformed_var = f"bend_y({point_var}, {rate_u}, {origin_u})"
-        else: # Z
-            ctx.add_custom_helper("bend_z", _GLSL_BEND_Z)
-            deformed_var = f"bend_z({point_var}, {rate_u}, {origin_u})"
-            
-        return self.source.to_glsl_sample(ctx, deformed_var)
+        return self.source.to_glsl_sample(ctx, self._deformed_var(ctx, point_var))
 
 
 _GLSL_BEND_X = """

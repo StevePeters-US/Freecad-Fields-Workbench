@@ -14,10 +14,11 @@ class CommandFldSdfCam:
     """FreeCAD Command class for the SDF CAM toolpath generation."""
 
     def GetResources(self):
+        from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
         return {
             'Pixmap': 'SDFCamProfile',
             'MenuText': 'SDF CNC Toolpath',
-            'ToolTip': 'Generate a CNC toolpath directly from the analytical SDF field.',
+            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Creates a CNC toolpath from the selected SDF object.\nSelect one SDF object.")),
         }
 
     def Activated(self):

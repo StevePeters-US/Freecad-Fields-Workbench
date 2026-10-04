@@ -21,6 +21,10 @@ from freecad.fields.core.sdf.sdf.torus import SdfTorusField
 # surface faces and the tool needs no brush rotation to be usable on day one.
 DEFAULT_BRUSH_NAME = "Sphere"
 
+# Voxels per side of a built-in brush. 32 left visible facets on a dab; 64 is smooth
+# and still a ~1 MB stamp. Seeded files below this are rebuilt, see _is_stale.
+BUILTIN_RESOLUTION = 64
+
 
 def brush_dir():
     base = FreeCAD.ConfigGet("UserAppData") or os.path.expanduser("~")
@@ -37,6 +41,9 @@ def list_brushes():
 
 
 def save_brush(brush):
+    if os.path.basename(brush.name) != brush.name:
+        fld_logger.error(f"brush_library: refusing unsafe brush name {brush.name!r}")
+        return False
     d = brush_dir()
     try:
         os.makedirs(d, exist_ok=True)
@@ -52,6 +59,9 @@ def save_brush(brush):
 
 
 def load_brush(name):
+    if os.path.basename(name) != name:
+        fld_logger.error(f"brush_library: refusing unsafe brush name {name!r}")
+        return None
     path = os.path.join(brush_dir(), name + ".npz")
     if not os.path.exists(path):
         fld_logger.error(f"brush_library: no brush named {name} at {path}")
@@ -66,6 +76,15 @@ def load_brush(name):
     except Exception as e:
         fld_logger.error(f"brush_library: failed to load {path}: {e}")
         return None
+
+
+def _is_stale(path):
+    """True when a seeded built-in was written at a lower resolution than today's."""
+    try:
+        with np.load(path) as z:
+            return int(min(z["resolution"])) < BUILTIN_RESOLUTION
+    except Exception:
+        return True
 
 
 def ensure_default_brushes():
@@ -87,9 +106,9 @@ def ensure_default_brushes():
     created = []
     for name, field in builtins:
         path = os.path.join(d, name + ".npz")
-        if os.path.exists(path):
+        if os.path.exists(path) and not _is_stale(path):
             continue
-        brush = SculptBrush.from_field(field, name, resolution=32)
+        brush = SculptBrush.from_field(field, name, resolution=BUILTIN_RESOLUTION)
         if save_brush(brush):
             created.append(name)
 
@@ -107,5 +126,6 @@ def default_brush():
         # and this is recoverable without one.
         fld_logger.warn(f"brush_library: {DEFAULT_BRUSH_NAME} missing; rebuilding in memory")
         brush = SculptBrush.from_field(
-            SdfSphereField(FreeCAD.Vector(0, 0, 0), 0.5), DEFAULT_BRUSH_NAME, resolution=32)
+            SdfSphereField(FreeCAD.Vector(0, 0, 0), 0.5), DEFAULT_BRUSH_NAME,
+            resolution=BUILTIN_RESOLUTION)
     return brush

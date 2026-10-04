@@ -223,7 +223,8 @@ class BoxCreator(PrimitiveCreatorBase):
             if getattr(self, "_snap_guide", None):
                 try:
                     self._snap_guide.undraw()
-                except Exception:
+                except Exception as exc:  # safe: best-effort cleanup of snap guide visual
+                    fld_logger.debug(f"[box_creator] _snap_guide.undraw failed: {exc}")
                     pass
             return
         if self._dragging_idx is None:

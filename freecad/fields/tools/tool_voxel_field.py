@@ -10,6 +10,7 @@ from PySide import QtWidgets, QtCore
 from freecad.fields.tools.fld_sdf_tool_base import FldSdfModifierToolBase
 from freecad.fields.core.input.fld_gui_utils import DynamicLimitSlider, DynamicLimitIntSlider
 from freecad.fields.core.objects.fld_voxel_field import write_back_voxel_data
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 
 class VoxelFieldTaskPanel:
@@ -65,7 +66,15 @@ class VoxelFieldTaskPanel:
 
         self.group_btn = QtWidgets.QPushButton("Additive")
         self.group_btn.clicked.connect(self._on_group_toggled)
-        self.group_btn.setToolTip("Toggle rendering group (Q)")
+        self.group_btn.setToolTip(
+            rich_tooltip(
+                "VoxelFieldTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "VoxelFieldTaskPanel",
+                    "Switches the object between the additive and subtractive group.",
+                ),
+            )
+        )
         ol.addRow("Group:", self.group_btn)
 
         # ── Sculpting / Carving Group ───────────────────────────────────────────
@@ -172,8 +181,6 @@ class VoxelFieldTool(FldSdfModifierToolBase):
         ("Interpolation", "Trilinear"),
         ("Group", "Additive"),
         ("Sculpted", False),
-        ("VoxelData", ""),
-        ("DataShape", [32, 32, 32]),
     ]
 
     def get_command_id(self):

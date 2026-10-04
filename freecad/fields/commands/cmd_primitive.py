@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: CC-BY-NC-SA-4.0
 import FreeCAD
 import FreeCADGui
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 class CommandFldCreatePrimitive:
     _ICONS = {
@@ -11,6 +12,14 @@ class CommandFldCreatePrimitive:
         "Prism": "Part_Prism",
         "Revolve": "Part_Revolution",
     }
+    _TOOLTIPS = {
+        "Box":      QT_TRANSLATE_NOOP("Fields", "Creates an SDF box where you click; set its size in the panel."),
+        "Sphere":   QT_TRANSLATE_NOOP("Fields", "Creates an SDF sphere where you click; set its size in the panel."),
+        "Cylinder": QT_TRANSLATE_NOOP("Fields", "Creates an SDF cylinder where you click; set its size in the panel."),
+        "Torus":    QT_TRANSLATE_NOOP("Fields", "Creates an SDF torus where you click; set its size in the panel."),
+        "Prism":    QT_TRANSLATE_NOOP("Fields", "Creates an SDF prism where you click; set its size in the panel."),
+        "Revolve":  QT_TRANSLATE_NOOP("Fields", "Creates an SDF solid of revolution where you click; set its size in the panel."),
+    }
     def __init__(self, c_type="Box"):
         self.c_type = c_type
 
@@ -18,7 +27,7 @@ class CommandFldCreatePrimitive:
         return {
             'Pixmap': self._ICONS.get(self.c_type, f"Part_{self.c_type}"),
             'MenuText': f"Create {self.c_type}",
-            'ToolTip': f"Interactive SDF {self.c_type} creation tool."
+            'ToolTip': rich_tooltip("Fields", self._TOOLTIPS[self.c_type])
         }
 
     def IsActive(self):

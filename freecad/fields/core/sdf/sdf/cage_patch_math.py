@@ -11,6 +11,12 @@ Parity Note (ST-010):
 import math
 import numpy as np
 
+# Gregory patches blend pairs of internal control points rationally using weights
+# with denominators that vanish at the four patch corners (e.g., s + t -> 0 at (0,0)).
+# This is a known removable corner singularity in Gregory patch formulation; we guard
+# denominator division with _GREGORY_SINGULARITY_EPS, defaulting to the corner limit.
+_GREGORY_SINGULARITY_EPS = 1e-6
+
 
 # ── Bezier helpers ────────────────────────────────────────────────────────────
 
@@ -83,20 +89,6 @@ def _coons_grad_b(C0, C1, D0, D1, s, t):
     Pt = ((c1s - c0s) + (1-sN)*d0dt + sN*d1dt + (1-sN)*(P00-P01) + sN*(P10-P11))
     return P, Ps, Pt
 
-def _hermite_b(t):
-    t2 = t*t
-    t3 = t2*t
-    h0 = 2*t3 - 3*t2 + 1
-    h1 = -2*t3 + 3*t2
-    h2 = t3 - 2*t2 + t
-    h3 = t3 - t2
-    
-    dh0 = 6*t2 - 6*t
-    dh1 = -6*t2 + 6*t
-    dh2 = 3*t2 - 4*t + 1
-    dh3 = 3*t2 - 2*t
-    return (h0, h1, h2, h3), (dh0, dh1, dh2, dh3)
-
 def _bicubic_coons_grad_b(C0, C1, D0, D1, s, t):
     sN = s[:, None]
     tN = t[:, None]
@@ -126,8 +118,8 @@ def _bicubic_coons_grad_b(C0, C1, D0, D1, s, t):
     U1 = (1.0 - tN) * c0_1 + tN * c1_1
     U1dt = c1_1 - c0_1
     
-    h_list, dh_list = _hermite_b(s)
-    g_list, dg_list = _hermite_b(t)
+    h_list, dh_list = _hermite(s)
+    g_list, dg_list = _hermite(t)
     
     g0 = g_list[0][:, None]
     g1 = g_list[1][:, None]
@@ -204,7 +196,7 @@ def _gregory_grad_b(C0, C1, D0, D1, s, t):
     P22s = B23 + (B32 - B33); P22t = B32 + (B23 - B33)
 
     den11 = s + t
-    ok11 = den11 > 1e-6
+    ok11 = den11 > _GREGORY_SINGULARITY_EPS
     den11_guarded = np.where(ok11, den11, 1.0)
     P11 = np.where(ok11[:, None], (s[:, None] * P11s + t[:, None] * P11t) / den11_guarded[:, None], P11s)
     dP11_ds = np.where(ok11[:, None], t[:, None] * (P11s - P11t) / (den11_guarded[:, None]**2), 0.0)
@@ -212,7 +204,7 @@ def _gregory_grad_b(C0, C1, D0, D1, s, t):
 
     u = 1.0 - s
     den21 = u + t
-    ok21 = den21 > 1e-6
+    ok21 = den21 > _GREGORY_SINGULARITY_EPS
     den21_guarded = np.where(ok21, den21, 1.0)
     P21 = np.where(ok21[:, None], (u[:, None] * P21s + t[:, None] * P21t) / den21_guarded[:, None], P21s)
     dP21_ds = np.where(ok21[:, None], -t[:, None] * (P21s - P21t) / (den21_guarded[:, None]**2), 0.0)
@@ -220,14 +212,14 @@ def _gregory_grad_b(C0, C1, D0, D1, s, t):
 
     v = 1.0 - t
     den12 = s + v
-    ok12 = den12 > 1e-6
+    ok12 = den12 > _GREGORY_SINGULARITY_EPS
     den12_guarded = np.where(ok12, den12, 1.0)
     P12 = np.where(ok12[:, None], (s[:, None] * P12s + v[:, None] * P12t) / den12_guarded[:, None], P12s)
     dP12_ds = np.where(ok12[:, None], v[:, None] * (P12s - P12t) / (den12_guarded[:, None]**2), 0.0)
     dP12_dt = np.where(ok12[:, None], -s[:, None] * (P12t - P12s) / (den12_guarded[:, None]**2), 0.0)
 
     den22 = u + v
-    ok22 = den22 > 1e-6
+    ok22 = den22 > _GREGORY_SINGULARITY_EPS
     den22_guarded = np.where(ok22, den22, 1.0)
     P22 = np.where(ok22[:, None], (u[:, None] * P22s + v[:, None] * P22t) / den22_guarded[:, None], P22s)
     dP22_ds = np.where(ok22[:, None], -v[:, None] * (P22s - P22t) / (den22_guarded[:, None]**2), 0.0)
@@ -375,7 +367,7 @@ def _gregory_grad(C0, C1, D0, D1, s, t):
     P22s = B23 + (B32 - B33); P22t = B32 + (B23 - B33)
 
     den11 = s + t
-    if den11 > 1e-6:
+    if den11 > _GREGORY_SINGULARITY_EPS:
         P11 = (s * P11s + t * P11t) / den11
         dP11_ds = t * (P11s - P11t) / (den11**2)
         dP11_dt = s * (P11t - P11s) / (den11**2)
@@ -386,7 +378,7 @@ def _gregory_grad(C0, C1, D0, D1, s, t):
 
     u = 1.0 - s
     den21 = u + t
-    if den21 > 1e-6:
+    if den21 > _GREGORY_SINGULARITY_EPS:
         P21 = (u * P21s + t * P21t) / den21
         dP21_ds = -t * (P21s - P21t) / (den21**2)
         dP21_dt = u * (P21t - P21s) / (den21**2)
@@ -397,7 +389,7 @@ def _gregory_grad(C0, C1, D0, D1, s, t):
 
     v = 1.0 - t
     den12 = s + v
-    if den12 > 1e-6:
+    if den12 > _GREGORY_SINGULARITY_EPS:
         P12 = (s * P12s + v * P12t) / den12
         dP12_ds = v * (P12s - P12t) / (den12**2)
         dP12_dt = -s * (P12t - P12s) / (den12**2)
@@ -407,7 +399,7 @@ def _gregory_grad(C0, C1, D0, D1, s, t):
         dP12_dt = np.zeros(3)
 
     den22 = u + v
-    if den22 > 1e-6:
+    if den22 > _GREGORY_SINGULARITY_EPS:
         P22 = (u * P22s + v * P22t) / den22
         dP22_ds = -v * (P22s - P22t) / (den22**2)
         dP22_dt = -u * (P22t - P22s) / (den22**2)

@@ -21,6 +21,7 @@ from PySide import QtWidgets, QtCore
 from freecad.fields.core import fld_logger
 from freecad.fields.core.sdf.sdf_rewriter import Bevel
 from freecad.fields.core.sdf.sdf_boolean_compose import build_boolean_field
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 
 class BooleanTaskPanel:
@@ -35,19 +36,18 @@ class BooleanTaskPanel:
         "Intersection": "Global Blend Radius (mm):",
     }
     _TIP = {
-        "Add": "0 = sharp boolean.\n"
-               "Values > 0 fillet the crease where the shapes meet (mm).\n"
-               "Editable later via the object's SmoothK property.",
-        "Subtract": "0 = sharp boolean.\n"
-                    "Values > 0 round the cutter's own edges, so the cavity gets\n"
-                    "internal corners of this radius -- what a corner-radius end\n"
-                    "mill leaves. The rim where the cut breaks the surface stays\n"
-                    "sharp. Clamped to what the cutter can hold: 3 mm inside a\n"
-                    "4 mm slot gives the 2 mm stadium.\n"
-                    "Editable later via the object's SmoothK property.",
-        "Intersection": "0 = sharp boolean.\n"
-                        "Values > 0 blend the two shapes over this radius (mm).\n"
-                        "Editable later via the object's SmoothK property.",
+        "Add": QT_TRANSLATE_NOOP(
+            "BooleanTaskPanel",
+            "Radius of the fillet where the shapes meet, in mm.\n0 leaves a sharp seam.\n<b>Default:</b> 0 mm.",
+        ),
+        "Subtract": QT_TRANSLATE_NOOP(
+            "BooleanTaskPanel",
+            "Radius of the cavity's internal corners, in mm, like a corner-radius end mill leaves.\nThe rim where the cut meets the surface stays sharp.\nClamped to what the cutter can hold: 3 mm in a 4 mm slot gives a 2 mm stadium.\n0 leaves sharp corners.\n<b>Default:</b> 0 mm.",
+        ),
+        "Intersection": QT_TRANSLATE_NOOP(
+            "BooleanTaskPanel",
+            "Radius of the blend between the two shapes, in mm.\n0 leaves a sharp intersection.\n<b>Default:</b> 0 mm.",
+        ),
     }
 
     def __init__(self, operation, orange_fields, blue_fields, result_obj,
@@ -83,7 +83,10 @@ class BooleanTaskPanel:
         self._smooth_spin.setSingleStep(1.0)
         self._smooth_spin.setDecimals(1)
         self._smooth_spin.setValue(self._original_k)
-        self._smooth_spin.setToolTip(self._TIP.get(operation, ""))
+        tip_image = "Fields_BooleanRadius.svg" if operation == "Add" else None
+        self._smooth_spin.setToolTip(
+            rich_tooltip("BooleanTaskPanel", self._TIP[operation], image=tip_image)
+        )
         form_layout.addRow(self._LABEL.get(operation, "Radius (mm):"), self._smooth_spin)
         main_layout.addLayout(form_layout)
 

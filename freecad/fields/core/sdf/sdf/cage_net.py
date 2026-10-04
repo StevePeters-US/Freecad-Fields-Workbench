@@ -13,6 +13,7 @@ class CageNet:
     edges: List[Tuple[int, int]]# (Ne, 2) vertex index pairs
     handle_types: List[int]     # (Nh,) int HandleType
     edge_straight: List[bool]   # (Ne,) bool
+    edge_sharpness: Optional[List[float]] = None # (Ne,) float
     rest_vertices: Optional[np.ndarray] = None # (Nv, 3) float64
     rest_handles: Optional[np.ndarray] = None  # (Nh, 3) float64
     displacements: Optional[np.ndarray] = None # (Nv+Nh, 3) float64
@@ -68,6 +69,8 @@ class CageNet:
             obj.HandleTypes = list(self.handle_types)
             if hasattr(obj, "EdgeStraight"):
                 obj.EdgeStraight = [1 if es else 0 for es in self.edge_straight]
+            if hasattr(obj, "EdgeSharpness") and self.edge_sharpness is not None:
+                obj.EdgeSharpness = [float(s) for s in self.edge_sharpness]
             if hasattr(obj, "Displacements") and self.displacements is not None:
                 obj.Displacements = [FreeCAD.Vector(*d) for d in self.displacements]
             obj.Points = [FreeCAD.Vector(*p) for p in self.control_points]
@@ -106,12 +109,17 @@ class CageNet:
         rest_h = vec_to_np(getattr(obj, "Handles", None))
         disp = vec_to_np(getattr(obj, "Displacements", None))
 
-        nv = len(rest_v) if len(rest_v) else len(pts_np) - 2 * len(edges)
+        nv = len(rest_v) if len(rest_v) else len(pts_np) - len(rest_h)
         verts = pts_np[:nv] if len(pts_np) >= nv else rest_v
         handles = pts_np[nv:] if len(pts_np) >= nv else rest_h
 
         ht = [int(h) for h in getattr(obj, "HandleTypes", [])]
         es = [bool(e) for e in getattr(obj, "EdgeStraight", [])]
+        es_raw = list(getattr(obj, "EdgeSharpness", []))
+        if len(es_raw) == len(edges):
+            sharp = [float(s) for s in es_raw]
+        else:
+            sharp = [0.0] * len(edges)
 
         return cls(
             vertices=verts,
@@ -120,6 +128,7 @@ class CageNet:
             edges=edges,
             handle_types=ht,
             edge_straight=es,
+            edge_sharpness=sharp,
             rest_vertices=rest_v if len(rest_v) else verts,
             rest_handles=rest_h if len(rest_h) else handles,
             displacements=disp,
@@ -129,6 +138,9 @@ class CageNet:
     def from_field(cls, field) -> "CageNet":
         """Extract a CageNet from an SdfCageField or SdfCageDeformField."""
         is_deform = hasattr(field, "rest_vertices")
+        sharp = list(getattr(field, "_edge_sharpness", []))
+        if len(sharp) != len(field._edges):
+            sharp = [0.0] * len(field._edges)
         return cls(
             vertices=field.vertices.copy(),
             handles=field.handles.copy(),
@@ -136,6 +148,7 @@ class CageNet:
             edges=list(field._edges),
             handle_types=list(getattr(field, "_handle_types", [])),
             edge_straight=list(getattr(field, "_edge_straight", [])),
+            edge_sharpness=sharp,
             rest_vertices=field.rest_vertices.copy() if is_deform else field.vertices.copy(),
             rest_handles=field.rest_handles.copy() if is_deform else field.handles.copy(),
             displacements=getattr(field, "displacements", None),
@@ -155,6 +168,7 @@ class CageNet:
                 edges=self.edges,
                 handle_types=self.handle_types,
                 edge_straight=self.edge_straight,
+                edge_sharpness=self.edge_sharpness,
                 rest_vertices=self.rest_vertices,
                 rest_handles=self.rest_handles,
                 displacements=self.displacements,
@@ -172,6 +186,7 @@ class CageNet:
                 edges=self.edges,
                 placement=placement,
                 handle_types=self.handle_types,
+                edge_sharpness=self.edge_sharpness,
             )
 
 
@@ -201,6 +216,7 @@ def write_net(obj, net: CageNet, points=None, displacements=None) -> None:
             edges=net.edges,
             handle_types=net.handle_types,
             edge_straight=net.edge_straight,
+            edge_sharpness=net.edge_sharpness,
             rest_vertices=net.rest_vertices,
             rest_handles=net.rest_handles,
             displacements=np.asarray([[d.x, d.y, d.z] if hasattr(d, "x") else [d[0], d[1], d[2]]

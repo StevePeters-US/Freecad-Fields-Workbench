@@ -264,6 +264,29 @@ class FldInputManager(QtCore.QObject):
                 except Exception as e:
                     fld_logger.debug(f"InputManager.eventFilter: DPI ratio/coordinate tracking failed: {e}")
 
+            # Middle mouse MUST always reach FreeCAD's navigation system.
+            # Use event.buttons() (live Qt bitmask) rather than our tracked flag so
+            # this is immune to any flag-tracking race.  This early-exit runs before
+            # tool dispatch, RMB context menus, AND before the no-tool else-branch,
+            # covering every state.
+            #
+            # `button()` alone is not enough: it names only the button this event is
+            # ABOUT, so a left or right press that lands while MMB is already held
+            # fell through to the tool -- which swallowed it. Those combinations are
+            # navigation gestures (MMB+LMB, MMB+RMB), and the RMB one additionally
+            # opened the Fields context menu mid-orbit, whose modal exec_() blocks the
+            # GUI thread. `buttons()` is the whole live bitmask, so it covers them.
+            if is_mouse_event:
+                _mid = QtCore.Qt.MiddleButton
+                if (event.type() in (QtCore.QEvent.MouseButtonPress,
+                                     QtCore.QEvent.MouseButtonRelease,
+                                     QtCore.QEvent.MouseButtonDblClick) and
+                        (event.button() == _mid or bool(event.buttons() & _mid))):
+                    return False
+                if (event.type() == QtCore.QEvent.MouseMove and
+                        bool(event.buttons() & _mid)):
+                    return False
+
             # [Event Owner: Qt Event Filter] Right-click → Fields context menu.
             # QEvent.ContextMenu is not reliably delivered for the 3D viewport
             # (see todo_input.md), so the menu is driven directly from the RMB
@@ -332,28 +355,6 @@ class FldInputManager(QtCore.QObject):
             if (is_mouse_event or is_context_event) and not is_viewport_event:
                 return False
 
-            # Middle mouse MUST always reach FreeCAD's navigation system.
-            # Use event.buttons() (live Qt bitmask) rather than our tracked flag so
-            # this is immune to any flag-tracking race.  This early-exit runs before
-            # tool dispatch AND before the no-tool else-branch, covering every state.
-            #
-            # `button()` alone is not enough: it names only the button this event is
-            # ABOUT, so a left or right press that lands while MMB is already held
-            # fell through to the tool -- which swallowed it. Those combinations are
-            # navigation gestures (MMB+LMB, MMB+RMB), and the RMB one additionally
-            # opened the Fields context menu mid-orbit, whose modal exec_() blocks the
-            # GUI thread. `buttons()` is the whole live bitmask, so it covers them.
-            if is_mouse_event:
-                _mid = QtCore.Qt.MiddleButton
-                if (event.type() in (QtCore.QEvent.MouseButtonPress,
-                                     QtCore.QEvent.MouseButtonRelease,
-                                     QtCore.QEvent.MouseButtonDblClick) and
-                        (event.button() == _mid or bool(event.buttons() & _mid))):
-                    return False
-                if (event.type() == QtCore.QEvent.MouseMove and
-                        bool(event.buttons() & _mid)):
-                    return False
-
             tool = FldToolManager.get_instance().get_active_tool()
 
             # --- Dispatch to Active Tool ---
@@ -387,7 +388,10 @@ class FldInputManager(QtCore.QObject):
                     return bool(consumed)
                 
                 elif event.type() == QtCore.QEvent.MouseButtonDblClick:
-                    consumed = tool.on_mouse_press(event_dict)
+                    if hasattr(tool, "on_mouse_double_click"):
+                        consumed = tool.on_mouse_double_click(event_dict)
+                    else:
+                        consumed = tool.on_mouse_press(event_dict)
                     return bool(consumed)
                     
                 elif event.type() == QtCore.QEvent.KeyPress:
@@ -526,9 +530,7 @@ class FldInputManager(QtCore.QObject):
                             event.accept(); return False
                     elif global_action == "global.toggle_group":
                         sel = FreeCADGui.Selection.getSelection()
-                        # Must match what the Q handler above actually toggles. This read
-                        # IsSubtractive, which onDocumentRestored removes and nothing adds
-                        # any more, so the override never fired and Q stayed stealable.
+                        # Must match what the Q handler above actually toggles.
                         if any(hasattr(o, "Group") for o in sel):
                             event.accept(); return False
 

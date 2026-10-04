@@ -13,6 +13,8 @@ from freecad.fields.tools.primitive_creator_base import (
 )
 import math
 
+_MIN_PRISM_RADIUS_MM = 0.1
+
 
 class PrismCreator(PrimitiveCreatorBase):
     """N-sided regular prism via polygon extrusion. Default 6 sides (hexagonal prism).
@@ -82,7 +84,7 @@ class PrismCreator(PrimitiveCreatorBase):
         dx = loc_rad.x - loc_center.x
         dy = loc_rad.y - loc_center.y
         radius = math.sqrt(dx * dx + dy * dy)
-        if radius < 0.1:
+        if radius < _MIN_PRISM_RADIUS_MM:
             return None
 
         if len(self.points) >= 3:

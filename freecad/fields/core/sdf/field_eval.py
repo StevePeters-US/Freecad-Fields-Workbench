@@ -2,7 +2,7 @@
 import numpy as np
 import time
 import weakref
-from freecad.fields.core.objects.fld_object import get_gpu_field_eval
+from freecad.fields.core.fld_settings import get_gpu_field_eval
 from freecad.fields.core.sdf.gpu_field_eval import GpuFieldEvaluator
 
 _gpu_evaluators = weakref.WeakKeyDictionary()

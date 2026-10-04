@@ -7,7 +7,6 @@ Reuses the GLFunctionLoader from gl_texture3d.py.
 import ctypes
 from freecad.fields.core.gl.gl_texture3d import _loader
 from freecad.fields.core import fld_logger
-from freecad.fields.core.gl.gl_constants import GL_RGBA16F, GL_R32F
 
 GL_VERTEX_SHADER   = 0x8B31
 GL_FRAGMENT_SHADER = 0x8B30
@@ -242,7 +241,7 @@ class GLProgram:
         glBegin   = _loader.get("glBegin",    [ctypes.c_uint], None)
         glEnd     = _loader.get("glEnd",      [], None)
         glVertex2f = _loader.get("glVertex2f", [ctypes.c_float, ctypes.c_float], None)
-        glBegin(0x0008)      # GL_TRIANGLE_STRIP
+        glBegin(0x0005)      # GL_TRIANGLE_STRIP
         glVertex2f(-1.0, -1.0)
         glVertex2f( 1.0, -1.0)
         glVertex2f(-1.0,  1.0)

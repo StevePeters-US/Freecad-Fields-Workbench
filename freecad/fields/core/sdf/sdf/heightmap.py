@@ -90,11 +90,16 @@ class SdfHeightmapField(SdfField):
 
     @staticmethod
     def _make_basis(d):
-        ref = FreeCAD.Vector(1, 0, 0) if abs(d.x) < 0.9 else FreeCAD.Vector(0, 1, 0)
-        u = d.cross(ref)
-        u = u * (1.0 / u.Length) if u.Length > 1e-8 else FreeCAD.Vector(0, 1, 0)
-        v = d.cross(u)
-        v = v * (1.0 / v.Length) if v.Length > 1e-8 else FreeCAD.Vector(1, 0, 0)
+        # A copy of SdfNoiseField._make_basis without the roll argument (NN-006,
+        # NN-008): deliberately duplicated rather than imported, because the two
+        # primitives share no other code. The handedness note lives on the noise
+        # copy -- `u.cross(d)` is not a typo for `d.cross(u)`. Keep the two in
+        # step; test_basis_matches_heightmap pins that they agree.
+        ref = FreeCAD.Vector(0, 1, 0) if abs(d.x) > 0.9 else FreeCAD.Vector(1, 0, 0)
+        u = ref - d * ref.dot(d)
+        u = u * (1.0 / u.Length) if u.Length > 1e-8 else FreeCAD.Vector(1, 0, 0)
+        v = u.cross(d)
+        v = v * (1.0 / v.Length) if v.Length > 1e-8 else FreeCAD.Vector(0, 1, 0)
         return u, v
 
     def _load_image(self, path):
@@ -125,7 +130,7 @@ class SdfHeightmapField(SdfField):
     def lipschitz(self) -> float:
         """Upper bound on |grad| of the value this field returns.
 
-        The value is returned unscaled — see `SdfNoise2DField.lipschitz` for what
+        The value is returned unscaled — see `SdfNoiseField.lipschitz` for what
         dividing it costs. The bound rides here, where the octree and the ray
         march's step divisor read it.
         """

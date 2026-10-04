@@ -352,7 +352,7 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
         if getattr(self, "_update_pending", False):
             return  # Timer already running, it will pick up _pending_callback
         if interval_ms is None:
-            from freecad.fields.core.objects.fld_object import get_interactive_throttle_interval
+            from freecad.fields.core.fld_settings import get_interactive_throttle_interval
             interval_ms = int(get_interactive_throttle_interval() * 1000)
         self._update_pending = True
         QtCore.QTimer.singleShot(interval_ms, self._fire_pending_update)
@@ -1557,6 +1557,15 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
             return self.on_button2_up(event_dict)
         elif btn == QtCore.Qt.RightButton:
             return self.on_button3_up(event_dict)
+        return False
+
+    def on_mouse_double_click(self, event_dict):
+        btn = event_dict.get("Button")
+        if btn == QtCore.Qt.LeftButton:
+            return self.on_button1_double_click(event_dict)
+        return False
+
+    def on_button1_double_click(self, event_dict):
         return False
 
     def on_mouse_move(self, event_dict):

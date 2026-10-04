@@ -188,7 +188,7 @@ class SdfVoxelField(SdfField):
         self._lipschitz = float(max(1.0, np.nanmax(mag)))
         return self._lipschitz
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         """A discrete grid CAN erode by offsetting its level set, unlike an analytic
         field.
 

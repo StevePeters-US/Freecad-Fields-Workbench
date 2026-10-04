@@ -12,6 +12,32 @@ class ViewProjector:
     def __init__(self, view):
         self.view = view
 
+    @staticmethod
+    def _cam_pos_vec(cam):
+        """Convert a camera node's position field into a FreeCAD.Vector."""
+        p = cam.position.getValue()
+        return FreeCAD.Vector(p[0], p[1], p[2])
+
+    def _get_cam_pos(self):
+        """Return the active view's camera position as FreeCAD.Vector, or None."""
+        if not self.view:
+            return None
+        cam = self.view.getCameraNode()
+        if not cam:
+            return None
+        return self._cam_pos_vec(cam)
+
+    @staticmethod
+    def _quat_to_basis(qx, qy, qz, qw):
+        """Return (forward, up, right) FreeCAD.Vectors from quaternion components."""
+        fx, fy, fz = 2.0*(qx*qz + qw*qy), 2.0*(qy*qz - qw*qx), 1.0 - 2.0*(qx*qx + qy*qy)
+        forward = FreeCAD.Vector(-fx, -fy, -fz)
+        ux, uy, uz = 2.0*(qx*qy - qw*qz), 1.0 - 2.0*(qx*qx + qz*qz), 2.0*(qy*qz + qw*qx)
+        up = FreeCAD.Vector(ux, uy, uz)
+        rx, ry, rz = 1.0 - 2.0*(qy*qy + qz*qz), 2.0*(qx*qy + qw*qz), 2.0*(qx*qz - qw*qy)
+        right = FreeCAD.Vector(rx, ry, rz)
+        return forward, up, right
+
     def get_ray(self, event_dict=None):
         """Centralized ray generation from screen coordinates."""
         im = FldInputManager.get_instance()
@@ -49,8 +75,7 @@ class ViewProjector:
             cam = view.getCameraNode()
             if not cam: return None, None
 
-            p = cam.position.getValue()
-            ray_p = FreeCAD.Vector(p[0], p[1], p[2])
+            ray_p = self._cam_pos_vec(cam)
 
             if scene_pt:
                 if hasattr(cam, "height"):
@@ -75,16 +100,7 @@ class ViewProjector:
             aspect = w / h
             quat = rot.getValue()
             qx, qy, qz, qw = quat[0], quat[1], quat[2], quat[3]
-
-            # Forward vector
-            fx, fy, fz = 2.0*(qx*qz + qw*qy), 2.0*(qy*qz - qw*qx), 1.0 - 2.0*(qx*qx + qy*qy)
-            forward = FreeCAD.Vector(-fx, -fy, -fz)
-            # Up vector
-            ux, uy, uz = 2.0*(qx*qy - qw*qz), 1.0 - 2.0*(qx*qx + qz*qz), 2.0*(qy*qz + qw*qx)
-            up = FreeCAD.Vector(ux, uy, uz)
-            # Right vector
-            rx, ry, rz = 1.0 - 2.0*(qy*qy + qz*qz), 2.0*(qx*qy + qw*qz), 2.0*(qx*qz - qw*qy)
-            right = FreeCAD.Vector(rx, ry, rz)
+            forward, up, right = self._quat_to_basis(qx, qy, qz, qw)
 
             if hasattr(cam, "heightAngle"): # Perspective
                 ha = cam.heightAngle.getValue()
@@ -127,8 +143,7 @@ class ViewProjector:
             cam = view.getCameraNode()
             if not cam:
                 return None
-            p = cam.position.getValue()
-            cam_pos = FreeCAD.Vector(p[0], p[1], p[2])
+            cam_pos = self._cam_pos_vec(cam)
 
             vp_sz = im._get_vp_size(view)
             w, h = vp_sz if vp_sz else (1000.0, 1000.0)
@@ -137,13 +152,7 @@ class ViewProjector:
             rot = cam.orientation.getValue()
             quat = rot.getValue()
             qx, qy, qz, qw = quat[0], quat[1], quat[2], quat[3]
-
-            fx, fy, fz = 2.0*(qx*qz + qw*qy), 2.0*(qy*qz - qw*qx), 1.0 - 2.0*(qx*qx + qy*qy)
-            forward = FreeCAD.Vector(-fx, -fy, -fz)
-            ux, uy, uz = 2.0*(qx*qy - qw*qz), 1.0 - 2.0*(qx*qx + qz*qz), 2.0*(qy*qz + qw*qx)
-            up = FreeCAD.Vector(ux, uy, uz)
-            rx, ry, rz = 1.0 - 2.0*(qy*qy + qz*qz), 2.0*(qx*qy + qw*qz), 2.0*(qx*qz - qw*qy)
-            right = FreeCAD.Vector(rx, ry, rz)
+            forward, up, right = self._quat_to_basis(qx, qy, qz, qw)
 
             wp = FreeCAD.Vector(world_pt)
 
@@ -197,8 +206,7 @@ class ViewProjector:
             elif hasattr(cam, "heightAngle") and hasattr(cam.heightAngle, "getValue"):
                 v = cam.heightAngle.getValue()
                 if isinstance(v, (int, float)):
-                    cam_p_vals = cam.position.getValue()
-                    cam_pos = FreeCAD.Vector(float(cam_p_vals[0]), float(cam_p_vals[1]), float(cam_p_vals[2]))
+                    cam_pos = self._cam_pos_vec(cam)
                     depth = (FreeCAD.Vector(ref_pt) - cam_pos).Length
                     fov = float(v)
                     half_world_h = depth * math.tan(fov / 2.0)
@@ -248,10 +256,7 @@ class ViewProjector:
             rot = cam.orientation.getValue()
             qx, qy, qz, qw = rot.getValue()
             # Right (X screen axis) and Up (Y screen axis) in world space
-            ux = 2*(qx*qy - qw*qz); uy = 1 - 2*(qx*qx + qz*qz); uz = 2*(qy*qz + qw*qx)
-            rx = 1 - 2*(qy*qy + qz*qz); ry = 2*(qx*qy + qw*qz); rz = 2*(qx*qz - qw*qy)
-            cam_right = FreeCAD.Vector(rx, ry, rz)
-            cam_up    = FreeCAD.Vector(ux, uy, uz)
+            _, cam_up, cam_right = self._quat_to_basis(qx, qy, qz, qw)
 
             # --- Step 2: Project the world normal into screen-space ---
             # scr_nx = how much the normal points in the screen-right direction
@@ -597,8 +602,7 @@ class ViewProjector:
 
             # Camera position for depth comparison (handles orthographic too).
             try:
-                cam_vals = self.view.getCameraNode().position.getValue()
-                cam_pos = FreeCAD.Vector(cam_vals[0], cam_vals[1], cam_vals[2])
+                cam_pos = self._get_cam_pos() or ray_p
             except Exception as e:
                 fld_logger.debug(f"ViewProjector.get_mouse_plane_pt: cam_pos acquisition failed: {e}")
                 cam_pos = ray_p
@@ -608,11 +612,9 @@ class ViewProjector:
                 if wp.Name in skip_names:
                     continue
                 n, o = self.get_base_plane(wp)
-                denom = ray_d.dot(n)
-                if abs(denom) < 1e-6:
+                pt_candidate = self._intersect_ray_plane(ray_p, ray_d, n, o)
+                if pt_candidate is None:
                     continue
-                t = (o - ray_p).dot(n) / denom
-                pt_candidate = ray_p + ray_d * t
                 if (pt_candidate - cam_pos).dot(ray_d) <= 0:
                     continue
                 
@@ -696,12 +698,10 @@ class ViewProjector:
             o_fb = wp_p.Base
             
             if ray_d is not None:
-                denom = ray_d.dot(n_fb)
-                if abs(denom) > 1e-6:
-                    t_fb = (o_fb - ray_p).dot(n_fb) / denom
-                    fallback_pt = ray_p + ray_d * t_fb
+                fallback_pt = self._intersect_ray_plane(ray_p, ray_d, n_fb, o_fb)
+                if fallback_pt is not None:
                     fallback_t = (fallback_pt - cam_pos).dot(ray_d) if cam_pos else 1.0
-                    
+
                     if fallback_t > 0:
                         description = "Fallback:WorkingPlane"
                         return fallback_pt, working_plane, description

@@ -38,6 +38,71 @@ class SdfOctreeCache:
         self._leaves_coords = None
         self._leaves_corners = None
 
+    def _compute_top_size(self, mn, mx, pad):
+        """Return (x0,y0,z0,x1,y1,z1,top_size) covering [mn-pad, mx+pad], with
+        top_size rounded up to the next power-of-two multiple of leaf_size so every
+        subdivision lands exactly on the leaf grid."""
+        x0 = mn.x - pad;  x1 = mx.x + pad
+        y0 = mn.y - pad;  y1 = mx.y + pad
+        z0 = mn.z - pad;  z1 = mx.z + pad
+        span = max(x1 - x0, y1 - y0, z1 - z0)
+        n = math.ceil(span / self.leaf_size)
+        n = 1 << math.ceil(math.log2(max(n, 1)))  # next power of 2
+        top_size = n * self.leaf_size
+        return x0, y0, z0, x1, y1, z1, top_size
+
+    def _cull_frontier(self, frontier, size, L):
+        """Return the subset of frontier cells whose center SDF is within reach of
+        the surface (abs(sdf) <= half-diagonal * Lipschitz bound)."""
+        from freecad.fields.core.sdf.field_eval import eval_grid
+        centers = frontier + size * 0.5
+        d = eval_grid(self.field, centers.astype(np.float32))
+        half_diag = size * math.sqrt(3.0) * 0.5
+        keep_mask = np.abs(d) <= half_diag * L
+        return frontier[keep_mask]
+
+    @staticmethod
+    def _subdivide(kept, size):
+        """Split each kept cell into 8 children for the next octree level.
+        Returns (children_frontier, new_size)."""
+        half = size * 0.5
+        children = kept[:, None, :] + _CELL_OFFSETS[None, :, :] * half  # (K, 8, 3)
+        return children.reshape(-1, 3), half
+
+    def _evaluate_leaf_corners(self, kept, x0, y0, z0):
+        """Evaluate and deduplicate SDF at the 8 corners of each kept leaf cell,
+        and store each cell's corner values into self._leaves.
+        Returns (cell_coords (K,3) int64, vals (K,8) float32)."""
+        from freecad.fields.core.sdf.field_eval import eval_grid
+        K = kept.shape[0]
+
+        ix = np.round((kept[:, 0] - x0) / self.leaf_size).astype(np.int64)
+        iy = np.round((kept[:, 1] - y0) / self.leaf_size).astype(np.int64)
+        iz = np.round((kept[:, 2] - z0) / self.leaf_size).astype(np.int64)
+
+        cell_coords = np.stack([ix, iy, iz], axis=1)  # (K, 3)
+
+        # Expand to 8 corners for each cell
+        corner_grid_coords = cell_coords[:, None, :] + _CELL_OFFSETS[None, :, :].astype(np.int64)  # (K, 8, 3)
+        flat_grid_coords = corner_grid_coords.reshape(-1, 3)  # (8*K, 3)
+
+        # Find unique corners
+        unique_grid_coords, inverse_indices = np.unique(flat_grid_coords, axis=0, return_inverse=True)
+
+        # Convert unique grid coords back to world space points and evaluate in a single batch
+        unique_world_pts = self._origin[None, :] + unique_grid_coords * self.leaf_size
+        unique_vals = eval_grid(
+            self.field, unique_world_pts.astype(np.float32)
+        ).astype(np.float32)
+
+        # Reconstruct corner values back into (K, 8) shape
+        vals = unique_vals[inverse_indices].reshape(K, 8)
+
+        for k in range(K):
+            self._leaves[(int(ix[k]), int(iy[k]), int(iz[k]))] = vals[k]
+
+        return cell_coords, vals
+
     def build(self, bounds=None, progress_callback=None):
         """
         Build the octree. Evaluates field near the surface only.
@@ -61,24 +126,10 @@ class SdfOctreeCache:
         else:
             mn, mx = self.field.bounding_box()
         pad = self.leaf_size
-        x0 = mn.x - pad;  x1 = mx.x + pad
-        y0 = mn.y - pad;  y1 = mx.y + pad
-        z0 = mn.z - pad;  z1 = mx.z + pad
+        x0, y0, z0, x1, y1, z1, top_size = self._compute_top_size(mn, mx, pad)
 
         self._origin = np.array([x0, y0, z0], dtype=np.float64)
-
-        # Top-level cell covering the whole bounding box.
-        span_x = x1 - x0
-        span_y = y1 - y0
-        span_z = z1 - z0
-        top_size = max(span_x, span_y, span_z)
-
-        # Round top_size up to nearest power-of-two multiple of leaf_size
-        # so that every subdivision lands exactly on the leaf grid.
-        n = math.ceil(top_size / self.leaf_size)
-        n = 1 << math.ceil(math.log2(max(n, 1)))  # next power of 2
-        top_size = n * self.leaf_size
-        total_levels = int(round(math.log2(n))) + 1
+        total_levels = int(round(math.log2(top_size / self.leaf_size))) + 1
 
         self._leaves.clear()
 
@@ -97,56 +148,21 @@ class SdfOctreeCache:
 
         L = self.field.lipschitz()
         while frontier.shape[0] > 0:
-            centers = frontier + size * 0.5
-            from freecad.fields.core.sdf.field_eval import eval_grid
-            d = eval_grid(self.field, centers.astype(np.float32))
-            half_diag = size * math.sqrt(3.0) * 0.5
-            keep_mask = np.abs(d) <= half_diag * L
-            kept = frontier[keep_mask]
+            kept = self._cull_frontier(frontier, size, L)
 
             if kept.shape[0] == 0:
                 break
 
             if size <= self.leaf_size * 1.001:
                 # Leaf level — deduplicate corner coordinates to avoid redundant SDF evaluations
-                K = kept.shape[0]
-                
-                ix = np.round((kept[:, 0] - x0) / self.leaf_size).astype(np.int64)
-                iy = np.round((kept[:, 1] - y0) / self.leaf_size).astype(np.int64)
-                iz = np.round((kept[:, 2] - z0) / self.leaf_size).astype(np.int64)
-                
-                cell_coords = np.stack([ix, iy, iz], axis=1) # (K, 3)
-                
-                # Expand to 8 corners for each cell
-                corner_grid_coords = cell_coords[:, None, :] + _CELL_OFFSETS[None, :, :].astype(np.int64) # (K, 8, 3)
-                flat_grid_coords = corner_grid_coords.reshape(-1, 3) # (8*K, 3)
-                
-                # Find unique corners
-                unique_grid_coords, inverse_indices = np.unique(flat_grid_coords, axis=0, return_inverse=True)
-                
-                # Convert unique grid coords back to world space points and evaluate in a single batch
-                unique_world_pts = self._origin[None, :] + unique_grid_coords * self.leaf_size
-                from freecad.fields.core.sdf.field_eval import eval_grid
-                unique_vals = eval_grid(
-                    self.field, unique_world_pts.astype(np.float32)
-                ).astype(np.float32)
-                
-                # Reconstruct corner values back into (K, 8) shape
-                vals = unique_vals[inverse_indices].reshape(K, 8)
-                
+                cell_coords, vals = self._evaluate_leaf_corners(kept, x0, y0, z0)
                 # Cache as NumPy arrays for fast vectorized meshing
                 self._leaves_coords = cell_coords
                 self._leaves_corners = vals
-                
-                for k in range(K):
-                    self._leaves[(int(ix[k]), int(iy[k]), int(iz[k]))] = vals[k]
                 break
 
             # Subdivide every surviving cell into 8 children for the next level.
-            half = size * 0.5
-            children = kept[:, None, :] + _CELL_OFFSETS[None, :, :] * half  # (K, 8, 3)
-            frontier = children.reshape(-1, 3)
-            size = half
+            frontier, size = self._subdivide(kept, size)
             level += 1
             if progress_callback:
                 progress_callback(min(level / max(total_levels, 1), 0.99))
@@ -248,14 +264,8 @@ class SdfOctreeCache:
         # 2. Run top-down subdivision starting from the top-level cell,
         # but restricted to cells that intersect the padded dirty region.
         mn, mx = self.field.bounding_box()
-        span_x = (mx.x + pad) - (mn.x - pad)
-        span_y = (mx.y + pad) - (mn.y - pad)
-        span_z = (mx.z + pad) - (mn.z - pad)
-        top_size = max(span_x, span_y, span_z)
-        n = math.ceil(top_size / self.leaf_size)
-        n = 1 << math.ceil(math.log2(max(n, 1)))  # next power of 2
-        top_size = n * self.leaf_size
-        
+        _, _, _, _, _, _, top_size = self._compute_top_size(mn, mx, pad)
+
         frontier = np.array([[x0, y0, z0]], dtype=np.float64)
         size = top_size
         L = self.field.lipschitz()
@@ -269,44 +279,17 @@ class SdfOctreeCache:
             if frontier.shape[0] == 0:
                 break
                 
-            centers = frontier + size * 0.5
-            from freecad.fields.core.sdf.field_eval import eval_grid
-            d = eval_grid(self.field, centers.astype(np.float32))
-            half_diag = size * math.sqrt(3.0) * 0.5
-            keep_mask = np.abs(d) <= half_diag * L
-            kept = frontier[keep_mask]
-            
+            kept = self._cull_frontier(frontier, size, L)
+
             if kept.shape[0] == 0:
                 break
-                
+
             if size <= self.leaf_size * 1.001:
                 # Leaf level — evaluate corners
-                K = kept.shape[0]
-                ix = np.round((kept[:, 0] - x0) / self.leaf_size).astype(np.int64)
-                iy = np.round((kept[:, 1] - y0) / self.leaf_size).astype(np.int64)
-                iz = np.round((kept[:, 2] - z0) / self.leaf_size).astype(np.int64)
-                
-                cell_coords = np.stack([ix, iy, iz], axis=1) # (K, 3)
-                corner_grid_coords = cell_coords[:, None, :] + _CELL_OFFSETS[None, :, :].astype(np.int64)
-                flat_grid_coords = corner_grid_coords.reshape(-1, 3)
-                
-                unique_grid_coords, inverse_indices = np.unique(flat_grid_coords, axis=0, return_inverse=True)
-                unique_world_pts = self._origin[None, :] + unique_grid_coords * self.leaf_size
-                
-                unique_vals = eval_grid(
-                    self.field, unique_world_pts.astype(np.float32)
-                ).astype(np.float32)
-                
-                vals = unique_vals[inverse_indices].reshape(K, 8)
-                
-                for k in range(K):
-                    self._leaves[(int(ix[k]), int(iy[k]), int(iz[k]))] = vals[k]
+                self._evaluate_leaf_corners(kept, x0, y0, z0)
                 break
-                
-            half = size * 0.5
-            children = kept[:, None, :] + _CELL_OFFSETS[None, :, :] * half
-            frontier = children.reshape(-1, 3)
-            size = half
+
+            frontier, size = self._subdivide(kept, size)
             
         # 3. Rebuild self._leaves_coords and self._leaves_corners
         if self._leaves:

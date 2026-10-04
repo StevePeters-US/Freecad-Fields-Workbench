@@ -16,6 +16,7 @@ from freecad.fields.core.render.field_appearance import DEFAULT_ADDITIVE_COLOR
 from freecad.fields.tools.fld_sdf_tool_base import FldSdfModifierToolBase
 from freecad.fields.tools.fld_base import ToolState
 from freecad.fields.tools.modifiers import BaseModifierTaskPanel
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 try:
     from pivy import coin
@@ -37,7 +38,15 @@ class LatticeTaskPanel(BaseModifierTaskPanel):
         self.res_spin = QtWidgets.QSpinBox()
         self.res_spin.setRange(2, 8)
         self.res_spin.setValue(2)
-        self.res_spin.setToolTip("Control points per axis (2 = 8 points, 3 = 27, etc.)")
+        self.res_spin.setToolTip(
+            rich_tooltip(
+                "LatticeTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "LatticeTaskPanel",
+                    "Control points along each axis.\n2 gives 8 points, 3 gives 27.\n<b>Default:</b> 2.",
+                ),
+            )
+        )
         self.res_spin.valueChanged.connect(self._on_changed)
         fl.addRow("Resolution:", self.res_spin)
 
@@ -132,40 +141,9 @@ class LatticeTool(FldSdfModifierToolBase):
         self._reconstruct_handles()
         self._commit_changes(force=True)
 
-    def _do_terminate(self):
-        try:
-            for fld_pt in self.fld_points:
-                fld_pt.undraw()
-            self.fld_points = []
-            if self._edge_lines:
-                self._edge_lines.undraw()
-                self._edge_lines = None
-            if self.points_root and self.view and self.view.getSceneGraph():
-                self.view.getSceneGraph().removeChild(self.points_root)
-            self.points_root = None
-        except Exception as e:
-            fld_logger.debug(f"LatticeTool._do_terminate exception: {e}")
-        super()._do_terminate()
-
-    def _reconstruct_handles(self):
-        for fld_pt in self.fld_points:
-            fld_pt.undraw()
-        self.fld_points = []
-        if self._edge_lines:
-            self._edge_lines.undraw()
-            self._edge_lines = None
-            
-        obj = self._target_obj
-        # get_sdf_field, not .SdfField: FldLatticeProxy.onChanged invalidates by
-        # setting SdfField = None, so the attribute reads None on exactly the
-        # tick after a Displacements write -- which is every tick of a drag.
-        field = obj.Proxy.get_sdf_field(obj) if (obj and obj.Proxy) else None
-        if field is None:
-            return
-
+    def _update_points_from_field(self, field):
         R = self._resolution
         deformed_grid_local = field.deformed_grid
-        
         self.points = []
         for i in range(R**3):
             pt_local = FreeCAD.Vector(deformed_grid_local[i, 0], deformed_grid_local[i, 1], deformed_grid_local[i, 2])
@@ -174,7 +152,38 @@ class LatticeTool(FldSdfModifierToolBase):
             else:
                 pt_world = pt_local
             self.points.append(pt_world)
-            
+
+    def _clear_visuals(self):
+        for fld_pt in self.fld_points:
+            fld_pt.undraw()
+        self.fld_points = []
+        if self._edge_lines:
+            self._edge_lines.undraw()
+            self._edge_lines = None
+
+    def _do_terminate(self):
+        try:
+            self._clear_visuals()
+            if self.points_root and self.view and self.view.getSceneGraph():
+                self.view.getSceneGraph().removeChild(self.points_root)
+            self.points_root = None
+        except Exception as e:
+            fld_logger.debug(f"LatticeTool._do_terminate exception: {e}")
+        super()._do_terminate()
+
+    def _reconstruct_handles(self):
+        self._clear_visuals()
+
+        obj = self._target_obj
+        # get_sdf_field, not .SdfField: FldLatticeProxy.onChanged invalidates by
+        # setting SdfField = None, so the attribute reads None on exactly the
+        # tick after a Displacements write -- which is every tick of a drag.
+        field = obj.Proxy.get_sdf_field(obj) if (obj and obj.Proxy) else None
+        if field is None:
+            return
+
+        self._update_points_from_field(field)
+
         r = self._compute_handle_radius()
         self.fld_points = []
         if self.points_root:
@@ -277,8 +286,6 @@ class LatticeTool(FldSdfModifierToolBase):
             if field is None:
                 return
 
-            R = self._resolution
-            
             if field.placement is not None:
                 pt_local = field.placement.inverse().multVec(pt_global)
             else:
@@ -293,14 +300,8 @@ class LatticeTool(FldSdfModifierToolBase):
             clamped_disps = field.clamp_displacements(proposed_disps, current_disps)
             field.displacements = clamped_disps
             
-            deformed_grid_local = field.deformed_grid
-            for i in range(R**3):
-                p_loc = FreeCAD.Vector(deformed_grid_local[i, 0], deformed_grid_local[i, 1], deformed_grid_local[i, 2])
-                if field.placement is not None:
-                    p_world = field.placement.multVec(p_loc)
-                else:
-                    p_world = p_loc
-                self.points[i] = p_world
+            self._update_points_from_field(field)
+            for i, p_world in enumerate(self.points):
                 self.fld_points[i].position = p_world
                 self.fld_points[i].update_draw()
                 

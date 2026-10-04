@@ -9,6 +9,7 @@ import math
 from collections import namedtuple
 
 import FreeCAD
+from freecad.fields.core import fld_logger
 
 # kind is one of: None, "grid", "angle", "vertex", "origin", "surface"
 SnapResult = namedtuple("SnapResult", "point kind target")
@@ -130,7 +131,8 @@ def snap_world_point(view, pt, *, extra_points=(), working_plane=None, exclude=(
                 d = (FreeCAD.Vector(hit) - v_pt).Length
                 if d <= tol:
                     return SnapResult(FreeCAD.Vector(hit), "surface", None)
-        except Exception:
+        except Exception as exc:  # safe: SDF surface hit query is best-effort
+            fld_logger.debug_throttled("fld_snap:find_snap_target", f"[fld_snap] get_sdf_hit failed: {exc}")
             pass
 
     return SnapResult(pt, None, None)
@@ -253,7 +255,8 @@ class FldSnapIndicator:
                 sb = mw.statusBar()
                 if sb:
                     sb.showMessage(f"Snapped: {kind}", 2000)
-        except Exception:
+        except Exception as exc:  # safe: status bar display is best-effort (e.g. in headless mode)
+            fld_logger.debug_throttled("fld_snap:show", f"[fld_snap] statusBar showMessage failed: {exc}")
             pass
 
     def hide(self):

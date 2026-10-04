@@ -8,24 +8,25 @@ import json
 from PySide import QtWidgets, QtGui, QtCore
 
 from freecad.fields.core import fld_logger
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 from freecad.fields.core.gui.node_editor.node_scene import NodeGraphScene
 from freecad.fields.core.gui.node_editor.node_view import NodeGraphView
-from freecad.fields.core.gui.node_editor.node_definitions import (
-    get_available_node_classes, compile_graph, get_template_graph
+from freecad.fields.core.gui.node_editor.nodes import (
+    get_available_node_classes, compile_graph, get_template_graph, SocketType,
 )
 
 
 class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
     """Visual Node Editor Dialog for procedural noise formulas."""
 
-    def __init__(self, target_obj=None, tool=None, is_2d=False, parent=None):
+    def __init__(self, target_obj=None, tool=None, parent=None):
         super().__init__(parent)
         self.target_obj = target_obj
         self.tool = tool
-        self.is_2d = is_2d
         self._is_updating = False
         self.current_subgraph_node_id = None
         self.root_graph_data = None
+        self._suppress_live_save = False
 
         self.setWindowTitle("Fields - Noise Formula Node Editor")
         self.resize(920, 620)
@@ -69,7 +70,15 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
         # Live Update toggle
         self.live_update_chk = QtWidgets.QCheckBox("Live 3D Update")
         self.live_update_chk.setChecked(True)
-        self.live_update_chk.setToolTip("Automatically update the 3D viewport in real time as nodes change")
+        self.live_update_chk.setToolTip(
+            rich_tooltip(
+                "FldNoiseNodeEditorDialog",
+                QT_TRANSLATE_NOOP(
+                    "FldNoiseNodeEditorDialog",
+                    "Updates the 3D viewport in real time as nodes change.",
+                ),
+            )
+        )
         toolbar.addWidget(self.live_update_chk)
 
         # Apply button
@@ -80,7 +89,15 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
 
         # Clear button
         clear_btn = QtWidgets.QPushButton("Clear")
-        clear_btn.setToolTip("Clear all nodes")
+        clear_btn.setToolTip(
+            rich_tooltip(
+                "FldNoiseNodeEditorDialog",
+                QT_TRANSLATE_NOOP(
+                    "FldNoiseNodeEditorDialog",
+                    "Deletes every node in the graph.",
+                ),
+            )
+        )
         clear_btn.clicked.connect(self._on_clear)
         toolbar.addWidget(clear_btn)
 
@@ -95,7 +112,15 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
         self.back_btn.setStyleSheet(
             "font-weight: bold; padding: 3px 10px; background-color: #0369a1; color: white; border-radius: 4px;"
         )
-        self.back_btn.setToolTip("Return to parent graph (changes to this subgraph are preserved)")
+        self.back_btn.setToolTip(
+            rich_tooltip(
+                "FldNoiseNodeEditorDialog",
+                QT_TRANSLATE_NOOP(
+                    "FldNoiseNodeEditorDialog",
+                    "Returns to the parent graph; preserves changes to this subgraph.",
+                ),
+            )
+        )
         self.back_btn.setVisible(False)
         self.back_btn.clicked.connect(self.close_subgraph)
         breadcrumb_bar.addWidget(self.back_btn)
@@ -122,14 +147,22 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
         for tname, tcolor in types_info:
             lbl = QtWidgets.QLabel(f"● {tname}")
             lbl.setStyleSheet(f"color: {tcolor}; font-size: 9px; font-weight: bold;")
-            lbl.setToolTip(f"{tname} socket and wire type")
+            lbl.setToolTip(rich_tooltip("FldNoiseNodeEditorDialog", f"{tname} socket and wire type."))
             legend_layout.addWidget(lbl)
         breadcrumb_bar.addWidget(legend_widget)
         breadcrumb_bar.addSpacing(12)
 
         self.zoom_fit_btn = QtWidgets.QToolButton()
         self.zoom_fit_btn.setText("⤢ Fit View")
-        self.zoom_fit_btn.setToolTip("Fit all nodes into view")
+        self.zoom_fit_btn.setToolTip(
+            rich_tooltip(
+                "FldNoiseNodeEditorDialog",
+                QT_TRANSLATE_NOOP(
+                    "FldNoiseNodeEditorDialog",
+                    "Zooms and pans to fit all nodes in the view.",
+                ),
+            )
+        )
         self.zoom_fit_btn.clicked.connect(lambda: self.view.zoom_to_fit())
         breadcrumb_bar.addWidget(self.zoom_fit_btn)
 
@@ -141,6 +174,7 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
         self.scene.open_subgraph_requested.connect(self.open_subgraph)
         self.view = NodeGraphView(self.scene, self)
         main_layout.addWidget(self.view, 1)
+        self._setup_shortcuts()
 
         # ── Bottom Status & Formula Preview ────────────────────────────────────
         bottom_box = QtWidgets.QWidget()
@@ -156,7 +190,15 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
 
         copy_btn = QtWidgets.QPushButton("Copy Formula")
         copy_btn.setStyleSheet("padding: 2px 8px; font-size: 9pt;")
-        copy_btn.setToolTip("Copy generated GLSL formula to clipboard")
+        copy_btn.setToolTip(
+            rich_tooltip(
+                "FldNoiseNodeEditorDialog",
+                QT_TRANSLATE_NOOP(
+                    "FldNoiseNodeEditorDialog",
+                    "Copies the generated GLSL formula to the clipboard.",
+                ),
+            )
+        )
         copy_btn.clicked.connect(self._on_copy_formula)
         status_row.addWidget(copy_btn)
 
@@ -183,7 +225,7 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
 
     def _populate_add_menu(self, menu, target_pos=None, in_subgraph=False):
         menu.clear()
-        classes = get_available_node_classes(self.is_2d, in_subgraph=in_subgraph)
+        classes = get_available_node_classes(in_subgraph=in_subgraph)
 
         # Group by category
         categories = {}
@@ -191,10 +233,12 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
             cat = cls.category
             categories.setdefault(cat, []).append(cls)
 
-        cat_order = ["Inputs", "Vector", "Math", "Trig", "Functions", "Range", "Generators", "Subgraph", "Output"]
-        for cat in cat_order:
-            if cat not in categories:
-                continue
+        cat_order = ["Inputs", "Vector", "Transform", "Projection", "Math", "Trig", "Functions", "Range", "Generators", "Patterns", "Subgraph", "Output"]
+        all_cats = [c for c in cat_order if c in categories]
+        for c in sorted(categories.keys()):
+            if c not in all_cats:
+                all_cats.append(c)
+        for cat in all_cats:
             submenu = menu.addMenu(cat)
             for cls in categories[cat]:
                 act = submenu.addAction(cls.title)
@@ -237,6 +281,51 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
             self.scene._pending_connection_socket = None
         return card
 
+    def _setup_shortcuts(self):
+        ctx = getattr(QtCore.Qt, "WidgetWithChildrenShortcut", None)
+        if ctx is None:
+            shortcut_ctx = getattr(QtCore.Qt, "ShortcutContext", None)
+            if shortcut_ctx is not None:
+                ctx = getattr(shortcut_ctx, "WidgetWithChildrenShortcut", None)
+        kw = {"context": ctx} if ctx is not None else {}
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+C"), self, activated=self._on_copy_shortcut, **kw)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+X"), self, activated=self._on_cut_shortcut, **kw)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+V"), self, activated=self._on_paste_shortcut, **kw)
+        QtGui.QShortcut(QtGui.QKeySequence("Ctrl+D"), self, activated=self._on_duplicate_shortcut, **kw)
+
+    def _is_proxy_widget_focused(self):
+        focus_item = self.scene.focusItem()
+        return isinstance(focus_item, QtWidgets.QGraphicsProxyWidget)
+
+    def _on_copy_shortcut(self):
+        if self._is_proxy_widget_focused():
+            w = QtWidgets.QApplication.focusWidget()
+            if hasattr(w, "copy"):
+                w.copy()
+            return
+        self.scene.copy_selection()
+
+    def _on_cut_shortcut(self):
+        if self._is_proxy_widget_focused():
+            w = QtWidgets.QApplication.focusWidget()
+            if hasattr(w, "cut"):
+                w.cut()
+            return
+        self.scene.cut_selection()
+
+    def _on_paste_shortcut(self):
+        if self._is_proxy_widget_focused():
+            w = QtWidgets.QApplication.focusWidget()
+            if hasattr(w, "paste"):
+                w.paste()
+            return
+        self.scene.paste()
+
+    def _on_duplicate_shortcut(self):
+        if self._is_proxy_widget_focused():
+            return
+        self.scene.duplicate_selection()
+
     def show_canvas_context_menu(self, view_pos, global_pos):
         """Shows the Add Node context menu at the right-click position."""
         scene_pos = self.view.mapToScene(view_pos)
@@ -275,10 +364,8 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
 
     def _populate_templates_menu(self):
         self.templates_menu.clear()
-        if not self.is_2d:
-            templates = ["3D: Simple Sine", "3D: Multi-Frequency Waves"]
-        else:
-            templates = ["2D: Dual Waves", "2D: Radial Ripple", "2D: Square Wave"]
+        templates = ["Waves", "Radial Ripple", "Square Wave",
+                     "Simple Sine", "Multi-Frequency", "Wavy Panel"]
 
         for tname in templates:
             act = self.templates_menu.addAction(tname)
@@ -302,8 +389,14 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
 
         subgraph_data = card.params.get("subgraph_data")
         if not subgraph_data or not subgraph_data.get("nodes"):
-            from freecad.fields.core.gui.node_editor.node_definitions import get_default_rotated_wave_2d_subgraph
-            subgraph_data = get_default_rotated_wave_2d_subgraph()
+            # The default must come from THIS node's class. A shared fallback loaded
+            # the rotated-wave network into whatever subgraph node was opened.
+            defaults = getattr(card.node_instance, "default_params", {}) or {}
+            subgraph_data = defaults.get("subgraph_data")
+            if not subgraph_data or not subgraph_data.get("nodes"):
+                fld_logger.warn(
+                    f"open_subgraph: {card.node_type} declares no default subgraph_data")
+                return
             card.params["subgraph_data"] = subgraph_data
 
         title = card.node_instance.title if card.node_instance else "Subgraph"
@@ -352,7 +445,7 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
     def _load_template(self, template_name):
         if self.current_subgraph_node_id:
             self.close_subgraph()
-        data = get_template_graph(template_name, self.is_2d)
+        data = get_template_graph(template_name)
         self.scene.load_graph_data(data)
         self.save_to_object()
 
@@ -397,7 +490,10 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
             self.status_lbl.setStyleSheet("font-weight: bold; color: #4ade80;")
             self.formula_preview.setPlainText(formula)
 
-            if self.live_update_chk.isChecked():
+            # The first compile after load_from_object() is a read, not an edit.
+            # Saving there would push the freshly loaded graph back over obj.Formula
+            # and drop every @param the stored graph does not declare.
+            if self.live_update_chk.isChecked() and not self._suppress_live_save:
                 self.save_to_object()
 
     def load_from_object(self):
@@ -417,12 +513,17 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
 
             if not loaded:
                 # Load default template for mode
-                default_tmpl = "2D: Dual Waves" if self.is_2d else "3D: Simple Sine"
-                data = get_template_graph(default_tmpl, self.is_2d)
+                # Load default template
+                default_tmpl = "Waves"
+                data = get_template_graph(default_tmpl)
                 self.scene.load_graph_data(data)
         finally:
             self._is_updating = False
-        self._on_graph_changed()
+        self._suppress_live_save = True
+        try:
+            self._on_graph_changed()
+        finally:
+            self._suppress_live_save = False
 
     def save_to_object(self):
         if not self.target_obj:
@@ -440,7 +541,8 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
         else:
             gdata = self.scene.get_graph_data()
 
-        formula, comments, err = compile_graph(gdata)
+        res = compile_graph(gdata)
+        formula, comments, err = res
         if err or not formula:
             return
 
@@ -456,7 +558,7 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
         try:
             self.target_obj.NodeGraphJson = json.dumps(gdata, default=str)
             self.target_obj.Formula = formula
-            from freecad.fields.core.sdf.sdf.noise import parse_custom_params
+            from freecad.fields.core.sdf.sdf.formula_eval import parse_custom_params
             parsed_params = parse_custom_params(formula)
             for p_info in parsed_params:
                 p_name = p_info["name"]
@@ -473,12 +575,12 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
                     try:
                         self.target_obj.addProperty(prop_type, prop_name, "Custom Params", f"Custom parameter {prop_name}")
                         setattr(self.target_obj, prop_name, bool(p_def) if p_type == "bool" else p_def)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        fld_logger.debug(f"FldNoiseNodeEditorDialog: could not add custom property {prop_name}: {e}")
         except Exception as e:
             fld_logger.warn(f"Failed to set Formula or NodeGraphJson: {e}")
 
-        # If tool is open, trigger commit and update panel's text edit
+        # If tool is open, trigger commit
         panel = None
         if self.tool:
             panel = getattr(self.tool, "panel", getattr(self.tool, "_panel", None))
@@ -488,10 +590,6 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
                 panel = p
 
         if panel:
-            if hasattr(panel, "_formula_edit"):
-                panel._formula_edit.blockSignals(True)
-                panel._formula_edit.setPlainText(formula)
-                panel._formula_edit.blockSignals(False)
             if hasattr(panel, "_update_custom_widgets"):
                 panel._update_custom_widgets()
 

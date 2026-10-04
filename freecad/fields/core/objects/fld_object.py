@@ -22,42 +22,7 @@ except ImportError:
     coin = None
 
 from freecad.fields.core import fld_logger
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Fields Settings helpers (re-exported from freecad.fields.core.fld_settings for backwards compat)
-# ─────────────────────────────────────────────────────────────────────────────
-
-from freecad.fields.core.fld_settings import (  # noqa: F401
-    _PARAM_PATH, get_show_wireframe, set_show_wireframe,
-    get_line_width, set_line_width, get_point_size, set_point_size,
-    get_picking_radius, set_picking_radius, get_max_bounds, set_max_bounds,
-    get_perf_profiler_enabled, set_perf_profiler_enabled,
-    get_render_debug_mode, set_render_debug_mode,
-    get_near_clip_distance, set_near_clip_distance,
-    get_ray_march_cell_size, set_ray_march_cell_size,
-    get_show_cage_curves, set_show_cage_curves,
-    get_max_sdf_render_size, set_max_sdf_render_size,
-    get_heightmap_resolution, set_heightmap_resolution,
-    apply_near_clip_override, get_interactive_throttle_interval,
-    set_interactive_throttle_interval, get_drag_tick_rate, set_drag_tick_rate,
-    get_sdf_selection_outline_size, set_sdf_selection_outline_size,
-    get_hatch_size, set_hatch_size,
-    get_hatch_color, set_hatch_color,
-    get_hatch_strength, set_hatch_strength,
-    RENDER_QUALITY_PRESETS, get_render_quality, set_render_quality,
-    get_render_quality_preset, get_interactive_resolution_scaling,
-    get_cage_patch_type, set_cage_patch_type,
-    get_simplify_cage_drag, set_simplify_cage_drag,
-    get_sdf_warp_resolution, set_sdf_warp_resolution,
-    get_voxel_grid_resolution, set_voxel_grid_resolution,
-    get_voxel_band_voxels, set_voxel_band_voxels,
-    get_gpu_field_eval, set_gpu_field_eval,
-    get_model_tolerance, set_model_tolerance,
-)
-
-
-
-
+from freecad.fields.core.fld_settings import get_line_width, get_point_size, get_show_wireframe
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Factory
@@ -256,24 +221,3 @@ def refresh_all_fld_objects():
             FreeCADGui.updateGui()
     from PySide import QtCore
     QtCore.QTimer.singleShot(0, _deferred_recompute)
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Backward-compat: FreeCAD's Part::FeaturePython persistence stores each
-# Proxy's class by module path (e.g. "freecad.fields.core.objects.fld_object.FldObjectProxy")
-# at save time, then does getattr(import_module(module), class_name) to
-# restore it. FldObjectProxy/FldViewProvider used to live in this module; they
-# now live in fld_object_proxy.py/fld_view_provider.py. This lazily resolves
-# the old path so previously-saved documents and already-open sessions can
-# still restore their proxies.
-# ─────────────────────────────────────────────────────────────────────────────
-
-def __getattr__(name):
-    if name == "FldObjectProxy":
-        from freecad.fields.core.objects.fld_object_proxy import FldObjectProxy
-        return FldObjectProxy
-    if name == "FldViewProvider":
-        from freecad.fields.core.objects.fld_view_provider import FldViewProvider
-        return FldViewProvider
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

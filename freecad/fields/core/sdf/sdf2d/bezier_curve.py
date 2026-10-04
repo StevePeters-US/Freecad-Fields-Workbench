@@ -6,6 +6,44 @@ from .sdf2d_field import Sdf2dField
 
 # Shared GLSL helpers — registered once per shader compile via add_custom_helper (deduped by name).
 
+# ── Tolerance ladder: cubic root solving and winding, in GLSL float32 ─────────
+# Every tolerance in this file, in the order a value flows through them. Two of the
+# seven are relative (scaled by the segment's own size) and five are absolute; the
+# relative ones are relative because they are compared against quantities measured in
+# millimetres, where an absolute constant means nothing. Each entry names the function
+# it lives in -- if you add a tolerance, add it here, and if you retune one, retune it
+# here too.
+#
+# 1. 1e-6 * scale -- degeneracy / degree reduction (`sd_solve_cubic`).
+#    Relative threshold on the coefficients a, b, c. A segment that is straight in
+#    y has a cubic term that is exactly zero in real arithmetic and ~1e-6 in the
+#    float32 the GPU runs; scaling is what keeps degree reduction from jittering
+#    per scan line. The long comment at the call site records what an absolute
+#    test cost.
+# 2. 1e-12 -- Cardano discriminant boundary (`sd_solve_cubic`).
+#    Guards disc = q^2/4 + p^3/27. Above it, one real root via Cardano; at or below
+#    it, the trigonometric three-real-roots branch, which keeps sqrt off negatives.
+# 3. 1e-7 -- trigonometric branch radius guard (`sd_solve_cubic`).
+#    In that branch r = sqrt(-p^3/27); when r < 1e-7 the roots have coalesced to the
+#    inflection point off = -b/(3a), and returning it avoids 0/0 in acos(-q/(2r)).
+# 4. 1e-10 -- Newton denominator guard (`sd_cubic_bez_2d`, and its numpy mirrors
+#    `_seg_dist_sq` and `evaluate_2d_grid`). Skips the Newton step when
+#    dot(dB,dB) + dot(B-p,dB2) vanishes at a collinear or stationary point.
+# 5. 1e-4 * y_scale -- horizontal-tangent threshold (`sd_cubic_winding`).
+#    Relative to the segment's own y extent. At an extremum the solver returns the
+#    root as 1 +/- 1e-4, where dB.y is already ~2.7e-3 -- four orders above any
+#    absolute 1e-7 -- so an absolute test counted the touch as a crossing and
+#    flipped the sign of the whole scan line. See the call site.
+# 6. EPS = 1e-5 -- root-interval acceptance window (`sd_cubic_winding`). Widens the
+#    half-open [0,1) / (0,1] ownership test by one window so a root sitting exactly
+#    on a shared segment endpoint is counted by one of the two segments rather than
+#    by both or neither.
+# 7. 1e-6 -- y-range slack on the per-segment winding gate, emitted into the generated
+#    GLSL by `to_glsl_2d`. Skips sd_cubic_winding for segments whose y extent cannot
+#    contain p.y; the slack keeps a ray that grazes a segment's own min/max y from
+#    being excluded by the gate before the tangent and interval tests above ever see
+#    it. Unrelated to entry 1 despite sharing a value -- this one is absolute.
+
 _GLSL_SOLVE_CUBIC = """
 int sd_solve_cubic(float a, float b, float c, float d,
                    out float r0, out float r1, out float r2) {

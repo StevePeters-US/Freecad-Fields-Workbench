@@ -5,6 +5,7 @@ tools/modifiers/array_tool.py
 Edit tool and task panel for the Array SDF modifier.
 """
 import FreeCAD
+from freecad.fields.core import fld_logger
 from PySide import QtWidgets, QtCore
 try:
     from pivy import coin
@@ -13,6 +14,14 @@ except ImportError:
 from freecad.fields.tools.fld_sdf_tool_base import FldSdfModifierToolBase, DirectionGizmoMixin
 from freecad.fields.core.input.fld_gui_utils import DynamicLimitSlider
 from freecad.fields.tools.modifiers import axis_combo, BaseModifierTaskPanel, block_signals
+from freecad.fields.tools.primitive_creator_base import GIZMO_HIT_TOLERANCE_MULT
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
+
+_AXIS_VECTORS = {"X": FreeCAD.Vector(1, 0, 0), "Y": FreeCAD.Vector(0, 1, 0), "Z": FreeCAD.Vector(0, 0, 1)}
+
+
+def _axis_vec(name):
+    return _AXIS_VECTORS.get(name, FreeCAD.Vector(0, 0, 1))
 
 
 class ArrayTaskPanel(BaseModifierTaskPanel):
@@ -53,20 +62,9 @@ class ArrayTaskPanel(BaseModifierTaskPanel):
         self.count_z_spin.valueChanged.connect(self._on_changed)
         grid_fl.addRow("Count Z:", self.count_z_spin)
 
-        self.spacing_x_slider = DynamicLimitSlider(value=20.0, min_val=-200.0, max_val=200.0, step=1.0, decimals=2)
-        self.spacing_x_slider.valueChanged.connect(self._on_changed)
-        self._connect_slider_drag(self.spacing_x_slider)
-        grid_fl.addRow("Spacing X:", self.spacing_x_slider)
-
-        self.spacing_y_slider = DynamicLimitSlider(value=20.0, min_val=-200.0, max_val=200.0, step=1.0, decimals=2)
-        self.spacing_y_slider.valueChanged.connect(self._on_changed)
-        self._connect_slider_drag(self.spacing_y_slider)
-        grid_fl.addRow("Spacing Y:", self.spacing_y_slider)
-
-        self.spacing_z_slider = DynamicLimitSlider(value=20.0, min_val=-200.0, max_val=200.0, step=1.0, decimals=2)
-        self.spacing_z_slider.valueChanged.connect(self._on_changed)
-        self._connect_slider_drag(self.spacing_z_slider)
-        grid_fl.addRow("Spacing Z:", self.spacing_z_slider)
+        self.spacing_x_slider = self._make_slider(grid_fl, "Spacing X:", value=20.0)
+        self.spacing_y_slider = self._make_slider(grid_fl, "Spacing Y:", value=20.0)
+        self.spacing_z_slider = self._make_slider(grid_fl, "Spacing Z:", value=20.0)
 
         # Step Group Box
         self.step_grp = QtWidgets.QGroupBox("Step Parameters")
@@ -87,35 +85,13 @@ class ArrayTaskPanel(BaseModifierTaskPanel):
         self._connect_slider_drag(self.step_angle_slider)
         step_fl.addRow("Angle (deg):", self.step_angle_slider)
 
-        self.step_x_slider = DynamicLimitSlider(value=0.0, min_val=-200.0, max_val=200.0, step=1.0, decimals=2)
-        self.step_x_slider.valueChanged.connect(self._on_changed)
-        self._connect_slider_drag(self.step_x_slider)
-        step_fl.addRow("Offset X:", self.step_x_slider)
+        self.step_x_slider = self._make_slider(step_fl, "Offset X:")
+        self.step_y_slider = self._make_slider(step_fl, "Offset Y:")
+        self.step_z_slider = self._make_slider(step_fl, "Offset Z:")
 
-        self.step_y_slider = DynamicLimitSlider(value=0.0, min_val=-200.0, max_val=200.0, step=1.0, decimals=2)
-        self.step_y_slider.valueChanged.connect(self._on_changed)
-        self._connect_slider_drag(self.step_y_slider)
-        step_fl.addRow("Offset Y:", self.step_y_slider)
-
-        self.step_z_slider = DynamicLimitSlider(value=0.0, min_val=-200.0, max_val=200.0, step=1.0, decimals=2)
-        self.step_z_slider.valueChanged.connect(self._on_changed)
-        self._connect_slider_drag(self.step_z_slider)
-        step_fl.addRow("Offset Z:", self.step_z_slider)
-
-        self.step_cx_slider = DynamicLimitSlider(value=0.0, min_val=-200.0, max_val=200.0, step=1.0, decimals=2)
-        self.step_cx_slider.valueChanged.connect(self._on_changed)
-        self._connect_slider_drag(self.step_cx_slider)
-        step_fl.addRow("Center X:", self.step_cx_slider)
-
-        self.step_cy_slider = DynamicLimitSlider(value=0.0, min_val=-200.0, max_val=200.0, step=1.0, decimals=2)
-        self.step_cy_slider.valueChanged.connect(self._on_changed)
-        self._connect_slider_drag(self.step_cy_slider)
-        step_fl.addRow("Center Y:", self.step_cy_slider)
-
-        self.step_cz_slider = DynamicLimitSlider(value=0.0, min_val=-200.0, max_val=200.0, step=1.0, decimals=2)
-        self.step_cz_slider.valueChanged.connect(self._on_changed)
-        self._connect_slider_drag(self.step_cz_slider)
-        step_fl.addRow("Center Z:", self.step_cz_slider)
+        self.step_cx_slider = self._make_slider(step_fl, "Center X:")
+        self.step_cy_slider = self._make_slider(step_fl, "Center Y:")
+        self.step_cz_slider = self._make_slider(step_fl, "Center Z:")
 
         self.step_scale_slider = DynamicLimitSlider(value=1.0, min_val=0.01, max_val=10.0, step=0.05, decimals=3)
         self.step_scale_slider.valueChanged.connect(self._on_changed)
@@ -129,24 +105,55 @@ class ArrayTaskPanel(BaseModifierTaskPanel):
         form_fl = QtWidgets.QFormLayout(self.formulas_grp)
         step_fl.addRow(self.formulas_grp)
 
-        tooltip = "Expression evaluated CPU-side. Variables in scope: i (0-based index), n (count), t (i/(n-1))."
         self.angle_formula_edit = QtWidgets.QLineEdit()
-        self.angle_formula_edit.setToolTip(f"{tooltip} Result in degrees.")
+        self.angle_formula_edit.setToolTip(
+            rich_tooltip(
+                "ArrayTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "ArrayTaskPanel",
+                    "Expression evaluated CPU-side. Variables in scope: i (0-based index), n (count), t (i/(n-1)). Result in degrees.",
+                ),
+            )
+        )
         self.angle_formula_edit.editingFinished.connect(self._on_changed)
         form_fl.addRow("Angle:", self.angle_formula_edit)
 
         self.radius_formula_edit = QtWidgets.QLineEdit()
-        self.radius_formula_edit.setToolTip(f"{tooltip} Result in mm.")
+        self.radius_formula_edit.setToolTip(
+            rich_tooltip(
+                "ArrayTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "ArrayTaskPanel",
+                    "Expression evaluated CPU-side. Variables in scope: i (0-based index), n (count), t (i/(n-1)). Result in mm.",
+                ),
+            )
+        )
         self.radius_formula_edit.editingFinished.connect(self._on_changed)
         form_fl.addRow("Radius:", self.radius_formula_edit)
 
         self.rise_formula_edit = QtWidgets.QLineEdit()
-        self.rise_formula_edit.setToolTip(f"{tooltip} Result in mm.")
+        self.rise_formula_edit.setToolTip(
+            rich_tooltip(
+                "ArrayTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "ArrayTaskPanel",
+                    "Expression evaluated CPU-side. Variables in scope: i (0-based index), n (count), t (i/(n-1)). Result in mm.",
+                ),
+            )
+        )
         self.rise_formula_edit.editingFinished.connect(self._on_changed)
         form_fl.addRow("Rise:", self.rise_formula_edit)
 
         self.scale_formula_edit = QtWidgets.QLineEdit()
-        self.scale_formula_edit.setToolTip(f"{tooltip} Result is uniform scale factor.")
+        self.scale_formula_edit.setToolTip(
+            rich_tooltip(
+                "ArrayTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "ArrayTaskPanel",
+                    "Expression evaluated CPU-side. Variables in scope: i (0-based index), n (count), t (i/(n-1)). Result is uniform scale factor.",
+                ),
+            )
+        )
         self.scale_formula_edit.editingFinished.connect(self._on_changed)
         form_fl.addRow("Scale:", self.scale_formula_edit)
 
@@ -183,6 +190,13 @@ class ArrayTaskPanel(BaseModifierTaskPanel):
 
         layout.addStretch()
         self.update_ui()
+
+    def _make_slider(self, layout, label, value=0.0, min_val=-200.0, max_val=200.0, step=1.0, decimals=2):
+        sl = DynamicLimitSlider(value=value, min_val=min_val, max_val=max_val, step=step, decimals=decimals)
+        sl.valueChanged.connect(self._on_changed)
+        self._connect_slider_drag(sl)
+        layout.addRow(label, sl)
+        return sl
 
     def _connect_slider_drag(self, dyn_slider):
         if hasattr(dyn_slider, "_slider"):
@@ -349,10 +363,6 @@ class ArrayTool(DirectionGizmoMixin, FldSdfModifierToolBase):
         ("ScaleFormula", ""),
         ("SkipIndices", []),
         ("OverlapMode", "Auto"),
-        ("OverlapSafe", False),
-        ("RadialAxis", "Z"),
-        ("RadialCount", 6),
-        ("RadialSpan", 360.0),
         ("Group", "Additive"),
     ]
 
@@ -393,7 +403,8 @@ class ArrayTool(DirectionGizmoMixin, FldSdfModifierToolBase):
             if fld:
                 try:
                     bb_min, bb_max = fld.bounding_box()
-                except Exception:
+                except Exception as exc:  # safe: bounding_box is optional; falls back to source.Placement.Base
+                    fld_logger.debug(f"[array_tool] bounding_box failed: {exc}")
                     pass
         if bb_min is None or bb_max is None:
             c_src = FreeCAD.Vector(source.Placement.Base) if (source and hasattr(source, "Placement")) else FreeCAD.Vector(0, 0, 0)
@@ -413,8 +424,7 @@ class ArrayTool(DirectionGizmoMixin, FldSdfModifierToolBase):
             # Step mode: T_1(c_src)
             c = FreeCAD.Vector(getattr(obj, "StepCenterX", 0.0), getattr(obj, "StepCenterY", 0.0), getattr(obj, "StepCenterZ", 0.0))
             ax_name = getattr(obj, "StepAxis", "Z")
-            a_vec = {"X": FreeCAD.Vector(1, 0, 0), "Y": FreeCAD.Vector(0, 1, 0), "Z": FreeCAD.Vector(0, 0, 1)}.get(ax_name, FreeCAD.Vector(0, 0, 1))
-            a_hat = a_vec.normalize()
+            a_hat = _axis_vec(ax_name).normalize()
             ang = getattr(obj, "StepAngle", 60.0)
             off = FreeCAD.Vector(getattr(obj, "StepX", 0.0), getattr(obj, "StepY", 0.0), getattr(obj, "StepZ", 0.0))
             scale = getattr(obj, "StepScale", 1.0)
@@ -452,7 +462,7 @@ class ArrayTool(DirectionGizmoMixin, FldSdfModifierToolBase):
                 obj.StepAxis = ax_key
         sign = 1.0
         ax_name = getattr(obj, "StepAxis", "Z")
-        ax_vec = {"X": FreeCAD.Vector(1, 0, 0), "Y": FreeCAD.Vector(0, 1, 0), "Z": FreeCAD.Vector(0, 0, 1)}.get(ax_name, FreeCAD.Vector(0, 0, 1))
+        ax_vec = _axis_vec(ax_name)
         if hasattr(rot, "Axis"):
             sign = 1.0 if rot.Axis.dot(ax_vec) >= 0 else -1.0
         delta_deg = math.degrees(rot.Angle) * sign
@@ -469,7 +479,7 @@ class ArrayTool(DirectionGizmoMixin, FldSdfModifierToolBase):
         if not ray_p or not ray_d:
             self._restore_cursor()
             return
-        tol = self._compute_handle_radius(self._gizmo_pivot()) * 2.5
+        tol = self._compute_handle_radius(self._gizmo_pivot()) * GIZMO_HIT_TOLERANCE_MULT
         if self._gizmo_handle_move(ray_p, ray_d, tol):
             return
         self._restore_cursor()
@@ -483,7 +493,7 @@ class ArrayTool(DirectionGizmoMixin, FldSdfModifierToolBase):
         ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
         if not ray_p or not ray_d:
             return False
-        tol = self._compute_handle_radius(self._gizmo_pivot()) * 2.5
+        tol = self._compute_handle_radius(self._gizmo_pivot()) * GIZMO_HIT_TOLERANCE_MULT
         started = self._gizmo_try_start_drag(ray_p, ray_d, event_dict, tol)
         if started:
             obj = self._target_obj

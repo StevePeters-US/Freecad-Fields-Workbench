@@ -4,6 +4,7 @@ import FreeCADGui
 import Part
 from freecad.fields.core import fld_logger
 from freecad.fields.core.objects import fld_object
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 class CommandFldFillCurve:
     """Command to fill a closed Fields curve with an SDF face."""
@@ -12,7 +13,7 @@ class CommandFldFillCurve:
         return {
             'Pixmap': 'Fields_MakeFace', # Use custom icon
             'MenuText': 'Fill Curve',
-            'ToolTip': 'Create an SDF face from a closed curve',
+            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Creates an SDF face that fills the selected closed curve.\nSelect one closed curve.")),
             'Accel': 'Ctrl+F'
         }
 
@@ -40,7 +41,8 @@ class CommandFldFillCurve:
                 "Close it with the curve tool, or toggle Closed from its right-click menu.")
             return
 
-        try:            
+        surf_obj = None
+        try:
             # 1. Create the surface object linked to the source curve
             surf_obj = fld_object.create_fld_object(
                 name="FldSurface",
@@ -52,20 +54,26 @@ class CommandFldFillCurve:
                 },
                 placement=obj.Placement
             )
-            
+
             fld_object.finalize_new_object(surf_obj)
             fld_logger.debug(f"Fill Curve: Created surface from {obj.Name}.")
-            
+
             # 2. Select the surface object and activate the surface edit tool immediately
             FreeCADGui.Selection.clearSelection()
             FreeCADGui.Selection.addSelection(surf_obj)
-            
+
             from freecad.fields.tools.sdf_face_tool import SdfFaceEditTool
             tool = SdfFaceEditTool()
             tool.edit_object(surf_obj)
-            
+
         except Exception as e:
             fld_logger.error(f"Fill Curve error: {e}")
+            if surf_obj is not None:
+                try:
+                    FreeCAD.ActiveDocument.removeObject(surf_obj.Name)
+                except Exception as exc:
+                    fld_logger.debug(f"[cmd_fill_curve] removeObject({surf_obj.Name}) failed: {exc}")
+                    pass
 
     def IsActive(self):
         return FreeCAD.ActiveDocument is not None

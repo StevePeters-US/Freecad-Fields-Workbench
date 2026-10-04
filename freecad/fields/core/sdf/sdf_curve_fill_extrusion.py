@@ -252,7 +252,7 @@ def solve_boundary_height_field(curve_obj, curve_plane, control_grid=None, resol
     """
     if resolution is None:
         try:
-            from freecad.fields.core.objects.fld_object import get_heightmap_resolution
+            from freecad.fields.core.fld_settings import get_heightmap_resolution
             resolution = get_heightmap_resolution()
         except Exception:
             resolution = 256

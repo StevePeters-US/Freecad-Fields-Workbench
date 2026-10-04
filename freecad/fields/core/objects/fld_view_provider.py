@@ -16,7 +16,7 @@ except ImportError:
     coin = None
 
 from freecad.fields.core import fld_logger
-from freecad.fields.core.objects.fld_object import apply_near_clip_override, get_line_width, get_point_size
+from freecad.fields.core.fld_settings import apply_near_clip_override, get_line_width, get_point_size
 from freecad.fields.core.render.field_appearance import DEFAULT_ADDITIVE_COLOR
 
 

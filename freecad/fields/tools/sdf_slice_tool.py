@@ -11,9 +11,11 @@ import FreeCAD
 import FreeCADGui
 from PySide import QtCore, QtWidgets
 from freecad.fields.core import fld_logger
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 from pivy import coin
 from freecad.fields.tools.fld_sdf_tool_base import FldSdfToolBase
 from freecad.fields.tools.fld_base import DragTimerMixin
+from freecad.fields.tools.primitive_creator_base import GIZMO_HIT_TOLERANCE_MULT
 import math
 
 from freecad.fields.core.sdf.sdf_slicer import _compute_bezier_handles as _compute_catmull_rom_handles
@@ -349,9 +351,24 @@ class SdfSliceTaskPanel:
         self.btn_x.setFixedWidth(28)
         self.btn_y.setFixedWidth(28)
         self.btn_z.setFixedWidth(28)
-        self.btn_x.setToolTip("Align slice normal to X axis")
-        self.btn_y.setToolTip("Align slice normal to Y axis")
-        self.btn_z.setToolTip("Align slice normal to Z axis")
+        self.btn_x.setToolTip(
+            rich_tooltip(
+                "SdfSliceTaskPanel",
+                QT_TRANSLATE_NOOP("SdfSliceTaskPanel", "Points the slice plane's normal along X."),
+            )
+        )
+        self.btn_y.setToolTip(
+            rich_tooltip(
+                "SdfSliceTaskPanel",
+                QT_TRANSLATE_NOOP("SdfSliceTaskPanel", "Points the slice plane's normal along Y."),
+            )
+        )
+        self.btn_z.setToolTip(
+            rich_tooltip(
+                "SdfSliceTaskPanel",
+                QT_TRANSLATE_NOOP("SdfSliceTaskPanel", "Points the slice plane's normal along Z."),
+            )
+        )
         self.btn_x.clicked.connect(lambda: self.set_axis(FreeCAD.Vector(1, 0, 0)))
         self.btn_y.clicked.connect(lambda: self.set_axis(FreeCAD.Vector(0, 1, 0)))
         self.btn_z.clicked.connect(lambda: self.set_axis(FreeCAD.Vector(0, 0, 1)))
@@ -362,7 +379,7 @@ class SdfSliceTaskPanel:
 
         # Base tolerance: absolute accuracy target, scaled internally by shape size.
         # Seeded from the global Model Tolerance (Fields Settings), overridable per run.
-        from freecad.fields.core.objects.fld_object import get_model_tolerance
+        from freecad.fields.core.fld_settings import get_model_tolerance
         self.tolerance_spin = QtWidgets.QDoubleSpinBox()
         self.tolerance_spin.setRange(0.001, 10.0)
         self.tolerance_spin.setValue(get_model_tolerance())
@@ -419,14 +436,27 @@ class SdfSliceTaskPanel:
         self.length_spin.setValue(50.0)
         self.length_spin.setSuffix(" mm")
         self.length_spin.setToolTip(
-            "How far the array runs from the slice plane, along the normal.")
+            rich_tooltip(
+                "SdfSliceTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "SdfSliceTaskPanel",
+                    "Distance the array runs from the slice plane, along the normal, in mm.\n<b>Default:</b> 50.0 mm.",
+                ),
+            )
+        )
         array_layout.addRow("Length:", self.length_spin)
 
         self.span_part_chk = QtWidgets.QCheckBox("Whole part")
         self.span_part_chk.setChecked(True)
         self.span_part_chk.setToolTip(
-            "Take the length from the plane to the far side of the shape's "
-            "bounding box, so the array covers everything ahead of it.")
+            rich_tooltip(
+                "SdfSliceTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "SdfSliceTaskPanel",
+                    "Sets the length to reach the far side of the bounding box, covering the rest of the shape.",
+                ),
+            )
+        )
         array_layout.addRow("", self.span_part_chk)
 
         self.array_summary = QtWidgets.QLabel("")
@@ -435,6 +465,19 @@ class SdfSliceTaskPanel:
 
         self.array_group.setLayout(array_layout)
         layout.addWidget(self.array_group)
+
+        self.nesting_chk = QtWidgets.QCheckBox("Flatten for Nesting")
+        self.nesting_chk.setChecked(False)
+        self.nesting_chk.setToolTip(
+            rich_tooltip(
+                "SdfSliceTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "SdfSliceTaskPanel",
+                    "Lays every traced contour flat in the XY plane and arranges them side by side for the Nesting workbench.",
+                ),
+            )
+        )
+        layout.addWidget(self.nesting_chk)
 
         self.array_group.toggled.connect(self.update_preview)
         self.array_mode.currentIndexChanged.connect(self.update_preview)
@@ -460,9 +503,14 @@ class SdfSliceTaskPanel:
         self.debug_body_chk = QtWidgets.QCheckBox("Debug Slice Body")
         self.debug_body_chk.setChecked(False)
         self.debug_body_chk.setToolTip(
-            "Add a Part solid built directly from the SDF on this plane "
-            "(marching squares, snapped, no curve fit).\n"
-            "Compare it against the fitted curves to see which one is wrong.")
+            rich_tooltip(
+                "SdfSliceTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "SdfSliceTaskPanel",
+                    "Adds a Part solid built directly from the SDF on this plane without curve fitting, for comparison against the fitted curves.",
+                ),
+            )
+        )
         debug_layout.addRow(self.debug_body_chk)
 
         self.body_thick_spin = QtWidgets.QDoubleSpinBox()
@@ -471,9 +519,14 @@ class SdfSliceTaskPanel:
         self.body_thick_spin.setDecimals(3)
         self.body_thick_spin.setSuffix(" mm")
         self.body_thick_spin.setToolTip(
-            "Slab thickness for the debug body. 0 gives flat faces; above 0 the "
-            "outline is the silhouette of the whole layer, so a feature thinner "
-            "than the layer cannot fall between sample planes and vanish.")
+            rich_tooltip(
+                "SdfSliceTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "SdfSliceTaskPanel",
+                    "Slab thickness for the debug body, in mm.\n0 gives flat faces; above 0 sweeps the layer silhouette.\n<b>Default:</b> 0.1 mm.",
+                ),
+            )
+        )
         debug_layout.addRow("Body Thickness:", self.body_thick_spin)
 
         self.debug_group.setLayout(debug_layout)
@@ -616,6 +669,13 @@ class SdfSliceTaskPanel:
                 max_control_points=max_pts, angle_tolerance_deg=angle_tol
             )
 
+            if self.nesting_chk.isChecked():
+                from freecad.fields.core.sdf.nesting_layout import flatten_slice_members_for_nesting
+                flatten_slice_members_for_nesting(
+                    slice_members, origin, self.tool.base_normal, spacing=spacing,
+                    placement=self.obj.Placement
+                )
+
             has_curves = any(curves for _, curves in slice_members)
             if has_curves or debug_body:
                 group_name = f"{self.obj.Label}_Slice"
@@ -729,7 +789,7 @@ class SdfSliceTool(FldSdfToolBase, DragTimerMixin):
         self.local_x = rot.multVec(FreeCAD.Vector(1, 0, 0))
         self.local_y = rot.multVec(FreeCAD.Vector(0, 1, 0))
 
-        from freecad.fields.core.objects.fld_object import get_ray_march_cell_size
+        from freecad.fields.core.fld_settings import get_ray_march_cell_size
         self.resolution = get_ray_march_cell_size()
 
         self.preview = SdfSlicePreview()
@@ -802,7 +862,7 @@ class SdfSliceTool(FldSdfToolBase, DragTimerMixin):
             ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
             if ray_p and ray_d:
                 gizmo_center = self.base_origin + self.base_normal * self.panel.offset_spin.value()
-                tol = self._compute_handle_radius(gizmo_center) * 2.5
+                tol = self._compute_handle_radius(gizmo_center) * GIZMO_HIT_TOLERANCE_MULT
                 axis = self._gizmo.hit_test(ray_p, ray_d, tol)
                 if axis:
                     from PySide.QtCore import Qt
@@ -824,7 +884,7 @@ class SdfSliceTool(FldSdfToolBase, DragTimerMixin):
             return False
 
         gizmo_center = self.base_origin + self.base_normal * self.panel.offset_spin.value()
-        tol = self._compute_handle_radius(gizmo_center) * 2.5
+        tol = self._compute_handle_radius(gizmo_center) * GIZMO_HIT_TOLERANCE_MULT
         axis = self._gizmo.hit_test(ray_p, ray_d, tol)
         if axis:
             self._dragging_idx = f'gizmo_{axis}'

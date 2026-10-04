@@ -102,7 +102,7 @@ class UnionField(ComposerField):
         # buildable at all, so the pair is capped by the smaller one.
         return min(self.a.max_erosion(), self.b.max_erosion())
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         # Approximate. Erosion does not distribute over union -- (A u B) (-) r
         # contains (A(-)r) u (B(-)r) and the two differ across the overlap. Eroding
         # member by member is the behaviour a boolean wants anyway: each shape keeps
@@ -140,7 +140,7 @@ class IntersectionField(ComposerField):
     def max_erosion(self) -> float:
         return min(self.a.max_erosion(), self.b.max_erosion())
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         # Exact: erosion distributes over intersection.
         a = self.a.eroded(distance)
         b = self.b.eroded(distance)
@@ -176,7 +176,7 @@ class SubtractionField(ComposerField):
         # B only ever removes material, so it cannot raise the cap; A sets it.
         return self.a.max_erosion()
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         # Exact: (A n B') (-) r = (A (-) r) n (B (+) r)'. Erosion distributes over
         # intersection, and complementing turns the erosion of B' into a dilation of
         # B -- which is exact for any field, so B needs no closed form of its own.
@@ -226,7 +226,7 @@ class SmoothUnionField(SmoothComposerField):
     def max_erosion(self) -> float:
         return min(self.a.max_erosion(), self.b.max_erosion())
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         a = self.a.eroded(distance)
         b = self.b.eroded(distance)
         if a is None or b is None:
@@ -271,7 +271,7 @@ class SmoothSubtractionField(SmoothComposerField):
     def max_erosion(self) -> float:
         return self.a.max_erosion()
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         from freecad.fields.core.sdf.sdf.offset import SdfOffsetField
         core = self.a.eroded(distance)
         if core is None:
@@ -315,7 +315,7 @@ class SmoothIntersectionField(SmoothComposerField):
     def max_erosion(self) -> float:
         return min(self.a.max_erosion(), self.b.max_erosion())
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         a = self.a.eroded(distance)
         b = self.b.eroded(distance)
         if a is None or b is None:

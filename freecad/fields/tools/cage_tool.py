@@ -13,14 +13,19 @@ from freecad.fields.core.objects.fld_line import FldLineSet
 from freecad.fields.core.input.input_manager import FldInputManager
 from freecad.fields.core import fld_logger
 from freecad.fields.core import fld_perf
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 from freecad.fields.core.sdf.sdf_face_extrude import newell_normal
 from freecad.fields.core.objects.fld_face_extrude_objects import ring_handles, ring_rest_handles, carry_ring_handles_to_cap, cage_net_of
 from freecad.fields.core.objects.fld_deform_objects import push_extrusion, set_last_extrusion_top, pop_extrusion
 from freecad.fields.core.sdf.sdf.cage import CageTopology, SdfCageField, MAX_CAGE_FACES, _closest_on_face, _closest_on_tri_face, rebuild_handles_and_types, remap_handle_displacements
+from freecad.fields.core.sdf.sdf.cage_limits import (
+    CageBudgetError, CageTopologyError, check_face_budget, predict_subdivide_faces,
+)
 from freecad.fields.core.sdf.sdf.cage_deform import SdfCageDeformField, HandleType
 from freecad.fields.core.sdf.sdf.cage_net import CageNet, read_net, write_net
 from freecad.fields.core.render.fld_scene_voxel_renderer import FldSceneVoxelRenderer
 from freecad.fields.tools.extrude_gizmo import ExtrudeGizmo
+from freecad.fields.tools.cage_edit_journal import CageEditJournal
 
 class CageTaskPanel:
     def __init__(self, tool):
@@ -41,12 +46,27 @@ class CageTaskPanel:
             "• <b>E</b>: Extrude face under mouse<br>"
             "• <b>Ctrl + R</b>: Insert loop at edge under mouse<br>"
             "• <b>M</b>: Weld last clicked vertex to hovered vertex<br>"
-            "• <b>Ctrl + D</b>: Subdivide Smooth"
+            "• <b>Ctrl + D</b>: Subdivide Smooth<br>"
+            "• <b>Alt + Z</b>: Toggle X-ray (see the net through the surface)"
         )
         label.setWordWrap(True)
         layout.addWidget(label)
         layout.addSpacing(15)
         
+        self.xray_check = QtWidgets.QCheckBox("X-ray (draw net through the surface)")
+        self.xray_check.setChecked(getattr(tool, "_xray", True))
+        self.xray_check.setToolTip(
+            rich_tooltip(
+                "CageTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "CageTaskPanel",
+                    "Draws the control net through the surface so control points and curves stay visible.\nShortcut: Alt+Z.",
+                ),
+            )
+        )
+        self.xray_check.toggled.connect(self.tool.set_xray)
+        layout.addWidget(self.xray_check)
+
         self.subdivide_btn = QtWidgets.QPushButton("Subdivide Smooth")
         self.subdivide_btn.clicked.connect(self._on_subdivide)
         layout.addWidget(self.subdivide_btn)
@@ -55,6 +75,12 @@ class CageTaskPanel:
 
     def _on_subdivide(self):
         self.tool.trigger_subdivide()
+
+    def sync_xray(self, on):
+        """Reflect a hotkey-driven x-ray change without re-emitting toggled()."""
+        was = self.xray_check.blockSignals(True)
+        self.xray_check.setChecked(bool(on))
+        self.xray_check.blockSignals(was)
 
     def accept(self):
         self.tool._dialog_open = False
@@ -92,15 +118,34 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
         self._target_obj = None
         self._is_editing = False
         self.fld_points = []
+        # Two parents, one net. points_root is an SoAnnotation: Coin renders it in the
+        # delayed pass with GL_DEPTH_TEST off, which is exactly the x-ray look. _depth_root
+        # is an ordinary separator, so its children depth-test against the SDF -- the voxel
+        # renderer writes real gl_FragDepth (post_process_shaders.py:192) with depth
+        # writes on (fld_scene_voxel_renderer.py:825), so this occludes correctly whatever the child order.
+        # _net_sep carries the whole cage net and moves between the two; the extrude gizmo
+        # and the base-class modal arrows stay on points_root always.
         self.points_root = coin.SoAnnotation() if (coin and hasattr(coin, "SoAnnotation")) else None
-        if self.points_root and self.view and self.view.getSceneGraph():
-            self.view.getSceneGraph().addChild(self.points_root)
+        self._depth_root = coin.SoSeparator() if coin else None
+        self._net_sep    = coin.SoSeparator() if coin else None
+        from freecad.fields.core.fld_settings import get_cage_xray
+        self._xray = get_cage_xray()
+        sg = self.view.getSceneGraph() if self.view else None
+        if sg:
+            if self.points_root:
+                sg.addChild(self.points_root)
+            if self._depth_root:
+                sg.addChild(self._depth_root)
+        if self._net_sep:
+            net_parent = self.points_root if self._xray else self._depth_root
+            if net_parent:
+                net_parent.addChild(self._net_sep)
         
         self._dragging_idx = None
-        self._modal_sel_idx = None
+        self._selection = []   # ordered control-point indices; last is the anchor
         self._drag_plane_n = None
         self._drag_plane_o = None
-        self._original_props = {}
+        self._journal = None
         self._edge_curves = None
         self._handle_arms = None
         self._last_mesh_time = 0.0
@@ -120,13 +165,12 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
         self._target_obj = obj
         self._is_editing = True
         
+        # Session undo. _original_props is replaced by the journal mechanism (CGE-008).
+        if getattr(self, "_journal", None) is None:
+            self._journal = CageEditJournal(obj.Document)
+        self._journal.capture(obj)
+
         proxy = getattr(obj, "Proxy", None)
-        self._original_props = {
-            "Net": CageNet.from_properties(obj),
-            "Points": list(getattr(obj, "Points", [])),
-            "SdfField": getattr(proxy, "SdfField", None),
-            "Placement": FreeCAD.Placement(obj.Placement.Base, obj.Placement.Rotation) if obj.Placement else None,
-        }
 
         from freecad.fields.core.objects.fld_face_extrude_objects import cage_net_of
         net = cage_net_of(obj)
@@ -174,19 +218,54 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
         for i, pt in enumerate(self.points):
             is_vert = i < self._n_verts
             fld_pt = FldPoint(pt)
-            if is_vert:
-                pt_color = HANDLE_TYPE_COLORS["vertex"]
-            else:
-                hi = i - self._n_verts
-                ht = field._handle_types[hi] if (field and hasattr(field, "_handle_types") and hi < len(field._handle_types)) else 1
-                pt_color = HANDLE_TYPE_COLORS.get(ht, HANDLE_TYPE_COLORS["LINKED"])
-            fld_pt.draw_point(self.points_root, r * (1.0 if is_vert else 0.6), color=pt_color)
+            pt_color = self._point_color(i)
+            fld_pt.draw_point(self._net_sep, r * (1.0 if is_vert else 0.6), color=pt_color)
             self.fld_points.append(fld_pt)
 
         # Initialize line sets for curves and arms
-        self._edge_curves = FldLineSet(self.points_root, color=(0.0, 0.8, 1.0), width=2.0)
-        self._handle_arms = FldLineSet(self.points_root, color=(0.6, 0.6, 0.6), width=1.2, pattern=0x0F0F)
+        self._edge_curves = FldLineSet(self._net_sep, color=(0.0, 0.8, 1.0), width=2.0)
+        self._handle_arms = FldLineSet(self._net_sep, color=HANDLE_TYPE_COLORS["LINKED"], width=1.2, pattern=0x0F0F)
         self._update_lines()
+
+    def set_xray(self, on):
+        """Move the cage net between the always-on-top parent and the depth-tested one."""
+        on = bool(on)
+        if not self._net_sep or on == getattr(self, "_xray", True):
+            return
+        old_parent = self.points_root if self._xray else self._depth_root
+        new_parent = self.points_root if on else self._depth_root
+        if old_parent is None or new_parent is None:
+            fld_logger.warn("CageEditTool.set_xray: overlay roots missing; toggle ignored")
+            return
+        try:
+            if old_parent.findChild(self._net_sep) >= 0:
+                old_parent.removeChild(self._net_sep)
+            new_parent.addChild(self._net_sep)
+        except Exception as e:
+            fld_logger.warn(f"CageEditTool.set_xray: reparent failed: {e}")
+            return
+        self._xray = on
+        from freecad.fields.core.fld_settings import set_cage_xray
+        set_cage_xray(on)
+        fld_logger.info(f"CageEditTool: x-ray {'on' if on else 'off'}")
+        panel = getattr(self, "panel", None)
+        if panel is not None and hasattr(panel, "sync_xray"):
+            panel.sync_xray(on)
+
+    def toggle_xray(self):
+        """Flip the x-ray state of the cage overlay."""
+        self.set_xray(not getattr(self, "_xray", True))
+
+
+    def _point_color(self, i):
+        """Return the unselected display color for control point i."""
+        if i < getattr(self, "_n_verts", 0):
+            return HANDLE_TYPE_COLORS["vertex"]
+        hi = i - self._n_verts
+        proxy = getattr(self._target_obj, "Proxy", None)
+        field = getattr(proxy, "SdfField", None) if proxy else None
+        ht = field._handle_types[hi] if (field and hasattr(field, "_handle_types") and hi < len(field._handle_types)) else 1
+        return HANDLE_TYPE_COLORS.get(ht, HANDLE_TYPE_COLORS["LINKED"])
 
     def _post_init(self):
         super()._post_init()
@@ -208,6 +287,20 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
             else:
                 verts = set()
         return {fi for fi, face in enumerate(getattr(field, "_face_verts", [])) if verts & set(face)}
+
+    def _report_refusal(self, message):
+        """Surface a refused operation where the user is actually looking.
+
+        fld_logger has no user-facing channel, so a warn-and-return refusal is
+        indistinguishable from a dead button. The status bar is the same surface
+        _update_modal_hud already uses in edit mode.
+        """
+        fld_logger.warn(f"CageEditTool: {message}")
+        try:
+            FreeCADGui.getMainWindow().statusBar().showMessage(message, 4000)
+        except Exception as e:
+            fld_logger.debug(f"CageEditTool: status bar unavailable: {e}",
+                            category="freecad.fields.tools")
 
     def on_button1_down(self, event_dict):
         btn = event_dict.get("Button")
@@ -256,8 +349,16 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
                 label = f"{self._target_obj.Document.Name}.{self._target_obj.Name}"
                 FldSceneVoxelRenderer.get_instance().update_field(label, field)
 
-            # Modal G/R/S act on the last control point the user clicked.
-            self._modal_sel_idx = best_idx
+            # Selection set: plain click replaces; Shift+click toggles
+            shift = bool(event_dict.get("Modifiers", 0) & QtCore.Qt.ShiftModifier)
+            if shift:
+                if best_idx in self._selection:
+                    self._selection.remove(best_idx)
+                else:
+                    self._selection.append(best_idx)
+            else:
+                self._selection = [best_idx]
+            self._sync_control_point_visuals()
 
             # Record last clicked vertex or edge for topology tools fallback
             if best_idx < self._n_verts:
@@ -281,12 +382,55 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
         
         return True
 
+    @property
+    def _modal_sel_idx(self):
+        """Anchor of the selection. Kept so modal G/R/S needs no change yet."""
+        return self._selection[-1] if self._selection else None
+
+    @_modal_sel_idx.setter
+    def _modal_sel_idx(self, val):
+        if val is None:
+            self._selection = []
+        else:
+            self._selection = [int(val)]
+
     def on_button1_up(self, event_dict):
         self._stop_drag_timer()
         self._clear_constraint_visual()
         if self._dragging_idx is not None:
             self._dragging_idx = None
             self._commit_changes(final=True)
+        return True
+
+    def on_button1_double_click(self, event_dict):
+        """Double-click on an edge selects its edge loop."""
+        edge_idx = self._get_edge_under_mouse(event_dict)
+        if edge_idx is None:
+            return False
+
+        proxy = getattr(self._target_obj, "Proxy", None)
+        field = proxy.SdfField if (proxy and hasattr(proxy, "SdfField")) else None
+        topo = getattr(field, "topology", None) if field else None
+        if not topo:
+            return False
+
+        try:
+            loop_edges = topo.edge_loop(edge_idx)
+        except Exception as e:
+            fld_logger.debug(f"CageEditTool: edge_loop failed on edge {edge_idx}: {e}")
+            return False
+
+        verts = []
+        for ei in loop_edges:
+            if ei < len(topo.edges):
+                va, vb = topo.edges[ei]
+                if va not in verts:
+                    verts.append(va)
+                if vb not in verts:
+                    verts.append(vb)
+
+        self._selection = verts
+        self._sync_control_point_visuals()
         return True
 
     def on_mouse_move(self, event_dict):
@@ -696,10 +840,15 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
         self._commit_changes()
 
     def _sync_control_point_visuals(self):
+        selection_set = set(getattr(self, "_selection", []))
+        sel_color = (0.1, 1.0, 0.1)
         for i, pt in enumerate(self.points):
             if i < len(self.fld_points):
-                self.fld_points[i].position = pt
-                self.fld_points[i].update_draw()
+                fld_pt = self.fld_points[i]
+                fld_pt.position = pt
+                c = sel_color if i in selection_set else self._point_color(i)
+                fld_pt.set_color(c)
+                fld_pt.update_draw()
         self._update_lines()
 
     def _modal_pivot_array(self):
@@ -812,51 +961,18 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
         if not obj:
             return
 
-        proxy = getattr(obj, "Proxy", None)
-        orig_prim = getattr(proxy, "_original_primitive_props", None) if proxy else None
-
-        if orig_prim is not None:
-            obj.SdfType = orig_prim["SdfType"]
-            obj.Points = [FreeCAD.Vector(p.x, p.y, p.z) for p in orig_prim["Points"]]
-            if orig_prim["Placement"]:
-                obj.Placement = orig_prim["Placement"]
-            proxy.SdfField = orig_prim["SdfField"]
-
-            for prop in orig_prim.get("AddedProperties", []):
-                if hasattr(obj, prop):
-                    try:
-                        obj.removeProperty(prop)
-                    except Exception as e:
-                        fld_logger.debug(f"restore_original: could not remove property {prop}: {e}")
-
-            if hasattr(proxy, "_original_primitive_props"):
-                delattr(proxy, "_original_primitive_props")
-
-            label = f"{obj.Document.Name}.{obj.Name}"
-            FldSceneVoxelRenderer.get_instance().update_field(label, orig_prim["SdfField"])
-            obj.touch()
-            obj.Document.recompute([obj])
-            if self.view:
-                self.view.redraw()
-            return
-
-        if not self._original_props:
-            return
-
-        orig_net = self._original_props.get("Net")
-        orig_field = self._original_props.get("SdfField")
-        if orig_net is not None:
-            write_net(obj, orig_net, points=self._original_props.get("Points"))
-        if self._original_props.get("Placement"):
-            obj.Placement = self._original_props["Placement"]
-        if orig_field is not None:
-            obj.Proxy.SdfField = orig_field
+        # Session undo first: this replays the cage net, points, field and
+        # placement as they were at edit_object() time, including any topology
+        # operation run during the session.
+        journal = getattr(self, "_journal", None)
+        if journal is not None:
+            journal.restore()
+            self._journal = None
 
         label = f"{obj.Document.Name}.{obj.Name}"
-        if orig_field:
-            FldSceneVoxelRenderer.get_instance().update_field(label, orig_field)
-        obj.touch()
-        obj.Document.recompute([obj])
+        field = getattr(getattr(obj, "Proxy", None), "SdfField", None)
+        if field:
+            FldSceneVoxelRenderer.get_instance().update_field(label, field)
         if self.view:
             self.view.redraw()
 
@@ -882,9 +998,7 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
     def finish(self):
         self._commit_changes(final=True, force_high_res=True)
         self._is_editing = False
-        proxy = getattr(self._target_obj, "Proxy", None) if self._target_obj else None
-        if proxy and hasattr(proxy, "_original_primitive_props"):
-            delattr(proxy, "_original_primitive_props")
+        self._journal = None
         self.terminate()
 
     def _do_terminate(self):
@@ -909,9 +1023,18 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
                 self.extrude_gizmo.clear()
                 self.extrude_gizmo = None
 
-            if self.points_root and self.view and self.view.getSceneGraph():
-                self.view.getSceneGraph().removeChild(self.points_root)
+            sg = self.view.getSceneGraph() if self.view else None
+            if sg:
+                for root in (self.points_root, self._depth_root):
+                    if root is None:
+                        continue
+                    try:
+                        sg.removeChild(root)
+                    except Exception as e:
+                        fld_logger.debug(f"CageEditTool._do_terminate: removeChild failed: {e}")
             self.points_root = None
+            self._depth_root = None
+            self._net_sep = None
         except Exception as e:
             fld_logger.warn(f"CageEditTool._do_terminate exception: {e}")
         super()._do_terminate()
@@ -1028,55 +1151,57 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
         return best_vi
 
     def _rebuild_cage_from_topology(self, new_topo, vertex_map=None, new_source=None,
-                                    vertex_overrides=None, extra_writes=None):
+                                    vertex_overrides=None, extra_writes=None,
+                                    handles=None, handle_types=None, edge_sharpness=None):
         from freecad.fields.core.sdf.sdf.cage import rebuild_handles_and_types, remap_handle_displacements
         from freecad.fields.core.sdf.sdf.cage_deform import SdfCageDeformField
         field = self._target_obj.Proxy.SdfField
         
-        # Check MAX_FACES shader cap (CP-014 / CP-021)
-        if len(new_topo.faces) > MAX_CAGE_FACES:
-            fld_logger.warn(f"CageEditTool: operation refused — {len(new_topo.faces)} "
-                           f"faces exceeds the MAX_FACES shader cap ({MAX_CAGE_FACES})")
+        # Budget check. A refused rebuild must be visible -- a bare return here
+        # reads to the user as a dead menu item.
+        try:
+            check_face_budget(len(new_topo.faces), "Cage rebuild")
+        except CageBudgetError as e:
+            self._report_refusal(str(e))
             return
+
+        journal = getattr(self, "_journal", None)
+        if journal is not None:
+            journal.capture(self._target_obj)
 
         v_map_fn = vertex_map if callable(vertex_map) else (lambda v: vertex_map.get(v, v) if isinstance(vertex_map, dict) else v)
         
-        new_faces = []
-        for f in new_topo.faces:
-            he_start = f.half_edge
-            he = he_start
-            f_verts = []
-            while True:
-                f_verts.append(he.prev.vertex.idx)
-                he = he.next
-                if he == he_start:
-                    break
-            new_faces.append(f_verts)
-        face_verts_flat = [v for f in new_faces for v in f]
-        face_sizes = [len(f) for f in new_faces]
+        new_faces = new_topo.face_vertex_lists()
+        face_verts_flat, face_sizes, _ = new_topo.net_arrays()
 
         if isinstance(field, SdfCageDeformField):
             rest_verts = np.array([v.pos for v in new_topo.vertices], dtype=np.float64)
-            class _RestProxy:
-                pass
-            rest_proxy = _RestProxy()
-            rest_proxy.vertices = field.rest_vertices
-            rest_proxy.handles = field.rest_handles
-            rest_proxy._edges = field._edges
-            rest_proxy._handle_types = field._handle_types
-            rest_handles, new_types = rebuild_handles_and_types(rest_proxy, new_topo, v_map_fn)
+            if handles is not None:
+                curr_handles = np.array(handles, dtype=np.float64)
+                rest_handles = curr_handles.copy()
+                new_types = list(handle_types) if handle_types is not None else [1] * len(curr_handles)
+                disp_h = np.zeros_like(curr_handles)
+            else:
+                class _RestProxy:
+                    pass
+                rest_proxy = _RestProxy()
+                rest_proxy.vertices = field.rest_vertices
+                rest_proxy.handles = field.rest_handles
+                rest_proxy._edges = field._edges
+                rest_proxy._handle_types = field._handle_types
+                rest_handles, new_types = rebuild_handles_and_types(rest_proxy, new_topo, v_map_fn)
 
-            # Preserve handle displacements frame-consistently. new_topo lives in
-            # the REST frame while field.handles live in the CURRENT (deformed)
-            # frame; rebuilding absolute curr_handles by mixing the two (the
-            # patch-cage path) leaks the vertex displacement into every handle and
-            # blows the cage into spikes on the second extrude. Carry the
-            # frame-independent handle displacement instead. (Handle types are
-            # frame-independent, so take them from the rest rebuild above.)
-            old_handle_disp = field.displacements[len(field.vertices):]
-            disp_h = remap_handle_displacements(
-                field._edges, old_handle_disp, new_topo.edges, v_map_fn)
-            curr_handles = rest_handles + disp_h
+                # Preserve handle displacements frame-consistently. new_topo lives in
+                # the REST frame while field.handles live in the CURRENT (deformed)
+                # frame; rebuilding absolute curr_handles by mixing the two (the
+                # patch-cage path) leaks the vertex displacement into every handle and
+                # blows the cage into spikes on the second extrude. Carry the
+                # frame-independent handle displacement instead. (Handle types are
+                # frame-independent, so take them from the rest rebuild above.)
+                old_handle_disp = field.displacements[len(field.vertices):]
+                disp_h = remap_handle_displacements(
+                    field._edges, old_handle_disp, new_topo.edges, v_map_fn)
+                curr_handles = rest_handles + disp_h
 
             curr_verts = rest_verts.copy()
             for vi_new in range(len(new_topo.vertices)):
@@ -1098,6 +1223,7 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
                 edges=new_topo.edges,
                 handle_types=new_types,
                 edge_straight=getattr(field, "_edge_straight", None),
+                edge_sharpness=edge_sharpness if edge_sharpness is not None else getattr(field, "_edge_sharpness", None),
                 rest_vertices=rest_verts,
                 rest_handles=rest_handles,
                 displacements=displacements,
@@ -1108,7 +1234,11 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
             new_points_fc = [FreeCAD.Vector(p[0], p[1], p[2]) for p in new_points_list]
         else:
             new_verts = np.array([v.pos for v in new_topo.vertices], dtype=np.float64)
-            new_handles, new_types = rebuild_handles_and_types(field, new_topo, v_map_fn)
+            if handles is not None:
+                new_handles = np.array(handles, dtype=np.float64)
+                new_types = list(handle_types) if handle_types is not None else [1] * len(new_handles)
+            else:
+                new_handles, new_types = rebuild_handles_and_types(field, new_topo, v_map_fn)
             from freecad.fields.core.sdf.sdf.cage import SdfCageField
             new_field = SdfCageField(
                 vertices=new_verts,
@@ -1117,7 +1247,8 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
                 face_sizes=face_sizes,
                 edges=new_topo.edges,
                 placement=field.placement,
-                handle_types=new_types
+                handle_types=new_types,
+                edge_sharpness=edge_sharpness if edge_sharpness is not None else getattr(field, "_edge_sharpness", None),
             )
             new_field.sign_mode = getattr(field, "sign_mode", "closest")
             new_points_list = list(new_verts) + list(new_handles)
@@ -1146,6 +1277,8 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
                     obj.HandleTypes = new_types
                     if hasattr(obj, "EdgeStraight"):
                         obj.EdgeStraight = [1 if es else 0 for es in new_field._edge_straight]
+                    if hasattr(obj, "EdgeSharpness"):
+                        obj.EdgeSharpness = [float(s) for s in (getattr(new_field, "_edge_sharpness", None) or [])]
                     if hasattr(obj, "Displacements"):
                         obj.Displacements = [FreeCAD.Vector(*d) for d in new_field.displacements]
                     obj.Points = ([FreeCAD.Vector(*v) for v in new_field.vertices] +
@@ -1161,6 +1294,8 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
                 obj.HandleTypes = new_types
                 if hasattr(obj, "EdgeStraight"):
                     obj.EdgeStraight = [1 if es else 0 for es in getattr(new_field, "_edge_straight", [])]
+                if hasattr(obj, "EdgeSharpness"):
+                    obj.EdgeSharpness = [float(s) for s in (getattr(new_field, "_edge_sharpness", None) or [])]
                 obj.Points = new_points_fc
                 obj.Proxy.SdfField = new_field
             
@@ -1242,20 +1377,27 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
         field = self._target_obj.Proxy.SdfField if (self._target_obj and hasattr(self._target_obj, "Proxy")) else None
         if not field or not hasattr(field, "topology"):
             return
-        
-        # Call subdivide_smooth on the topology
-        new_verts, new_handles, new_edges, new_faces_flat, new_types = field.topology.subdivide_smooth()
-        
-        # Check MAX_FACES shader cap
-        n_faces = len(new_faces_flat) // 4
-        if n_faces > MAX_CAGE_FACES:
-            fld_logger.warn(f"CageEditTool: Subdivide refused — {n_faces} "
-                           f"faces exceeds the MAX_FACES shader cap ({MAX_CAGE_FACES}).")
+
+        # Budget first: subdivide_smooth() allocates the whole refined cage, so
+        # measuring its output is measuring work we already decided not to keep.
+        try:
+            check_face_budget(predict_subdivide_faces(field.topology), "Subdivide")
+        except CageBudgetError as e:
+            self._report_refusal(str(e))
             return
-            
+
+        edge_sharp = getattr(field, "_edge_sharpness", None)
+        new_verts, new_handles, new_edges, new_faces_flat, new_types, new_sharp = field.topology.subdivide_smooth(edge_sharpness=edge_sharp)
+
         from freecad.fields.core.sdf.sdf.cage import CageTopology
+        n_faces = len(new_faces_flat) // 4
         new_topo = CageTopology(new_faces_flat, [4] * n_faces, new_verts)
-        self._rebuild_cage_from_topology(new_topo)
+        self._rebuild_cage_from_topology(
+            new_topo,
+            handles=new_handles,
+            handle_types=new_types,
+            edge_sharpness=new_sharp,
+        )
 
     def handle_keyboard(self, event_dict):
         key = event_dict.get("Key")
@@ -1281,6 +1423,12 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
                     self.view.redraw()
                 return True
         
+        from freecad.fields.core.input import fld_keymap
+        if (fld_keymap.action_for(event_dict, (fld_keymap.CTX_TOOL, fld_keymap.CTX_EDIT)) == "cage.toggle_xray"
+                or (key == QtCore.Qt.Key_Z and bool(mods & getattr(QtCore.Qt, "AltModifier", 0)))):
+            self.toggle_xray()
+            return True
+
         field = self._target_obj.Proxy.SdfField if (self._target_obj and hasattr(self._target_obj, "Proxy")) else None
         if not field:
             return super().handle_keyboard(event_dict)
@@ -1348,7 +1496,11 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
             
             if ei is not None:
                 fld_logger.info(f"CageEditTool: inserting edge loop at edge {ei}")
-                field.topology.insert_edge_loop(ei, 0.5)
+                try:
+                    field.topology.insert_edge_loop(ei, 0.5)
+                except CageTopologyError as e:
+                    self._report_refusal(str(e))
+                    return True
                 self._rebuild_cage_from_topology(field.topology)
                 return True
             else:
@@ -1381,7 +1533,7 @@ class CageEditTool(FldSdfToolBase, DragTimerMixin):
         elif key == QtCore.Qt.Key_D and is_ctrl:
             self.trigger_subdivide()
             return True
-                
+
         return super().handle_keyboard(event_dict)
 
     def _log_drag_session_summary(self):

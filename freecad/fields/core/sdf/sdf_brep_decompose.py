@@ -120,7 +120,8 @@ def _convert_sketch_or_wire_to_2d_profile(obj_or_wire):
                             mid_angle += 2.0 * math.pi
                         if mid_angle > t1:
                             t0, t1 = t1, t0
-                    except Exception:
+                    except Exception as exc:  # safe: mid-point angle probe is best-effort orientation check
+                        fld_logger.debug(f"[sdf_brep_decompose] mid-point angle probe failed: {exc}")
                         pass
 
                 arc_segs = _arc_to_bezier_segments_2d(center, radius, t0, t1)
@@ -461,27 +462,13 @@ def _triangulate_planar_polygon_with_holes(outer_corners, holes_corners, normal=
 def _triangulate_polygon(corners, edge_handles=None):
     """Triangulate a polygon with N >= 3 vertices into tri/quad patch specs."""
     N = len(corners)
-    if N == 3:
+    if N in (3, 4):
         handles = []
-        for i in range(3):
+        for i in range(N):
             if edge_handles and i < len(edge_handles):
                 h0, h1 = edge_handles[i]
             else:
-                h0, h1 = _straight_handles(corners[i], corners[(i + 1) % 3])
-            handles.append(h0)
-            handles.append(h1)
-        return [{
-            "corners": np.array(corners, dtype=np.float64),
-            "handles": np.array(handles, dtype=np.float64)
-        }]
-
-    if N == 4:
-        handles = []
-        for i in range(4):
-            if edge_handles and i < len(edge_handles):
-                h0, h1 = edge_handles[i]
-            else:
-                h0, h1 = _straight_handles(corners[i], corners[(i + 1) % 4])
+                h0, h1 = _straight_handles(corners[i], corners[(i + 1) % N])
             handles.append(h0)
             handles.append(h1)
         return [{
@@ -515,15 +502,21 @@ def _triangulate_polygon(corners, edge_handles=None):
     return specs
 
 
-def _cylinder_face_to_patch_specs(face, weld_tol=_DEFAULT_WELD_TOL):
-    """Decompose a cylindrical surface face into curved Coons patches with exact arc handles."""
-    surf = getattr(face, "Surface", None)
-    if surf is None:
-        return []
-    st = type(surf).__name__
-    if not ("Cylinder" in st or "Cylindrical" in st or "Geom_CylindricalSurface" in st):
-        return []
-
+# NOT reusing sdf_prism.extrude_frame() for the ref/ex/ey frame built here (CR-027):
+# _cylinder_face_to_patch_specs's `is_reversed` probe takes the dot of a real
+# B-Rep-measured normal against `ex` specifically -- swapping to extrude_frame()'s
+# different seed-vector convention would rotate `ex` to point a different way for
+# the same axis, changing that dot product's sign for some real cylinders and
+# silently flipping face winding on them. The polygon-triangulation basis a few
+# hundred lines up has no such coupling (its n_vec already carries the polygon's
+# own winding, self-corrected below by signed_area_2d) and was switched; this frame
+# and its use in both the cylinder and cone decomposers below were left as-is
+# rather than risk that. The two callers must stay bit-for-bit identical here --
+# that is the whole point of sharing this function instead of two copies -- because
+# a diverging frame or v-range would break the weld between the two surfaces.
+def _cyl_cone_common_setup(surf, face):
+    """Shared axis/frame/v-range setup for the cylinder and cone face decomposers.
+    Returns (center, axis, ex, ey, vmin, vmax, n_quads, d_theta)."""
     center = _vec_to_np(surf.Center)
     axis = _vec_to_np(surf.Axis)
     axis_len = np.linalg.norm(axis)
@@ -531,17 +524,7 @@ def _cylinder_face_to_patch_specs(face, weld_tol=_DEFAULT_WELD_TOL):
         axis = axis / axis_len
     else:
         axis = np.array([0.0, 0.0, 1.0])
-    radius = float(surf.Radius)
 
-    # NOT reusing sdf_prism.extrude_frame() here (CR-027): the `is_reversed` probe
-    # below takes the dot of a real B-Rep-measured normal against `ex` specifically
-    # -- swapping to extrude_frame()'s different seed-vector convention would rotate
-    # `ex` to point a different way for the same axis, changing that dot product's
-    # sign for some real cylinders and silently flipping face winding on them. The
-    # polygon-triangulation basis a few hundred lines up has no such coupling (its
-    # n_vec already carries the polygon's own winding, self-corrected below by
-    # signed_area_2d) and was switched; this one and _cone_face_to_patch_specs's
-    # identical pattern were left as-is rather than risk that.
     ref = np.array([1.0, 0.0, 0.0]) if abs(axis[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
     ex = np.cross(axis, ref)
     ex /= np.linalg.norm(ex)
@@ -570,9 +553,25 @@ def _cylinder_face_to_patch_specs(face, weld_tol=_DEFAULT_WELD_TOL):
     if abs(vmax - vmin) < 1e-6:
         vmax = vmin + 1.0
 
-    specs = []
     n_quads = _ARC_SEGMENTS
     d_theta = 2.0 * math.pi / n_quads
+
+    return center, axis, ex, ey, vmin, vmax, n_quads, d_theta
+
+
+def _cylinder_face_to_patch_specs(face, weld_tol=_DEFAULT_WELD_TOL):
+    """Decompose a cylindrical surface face into curved Coons patches with exact arc handles."""
+    surf = getattr(face, "Surface", None)
+    if surf is None:
+        return []
+    st = type(surf).__name__
+    if not ("Cylinder" in st or "Cylindrical" in st or "Geom_CylindricalSurface" in st):
+        return []
+
+    center, axis, ex, ey, vmin, vmax, n_quads, d_theta = _cyl_cone_common_setup(surf, face)
+    radius = float(surf.Radius)
+
+    specs = []
     k_arc = (4.0 / 3.0) * math.tan(d_theta / 4.0) * radius
 
     is_reversed = getattr(face, "Orientation", "") == "Reversed"
@@ -581,7 +580,8 @@ def _cylinder_face_to_patch_specs(face, weld_tol=_DEFAULT_WELD_TOL):
             n_probe = face.normalAt(0.0, (vmin + vmax) * 0.5)
             if np.dot(_vec_to_np(n_probe), ex) < -0.1:
                 is_reversed = True
-        except Exception:
+        except Exception as exc:  # safe: normal probe is best-effort orientation check
+            fld_logger.debug(f"[sdf_brep_decompose] normal probe failed: {exc}")
             pass
 
     for q in range(n_quads):
@@ -624,52 +624,15 @@ def _cone_face_to_patch_specs(face, weld_tol=_DEFAULT_WELD_TOL):
     if not ("Cone" in st or "Conical" in st or "Geom_ConicalSurface" in st):
         return []
 
-    center = _vec_to_np(surf.Center)
-    axis = _vec_to_np(surf.Axis)
-    axis_len = np.linalg.norm(axis)
-    if axis_len > DEGENERATE_AXIS_EPS:
-        axis = axis / axis_len
-    else:
-        axis = np.array([0.0, 0.0, 1.0])
+    center, axis, ex, ey, vmin, vmax, n_quads, d_theta = _cyl_cone_common_setup(surf, face)
 
     r_base = float(getattr(surf, "Radius", getattr(surf, "Radius1", 0.0)))
     semi_angle = float(getattr(surf, "SemiAngle", 0.0))
-
-    ref = np.array([1.0, 0.0, 0.0]) if abs(axis[0]) < 0.9 else np.array([0.0, 1.0, 0.0])
-    ex = np.cross(axis, ref)
-    ex /= np.linalg.norm(ex)
-    ey = np.cross(axis, ex)
-    ey /= np.linalg.norm(ey)
-
-    v_vals = []
-    vertexes = getattr(face, "Vertexes", None) or []
-    for v in vertexes:
-        pt = _vec_to_np(v.Point)
-        v_vals.append(float(np.dot(pt - center, axis)))
-
-    if not v_vals:
-        if hasattr(face, "ParameterRange"):
-            pr = face.ParameterRange
-            v_vals = [float(pr[2]), float(pr[3])]
-        elif hasattr(face, "BoundBox"):
-            bb = face.BoundBox
-            v_vals = [float(np.dot(_vec_to_np((bb.XMin, bb.YMin, bb.ZMin)) - center, axis)),
-                      float(np.dot(_vec_to_np((bb.XMax, bb.YMax, bb.ZMax)) - center, axis))]
-        else:
-            v_vals = [0.0, 10.0]
-
-    vmin = min(v_vals)
-    vmax = max(v_vals)
-    if abs(vmax - vmin) < 1e-6:
-        vmax = vmin + 1.0
 
     r_min = max(0.0, r_base + vmin * math.tan(semi_angle))
     r_max = max(0.0, r_base + vmax * math.tan(semi_angle))
 
     specs = []
-    n_quads = _ARC_SEGMENTS
-    d_theta = 2.0 * math.pi / n_quads
-
     for q in range(n_quads):
         t0 = q * d_theta
         t1 = (q + 1) * d_theta
@@ -770,7 +733,8 @@ def face_to_patch_specs(face, weld_tol=_DEFAULT_WELD_TOL):
                 try:
                     nv = face.normalAt(0.0, 0.0)
                     norm = np.array([float(nv.x), float(nv.y), float(nv.z)], dtype=np.float64)
-                except Exception:
+                except Exception as exc:  # safe: normalAt is optional; triangulator infers normal if None
+                    fld_logger.debug(f"[sdf_brep_decompose] face.normalAt failed: {exc}")
                     pass
             hole_specs = _triangulate_planar_polygon_with_holes(outer_corners, hole_corners_list, normal=norm, weld_tol=weld_tol)
             if hole_specs:

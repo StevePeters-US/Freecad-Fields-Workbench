@@ -635,13 +635,17 @@ def _solve_bezier_handles(fit_pts, is_closed, handle_types, source_xyz, spans,
 def _surface_distance_grid(field, samples, normal, iters=3):
     """In-plane distance in MILLIMETRES from each sample to the zero isoline.
 
-    `field.evaluate` does not return millimetres. Every field that normalises by a
-    Lipschitz bound returns value/L -- `SdfNoiseField` divides by `1 + amp*freq*k`,
-    which is 13.0 at amp=3/freq=2 -- and a domain-warping field returns the base
-    field's value at the warped point. Only an unmodified primitive is a true
-    distance field. Treating the raw value as a deviation understated the real error
-    by 2.1x to 25.9x on measured noise fields, so the refinement stopped inserting
-    control points while the curve was still millimetres off the surface.
+    `field.evaluate` does not return millimetres. Only an unmodified primitive is a
+    true distance field. A domain-warping field returns the base field's value at
+    the warped point, which is not the distance to the warped surface -- and that is
+    every noise, twist, bend and deform-cage field, since `SdfNoiseField` evaluates
+    `base(p - displacement)`. No field divides its value by a Lipschitz bound: the
+    value stays in millimetres and the bound rides `lipschitz()` (UX-009, and
+    `SdfNoiseField.lipschitz` for what dividing it cost), so a constant divisor is
+    not available here even in principle. Treating the raw value as a deviation
+    understated the real error by 2.1x to 25.9x on measured noise fields, so the
+    refinement stopped inserting control points while the curve was still
+    millimetres off the surface.
 
     The fix is Newton's step, `|f| / |grad f|`, which is the distance to the isoline
     and reduces to `|f|` wherever the field is a true distance field -- so smooth
@@ -1266,7 +1270,8 @@ def _redistribute_points(field, source, source_xyz, indices, is_closed, toleranc
         m = len(idx)
         try:
             f0, f1 = idx.index(a0), idx.index(a1)
-        except ValueError:
+        except ValueError as exc:
+            fld_logger.debug(f"[sdf_slicer] fixed point index lookup failed: {exc}")
             continue
         k = (m - 1) if (is_closed and n_fixed == 1) else (
             (f1 - f0 - 1) % m if is_closed else (f1 - f0 - 1))

@@ -16,10 +16,11 @@ class CommandFldConvertToBrush:
     """Converts the selected SDF object into a normalized sculpt library brush."""
 
     def GetResources(self):
+        from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
         return {
             "Pixmap": "Fields_ConvertToBrush",
             "MenuText": "Convert to Brush",
-            "ToolTip": "Turn the selected SDF object into a sculpt library brush.",
+            "ToolTip": rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Saves the selected SDF object as a brush in the sculpt brush library.\nSelect one SDF object.")),
         }
 
     def IsActive(self):
@@ -68,6 +69,8 @@ class CommandFldConvertToBrush:
         brush = SculptBrush.from_field(field, name, resolution=32)
         if save_brush(brush):
             fld_logger.info(f"cmd_convert_to_brush: saved brush '{name}' to library")
+        else:
+            fld_logger.error(f"cmd_convert_to_brush: failed to save brush '{name}' to library")
 
 
 FreeCADGui.addCommand("Fields_ConvertToBrush", CommandFldConvertToBrush())

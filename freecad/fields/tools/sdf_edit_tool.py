@@ -35,18 +35,12 @@ class SdfEditTool(FldBase):
 
         # 1. Handle Noise Objects
         from freecad.fields.core.objects.fld_noise_object import FldNoiseProxy
-        from freecad.fields.core.objects.fld_noise2d_object import FldNoise2DProxy
         from freecad.fields.core.objects.fld_deform_objects import FldTwistProxy, FldBendProxy, FldLatticeProxy, FldDeformCageProxy, FldArrayProxy
         from freecad.fields.core.objects.fld_heightmap_object import FldHeightmapProxy
         from freecad.fields.core.objects.fld_voxel_field import FldVoxelFieldProxy
         if isinstance(proxy, FldNoiseProxy):
-            from freecad.fields.tools.noise_3d_tool import NoiseTool
+            from freecad.fields.tools.noise_tool import NoiseTool
             tool = NoiseTool()
-            tool.edit_object(obj)
-            return
-        if isinstance(proxy, FldNoise2DProxy):
-            from freecad.fields.tools.noise_2d_tool import Noise2DTool
-            tool = Noise2DTool()
             tool.edit_object(obj)
             return
         if isinstance(proxy, FldTwistProxy):
@@ -91,6 +85,7 @@ class SdfEditTool(FldBase):
         from freecad.fields.tools.creators.sphere_creator import SphereCreator
         from freecad.fields.tools.creators.cylinder_creator import CylinderCreator
         from freecad.fields.tools.creators.torus_creator import TorusCreator
+        from freecad.fields.tools.creators.prism_creator import PrismCreator
         from freecad.fields.tools.creators.extrusion_creator import CurveExtrudeCreator, SdfCurveFillExtrudeCreator
         from freecad.fields.tools.creators.revolve_creator import RevolveCreator
         from freecad.fields.tools.cage_tool import CageEditTool
@@ -104,6 +99,7 @@ class SdfEditTool(FldBase):
         from freecad.fields.core.sdf.sdf.sphere import SdfSphereField
         from freecad.fields.core.sdf.sdf.cylinder import SdfCylinderField
         from freecad.fields.core.sdf.sdf.torus import SdfTorusField
+        from freecad.fields.core.sdf.sdf_prism import SdfPrismExtrusionField
         from freecad.fields.core.sdf.sdf_extrusion import SdfExtrusionField
         from freecad.fields.core.sdf.sdf_curve_fill_extrusion import SdfCurveFillExtrusionField
         from freecad.fields.core.sdf.sdf_revolution import SdfRevolutionField
@@ -121,6 +117,7 @@ class SdfEditTool(FldBase):
             SdfSphereField: SphereCreator,
             SdfCylinderField: CylinderCreator,
             SdfTorusField: TorusCreator,
+            SdfPrismExtrusionField: PrismCreator,
             SdfExtrusionField: CurveExtrudeCreator,
             SdfCurveFillExtrusionField: SdfCurveFillExtrudeCreator,
             SdfRevolutionField: RevolveCreator,

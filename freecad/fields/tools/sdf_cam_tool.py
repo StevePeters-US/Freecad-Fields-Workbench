@@ -120,7 +120,7 @@ class SdfCamTaskPanel:
         form_layout.addRow("Plunge Feed:", self.plunge_feed_spin)
 
         # Tolerance — seeded from the global Model Tolerance (Fields Settings)
-        from freecad.fields.core.objects.fld_object import get_model_tolerance
+        from freecad.fields.core.fld_settings import get_model_tolerance
         self.tolerance_spin = QtWidgets.QDoubleSpinBox()
         self.tolerance_spin.setRange(0.001, 10.0)
         self.tolerance_spin.setDecimals(3)

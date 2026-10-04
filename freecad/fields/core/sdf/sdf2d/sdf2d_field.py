@@ -3,7 +3,16 @@ import numpy as np
 
 
 class Sdf2dField:
-    """Abstract base for 2D SDF primitives evaluated in the XY (or r,z) plane."""
+    """Abstract base for 2D SDF primitives evaluated in the XY (or r,z) plane.
+
+    Not a subclass of `SdfField` (freecad/fields/core/sdf/sdf_field.py) and not
+    independently renderable: a `Sdf2dField` has no `bounding_box()` and is
+    never a `ComposerField` operand. It becomes visible only when a 3D
+    `SdfField` wraps it as a profile and folds `evaluate_2d`/`to_glsl_2d` into
+    its own `evaluate`/`to_glsl` -- see `SdfExtrusionField`
+    (freecad/fields/core/sdf/sdf_extrusion.py) for the reference pattern, and
+    AGENTS.md's "Two SDF Systems" section for the full picture.
+    """
 
     def evaluate_2d(self, x: float, y: float) -> float:
         raise NotImplementedError

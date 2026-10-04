@@ -13,9 +13,28 @@ float sdf_box2d(vec2 p, vec2 h) {
 class Sdf2dBox(Sdf2dField):
     """2D axis-aligned box SDF centered at origin with half-extents hx, hy."""
 
-    def __init__(self, hx: float, hy: float):
-        self.hx = hx
-        self.hy = hy
+    def __init__(self, hx=None, hy=None, size=None):
+        """hx/hy are HALF-extents; `size` is the full width/height pair.
+
+        Keep those two the only spellings. A tuple accepted positionally as hx
+        would read as half-extents at the call site and as a full size here, so
+        Sdf2dBox(5.0) and Sdf2dBox((5.0, 5.0)) would differ by a factor of two.
+        """
+        if size is not None:
+            if hx is not None or hy is not None:
+                raise TypeError("Sdf2dBox takes either size=(w, h) or hx/hy half-extents, not both")
+            self.hx = float(size[0]) * 0.5
+            self.hy = float(size[1]) * 0.5
+            return
+        if hx is None:
+            raise TypeError("Sdf2dBox requires size=(w, h), hx=..., or hx/hy half-extents")
+        if isinstance(hx, (tuple, list)):
+            raise TypeError("Sdf2dBox: pass a pair as size=(width, height); hx/hy are scalar half-extents")
+        self.hx = float(hx)
+        self.hy = float(hy) if hy is not None else float(hx)
+
+    def bbox_2d(self):
+        return (-self.hx, -self.hy, self.hx, self.hy)
 
     def evaluate_2d(self, x: float, y: float) -> float:
         dx = abs(x) - self.hx

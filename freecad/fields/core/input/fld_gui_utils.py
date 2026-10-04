@@ -3,6 +3,7 @@
 
 from PySide import QtCore, QtGui, QtWidgets
 from freecad.fields.core import fld_logger
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 
 class _DynamicLimitSliderBase(QtWidgets.QWidget):
@@ -46,29 +47,34 @@ class _DynamicLimitSliderBase(QtWidgets.QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(4)
 
-        spin_cls = QtWidgets.QSpinBox if self._is_int else QtWidgets.QDoubleSpinBox
+        self._step = step
+        self._decimals = decimals
 
-        self._min_spin = spin_cls()
-        self._min_spin.setRange(-999999, 999999)
-        self._min_spin.setValue(int(min_val) if self._is_int else min_val)
-        self._min_spin.setSingleStep(int(step) if self._is_int else step)
-        if not self._is_int:
-            self._min_spin.setDecimals(decimals)
-        self._min_spin.setFixedWidth(72)
-        self._min_spin.setToolTip("Lower limit")
+        self._min_spin = self._make_limit_spin(
+            min_val,
+            rich_tooltip(
+                "_DynamicLimitSliderBase",
+                QT_TRANSLATE_NOOP(
+                    "_DynamicLimitSliderBase",
+                    "Lowest value the slider reaches. Values below it are clamped.",
+                ),
+            ),
+        )
 
         self._slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         if not self._is_int:
             self._slider.setRange(0, self._STEPS)
 
-        self._max_spin = spin_cls()
-        self._max_spin.setRange(-999999, 999999)
-        self._max_spin.setValue(int(max_val) if self._is_int else max_val)
-        self._max_spin.setSingleStep(int(step) if self._is_int else step)
-        if not self._is_int:
-            self._max_spin.setDecimals(decimals)
-        self._max_spin.setFixedWidth(72)
-        self._max_spin.setToolTip("Upper limit")
+        self._max_spin = self._make_limit_spin(
+            max_val,
+            rich_tooltip(
+                "_DynamicLimitSliderBase",
+                QT_TRANSLATE_NOOP(
+                    "_DynamicLimitSliderBase",
+                    "Highest value the slider reaches. Values above it are clamped.",
+                ),
+            ),
+        )
 
         lay.addWidget(self._min_spin)
         lay.addWidget(self._slider, 1)
@@ -81,8 +87,20 @@ class _DynamicLimitSliderBase(QtWidgets.QWidget):
         self._slider.valueChanged.connect(self._on_slider_moved)
         self._slider.sliderPressed.connect(self._on_slider_pressed)
         self._slider.sliderReleased.connect(self._on_slider_released)
-        self._min_spin.valueChanged.connect(self._on_min_changed)
-        self._max_spin.valueChanged.connect(self._on_max_changed)
+        self._min_spin.valueChanged.connect(lambda v: self._on_limit_changed(True, v))
+        self._max_spin.valueChanged.connect(lambda v: self._on_limit_changed(False, v))
+
+    def _make_limit_spin(self, initial_value, tooltip):
+        spin_cls = QtWidgets.QSpinBox if self._is_int else QtWidgets.QDoubleSpinBox
+        spin = spin_cls()
+        spin.setRange(-999999, 999999)
+        spin.setValue(int(initial_value) if self._is_int else initial_value)
+        spin.setSingleStep(int(self._step) if self._is_int else self._step)
+        if not self._is_int:
+            spin.setDecimals(self._decimals)
+        spin.setFixedWidth(72)
+        spin.setToolTip(tooltip)
+        return spin
 
     def _format_tooltip(self):
         return f"Value: {self._value}" if self._is_int else f"Value: {self._value:.3f}"
@@ -142,45 +160,32 @@ class _DynamicLimitSliderBase(QtWidgets.QWidget):
         except Exception as e:
             fld_logger.debug(f"Failed to restore quality render state: {e}")
 
-    def _on_min_changed(self, new_min):
-        """Callback when the minimum limit spinbox is modified."""
+    def _on_limit_changed(self, is_min, new_val):
+        """Callback when either limit spinbox is modified; enforces min <= max
+        by dragging the other spinbox along, then re-derives the slider position."""
         if self._updating:
             return
         self._updating = True
         try:
-            max_v = self._max_spin.value()
-            # Enforce min <= max
-            if max_v < new_min:
-                self._max_spin.blockSignals(True)
-                self._max_spin.setValue(new_min)
-                self._max_spin.blockSignals(False)
-                max_v = new_min
+            if is_min:
+                min_v, max_v = new_val, self._max_spin.value()
+                if max_v < min_v:
+                    self._max_spin.blockSignals(True)
+                    self._max_spin.setValue(min_v)
+                    self._max_spin.blockSignals(False)
+                    max_v = min_v
+            else:
+                min_v, max_v = self._min_spin.value(), new_val
+                if min_v > max_v:
+                    self._min_spin.blockSignals(True)
+                    self._min_spin.setValue(max_v)
+                    self._min_spin.blockSignals(False)
+                    min_v = max_v
 
             self._update_slider_position()
-            self.limitsChanged.emit(new_min, max_v)
+            self.limitsChanged.emit(min_v, max_v)
         except Exception as e:
-            fld_logger.error(f"Error in {type(self).__name__}._on_min_changed: {e}")
-        finally:
-            self._updating = False
-
-    def _on_max_changed(self, new_max):
-        """Callback when the maximum limit spinbox is modified."""
-        if self._updating:
-            return
-        self._updating = True
-        try:
-            min_v = self._min_spin.value()
-            # Enforce min <= max
-            if min_v > new_max:
-                self._min_spin.blockSignals(True)
-                self._min_spin.setValue(new_max)
-                self._min_spin.blockSignals(False)
-                min_v = new_max
-
-            self._update_slider_position()
-            self.limitsChanged.emit(min_v, new_max)
-        except Exception as e:
-            fld_logger.error(f"Error in {type(self).__name__}._on_max_changed: {e}")
+            fld_logger.error(f"Error in {type(self).__name__}._on_limit_changed: {e}")
         finally:
             self._updating = False
 
@@ -301,7 +306,8 @@ class NumericLineEdit(QtWidgets.QLineEdit):
         self._text = str(val)
         try:
             super().setText(str(val))
-        except Exception:
+        except Exception as exc:  # safe: base setText may fail in headless/mock
+            fld_logger.debug(f"[fld_gui_utils] setText failed: {exc}")
             pass
 
     def text(self):
@@ -309,7 +315,8 @@ class NumericLineEdit(QtWidgets.QLineEdit):
             t = super().text()
             if isinstance(t, str):
                 return t
-        except Exception:
+        except Exception as exc:  # safe: base text() may fail in headless/mock; falls back to _text
+            fld_logger.debug(f"[fld_gui_utils] text query failed: {exc}")
             pass
         return getattr(self, "_text", "")
 
@@ -365,20 +372,17 @@ class CompactVector3Widget(QtWidgets.QWidget):
         except Exception as e:
             fld_logger.debug(f"CompactVector3Widget._on_editing_finished: {e}")
 
+    @staticmethod
+    def _parse_float(text):
+        try:
+            return float(text or 0.0)
+        except ValueError:
+            return 0.0
+
     def values(self):
-        try:
-            x = float(self.x_input.text() or 0.0)
-        except ValueError:
-            x = 0.0
-        try:
-            y = float(self.y_input.text() or 0.0)
-        except ValueError:
-            y = 0.0
-        try:
-            z = float(self.z_input.text() or 0.0)
-        except ValueError:
-            z = 0.0
-        return x, y, z
+        return (self._parse_float(self.x_input.text()),
+                self._parse_float(self.y_input.text()),
+                self._parse_float(self.z_input.text()))
 
     def setValues(self, x, y, z):
         self.x_input.blockSignals(True)

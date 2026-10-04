@@ -38,15 +38,7 @@ class FldModifierProxyBase:
 
     @staticmethod
     def _ensure_enabled(obj):
-        """Add the bypass checkbox if it is missing.
-
-        Called from `__init__` for new objects and from `onDocumentRestored` for
-        documents saved before the property existed. Without the restore half, an
-        older modifier reloads with no `Enabled` at all: reads are safe because every
-        one of them goes through `getattr(fp, "Enabled", True)`, but the panel's write
-        lands on a plain Python attribute instead of a document property, so nothing
-        is touched, no recompute runs, and the checkbox is a silent no-op.
-        """
+        """Add the bypass checkbox if it is missing."""
         if not hasattr(obj, "Enabled"):
             obj.addProperty("App::PropertyBool", "Enabled", "Fields",
                             "Uncheck to bypass this modifier")
@@ -74,16 +66,7 @@ class FldModifierProxyBase:
         pass
 
     def onDocumentRestored(self, obj):
-        if not hasattr(obj, "SurfaceIdBase"):
-            obj.addProperty("App::PropertyInteger", "SurfaceIdBase", "Fields", "Monotonic surface ID base")
-            from freecad.fields.core.objects.fld_surface_id import allocate_surface_ids
-            doc = getattr(obj, "Document", None)
-            obj.SurfaceIdBase = allocate_surface_ids(doc, 1) if doc else SURFACE_ID_UNSET
-        if getattr(obj, "Group", None) in ("Group 1", "Group 2"):
-            old_val = obj.Group
-            obj.Group = ["Additive", "Subtractive"]
-            obj.Group = "Subtractive" if old_val == "Group 2" else "Additive"
-        self._ensure_enabled(obj)
+        """Hook for subclasses that must rebuild runtime state after a load."""
 
     def get_sdf_field(self, fp):
         if not getattr(fp, "Enabled", True):

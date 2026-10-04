@@ -13,11 +13,9 @@ import math
 from freecad.fields.core import fld_logger
 
 
-def sample_closed_curve_3d(obj, n_samples=256):
-    """
-    Sample a closed curve FldObject into local-space (x, y, z) tuples.
-    Z is in working-plane local space — non-zero for 3D (non-planar) curves.
-    """
+def _discretize_curve_local(obj, n_samples, caller_name):
+    """Build an FldCurve from obj.Points/HandleIn/HandleOut and return its
+    discretized local-space FreeCAD.Vectors."""
     from freecad.fields.core.objects.fld_point import FldPoint
     from freecad.fields.core.objects.fld_curve import FldCurve
 
@@ -37,10 +35,18 @@ def sample_closed_curve_3d(obj, n_samples=256):
     curve = FldCurve(points=fld_pts, is_closed=True)
     bs = curve.bspline
     if bs is None:
-        fld_logger.error("sample_closed_curve_3d: Could not build BSpline from curve object")
+        fld_logger.error(f"{caller_name}: Could not build BSpline from curve object")
         raise ValueError("Could not build BSpline from curve object")
 
-    sampled = bs.discretize(Number=n_samples)
+    return bs.discretize(Number=n_samples)
+
+
+def sample_closed_curve_3d(obj, n_samples=256):
+    """
+    Sample a closed curve FldObject into local-space (x, y, z) tuples.
+    Z is in working-plane local space — non-zero for 3D (non-planar) curves.
+    """
+    sampled = _discretize_curve_local(obj, n_samples, "sample_closed_curve_3d")
     return [(v.x, v.y, v.z) for v in sampled]
 
 
@@ -49,30 +55,8 @@ def sample_curve_world_pts(obj, n_samples=256):
     Sample a closed curve FldObject in WORLD space by applying obj.Placement.
     Returns list of FreeCAD.Vector in world coordinates.
     """
-    from freecad.fields.core.objects.fld_point import FldPoint
-    from freecad.fields.core.objects.fld_curve import FldCurve
-
-    pts   = list(getattr(obj, "Points", []))
-    h_in  = list(getattr(obj, "HandleIn", []))
-    h_out = list(getattr(obj, "HandleOut", []))
     wp = obj.Placement
-
-    fld_pts = []
-    for i, p in enumerate(pts):
-        hi = h_in[i]  if i < len(h_in)  else p
-        ho = h_out[i] if i < len(h_out) else p
-        dp = FldPoint(p)
-        dp.handle_in  = hi if (hi - p).Length > 0.001 else None
-        dp.handle_out = ho if (ho - p).Length > 0.001 else None
-        fld_pts.append(dp)
-
-    curve = FldCurve(points=fld_pts, is_closed=True)
-    bs = curve.bspline
-    if bs is None:
-        fld_logger.error("sample_curve_world_pts: Could not build BSpline from curve object")
-        raise ValueError("Could not build BSpline from curve object")
-
-    sampled_local = bs.discretize(Number=n_samples)
+    sampled_local = _discretize_curve_local(obj, n_samples, "sample_curve_world_pts")
     return [wp.multVec(v) for v in sampled_local]
 
 
@@ -187,6 +171,19 @@ def compute_best_fit_placement(pts_world, fallback_placement=None):
 
 
 
+def _interp_point(p0, p3, frac):
+    """Point at fraction `frac` along the straight segment p0->p3 (tuple of any length)."""
+    return tuple(p0[k] + frac * (p3[k] - p0[k]) for k in range(len(p0)))
+
+
+def _resolve_handle(handle, anchor, to_space, fallback_frac, p0, p3):
+    """The transformed handle if it's meaningfully offset from its anchor point,
+    else the straight-line fallback at fallback_frac between p0 and p3."""
+    if handle is not None and (handle - anchor).Length > 0.001:
+        return to_space(handle)
+    return _interp_point(p0, p3, fallback_frac)
+
+
 def extract_bezier_segments_in_placement(obj, placement):
     """
     Extract Bezier control points from obj (stored in obj.Placement local space),
@@ -210,14 +207,10 @@ def extract_bezier_segments_in_placement(obj, placement):
         j = (i + 1) % n
         p0 = to_2d(pts[i])
         p3 = to_2d(pts[j])
-        if i < len(h_out) and (h_out[i] - pts[i]).Length > 0.001:
-            p1 = to_2d(h_out[i])
-        else:
-            p1 = (p0[0] + (p3[0] - p0[0]) / 3.0, p0[1] + (p3[1] - p0[1]) / 3.0)
-        if j < len(h_in) and (h_in[j] - pts[j]).Length > 0.001:
-            p2 = to_2d(h_in[j])
-        else:
-            p2 = (p0[0] + 2.0 * (p3[0] - p0[0]) / 3.0, p0[1] + 2.0 * (p3[1] - p0[1]) / 3.0)
+        h_out_i = h_out[i] if i < len(h_out) else None
+        p1 = _resolve_handle(h_out_i, pts[i], to_2d, 1.0 / 3.0, p0, p3)
+        h_in_j = h_in[j] if j < len(h_in) else None
+        p2 = _resolve_handle(h_in_j, pts[j], to_2d, 2.0 / 3.0, p0, p3)
         segs.append((p0, p1, p2, p3))
     return segs
 
@@ -247,21 +240,181 @@ def extract_bezier_segments_3d(obj, closed=None):
         j = (i + 1) % n
         p0 = to_world(pts[i])
         p3 = to_world(pts[j])
-        if i < len(h_out) and (h_out[i] - pts[i]).Length > 0.001:
-            p1 = to_world(h_out[i])
-        else:
-            p1 = (
-                p0[0] + (p3[0] - p0[0]) / 3.0,
-                p0[1] + (p3[1] - p0[1]) / 3.0,
-                p0[2] + (p3[2] - p0[2]) / 3.0,
-            )
-        if j < len(h_in) and (h_in[j] - pts[j]).Length > 0.001:
-            p2 = to_world(h_in[j])
-        else:
-            p2 = (
-                p0[0] + 2*(p3[0] - p0[0]) / 3.0,
-                p0[1] + 2*(p3[1] - p0[1]) / 3.0,
-                p0[2] + 2*(p3[2] - p0[2]) / 3.0,
-            )
+        h_out_i = h_out[i] if i < len(h_out) else None
+        p1 = _resolve_handle(h_out_i, pts[i], to_world, 1.0 / 3.0, p0, p3)
+        h_in_j = h_in[j] if j < len(h_in) else None
+        p2 = _resolve_handle(h_in_j, pts[j], to_world, 2.0 / 3.0, p0, p3)
         segs.append((p0, p1, p2, p3))
     return segs
+
+
+def compute_curve_rmf_frames(segments_3d, is_closed=False):
+    """Compute Rotation-Minimizing Frames (RMF) at segment endpoints for a 3D Bezier curve.
+
+    Returns list of dicts per segment with keys 't0', 'n0', 'b0', 't1', 'n1', 'b1',
+    representing unit tangent, normal, and binormal at the segment start (t=0) and end (t=1).
+
+    `is_closed` only matters for genuinely non-planar curves. A parallel-transported
+    frame carried once around a closed space curve comes back rotated by the holonomy
+    angle, so the profile at the seam would not meet itself; the correction spreads
+    that angle evenly over the arc length (Wang et al. 2008, sec. 5). Planar curves
+    have zero holonomy -- the binormal is the constant plane normal -- so the planar
+    fast path needs no correction and ignores the flag.
+    """
+    import numpy as np
+
+    if not segments_3d:
+        return []
+
+    # Check if curve is planar
+    pts = np.array([pt for seg in segments_3d for pt in seg], dtype=np.float64)
+    centroid = pts.mean(axis=0)
+    shifted = pts - centroid
+    _, s_vals, vh = np.linalg.svd(shifted)
+    is_planar = len(s_vals) >= 3 and s_vals[2] < 1e-4
+
+    if is_planar:
+        normal_plane = vh[2]
+        frames = []
+        for p0, p1, p2, p3 in segments_3d:
+            p0, p1, p2, p3 = np.array(p0), np.array(p1), np.array(p2), np.array(p3)
+            t0 = 3.0 * (p1 - p0)
+            len_t0 = np.linalg.norm(t0)
+            if len_t0 <= 1e-9:
+                t0 = p2 - p0
+                len_t0 = np.linalg.norm(t0)
+                if len_t0 <= 1e-9:
+                    t0 = p3 - p0
+                    len_t0 = np.linalg.norm(t0)
+            t0 = t0 / len_t0 if len_t0 > 1e-9 else np.array([0.0, 0.0, 1.0])
+            b0 = normal_plane / np.linalg.norm(normal_plane)
+            n0 = np.cross(b0, t0)
+            len_n0 = np.linalg.norm(n0)
+            n0 = n0 / len_n0 if len_n0 > 1e-9 else np.array([1.0, 0.0, 0.0])
+
+            t1 = 3.0 * (p3 - p2)
+            len_t1 = np.linalg.norm(t1)
+            if len_t1 <= 1e-9:
+                t1 = p3 - p1
+                len_t1 = np.linalg.norm(t1)
+                if len_t1 <= 1e-9:
+                    t1 = p3 - p0
+                    len_t1 = np.linalg.norm(t1)
+            t1 = t1 / len_t1 if len_t1 > 1e-9 else t0
+            b1 = b0
+            n1 = np.cross(b1, t1)
+            len_n1 = np.linalg.norm(n1)
+            n1 = n1 / len_n1 if len_n1 > 1e-9 else n0
+            frames.append({'t0': t0, 'n0': n0, 'b0': b0, 't1': t1, 'n1': n1, 'b1': b1})
+        return frames
+
+    # General 3D Space Curve: Double Reflection Method
+    frames = []
+    p0_first = np.array(segments_3d[0][0])
+    p1_first = np.array(segments_3d[0][1])
+    t_start = p1_first - p0_first
+    len_t = np.linalg.norm(t_start)
+    if len_t <= 1e-9:
+        t_start = np.array(segments_3d[0][2]) - p0_first
+        len_t = np.linalg.norm(t_start)
+    t_curr = t_start / len_t if len_t > 1e-9 else np.array([0.0, 0.0, 1.0])
+
+    seed = np.array([0.0, 0.0, 1.0]) if abs(t_curr[2]) < 0.9 else np.array([0.0, 1.0, 0.0])
+    n_curr = np.cross(t_curr, seed)
+    len_n = np.linalg.norm(n_curr)
+    n_curr = n_curr / len_n if len_n > 1e-9 else np.array([1.0, 0.0, 0.0])
+
+    for seg in segments_3d:
+        p0, p1, p2, p3 = (np.array(pt) for pt in seg)
+        t0 = 3.0 * (p1 - p0)
+        len_t0 = np.linalg.norm(t0)
+        if len_t0 <= 1e-9:
+            t0 = p2 - p0
+            len_t0 = np.linalg.norm(t0)
+        t0 = t0 / len_t0 if len_t0 > 1e-9 else t_curr
+        n0 = n_curr - np.dot(n_curr, t0) * t0
+        len_n0 = np.linalg.norm(n0)
+        n0 = n0 / len_n0 if len_n0 > 1e-9 else n_curr
+        b0 = np.cross(t0, n0)
+
+        t1 = 3.0 * (p3 - p2)
+        len_t1 = np.linalg.norm(t1)
+        if len_t1 <= 1e-9:
+            t1 = p3 - p1
+            len_t1 = np.linalg.norm(t1)
+        t1 = t1 / len_t1 if len_t1 > 1e-9 else t0
+
+        v1 = p3 - p0
+        c1 = np.dot(v1, v1)
+        if c1 > 1e-12:
+            n0_refl = n0 - (2.0 / c1) * np.dot(v1, n0) * v1
+            t0_refl = t0 - (2.0 / c1) * np.dot(v1, t0) * v1
+            v2 = t1 - t0_refl
+            c2 = np.dot(v2, v2)
+            if c2 > 1e-12:
+                n1 = n0_refl - (2.0 / c2) * np.dot(v2, n0_refl) * v2
+            else:
+                n1 = n0_refl
+        else:
+            n1 = n0
+        n1 = n1 - np.dot(n1, t1) * t1
+        len_n1 = np.linalg.norm(n1)
+        n1 = n1 / len_n1 if len_n1 > 1e-9 else n0
+        b1 = np.cross(t1, n1)
+
+        frames.append({'t0': t0, 'n0': n0, 'b0': b0, 't1': t1, 'n1': n1, 'b1': b1})
+        n_curr = n1
+        t_curr = t1
+
+    if is_closed:
+        _close_rmf_frames(frames, segments_3d)
+
+    return frames
+
+
+def _close_rmf_frames(frames, segments_3d):
+    """Spread the parallel-transport holonomy of a closed space curve over its length.
+
+    Rotates every frame about its own tangent by angle * s/L, where `angle` is the
+    mismatch between the frame arriving back at the seam and the frame that left it.
+    The start frame (s=0) is untouched and the end frame (s=L) lands exactly on it,
+    so the swept profile meets itself at the seam. Modifies `frames` in place.
+    """
+    import numpy as np
+
+    last, first = frames[-1], frames[0]
+    seam_gap = np.linalg.norm(np.array(segments_3d[-1][3]) - np.array(segments_3d[0][0]))
+    if seam_gap > 1e-6:
+        return  # caller claims closed but the curve does not actually meet; leave alone
+
+    t_end, n_end, b_end = last['t1'], last['n1'], last['b1']
+    ref = first['n0'] - np.dot(first['n0'], t_end) * t_end
+    len_ref = np.linalg.norm(ref)
+    if len_ref <= 1e-9:
+        return  # start normal is parallel to the seam tangent; no meaningful angle
+    ref = ref / len_ref
+
+    angle = math.atan2(float(np.dot(ref, b_end)), float(np.dot(ref, n_end)))
+    if abs(angle) < 1e-12:
+        return
+
+    seg_lengths = []
+    for p0, p1, p2, p3 in segments_3d:
+        p0a, p1a, p2a, p3a = np.array(p0), np.array(p1), np.array(p2), np.array(p3)
+        chord = np.linalg.norm(p3a - p0a)
+        poly = (np.linalg.norm(p1a - p0a) + np.linalg.norm(p2a - p1a)
+                + np.linalg.norm(p3a - p2a))
+        seg_lengths.append(0.5 * (chord + poly))
+    total = sum(seg_lengths)
+    if total <= 1e-9:
+        return
+
+    accum = 0.0
+    for fr, seg_len in zip(frames, seg_lengths):
+        for suffix, s in (('0', accum), ('1', accum + seg_len)):
+            phi = angle * (s / total)
+            c, sn = math.cos(phi), math.sin(phi)
+            n, b = fr['n' + suffix], fr['b' + suffix]
+            fr['n' + suffix] = c * n + sn * b
+            fr['b' + suffix] = c * b - sn * n
+        accum += seg_len

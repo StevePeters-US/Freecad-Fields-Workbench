@@ -6,7 +6,7 @@ try:
 except ImportError:
     coin = None
 
-from freecad.fields.core.objects.fld_object import get_show_wireframe, get_line_width, get_point_size, get_show_cage_curves
+from freecad.fields.core.fld_settings import get_show_wireframe, get_line_width, get_point_size, get_show_cage_curves
 from freecad.fields.core.render.delegates.sdf_renderer_delegate import SdfRendererDelegate
 from freecad.fields.core.render.delegates.cage_surface_renderer_delegate import CageSurfaceRendererDelegate
 from freecad.fields.core.render.delegates.point_renderer_delegate import PointRendererDelegate

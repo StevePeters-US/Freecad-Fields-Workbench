@@ -11,7 +11,7 @@ from this module by name.
 
 Converts arbitrary OpenCASCADE CAD solids (primitives, sketch extrusions with curved
 arcs and splines, revolutions, edge fillets and roundovers, quadrics, patterns,
-boolean trees, and STEP imports) into Fields SdfField trees.
+boolean trees, and imported solids) into Fields SdfField trees.
 """
 import math
 import FreeCAD
@@ -79,7 +79,8 @@ def _new_planar_faces(shape, base_shape):
             try:
                 n = f.normalAt(0.0, 0.0)
                 q = f.CenterOfMass
-            except Exception:
+            except Exception as exc:
+                fld_logger.debug(f"[sdf_csg_convert] face normalAt/CenterOfMass failed: {exc}")
                 continue
             ln = math.sqrt(n.x * n.x + n.y * n.y + n.z * n.z)
             if ln < 1e-9:
@@ -245,7 +246,7 @@ def convert_csg_to_sdf(obj, max_depth=50, weld_tol=_DEFAULT_WELD_TOL, sign_mode=
         span = float(length_val.Value if hasattr(length_val, "Value") else length_val)
         spacing = span / max(1, count - 1)
         if base_field is not None:
-            return SdfArrayField(base_field, mode="linear", counts=(count, 1, 1), spacing=(spacing, 20.0, 20.0))
+            return SdfArrayField(base_field, mode="grid", counts=(count, 1, 1), spacing=(spacing, 20.0, 20.0))
 
     # PartDesign::Mirrored / Part::Mirroring
     if type_id in ("PartDesign::Mirrored", "Part::Mirroring"):

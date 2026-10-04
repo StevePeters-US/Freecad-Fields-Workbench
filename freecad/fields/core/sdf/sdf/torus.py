@@ -65,7 +65,7 @@ class SdfTorusField(SdfField):
     def max_erosion(self) -> float:
         return self.tube_radius
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         d = float(distance)
         if d <= 0.0 or d > self.tube_radius:
             return None
@@ -89,13 +89,5 @@ class SdfTorusField(SdfField):
                 for sz in (-1, 1):
                     corners_local.append(self.center + FreeCAD.Vector(sx * extent.x, sy * extent.y, sz * extent.z))
                     
-        if self.placement is not None:
-            corners = [self.placement.multVec(pt) for pt in corners_local]
-        else:
-            corners = corners_local
-            
-        min_x = min(pt.x for pt in corners); max_x = max(pt.x for pt in corners)
-        min_y = min(pt.y for pt in corners); max_y = max(pt.y for pt in corners)
-        min_z = min(pt.z for pt in corners); max_z = max(pt.z for pt in corners)
-        return (FreeCAD.Vector(min_x, min_y, min_z), FreeCAD.Vector(max_x, max_y, max_z))
+        return self._bbox_from_local_corners(corners_local)
 

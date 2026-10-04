@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120" viewBox="0 0 240 120" version="1.1">
+  <!-- Card background -->
+  <rect x="0.5" y="0.5" width="239" height="119" rx="6" style="fill:#f8fafc;stroke:#cbd5e1;stroke-width:1"/>
+  <!-- Left: Before (sharp seam) -->
+  <path d="M25 65 H57 V25 H97 V95 H25 Z" style="fill:#e0e0e0;stroke:#1e293b;stroke-width:2"/>
+  <!-- Arrow -->
+  <path d="M112 60 H128" style="fill:none;stroke:#64748b;stroke-width:2"/>
+  <path d="M128 60 L121 55 L121 65 Z" style="fill:#64748b;stroke:none"/>
+  <!-- Right: After (blended fillet in outline) -->
+  <path d="M145 65 H165 A 12 12 0 0 0 177 53 V25 H217 V95 H145 Z" style="fill:#e0e0e0;stroke:#1e293b;stroke-width:2"/>
+  <!-- Fillet arc highlighted with accent -->
+  <path d="M165 65 A 12 12 0 0 0 177 53" style="fill:none;stroke:#ffaa00;stroke-width:3"/>
+</svg>

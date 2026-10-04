@@ -2,6 +2,7 @@
 import FreeCAD
 import FreeCADGui
 from freecad.fields.tools.work_plane_tool import WorkPlaneCreator
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 class CommandFldWorkPlane:
     """Command to activate the WorkPlaneCreator tool."""
@@ -10,7 +11,7 @@ class CommandFldWorkPlane:
         return {
             'Pixmap': 'Fields_WorkPlane',
             'MenuText': 'Set Work Plane',
-            'ToolTip': 'Place a permanent Work Plane object',
+            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Places a permanent work plane object.")),
             'Accel': 'W'
         }
 

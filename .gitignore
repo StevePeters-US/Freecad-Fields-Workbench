@@ -1,25 +1,36 @@
-# Published tree gitignore — installed as .gitignore by publish.sh.
-# The public repo is built by publish.sh; these are backstops for anything
-# that is created while running or testing in the published directory.
+# Ships with the public addon, so it names generic build cruft only.
 
-# Bytecode
-__pycache__/
+# Python bytecode
 *.py[cod]
-*$py.class
+__pycache__/
 
-# FreeCAD transient files
-*.FCBak
-*.FCStd1
-Fields.FCStd.lock
-DirectModeling.FCStd.lock
-
-# Test runner / IDE output
+# Test / tooling caches
 .pytest_cache/
-.coverage
-htmlcov/
-.idea/
-.vscode/
+.ruff_cache/
+.mypy_cache/
 
-# Never ship dev-only material if a developer creates it in-place
-tests/
-private/
+# Virtual environments (there is no project venv; never commit one)
+.venv/
+venv/
+
+# FreeCAD backups
+*.FCStd1
+*.FCBak
+
+# Editor / OS cruft
+.DS_Store
+*.swp
+
+# Fields: runtime and tooling output that can appear at the repo root
+Fields.log
+*.FCStd.lock
+ollama_code_review.md
+codereview_*.md
+scratch/
+.cache/
+.venv_linux/
+test_venv/
+
+# CAD exports
+*.step
+*.stp

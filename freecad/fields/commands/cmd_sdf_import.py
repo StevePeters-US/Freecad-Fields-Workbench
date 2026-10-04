@@ -8,6 +8,7 @@ import FreeCADGui
 from PySide import QtCore
 from freecad.fields.core import fld_logger
 from freecad.fields.core.objects import fld_object
+from freecad.fields.core.objects.fld_object_proxy import persist_brep_cage_field
 from freecad.fields.core.sdf.sdf_csg_convert import convert_csg_to_sdf
 
 
@@ -15,13 +16,11 @@ class CommandFldConvertShapeToSdf:
     """Convert a Part / PartDesign / CSG shape into a Fields SDF object."""
 
     def GetResources(self):
+        from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
         return {
             'Pixmap': 'SDF_Cage',
             'MenuText': 'Convert B-Rep / CSG to SDF',
-            'ToolTip': (
-                "Convert the selected Part, PartDesign, or boolean CSG shape\n"
-                "into a Fields implicit SDF object via patch assembly."
-            ),
+            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Converts each selected Part, PartDesign or boolean shape into an SDF object.\nSelect one or more shapes.")),
         }
 
     def IsActive(self):
@@ -46,6 +45,7 @@ class CommandFldConvertShapeToSdf:
             try:
                 doc.openTransaction('Convert Shape to SDF')
                 converted_count = 0
+                transient_count = 0
                 for obj in sel:
                     field = convert_csg_to_sdf(obj)
                     if field is None:
@@ -58,6 +58,10 @@ class CommandFldConvertShapeToSdf:
 
                     if hasattr(obj, 'Placement'):
                         fld_obj.Placement = obj.Placement
+
+                    persisted = persist_brep_cage_field(fld_obj, field)
+                    if not persisted:
+                        transient_count += 1
 
                     if hasattr(obj, 'ViewObject') and obj.ViewObject:
                         obj.ViewObject.Visibility = False
@@ -79,7 +83,11 @@ class CommandFldConvertShapeToSdf:
                     doc.recompute()
                     if FreeCADGui.activeView():
                         FreeCADGui.activeView().redraw()
-                    fld_logger.info(f'Convert to SDF: Successfully converted {converted_count} object(s).')
+                    msg = f'Convert to SDF: Successfully converted {converted_count} object(s).'
+                    if transient_count:
+                        msg += (f' {transient_count} will NOT survive a document reload - '
+                                f'the field tree could not be described (see log).')
+                    fld_logger.info(msg)
                 else:
                     doc.abortTransaction()
             except Exception as e:

@@ -10,6 +10,9 @@ class Sdf2dCircle(Sdf2dField):
     def __init__(self, radius: float):
         self.radius = radius
 
+    def bbox_2d(self):
+        return (-self.radius, -self.radius, self.radius, self.radius)
+
     def evaluate_2d(self, x: float, y: float) -> float:
         return math.sqrt(x * x + y * y) - self.radius
 

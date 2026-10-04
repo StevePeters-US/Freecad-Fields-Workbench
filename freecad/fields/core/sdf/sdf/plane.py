@@ -13,7 +13,7 @@ float sdf_plane(vec3 p, vec3 origin, vec3 normal) {
 class SdfPlaneField(SdfField):
     """A half-space field divided by an infinite plane."""
     def __init__(self, normal: FreeCAD.Vector, origin: FreeCAD.Vector):
-        self.normal = normal
+        self.normal = FreeCAD.Vector(normal)
         self.normal.normalize()
         self.origin = origin
 
@@ -36,7 +36,7 @@ class SdfPlaneField(SdfField):
         # it is the identity.
         return float("inf")
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         d = float(distance)
         if d <= 0.0:
             return None
@@ -46,6 +46,6 @@ class SdfPlaneField(SdfField):
         return self.normal
 
     def bounding_box(self):
-        from freecad.fields.core.objects.fld_object import get_max_bounds
+        from freecad.fields.core.fld_settings import get_max_bounds
         mb = get_max_bounds()
         return (FreeCAD.Vector(-mb, -mb, -mb), FreeCAD.Vector(mb, mb, mb))
