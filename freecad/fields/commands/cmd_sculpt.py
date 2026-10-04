@@ -13,10 +13,11 @@ class CommandFldSculptBrush:
     """Command to start the interactive sculpt brush tool on the selected SDF object."""
 
     def GetResources(self):
+        from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
         return {
             'Pixmap': 'SDF_SculptBrush',
             'MenuText': 'Sculpt Brush',
-            'ToolTip': 'Interactively sculpt the selected SDF object with a 3D volumetric brush (Hold Ctrl to Carve, [ ] to resize).',
+            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Sculpts the selected SDF object with a 3D brush.\nSelect one SDF object.\nHold Ctrl to carve; [ and ] resize the brush.")),
             'Accel': '',
         }
 

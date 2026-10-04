@@ -6,6 +6,8 @@ from freecad.fields.tools.fld_sdf_tool_base import FldSdfModifierToolBase, Direc
 import os
 from freecad.fields.core import fld_logger
 from freecad.fields.core.input.fld_gui_utils import DynamicLimitSlider
+from freecad.fields.tools.primitive_creator_base import GIZMO_HIT_TOLERANCE_MULT
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 from pivy import coin
 
 
@@ -90,21 +92,42 @@ class HeightmapTaskPanel:
 
         self.cutoff_slider = DynamicLimitSlider(value=0.0, min_val=-1.0, max_val=1.0, step=0.05, decimals=2)
         self.cutoff_slider.setToolTip(
-            "Facing cutoff: -1 = displace all surfaces, 0 = front hemisphere only,\n"
-            "0.5 = only surfaces whose normal is within ~60° of the direction"
+            rich_tooltip(
+                "HeightmapTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "HeightmapTaskPanel",
+                    "Angle threshold for displacement.\n-1 displaces all surfaces, 0 front hemisphere only, 0.5 within ~60° of direction.\n<b>Default:</b> 0.0.",
+                ),
+            )
         )
         self.cutoff_slider.valueChanged.connect(self._on_params_changed)
         p_layout.addRow("Facing Cutoff:", self.cutoff_slider)
 
         self.tile_check = QtWidgets.QCheckBox("Tile texture")
         self.tile_check.setChecked(True)
-        self.tile_check.setToolTip("Repeat (tile) the heightmap image. Uncheck to clamp to edges.")
+        self.tile_check.setToolTip(
+            rich_tooltip(
+                "HeightmapTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "HeightmapTaskPanel",
+                    "Repeats the heightmap image across the surface. Unchecked clamps to the edges.",
+                ),
+            )
+        )
         self.tile_check.stateChanged.connect(self._on_params_changed)
         p_layout.addRow("", self.tile_check)
 
         self.group_btn = QtWidgets.QPushButton("Additive")
         self.group_btn.clicked.connect(self._on_group_toggled)
-        self.group_btn.setToolTip("Toggle rendering group (Q)")
+        self.group_btn.setToolTip(
+            rich_tooltip(
+                "HeightmapTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "HeightmapTaskPanel",
+                    "Switches the object between the additive and subtractive group.",
+                ),
+            )
+        )
         p_layout.addRow("Group:", self.group_btn)
 
         # ── Direction ──────────────────────────────────────────────────────────
@@ -424,7 +447,7 @@ class HeightmapTool(FldSdfModifierToolBase, DirectionGizmoMixin, DragTimerMixin)
         if not ray_p or not ray_d:
             self._restore_cursor()
             return
-        tol = self._compute_handle_radius(self._gizmo_pivot()) * 2.5
+        tol = self._compute_handle_radius(self._gizmo_pivot()) * GIZMO_HIT_TOLERANCE_MULT
         sph = self._get_amp_sphere_pos()
         if sph:
             perp = (sph - ray_p).cross(ray_d).Length / max(ray_d.Length, 1e-10)
@@ -445,7 +468,7 @@ class HeightmapTool(FldSdfModifierToolBase, DirectionGizmoMixin, DragTimerMixin)
         ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
         if not ray_p or not ray_d:
             return False
-        tol = self._compute_handle_radius(self._gizmo_pivot()) * 2.5
+        tol = self._compute_handle_radius(self._gizmo_pivot()) * GIZMO_HIT_TOLERANCE_MULT
         sph = self._get_amp_sphere_pos()
         if sph:
             perp = (sph - ray_p).cross(ray_d).Length / max(ray_d.Length, 1e-10)

@@ -23,7 +23,7 @@ class SdfCylinderField(SdfField):
     def __init__(self, base_center: FreeCAD.Vector, axis: FreeCAD.Vector, radius: float, height: float, placement: FreeCAD.Placement = None):
         super().__init__()
         self.base_center = base_center
-        self.axis = axis
+        self.axis = FreeCAD.Vector(axis)
         self.axis.normalize()
         self.radius = radius
         self.height = height
@@ -79,7 +79,7 @@ class SdfCylinderField(SdfField):
     def max_erosion(self) -> float:
         return min(self.radius, abs(self.height) * 0.5)
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         d = float(distance)
         if d <= 0.0 or d > self.max_erosion():
             return None
@@ -117,13 +117,4 @@ class SdfCylinderField(SdfField):
                 for sw in (-1, 1):
                     corners_local.append(p + u * (su * r) + w * (sw * r))
         
-        if self.placement is not None:
-            corners = [self.placement.multVec(pt) for pt in corners_local]
-        else:
-            corners = corners_local
-            
-        min_x = min(pt.x for pt in corners); max_x = max(pt.x for pt in corners)
-        min_y = min(pt.y for pt in corners); max_y = max(pt.y for pt in corners)
-        min_z = min(pt.z for pt in corners); max_z = max(pt.z for pt in corners)
-        
-        return (FreeCAD.Vector(min_x, min_y, min_z), FreeCAD.Vector(max_x, max_y, max_z))
+        return self._bbox_from_local_corners(corners_local)

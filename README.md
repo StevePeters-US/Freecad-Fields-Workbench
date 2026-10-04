@@ -1,113 +1,89 @@
-# FreeCAD Fields Workbench
+# Fields Workbench
 
-> **Support the Project:** If you find this workbench useful, consider supporting its development on [Patreon](https://www.patreon.com/cw/AttackPotato).
+[![Patreon](https://img.shields.io/badge/Support-Patreon-F96854?style=flat&logo=patreon)](https://www.patreon.com/cw/AttackPotato)
 
-> [!WARNING]
-> **Active Development:** This workbench is an experimental work in progress. Tools, underlying data structures, and file storage formats are subject to change. **Backwards compatibility is not guaranteed** across updates.
+The **Fields Workbench** brings implicit modeling, procedural textures, and volumetric deformation to FreeCAD using Signed Distance Fields (SDF). While traditional CAD relies on stitched boundary surfaces and brittle B-Rep booleans that can fail on complex intersections, Fields represents shapes as continuous volumetric fields. This makes it possible to blend intersecting solids with smooth transitions, carve and sculpt with 3D brushes, displace surfaces with procedural noise and heightmaps, and deform geometry with lattices and cages—all evaluated cleanly without topological errors, and convertible back to standard meshes or sliced into 2D curves for downstream FreeCAD operations.
 
-The **Fields Workbench** is a companion workbench for FreeCAD that provides implicit modeling, sculpting, and volumetric deformation tools using **Signed Distance Fields (SDF)**.
+![FreeCAD Fields Workbench viewport with sculpted, blended SDF primitives and noise textures](docs/images/hero.png)
 
-Designed to accompany FreeCAD's parametric toolsets, it provides an alternative way to model organic shapes, soft transitions, and volumetric textures without relying on boundary face stitching or traditional B-Rep boolean operations.
+## Tools
 
----
+### Primitives
 
-## 1. What Are Signed Distance Fields (SDF)?
+Creates exact mathematical solids—box, sphere, cylinder, and torus—with live-editable parameters. Use them as the building blocks for boolean operations, blends, and deformers.
 
-Most CAD modeling tools represent an object by its boundary surface—such as stitched parametric faces or polygonal meshes.
+![Analytical SDF primitives: box, sphere, cylinder, and torus](docs/images/tools_primitives.png)
 
-An **SDF** instead represents a shape as a continuous spatial field. For any point in 3D space, the field returns the distance to the nearest surface of the object:
+### Procedural Noise
 
-- **Inside the solid:** Distance values are **negative**.
-- **On the surface boundary:** Distance is **zero**.
-- **Outside in empty space:** Distance values are **positive**.
+Adds procedural 3D noise directly to the surface of any SDF solid. Use it to create organic textures, knurling, or rough surface finishes.
 
-<!-- Place screenshot of an SDF shape with distance contours here -->
-<!-- ![Signed Distance Field Concept](docs/images/sdf_concept.png) -->
+![SDF primitive with procedural 3D surface noise displacement](docs/images/tools_noise.png)
 
-### Practical Characteristics:
+### Heightmap Displacement
 
-- **Continuous Blending:** Intersecting shapes can blend together smoothly with an adjustable transition radius.
-- **Robust Booleans:** Union, cut, and intersection operations evaluate the field directly, avoiding topological failures or degenerate trimmed edges.
-- **Volumetric Modifiers:** Procedural noise, space deformations, lattices, and digital sculpting can be applied directly to the field.
-- **Companion to FreeCAD:** Shapes created in Fields can be converted to standard meshes or sliced into 2D profile curves for use with standard FreeCAD workbenches.
+Displaces the surface of an SDF object using imported grayscale images or elevation data. Use it to emboss logos, textures, and terrain with adjustable depth and smoothing.
 
----
+![3D relief surface generated from an imported grayscale heightmap](docs/images/tools_heightmap.png)
 
-## 2. Integrated into FreeCAD
+### Spatial Deformers
 
-Fields objects integrate directly into the FreeCAD environment:
+Non-destructively bends, twists, or repeats any SDF solid in a linear or polar array. Reach for these when shaping flowing, curved, or repetitive organic geometry.
 
-<!-- Place FreeCAD interface screenshot showing the 3D viewport, Tree View, and Modifier Stack here -->
-<!-- ![FreeCAD Fields Workbench Overview](docs/images/freecad_fields_overview.png) -->
+![SDF solid deformed with twist, bend, and array modifiers](docs/images/tools_deformers.png)
 
-- **Document Objects:** Fields objects live in the FreeCAD Tree View as standard `Part::FeaturePython` objects. Their parameters and placements can be adjusted in the Property view.
-- **Modifier Stack:** Deformations, noise layers, sculpt data, and booleans are organized in a non-destructive stack. Modifiers can be toggled, reordered, or edited at any time.
-- **Interactive Viewport Controls:** Edit objects using on-screen 3D gizmos, cage handles, and a dynamic workplane.
-- **Two-Color Grouping:** Press **`Q`** to toggle an object between **Group 1 (Additive)** and **Group 2 (Subtractive)** for quick visual booleans.
+### Lattice and Cage Deform
 
-### Viewport Display vs. Internal Evaluation
+Encloses any SDF solid within an interactive 3D control cage or lattice. Moving cage vertices deforms the underlying volume, making it easy to sculpt ergonomic contours and complex silhouettes.
 
-Evaluating continuous distance fields across 3D space is computationally demanding. To maintain usable viewport frame rates while preserving modeling accuracy, Fields separates display from exact calculation:
+![Freeform deformation of an SDF solid using an interactive control cage](docs/images/tools_cage.png)
 
-1. **Real-Time Viewport Render:** A lightweight GPU preview rendered directly in FreeCAD's 3D viewport for interactive navigation, handle dragging, and previewing edits.
-2. **Exact Internal Model:** A high-precision representation evaluated on demand when an operation requires exact geometric values—such as generating a mesh or calculating 2D slice contours.
+### Voxel Sculpt
 
----
+Converts an SDF solid into an editable voxel volume that you can add and carve using 3D brushes. Use it for freeform digital clay sculpting with adjustable brush radius, strength, and falloff.
 
-## 3. Major Tool Families
+![Volumetric digital sculpting on an SDF field with a 3D brush](docs/images/tools_sculpt.png)
 
-The workbench organizes modeling tools into several families:
+### SDF to Shape
 
-### 1. Primitives
-<!-- ![Primitives](docs/images/tools_primitives.png) -->
-Basic analytical 3D shapes:
-- **Box**, **Sphere**, **Cylinder**, and **Torus**.
+Creates a Part solid from implicit fields using Surface Nets, Marching Cubes, or Dual Contouring. Use FreeCAD's standard export to save STL/OBJ files for 3D printing or downstream solid modeling.
 
-### 2. Procedural Noise *(Node Graph in Progress)*
-<!-- ![Procedural Noise & Node Graph](docs/images/tools_noise.png) -->
-- A **visual node graph editor** in progress 
+![Extracted polygon mesh from an implicit SDF field](docs/images/tools_sdf_to_mesh.png)
 
-### 3. Heightmap Displacement
-<!-- ![Heightmap Displacement](docs/images/tools_heightmap.png) -->
-Import grayscale images or elevation data to create 3D relief surfaces and embossed textures with adjustable depth and smoothing.
+### Slice SDF
 
-### 4. Spatial Deformers
-<!-- ![Spatial Deformers](docs/images/tools_deformers.png) -->
-Non-destructively alter coordinate space across the field:
-- **Twist:** Rotational torsion along a chosen axis.
-- **Bend:** Curvature along a radius.
-- **Array:** Linear or circular repetition.
+Cuts an SDF solid with a cutting plane to extract 2D cross-section contour curves as native FreeCAD BSplineCurves. Use it for CNC toolpath generation, laser cutting, or sketching profiles.
 
-### 5. Lattice and Cage Deform
-<!-- ![Lattice and Cage Deform](docs/images/tools_cage.png) -->
-Enclose a shape in a 3D cage or lattice grid. Moving the cage vertices deforms the enclosed volume, useful for shaping organic silhouettes and ergonomic contours.
+![2D cross-section contour curves extracted from an SDF solid](docs/images/tools_sdf_slice.png)
 
-### 6. Voxel Sculpt
-<!-- ![Voxel Sculpt](docs/images/tools_sculpt.png) -->
-Sculpt volumetric details directly on objects using voxel layers and interactive 3D brushes
-- Adjustable radius, strength, and falloff profiles via the Brush Editor panel.
+## Requirements
 
-### 7. SDF to Mesh
-<!-- ![SDF to Mesh](docs/images/tools_sdf_to_mesh.png) -->
-Extract a standard polygon mesh from the implicit field (via Surface Nets, Marching Cubes, or Dual Contouring) for export (STL/OBJ) or downstream operations in FreeCAD.
+- FreeCAD 1.1 or newer
+- Fields requires no external dependencies beyond what FreeCAD bundles.
 
-### 8. Slice SDF
-<!-- ![SDF Slice Toolpath Contours](docs/images/tools_sdf_slice.png) -->
-Cut an SDF with a plane to extract 2D cross-section contour curves as FreeCAD `BSplineCurve` objects.
----
+## Installation
 
-## 4. Interactive Modeling & Keyboard Reference
+**Addon Manager (recommended):** Tools → Addon manager → search for "Fields" → Install, then restart FreeCAD.
 
-### Dynamic Workplane
-All geometry creation snaps to a dynamic workplane:
-- **Hovering over a face:** Aligns normal to the hovered surface (green tint).
-- **Hovering in empty space:** Falls back to the camera-facing viewport plane (blue tint).
-- **First Click:** Locks the workplane in place.
-- **Second Click:** Drag to size
+**Manual:** Clone or download https://github.com/StevePeters-US/Freecad-Fields-Workbench into the `Mod` folder of your FreeCAD user data directory (the Python console prints it: `App.getUserAppDataDir()`), then restart FreeCAD.
 
-### Keyboard Shortcuts
+## Quick start
+
+Geometry creation snaps to a dynamic workplane: hover over a face to align normal to the surface, or hover in empty space to use the camera-facing viewport plane. The first click locks the plane in place.
+
+1. Switch to the **Fields** workbench from the workbench selector.
+2. Click **Create Box** on the constructive toolbar, then click in the 3D viewport to place an SDF box.
+3. With the box selected, click **Add Noise Modifier** to add procedural surface texture, and adjust the noise scale in the task panel.
+4. Click **SDF to Shape** to convert the procedural solid into a Part solid ready for export.
+
+Alternatively, open `Resources/examples/Fields.FCStd` to explore pre-built examples of blends, deformers, and sculpted volumes.
+
+![SDF box with procedural surface noise converted to a polygon mesh](docs/images/quickstart_result.png)
+
+### Keyboard
 
 **Object Selection / Navigation**
+
 | Key | Action |
 |---|---|
 | `Tab` / `E` | Enter edit mode for the selected object |
@@ -116,6 +92,7 @@ All geometry creation snaps to a dynamic workplane:
 | `Ctrl + Space` | Toggle viewport maximize |
 
 **While a Tool is Active**
+
 | Key | Action |
 |---|---|
 | `Esc` | Cancel tool and restore original state |
@@ -126,7 +103,9 @@ All geometry creation snaps to a dynamic workplane:
 | `D` | Tool options menu |
 
 **Modal Transforms (Blender-style)**
+
 Press `G`, `R`, or `S` in edit mode. Middle-mouse view navigation remains live throughout:
+
 | Key | Action |
 |---|---|
 | `G` | Grab (translate / move) |
@@ -139,18 +118,18 @@ Press `G`, `R`, or `S` in edit mode. Middle-mouse view navigation remains live t
 | `Enter` or Left-Click | Apply transform |
 | `Esc` or Right-Click | Cancel transform and restore original position |
 
----
+## Known issues
 
-## 5. Installation
+- Active development: tools, underlying data structures, and file formats may change between releases. Backwards compatibility is not guaranteed across updates.
+- Visual node graph editor for procedural noise is currently in progress.
 
-1. Clone or symlink this repository into your FreeCAD `Mod` directory:
-   - **Linux**: `~/.FreeCAD/Mod/Fields`
-   - **macOS**: `~/Library/Application Support/FreeCAD/Mod/Fields`
-   - **Windows**: `%APPDATA%\FreeCAD\Mod\Fields`
-2. Restart FreeCAD.
-3. Select **Fields** from the workbench dropdown menu.
+## Support
 
----
+If you find this workbench useful, consider supporting its development on [Patreon](https://www.patreon.com/cw/AttackPotato).
+
+## License
+
+CC BY-NC-SA 4.0 — see [LICENSE](LICENSE).
 
 ## Attributions
 

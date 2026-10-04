@@ -34,7 +34,8 @@ for lib_name in _lib_names:
         try:
             _gl = ctypes.cdll.LoadLibrary(_gl_path)
             break
-        except OSError:
+        except OSError as exc:
+            fld_logger.debug(f"[gl_texture3d] LoadLibrary({_gl_path}) failed: {exc}")
             continue
 
 if _gl is None:
@@ -43,7 +44,8 @@ if _gl is None:
         try:
             _gl = ctypes.cdll.LoadLibrary(name)
             break
-        except OSError:
+        except OSError as exc:
+            fld_logger.debug(f"[gl_texture3d] LoadLibrary({name}) failed: {exc}")
             continue
 
 if _gl is None:
@@ -63,7 +65,7 @@ class GLFunctionLoader:
 
     def __init__(self, gl_lib):
         self._gl = gl_lib
-        self._is_win = (ctypes.sizeof(ctypes.c_void_p) == 8 or True) and hasattr(ctypes, "windll")
+        self._is_win = hasattr(ctypes, "windll")
         self._funcs = {}
         self._wglGetProcAddress = None
 
@@ -166,11 +168,12 @@ class GLTexture3D:
         self._width = width
         self._height = height
         self._depth = depth
-        # Keep the bytes alive so the ctypes pointer remains valid
-        if isinstance(rgba_bytes, (bytes, bytearray)):
-            self._data = (ctypes.c_ubyte * len(rgba_bytes)).from_buffer_copy(rgba_bytes)
-        else:
-            self._data = (ctypes.c_ubyte * len(rgba_bytes)).from_buffer_copy(bytes(rgba_bytes))
+        # Keep the bytes alive so the ctypes pointer remains valid. memoryview
+        # handles bytes/bytearray and buffer-protocol objects (e.g. numpy
+        # arrays) alike, sized in actual bytes rather than len() (which for a
+        # multi-dim array would be just the first-axis count).
+        buf = memoryview(rgba_bytes).cast("B")
+        self._data = (ctypes.c_ubyte * len(buf)).from_buffer_copy(buf)
         self._needs_upload = True
         self._needs_allocate = False
         self._needs_partial = False # Full upload supercedes partial

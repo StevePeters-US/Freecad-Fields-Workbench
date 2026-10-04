@@ -2,7 +2,7 @@
 """
 commands/cmd_sdf_slice.py
 
-Slice an SDF SDF on a plane and create Fields curve objects.
+Slice an SDF on a plane and create Fields curve objects.
 """
 import FreeCAD
 import FreeCADGui
@@ -13,11 +13,11 @@ class CommandFldSdfSlice:
     """Slice an SDF object to create cross-section curves."""
 
     def GetResources(self):
+        from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
         return {
             'Pixmap': 'SDFSlice',
             'MenuText': 'SDF Slice',
-            'ToolTip': 'Slice an SDF object on a plane to create cross-section curves.\n'
-                       'Select an SDF object first. Slice plane starts at object placement and is steered from the panel.',
+            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Creates cross-section curves where a plane cuts the selected SDF object.\nSelect one SDF object.")),
         }
 
     def Activated(self):

@@ -44,6 +44,25 @@ class DirectionGizmoMixin:
         """Return tuple of property names (X, Y, Z) to modify on translation drag, or None for Placement.Base."""
         return None
 
+    def _gizmo_translate_target(self):
+        """Object whose Placement.Base a translation drag moves, when
+        `_gizmo_origin_prop_names()` returns None. Defaults to Source (the
+        historical behaviour: dragging moves the wrapped shape), falling back
+        to the tool's own object. Override when Center *is* the tool's own
+        Placement (e.g. NoiseTool)."""
+        import FreeCAD
+        obj = getattr(self, "_target_obj", None)
+        source = getattr(obj, "Source", None)
+        return source if (source and hasattr(source, "Placement")) else obj
+
+    def _gizmo_direction_vector(self):
+        """World-space direction arrow drawn by `_draw_direction_arrow()`.
+        Defaults to reading DirectionX/Y/Z off the target object; override when
+        direction is derived from Placement instead (e.g. NoiseTool)."""
+        import FreeCAD
+        obj = getattr(self, "_target_obj", None)
+        return FreeCAD.Vector(obj.DirectionX, obj.DirectionY, obj.DirectionZ)
+
     def _init_gizmo(self):
         import FreeCAD
         from freecad.fields.core.input.fld_gizmo import FldTransformGizmo
@@ -90,7 +109,7 @@ class DirectionGizmoMixin:
         if not obj:
             return
         origin = self._gizmo_pivot()
-        dir_vec = FreeCAD.Vector(obj.DirectionX, obj.DirectionY, obj.DirectionZ)
+        dir_vec = self._gizmo_direction_vector()
         if dir_vec.Length < 1e-8:
             dir_vec = FreeCAD.Vector(0, 0, -1)
         else:
@@ -285,8 +304,7 @@ class DirectionGizmoMixin:
                 setattr(obj, py, getattr(obj, py, 0.0) + delta.y)
                 setattr(obj, pz, getattr(obj, pz, 0.0) + delta.z)
             else:
-                source = getattr(obj, "Source", None)
-                target = source if (source and hasattr(source, "Placement")) else obj
+                target = self._gizmo_translate_target()
                 if hasattr(target, "Placement"):
                     pl = FreeCAD.Placement(target.Placement)
                     pl.move(delta)
@@ -331,8 +349,7 @@ class DirectionGizmoMixin:
                 setattr(obj, py, getattr(obj, py, 0.0) + delta.y)
                 setattr(obj, pz, getattr(obj, pz, 0.0) + delta.z)
             else:
-                source = getattr(obj, "Source", None)
-                target = source if (source and hasattr(source, "Placement")) else obj
+                target = self._gizmo_translate_target()
                 if hasattr(target, "Placement"):
                     # `target.Placement.Base += delta` silently does nothing: the
                     # property getter returns a copy. Assign a whole Placement.
@@ -450,7 +467,7 @@ class FldSdfToolBase(FldBase):
 class FldSdfModifierToolBase(FldSdfToolBase):
     """
     Shared edit/cancel/commit lifecycle for SDF modifier tools (Twist, Bend, Lattice,
-    Noise3D, Noise2D, Heightmap). Each concrete tool only needs to:
+    Noise, Heightmap). Each concrete tool only needs to:
       - set SNAPSHOT_PROPERTIES (and optionally SNAPSHOT_CUSTOM_PREFIX)
       - implement _make_panel()
       - override edit_object()/_after_group_toggle() to add tool-specific visuals,

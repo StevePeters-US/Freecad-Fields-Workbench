@@ -38,9 +38,22 @@ _gl_context_func = None
 _unknown_platform_warned = False
 
 def has_active_context() -> bool:
+    """Report whether a GL context is current, resolving the platform entry point once.
+
+    `_gl_context_resolved` latches the one-time platform lookup below and means
+    "the lookup has been attempted" -- not "a context was found", which is this
+    function's return value. The lookup therefore runs before any early return:
+    it used to sit behind the `glGenBuffers` guard, where a platform missing that
+    entry point left the latch False forever and the lookup permanently un-run.
+
+    That is not hypothetical. `glGenBuffers` is GL 1.5 and `opengl32.dll` exports
+    only the GL 1.1 ABI, so on Windows the guard above always fires, and the
+    resolution below -- which wants `wglGetCurrentContext`, a GL 1.1 entry point
+    that *is* exported -- never got to run. Whether buffer entry points exist is a
+    separate question from whether a context is current, and the two are now asked
+    in that order.
+    """
     global _gl_context_resolved, _gl_context_func, _unknown_platform_warned
-    if glGenBuffers is None:
-        return False
     if not _gl_context_resolved:
         if sys.platform == "linux":
             for libname in ["libGL.so.1", "libGL.so"]:
@@ -79,6 +92,11 @@ def has_active_context() -> bool:
                 _unknown_platform_warned = True
         _gl_context_resolved = True
 
+    # A context we cannot allocate buffers in is of no use to this evaluator, so the
+    # answer is still False -- but it is False after the lookup ran, not instead of it.
+    if glGenBuffers is None:
+        return False
+
     if _gl_context_func is None:
         return False
 
@@ -92,6 +110,19 @@ def has_active_context() -> bool:
 class GpuFieldEvaluator:
     # Program cache: source_hash -> GLProgram instance
     _program_cache = {}
+
+    @staticmethod
+    def _set_texture_filtering(target, glTexParameteri, is_3d=False):
+        # Call this as GpuFieldEvaluator._set_texture_filtering(...), never self._....
+        # _bind_textures/_bind_textures3d are deliberately callable unbound --
+        # scene_volume.py:478 invokes them as GpuFieldEvaluator._bind_textures(None, ...)
+        # with no evaluator instance -- so any `self.` inside them raises AttributeError.
+        glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+        glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+        if is_3d:
+            glTexParameteri(target, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE)
 
     def _bind_textures(self, program, ctx, base_unit=1):
         """Upload and bind sampler2D textures to GL texture units starting at base_unit."""
@@ -141,10 +172,7 @@ class GpuFieldEvaluator:
             glActiveTexture(GL_TEXTURE0 + unit)
             glBindTexture(GL_TEXTURE_2D, tex_id)
             glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, w, h, 0, GL_RED, GL_FLOAT, data_ptr)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+            GpuFieldEvaluator._set_texture_filtering(GL_TEXTURE_2D, glTexParameteri, is_3d=False)
 
             if program is not None:
                 program.set_1i(sname, unit)
@@ -246,11 +274,7 @@ class GpuFieldEvaluator:
 
                 glBindTexture(GL_TEXTURE_3D, tex_id)
                 glTexImage3D(GL_TEXTURE_3D, 0, int_fmt, nx, ny, nz, 0, gl_fmt, gl_type, data_ptr)
-                glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-                glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-                glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-                glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-                glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE)
+                GpuFieldEvaluator._set_texture_filtering(GL_TEXTURE_3D, glTexParameteri, is_3d=True)
 
                 tdata_uniforms = tdata.get("uniforms", {})
                 entry = {"tex_id": tex_id, "key": key, "uniforms": tdata_uniforms}

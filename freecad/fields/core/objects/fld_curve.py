@@ -2,6 +2,7 @@
 import FreeCAD
 import Part
 from freecad.fields.core.objects.fld_point import FldPoint
+from freecad.fields.core import fld_logger
 
 class FldCurve:
     """
@@ -93,7 +94,6 @@ class FldCurve:
                 self._bspline = bs
                 return bs
             except Exception as e:
-                from freecad.fields.core import fld_logger
                 fld_logger.debug(f"DEBUG: Native interpolate failed: {e}. Falling back to manual pole building.")
         
         # 2. Handle path: Build Bezier poles for each cubic segment (preserved for explicit tangent control)
@@ -158,7 +158,6 @@ class FldCurve:
         try:
             bs = Part.BSplineCurve(poles, mults, knots, is_closed_arg, degree, weights)
         except Exception as e:
-            from freecad.fields.core import fld_logger
             fld_logger.error(
                 f"FldCurve.bspline: Part.BSplineCurve rejected the pole structure "
                 f"({len(poles)} poles, mults={mults}, knots={knots}, "
@@ -170,14 +169,21 @@ class FldCurve:
         return bs
 
     def to_shape(self):
-        """Returns the curve as a Part.Shape (Edge). Control points move to Coin3D overlay."""
+        """Returns the curve as a Part.Shape (Wire around a single Edge). Control
+        points move to Coin3D overlay.
+
+        Must be a Wire, not a bare Edge: `Shape.Wires` only enumerates explicit
+        TopoDS_WIRE sub-shapes, so a lone periodic (closed) Edge reports zero
+        Wires even though it's geometrically closed. External consumers that
+        walk `Shape.Wires` -- e.g. the Nesting workbench extracting a cuttable
+        profile -- found nothing to trace and fell back to discretizing the
+        object some other way instead of following the curve.
+        """
         bs = self.bspline
         if bs:
             try:
-                # Return only the edge. Markers/handles are now handled by FldViewProvider overlay.
-                return Part.Edge(bs)
+                return Part.Wire([Part.Edge(bs)])
             except Exception as e:
-                from freecad.fields.core import fld_logger
                 fld_logger.debug(f"DEBUG: FldCurve.to_shape edge error: {e}")
 
         # Fallback if no BSpline could be built (e.g. 1 point)

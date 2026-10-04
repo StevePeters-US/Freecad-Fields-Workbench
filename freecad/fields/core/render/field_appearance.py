@@ -25,7 +25,7 @@ DEFAULT_SPECULAR          = (1.0, 1.0, 1.0, 32.0)
 def apply_default_view_settings(view_object, shape_color):
     """Visible, `shape_color`-tinted, shaded -- the default a newly-created
     object's ViewObject gets. Shared by the object-creation factories in
-    `fld_noise_object.py`, `fld_noise2d_object.py`, `fld_heightmap_object.py` and
+    `fld_noise_object.py`, `fld_heightmap_object.py` and
     `fld_voxel_field.py` (CR-030), which each repeated exactly these three
     assignments; the `FreeCAD.GuiUp` guard and try/except around the call are left
     at each call site since their logging context (which factory failed) differs.
@@ -45,14 +45,16 @@ class FieldAppearance:
                 return None
             doc = FreeCAD.getDocument(parts[0])
             return doc.getObject(parts[1]) if doc else None
-        except Exception:
+        except Exception as e:
+            fld_logger.render_debug(f"FieldAppearance._object_for failed for {label!r}: {e}")
             return None
 
     def is_subtractive(self, label):
         try:
             obj = self._object_for(label)
             return getattr(obj, "Group", "Additive") == "Subtractive"
-        except Exception:
+        except Exception as e:
+            fld_logger.render_debug(f"FieldAppearance.is_subtractive failed for {label!r}: {e}")
             return False
 
     def vis_alpha(self, label):
@@ -61,7 +63,8 @@ class FieldAppearance:
             obj = self._object_for(label)
             val = getattr(obj, "DebugAlpha", None)
             return float(val) if val is not None else 1.0
-        except Exception:
+        except Exception as e:
+            fld_logger.render_debug(f"FieldAppearance.vis_alpha failed for {label!r}: {e}")
             return 1.0
 
     def shape_color(self, label):

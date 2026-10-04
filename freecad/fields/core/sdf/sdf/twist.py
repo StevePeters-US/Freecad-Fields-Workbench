@@ -140,39 +140,26 @@ class SdfTwistField(SdfField):
             
         return self.source.evaluate_grid(pts_rot).astype(np.float32)
 
-    def to_glsl(self, ctx, point_var="p"):
+    def _deformed_var(self, ctx, point_var="p") -> str:
         import math
         rate_val = math.radians(self.angle_per_unit)
         rate_u = ctx.uniform("float", rate_val)
         
         if self.axis == "X":
             ctx.add_custom_helper("twist_x", _GLSL_TWIST_X)
-            deformed_var = f"twist_x({point_var}, {rate_u})"
+            return f"twist_x({point_var}, {rate_u})"
         elif self.axis == "Y":
             ctx.add_custom_helper("twist_y", _GLSL_TWIST_Y)
-            deformed_var = f"twist_y({point_var}, {rate_u})"
+            return f"twist_y({point_var}, {rate_u})"
         else: # Z
             ctx.add_custom_helper("twist_z", _GLSL_TWIST_Z)
-            deformed_var = f"twist_z({point_var}, {rate_u})"
-            
-        return self.source.to_glsl(ctx, deformed_var)
+            return f"twist_z({point_var}, {rate_u})"
+
+    def to_glsl(self, ctx, point_var="p"):
+        return self.source.to_glsl(ctx, self._deformed_var(ctx, point_var))
 
     def to_glsl_sample(self, ctx, point_var="p"):
-        import math
-        rate_val = math.radians(self.angle_per_unit)
-        rate_u = ctx.uniform("float", rate_val)
-        
-        if self.axis == "X":
-            ctx.add_custom_helper("twist_x", _GLSL_TWIST_X)
-            deformed_var = f"twist_x({point_var}, {rate_u})"
-        elif self.axis == "Y":
-            ctx.add_custom_helper("twist_y", _GLSL_TWIST_Y)
-            deformed_var = f"twist_y({point_var}, {rate_u})"
-        else: # Z
-            ctx.add_custom_helper("twist_z", _GLSL_TWIST_Z)
-            deformed_var = f"twist_z({point_var}, {rate_u})"
-            
-        return self.source.to_glsl_sample(ctx, deformed_var)
+        return self.source.to_glsl_sample(ctx, self._deformed_var(ctx, point_var))
 
 
 _GLSL_TWIST_X = """

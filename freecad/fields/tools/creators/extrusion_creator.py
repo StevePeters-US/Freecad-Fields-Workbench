@@ -38,7 +38,50 @@ def extrude_rings_from_segments_3d(segs_3d, offset):
             [p + offset for p in base_ring], [p + offset for p in base_handles])
 
 
-class CurveExtrudeCreator(PrimitiveCreatorBase):
+class _BaseExtrudeCreator(PrimitiveCreatorBase):
+    """Shared base for extrusion creators: one-shot finish, height clamping, and height parameters."""
+
+    CREATION_STEPS = [ToolState.DRAG_Z]
+    SUPPORTS_ORIGIN_EDIT = False
+
+    def finish(self):
+        """One-shot tool: commit then terminate (prevents a second object being created)."""
+        if getattr(self, "_is_editing", False):
+            super().finish()   # commits edits, resets to DRAG_Z
+            self._finished = True
+            self.terminate()
+        elif self.is_in_progress():
+            self._finalize_object(self._primitive_name(), terminate=True)
+        else:
+            self.terminate()
+
+    def _clamp_height(self, h):
+        return max(0.1, h)
+
+    def _offset_placement(self):
+        """Working plane shifted height/2 along normal — centers the ±height/2 extrusion."""
+        wp = self.working_plane
+        norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
+        base = wp.Base if wp else FreeCAD.Vector(0, 0, 0)
+        rot = wp.Rotation if wp else FreeCAD.Rotation()
+        return FreeCAD.Placement(base + norm * (self._height * 0.5), rot)
+
+    def _get_final_points(self):
+        source = getattr(self, "_curve_obj", getattr(self, "_surface_obj", None))
+        return [FreeCAD.Vector(0.0, 0.0, self._height)] if source else None
+
+    def get_parameters(self):
+        return {"Height": self._height}
+
+    def _apply_parameters(self, params):
+        self._height = self._clamp_height(float(params.get("Height", 10.0)))
+        if self._cached_extrude is not None:
+            self._update_field_inplace(self._cached_extrude)
+        self._update_extrude_handles()
+        return True
+
+
+class CurveExtrudeCreator(_BaseExtrudeCreator):
     """
     Extrudes a selected closed curve into an SDF solid using exact cubic Bezier distance.
     Uses obj.Placement directly as the extrusion direction (2D curves only).
@@ -99,9 +142,6 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
     def _detect_selected_workplane(self):
         pass
 
-    def _clamp_height(self, h):
-        return max(0.1, h)
-
     def _on_stage_accept(self, state, pos):
         if state == ToolState.DRAG_Z and pos and self._anchor_pt:
             wp   = self.working_plane
@@ -131,12 +171,6 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
         top_ctrl  = [p + offset for p in base_ctrl]
 
         self.gizmo.update(base_ctrl, top_ctrl, handle_radius=r)
-
-    def _offset_placement(self):
-        """Working plane shifted height/2 along its normal - centers the ±height/2 extrusion."""
-        wp   = self.working_plane
-        norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
-        return FreeCAD.Placement(wp.Base + norm * (self._height * 0.5), wp.Rotation)
 
     def _update_field_inplace(self, field):
         """Sync height and placement on an existing SdfExtrusionField without changing id()."""
@@ -173,39 +207,19 @@ class CurveExtrudeCreator(PrimitiveCreatorBase):
     def _get_edit_preview_field(self):  return self._extrude_field()
     def _get_final_field(self):         return self._extrude_field()
 
-    def _get_final_points(self):
-        return [FreeCAD.Vector(0.0, 0.0, self._height)] if self._curve_obj else None
-
-    def get_parameters(self):
-        return {"Height": self._height}
-
-    def _apply_parameters(self, params):
-        self._height = self._clamp_height(float(params.get("Height", 10.0)))
-        if self._cached_extrude is not None:
-            self._update_field_inplace(self._cached_extrude)
-        self._update_extrude_handles()
-        return True
+    _get_final_points = _BaseExtrudeCreator._get_final_points
+    get_parameters = _BaseExtrudeCreator.get_parameters
+    _apply_parameters = _BaseExtrudeCreator._apply_parameters
 
     def _primitive_name(self):
         return "CurveExtrude"
-
-    def finish(self):
-        """One-shot tool: commit then terminate (prevents a second object being created)."""
-        if getattr(self, "_is_editing", False):
-            super().finish()   # commits edits, resets to DRAG_Z
-            self._finished = True
-            self.terminate()
-        elif self.is_in_progress():
-            self._finalize_object(self._primitive_name(), terminate=True)
-        else:
-            self.terminate()
 
     def _do_terminate(self):
         self.gizmo.clear()
         super()._do_terminate()
 
 
-class CurveExtrude3DCreator(PrimitiveCreatorBase):
+class CurveExtrude3DCreator(_BaseExtrudeCreator):
     """
     Creates a round tube/pipe swept along a selected 3D curve path.
     Works with open and closed curves of any 3D shape.
@@ -384,19 +398,8 @@ class CurveExtrude3DCreator(PrimitiveCreatorBase):
     def _primitive_name(self):
         return "CurvePipe"
 
-    def finish(self):
-        """One-shot tool: commit then terminate."""
-        if getattr(self, "_is_editing", False):
-            super().finish()
-            self._finished = True
-            self.terminate()
-        elif self.is_in_progress():
-            self._finalize_object(self._primitive_name(), terminate=True)
-        else:
-            self.terminate()
 
-
-class SdfCurveFillExtrudeCreator(PrimitiveCreatorBase):
+class SdfCurveFillExtrudeCreator(_BaseExtrudeCreator):
     """
     Extrudes a selected SDF face (FldSurface) into a solid SDF using SdfCurveFillExtrusionField.
     Shows two curve rings (base + top) representing the boundary and lets the user drag to set depth.
@@ -528,9 +531,6 @@ class SdfCurveFillExtrudeCreator(PrimitiveCreatorBase):
     def _detect_selected_workplane(self):
         pass
 
-    def _clamp_height(self, h):
-        return max(0.1, h)
-
     def _on_stage_accept(self, state, pos):
         if state == ToolState.DRAG_Z and pos and self._anchor_pt:
             norm = self.working_plane.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
@@ -564,14 +564,6 @@ class SdfCurveFillExtrudeCreator(PrimitiveCreatorBase):
         )
         self.gizmo.update(base_ctrl, top_ctrl, base_handles, top_handles, handle_radius=r)
 
-    def _offset_placement(self):
-        """Working plane shifted height/2 along normal — centers the ±height/2 extrusion."""
-        norm = self.working_plane.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
-        return FreeCAD.Placement(
-            self.working_plane.Base + norm * (self._height * 0.5),
-            self.working_plane.Rotation,
-        )
-
     def _update_field_inplace(self, field):
         """Retarget the cached field to the current drag height, keeping id() stable.
 
@@ -602,18 +594,9 @@ class SdfCurveFillExtrudeCreator(PrimitiveCreatorBase):
     def _get_edit_preview_field(self): return self._extrude_field()
     def _get_final_field(self):        return self._extrude_field()
 
-    def _get_final_points(self):
-        return [FreeCAD.Vector(0.0, 0.0, self._height)] if self._surface_obj else None
-
-    def get_parameters(self):
-        return {"Height": self._height}
-
-    def _apply_parameters(self, params):
-        self._height = self._clamp_height(float(params.get("Height", 10.0)))
-        if self._cached_extrude is not None:
-            self._update_field_inplace(self._cached_extrude)
-        self._update_extrude_handles()
-        return True
+    _get_final_points = _BaseExtrudeCreator._get_final_points
+    get_parameters = _BaseExtrudeCreator.get_parameters
+    _apply_parameters = _BaseExtrudeCreator._apply_parameters
 
     def _primitive_name(self):
         return "SurfaceExtrude"

@@ -264,11 +264,8 @@ class SculptBrushTool(FldSdfModifierToolBase):
             if event_dict.get("ctrl", False):
                 return True
             mods = event_dict.get("Modifiers", 0)
-            try:
-                if bool(int(mods) & int(QtCore.Qt.ControlModifier)):
-                    return True
-            except Exception:
-                pass
+            if bool(mods & QtCore.Qt.ControlModifier):
+                return True
             key_code = event_dict.get("Key", 0)
             if key_code == QtCore.Qt.Key_Control:
                 return True
@@ -276,10 +273,8 @@ class SculptBrushTool(FldSdfModifierToolBase):
             if key_str in ("Control", "ctrl", "Ctrl"):
                 return True
         if FreeCAD.GuiUp:
-            try:
-                return bool(QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ControlModifier)
-            except Exception:
-                pass
+            from freecad.fields.core.input.input_manager import FldInputManager
+            return FldInputManager.get_instance().is_ctrl_down()
         return False
 
     def _update_status(self):

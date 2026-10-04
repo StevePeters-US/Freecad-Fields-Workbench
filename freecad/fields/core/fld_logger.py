@@ -1,12 +1,16 @@
 # SPDX-License-Identifier: CC-BY-NC-SA-4.0
 import FreeCAD
 import os
+import sys
 import time
 import traceback
 
 _throttle_times = {}  # key -> last_emit_time
+_THROTTLE_TIMES_MAX = 1024  # eviction cap so long sessions with many keys don't leak
 
-_PARAM_PATH = "User parameter:FCFields"
+_PARAM_PATH = "User parameter:BaseApp/Preferences/fields"  # == fld_prefs.PREFS_PATH; pinned by test_prefs_path
+_crash_log_enabled = None  # cached EnableCrashLog (None = not yet loaded)
+
 def get_enable_crash_log():
     try:
         return FreeCAD.ParamGet(_PARAM_PATH).GetBool("EnableCrashLog", True) # Default True
@@ -16,8 +20,14 @@ def get_enable_crash_log():
 def set_enable_crash_log(val):
     try:
         FreeCAD.ParamGet(_PARAM_PATH).SetBool("EnableCrashLog", bool(val))
-    except Exception:
-        pass  # Ignore parameter store exceptions during logger setup
+    except Exception as exc:
+        try:
+            if sys.__stderr__ is not None:
+                sys.__stderr__.write(f"fld_logger: set_enable_crash_log failed: {exc}\n")
+        except Exception:
+            pass  # Allowed: sys.__stderr__ write can fail or be None on Windows
+    global _crash_log_enabled
+    _crash_log_enabled = bool(val)
 
 # ── Debug logging categories ────────────────────────────────────────────────
 # debug() output is gated by (a) a master switch and (b) a per-category switch.
@@ -47,8 +57,12 @@ def get_enable_debug_log():
 def set_enable_debug_log(val):
     try:
         FreeCAD.ParamGet(_PARAM_PATH).SetBool("EnableDebugLog", bool(val))
-    except Exception:
-        pass  # Ignore parameter store exceptions during debug switch update
+    except Exception as exc:
+        try:
+            if sys.__stderr__ is not None:
+                sys.__stderr__.write(f"fld_logger: set_enable_debug_log failed: {exc}\n")
+        except Exception:
+            pass  # Allowed: sys.__stderr__ write can fail or be None on Windows
     _refresh_debug_cache()
 
 def get_debug_category(cat):
@@ -61,15 +75,20 @@ def get_debug_category(cat):
 def set_debug_category(cat, val):
     try:
         FreeCAD.ParamGet(_PARAM_PATH).SetBool(f"DebugCat_{cat}", bool(val))
-    except Exception:
-        pass  # Ignore parameter store exceptions during category switch update
+    except Exception as exc:
+        try:
+            if sys.__stderr__ is not None:
+                sys.__stderr__.write(f"fld_logger: set_debug_category failed: {exc}\n")
+        except Exception:
+            pass  # Allowed: sys.__stderr__ write can fail or be None on Windows
     _refresh_debug_cache()
 
 def _refresh_debug_cache():
     """Reload cached debug switches from params (call after settings change)."""
-    global _debug_master, _debug_cats
+    global _debug_master, _debug_cats, _crash_log_enabled
     _debug_master = get_enable_debug_log()
     _debug_cats = {c: get_debug_category(c) for c in DEBUG_CATEGORIES}
+    _crash_log_enabled = get_enable_crash_log()
 
 def refresh_debug_settings():
     """Public alias — the settings dialog calls this on accept."""
@@ -110,20 +129,42 @@ def _log(level, msg):
             FreeCAD.Console.PrintMessage(formatted + "\n")
 
     # Log to file if enabled OR if it's an ERROR (crash investigation)
-    if get_enable_crash_log() or level == "ERROR":
+    global _crash_log_enabled
+    if _crash_log_enabled is None:
+        _crash_log_enabled = get_enable_crash_log()
+    if _crash_log_enabled or level == "ERROR":
         try:
             log_p = get_log_path()
             d = os.path.dirname(log_p)
             if d and not os.path.exists(d):
                 os.makedirs(d, exist_ok=True)
-            
+            _rotate_if_full(log_p)
+
             with open(log_p, "a", encoding="utf-8") as f:
                 for line in lines:
                     formatted = f"[{level}] {line}" if level else line
                     f.write(formatted + "\n")
                 f.flush()
-        except Exception:
-            pass  # Ignore file write failures inside logger to prevent log recursion
+        except Exception as exc:
+            try:
+                if sys.__stderr__ is not None:
+                    sys.__stderr__.write(f"fld_logger: log file write failed: {exc}\n")
+            except Exception:
+                pass  # Allowed: sys.__stderr__ write can fail or be None on Windows
+
+_LOG_MAX_BYTES = 10 * 1024 * 1024
+_LOG_BACKUPS = 3
+
+
+def _rotate_if_full(path):
+    """Cap the log at _LOG_MAX_BYTES: shift path -> path.1 -> ... -> path.<_LOG_BACKUPS>."""
+    if not os.path.exists(path) or os.path.getsize(path) < _LOG_MAX_BYTES:
+        return
+    for i in range(_LOG_BACKUPS - 1, 0, -1):
+        if os.path.exists(f"{path}.{i}"):
+            os.replace(f"{path}.{i}", f"{path}.{i + 1}")
+    os.replace(path, f"{path}.1")
+
 
 def log(msg):
     """Generic log message (FreeCAD.Console.PrintLog equivalent)."""
@@ -154,6 +195,8 @@ def debug_throttled(key, msg, interval=0.5, category="general"):
         return
     now = time.monotonic()
     if now - _throttle_times.get(key, 0) >= interval:
+        if len(_throttle_times) > _THROTTLE_TIMES_MAX:
+            _throttle_times.clear()
         _throttle_times[key] = now
         _log("DEBUG", msg)
 

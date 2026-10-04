@@ -12,10 +12,11 @@ from freecad.fields.core.gui.settings_dialog import _SettingsDialog
 
 class CommandFldSettings:
     def GetResources(self):
+        from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
         return {
             'Pixmap':   'preferences-system',
             'MenuText': 'Fields Settings',
-            'ToolTip':  'Configure Fields settings (mesh algorithm, resolution…)',
+            'ToolTip':  rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Opens the Fields settings for display, snapping, rendering and logging.")),
         }
 
     def IsActive(self):

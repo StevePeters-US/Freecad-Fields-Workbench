@@ -119,19 +119,6 @@ def _grids_to_flush(doc, target):
     return out
 
 
-def _drop_migrated_properties(doc, obj_name):
-    """A legacy migration that could not write its sidecar keeps `VoxelData`
-    until one lands (VOX-021). It has now landed, so the properties can go."""
-    obj = doc.getObject(obj_name) if hasattr(doc, "getObject") else None
-    if obj is None or not hasattr(obj, "VoxelData"):
-        return
-    try:
-        obj.removeProperty("VoxelData")
-        obj.removeProperty("DataShape")
-    except Exception as e:
-        fld_logger.error(f"sculpt_store: could not drop legacy properties on {obj_name}: {e}")
-
-
 class _SculptSidecarObserver:
     """Flushes sculpt grids when a document is saved.
 
@@ -155,7 +142,6 @@ class _SculptSidecarObserver:
         for obj_name, grid in _grids_to_flush(doc, target).items():
             if save_grid(doc, obj_name, grid, filename):
                 _dirty.pop((doc.Name, obj_name), None)
-                _drop_migrated_properties(doc, obj_name)
 
     def slotDeletedDocument(self, doc):
         # Document names are reused -- close A and open A again and a stale entry

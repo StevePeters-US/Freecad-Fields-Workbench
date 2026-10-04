@@ -14,6 +14,7 @@ import FreeCADGui
 from freecad.fields.core import fld_logger
 from freecad.fields.core.sdf.sdf_boolean_compose import build_boolean_field
 from freecad.fields.tools.boolean_task_panel import BooleanTaskPanel
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 
 class CommandFldBoolean:
@@ -23,9 +24,9 @@ class CommandFldBoolean:
         "Intersection": "Fields_MakeIntersection",
     }
     _TOOLTIPS = {
-        "Add":          "Union of all selected SDF objects. Select 2+ SDF objects, or re-select a boolean result to edit.",
-        "Subtract":     "Subtract blue objects from orange. Select 2+ SDF objects, or re-select a boolean result to edit.",
-        "Intersection": "Intersection of orange and blue groups. Select 2+ SDF objects, or re-select a boolean result to edit.",
+        "Add":          QT_TRANSLATE_NOOP("Fields", "Joins the selected SDF objects into one.\nSelect 2 or more SDF objects, or a boolean result to edit it."),
+        "Subtract":     QT_TRANSLATE_NOOP("Fields", "Cuts the blue (subtractive) objects out of the orange ones.\nSelect 2 or more SDF objects, or a boolean result to edit it."),
+        "Intersection": QT_TRANSLATE_NOOP("Fields", "Keeps only the volume the orange and blue objects share.\nSelect 2 or more SDF objects, or a boolean result to edit it."),
     }
 
     def __init__(self, operation="Add"):
@@ -35,7 +36,7 @@ class CommandFldBoolean:
         return {
             'Pixmap':  self._ICONS.get(self.operation, 'Part_Booleans.svg'),
             'MenuText': self.operation,
-            'ToolTip':  self._TOOLTIPS.get(self.operation, f"Boolean {self.operation}."),
+            'ToolTip':  rich_tooltip("Fields", self._TOOLTIPS[self.operation]),
         }
 
     def IsActive(self):

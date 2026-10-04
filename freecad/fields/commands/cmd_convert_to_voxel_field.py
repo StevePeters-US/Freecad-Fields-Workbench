@@ -7,6 +7,7 @@ Command to discretize an analytic SDF solid into a discrete 3D voxel field.
 import FreeCAD
 import FreeCADGui
 from freecad.fields.commands.cmd_modifier_base import CommandFldModifierBase
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 
 class CommandFldConvertToVoxelField(CommandFldModifierBase):
@@ -18,7 +19,7 @@ class CommandFldConvertToVoxelField(CommandFldModifierBase):
             name_suffix="_Voxel",
             pixmap="Fields_ConvertToVoxelField",
             menu_text="Convert to SDF Field",
-            tooltip="Discretize the selected SDF solid into a 3D voxel field primitive.",
+            tooltip=QT_TRANSLATE_NOOP("Fields", "Converts the selected SDF solid into a voxel field you can sculpt.\nSelect one SDF solid."),
             creator_module="freecad.fields.core.objects.fld_voxel_field",
             creator_func="create_voxel_field_object",
             tool_module="freecad.fields.tools.tool_voxel_field",
@@ -33,7 +34,7 @@ class CommandFldCreateVoxelField:
         return {
             "Pixmap": "Fields_CreateVoxelField",
             "MenuText": "Create SDF Field",
-            "ToolTip": "Create a new discrete 3D voxel field primitive for sculpting.",
+            "ToolTip": rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Creates an empty voxel field to sculpt.")),
         }
 
     def Activated(self):

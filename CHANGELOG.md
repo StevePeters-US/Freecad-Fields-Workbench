@@ -2,10 +2,27 @@
 
 All notable changes to the FreeCAD Fields workbench will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+Releases are named by month and year (e.g. 9-26); the manifest version is year.month.patch (e.g. 2026.9.0).
+Releases before 9-26 used semantic versioning.
 
 ## [Unreleased]
+
+### Changed
+- **Breaking:** preferences moved to one group named after the package,
+  `User parameter:BaseApp/Preferences/fields` (keymap under `fields/Keymap`). Values in
+  the old `Preferences/Mod/Fields` and `FCFields` groups are not carried over.
+
+### Removed
+- Backward-compatibility shims for old documents: the `IsSubtractive` → `Group`
+  migration, the `patch_assembly` field type, the `VoxelData` → sidecar migration, the
+  Array `Linear`/`Radial` mode and `Radial*`/`OverlapSafe` properties, and the
+  `fld_object.FldObjectProxy` import alias. Documents that still depend on these no
+  longer load.
+
+## [9-26] - 2026-09-27
+
+Version 2026.9.0.
 
 ### Changed
 - Renamed workbench from **Direct Modeling** to **Fields** (`FieldsWorkbench`).

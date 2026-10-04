@@ -481,7 +481,7 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
 
             elif self.state == ToolState.ACTIVE:
                 if len(self.points) >= 2:
-                    from freecad.fields.core.objects.fld_object import get_picking_radius
+                    from freecad.fields.core.fld_settings import get_picking_radius
                     is_closing = (pt - self.points[0]).Length < get_picking_radius()
                     if not is_closing and self.linked_nodes and hit_node == self.linked_nodes[0]:
                         is_closing = True
@@ -541,7 +541,7 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
                 return
 
             if len(self.points) >= 2:
-                from freecad.fields.core.objects.fld_object import get_picking_radius
+                from freecad.fields.core.fld_settings import get_picking_radius
                 if (pt - self.points[0]).Length < get_picking_radius():
                     pt = self.points[0]
             self.current_point = pt

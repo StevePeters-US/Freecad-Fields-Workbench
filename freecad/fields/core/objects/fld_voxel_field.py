@@ -5,7 +5,6 @@ core/objects/fld_voxel_field.py
 Document object proxy for the discrete 3D voxel SDF field, plus its factory
 and the write-back helper that persists a mutated grid onto the object.
 """
-import base64
 import numpy as np
 from scipy.ndimage import map_coordinates
 
@@ -58,27 +57,6 @@ class FldVoxelFieldProxy(FldModifierProxyBase):
     def onDocumentRestored(self, obj):
         super().onDocumentRestored(obj)
         install_observer()
-        if not hasattr(obj, "Sculpted"):
-            obj.addProperty("App::PropertyBool", "Sculpted", "VoxelField", "Whether field contains sculpted/standalone data")
-            obj.Sculpted = False
-
-        # Migrate legacy VoxelData property to sidecar if present
-        if hasattr(obj, "VoxelData") and getattr(obj, "VoxelData", ""):
-            try:
-                raw_bytes = base64.b64decode(obj.VoxelData.encode('ascii'))
-                data_shape = tuple(getattr(obj, "DataShape", (obj.ResolutionX, obj.ResolutionY, obj.ResolutionZ)))
-                data = np.frombuffer(raw_bytes, dtype=np.float32).copy().reshape(data_shape)
-                interp = str(getattr(obj, "Interpolation", "Trilinear")).lower()
-                fld = SdfVoxelField(size=(obj.SizeX, obj.SizeY, obj.SizeZ), resolution=data_shape, data=data,
-                                    interpolation=interp, placement=obj.Placement)
-                self._grid = fld
-                if save_grid(obj.Document, obj.Name, fld):
-                    obj.removeProperty("VoxelData")
-                    obj.removeProperty("DataShape")
-                else:
-                    mark_dirty(self, obj)
-            except Exception as e:
-                fld_logger.error(f"Failed to migrate VoxelData to sidecar for {obj.Name}: {e}")
 
     def _grid_field(self, fp):
         """The voxel grid, loaded lazily from the sidecar on first use after restore."""

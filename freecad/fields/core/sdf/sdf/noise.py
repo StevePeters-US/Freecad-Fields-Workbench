@@ -1,664 +1,46 @@
 # SPDX-License-Identifier: CC-BY-NC-SA-4.0
 import FreeCAD
-from freecad.fields.core.sdf.sdf_field import SdfField
+from freecad.fields.core.sdf.sdf_field import SdfField, _GLSL_APPLY_INV_MAT, placement_matrix
 import math
-from collections import namedtuple
-import numpy as np
 import re
-
-
-def parse_custom_params(formula_text):
-    """
-    Parses custom parameters from formula text comments.
-    Format: // @param <type> <name> <default> [<min> <max> [<step>]]
-    """
-    params = []
-    if not formula_text:
-        return params
-    # Match comment lines starting with // or # and @param
-    pattern = r'^\s*(?://|#)\s*@param\s+(\w+)\s+(\w+)\s+([\d.-]+)(?:\s+([\d.-]+)\s+([\d.-]+)(?:\s+([\d.-]+))?)?'
-    for line in formula_text.splitlines():
-        match = re.match(pattern, line)
-        if match:
-            ptype = match.group(1).lower()
-            pname = match.group(2)
-            pdefault_str = match.group(3)
-            pmin_str = match.group(4)
-            pmax_str = match.group(5)
-            pstep_str = match.group(6)
-            
-            if ptype not in ('float', 'int', 'slider', 'bool'):
-                continue
-            
-            try:
-                if ptype == 'int':
-                    pdefault = int(pdefault_str)
-                    pmin = int(pmin_str) if pmin_str is not None else None
-                    pmax = int(pmax_str) if pmax_str is not None else None
-                    pstep = int(pstep_str) if pstep_str is not None else None
-                elif ptype == 'bool':
-                    pdefault = True if pdefault_str.lower() in ('1', 'true', 'yes') else False
-                    pmin = 0
-                    pmax = 1
-                    pstep = 1
-                else:
-                    pdefault = float(pdefault_str)
-                    pmin = float(pmin_str) if pmin_str is not None else None
-                    pmax = float(pmax_str) if pmax_str is not None else None
-                    pstep = float(pstep_str) if pstep_str is not None else None
-                
-                params.append({
-                    'type': ptype,
-                    'name': pname,
-                    'default': pdefault,
-                    'min': pmin,
-                    'max': pmax,
-                    'step': pstep
-                })
-            except ValueError as e:
-                from freecad.fields.core import fld_logger
-                fld_logger.debug(f"parse_custom_params: skipping malformed param line ({e})")
-                continue
-    return params
-
-
-def update_formula_param_comment(formula_text, pname, ptype, current_val, min_val=None, max_val=None, step_val=None):
-    if not formula_text:
-        return formula_text
-    lines = formula_text.splitlines()
-    for i, line in enumerate(lines):
-        # Match this parameter's comment line
-        match = re.match(rf'^(\s*(?://|#)\s*@param\s+{ptype}\s+{pname}\s+)([\d.-]+)(?:\s+([\d.-]+)\s+([\d.-]+)(?:\s+([\d.-]+))?)?', line)
-        if match:
-            prefix = match.group(1)
-            # Construct new line
-            if ptype == 'bool':
-                new_line = f"{prefix.rstrip()} {1 if current_val else 0}"
-            elif ptype == 'int':
-                new_line = f"{prefix.rstrip()} {int(current_val)}"
-                if min_val is not None and max_val is not None:
-                    new_line += f" {int(min_val)} {int(max_val)}"
-                    if step_val is not None:
-                        new_line += f" {int(step_val)}"
-            else:
-                new_line = f"{prefix.rstrip()} {current_val:.3f}"
-                if min_val is not None and max_val is not None:
-                    new_line += f" {min_val:.3f} {max_val:.3f}"
-                    if step_val is not None:
-                        new_line += f" {step_val:.3f}"
-            lines[i] = new_line
-            break
-    return "\n".join(lines)
-
-
-def clean_formula_code(formula_text):
-    if not formula_text:
-        return ""
-    lines = [line.strip() for line in formula_text.splitlines() if line.strip() and not line.strip().startswith("//") and not line.strip().startswith("#")]
-    return "\n".join(lines)
-
-
-_ComplexPreset = namedtuple(
-    '_ComplexPreset',
-    ['dep_helpers', 'main_fn_name', 'main_fn_code', 'python_fn', 'numpy_fn', 'display',
-     'lip_factor', 'peak_factor']
+import numpy as np
+from freecad.fields.core.sdf.sdf.noise_nodes import NOISE_NODES
+from freecad.fields.core.sdf.sdf.formula_eval import (
+    parse_custom_params, update_formula_param_comment, clean_formula_code,
+    GlslVec2, GlslVec3,
+    EVAL_NS, EVAL_NS_NP,
+    MAX_SCALAR_FALLBACK_POINTS,
+    _eval_formula_grid_np,
 )
 
 
-# ── Python noise implementations (CPU fallback) ───────────────────────────────
-
-def _fade(t): return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
-def _lerp(a, b, t): return a + t * (b - a)
+# ── SdfNoiseField ─────────────────────────────────────────────────────────────
 
 
-# ── Lattice hash: integer, so the CPU and the GPU get the SAME noise ──────────
-#
-# This used to be `fract(sin(dot(p, k)) * 43758.5453123)`, the ubiquitous
-# shadertoy hash. It is not one function -- it is a different function on each
-# side of the CPU/GPU line. `sin` runs in float64 here and in float32 there (and
-# GLSL only requires `sin` to be accurate to a few ULP, so the driver's is worse
-# still), the lattice coordinate is scaled by ~300 before the sine, and the
-# result is then multiplied by 43758: a 1e-5 disagreement in the argument moves
-# the product by a whole integer and `fract` lands somewhere unrelated.
-#
-# Measured, same algorithm, only the precision changed -- 4000 points on
-# sphere(r=30) + Perlin(amp 3, freq 0.1): the float32 and float64 fields
-# correlate at +0.18 and differ by up to 2.45 mm; at amp 8 by up to 7.49 mm.
-# They are different lumps of the same statistical character. The slicer traces
-# the CPU field and the viewport draws the GPU one, so a contour that is
-# genuinely 0.09 mm from the surface it was fitted to sits millimetres off the
-# surface on screen -- which is exactly what it looked like.
-#
-# pcg3d / pcg2d (Jarzynski & Olano, "Hash Functions for GPU Rendering", JCGT
-# 9(3), 2020) are integer mixers. uint32 arithmetic wraps identically in GLSL,
-# in numpy and in Python-with-a-mask, so all three get the same bits out; the
-# top 24 of those bits convert to float exactly in float32 as well as float64,
-# so the gradients are bit-identical rather than merely close. Every hash below
-# feeds on `floor()`ed lattice coordinates, so the integer domain costs nothing.
-_U32 = 0xFFFFFFFF
-_HASH_SCALE = 1.0 / 16777216.0   # 2^-24; (h >> 8) < 2^24 is exact as a float32
-
-
-def _pcg3d_py(x, y, z):
-    x = (x * 1664525 + 1013904223) & _U32
-    y = (y * 1664525 + 1013904223) & _U32
-    z = (z * 1664525 + 1013904223) & _U32
-    x = (x + y * z) & _U32; y = (y + z * x) & _U32; z = (z + x * y) & _U32
-    x ^= x >> 16; y ^= y >> 16; z ^= z >> 16
-    x = (x + y * z) & _U32; y = (y + z * x) & _U32; z = (z + x * y) & _U32
-    return x, y, z
-
-
-def _pcg2d_py(x, y):
-    x = (x * 1664525 + 1013904223) & _U32
-    y = (y * 1664525 + 1013904223) & _U32
-    x = (x + y * 1664525) & _U32
-    y = (y + x * 1664525) & _U32
-    x ^= x >> 16; y ^= y >> 16
-    x = (x + y * 1664525) & _U32
-    y = (y + x * 1664525) & _U32
-    x ^= x >> 16; y ^= y >> 16
-    return x, y
-
-
-def _ghash3_py(px, py, pz):
-    hx, hy, hz = _pcg3d_py(int(px) & _U32, int(py) & _U32, int(pz) & _U32)
-    return (
-        -1.0 + 2.0 * ((hx >> 8) * _HASH_SCALE),
-        -1.0 + 2.0 * ((hy >> 8) * _HASH_SCALE),
-        -1.0 + 2.0 * ((hz >> 8) * _HASH_SCALE),
-    )
-
-def _perlin3d_py(px, py, pz, amp, freq):
-    px *= freq; py *= freq; pz *= freq
-    ix = math.floor(px); iy = math.floor(py); iz = math.floor(pz)
-    fx = px - ix; fy = py - iy; fz = pz - iz
-    ux = _fade(fx); uy = _fade(fy); uz = _fade(fz)
-    def n(dx, dy, dz):
-        gx, gy, gz = _ghash3_py(ix+dx, iy+dy, iz+dz)
-        return gx*(fx-dx) + gy*(fy-dy) + gz*(fz-dz)
-    v = _lerp(
-        _lerp(_lerp(n(0,0,0), n(1,0,0), ux), _lerp(n(0,1,0), n(1,1,0), ux), uy),
-        _lerp(_lerp(n(0,0,1), n(1,0,1), ux), _lerp(n(0,1,1), n(1,1,1), ux), uy), uz)
-    return amp * v
-
-
-def _vhash33_py(px, py, pz):
-    hx, hy, hz = _pcg3d_py(int(px) & _U32, int(py) & _U32, int(pz) & _U32)
-    return ((hx >> 8) * _HASH_SCALE,
-            (hy >> 8) * _HASH_SCALE,
-            (hz >> 8) * _HASH_SCALE)
-
-def _voronoi3d_py(px, py, pz, amp, freq):
-    px *= freq; py *= freq; pz *= freq
-    ix = math.floor(px); iy = math.floor(py); iz = math.floor(pz)
-    fx = px - ix; fy = py - iy; fz = pz - iz
-    md = 1e9
-    for xi in range(-1, 2):
-        for yi in range(-1, 2):
-            for zi in range(-1, 2):
-                hx, hy, hz = _vhash33_py(ix+xi, iy+yi, iz+zi)
-                rx = xi - fx + hx; ry = yi - fy + hy; rz = zi - fz + hz
-                d = rx*rx + ry*ry + rz*rz
-                if d < md: md = d
-    return amp * math.sqrt(md) / 0.866025 - amp * 0.5
-
-
-def _ghash2_py(u, w):
-    hx, hy = _pcg2d_py(int(u) & _U32, int(w) & _U32)
-    return (-1.0 + 2.0 * ((hx >> 8) * _HASH_SCALE),
-            -1.0 + 2.0 * ((hy >> 8) * _HASH_SCALE))
-
-def _perlin2d_py(x, y, amp, freq):
-    x *= freq; y *= freq
-    ix = math.floor(x); iy = math.floor(y)
-    fx = x - ix; fy = y - iy
-    ux = _fade(fx); uy = _fade(fy)
-    def n(dx, dy):
-        gx, gy = _ghash2_py(ix+dx, iy+dy)
-        return gx*(fx-dx) + gy*(fy-dy)
-    return amp * _lerp(_lerp(n(0,0), n(1,0), ux), _lerp(n(0,1), n(1,1), ux), uy)
-
-
-def _vhash22_py(x, y):
-    hx, hy = _pcg2d_py(int(x) & _U32, int(y) & _U32)
-    return ((hx >> 8) * _HASH_SCALE, (hy >> 8) * _HASH_SCALE)
-
-def _voronoi2d_py(x, y, amp, freq):
-    x *= freq; y *= freq
-    ix = math.floor(x); iy = math.floor(y)
-    fx = x - ix; fy = y - iy
-    md = 1e9
-    for xi in range(-1, 2):
-        for yi in range(-1, 2):
-            hx, hy = _vhash22_py(ix+xi, iy+yi)
-            rx = xi - fx + hx; ry = yi - fy + hy
-            d = rx*rx + ry*ry
-            if d < md: md = d
-    return amp * math.sqrt(md) / 0.707107 - amp * 0.5
-
-
-# ── Vectorized numpy noise implementations (CPU dense volume bake) ─────────────
-# Bit-exact (max abs error 0.0 over 200k random points) vs the _py scalar
-# versions above — verified numerically since these are hand-transcribed, not
-# derived. Used by evaluate_grid() so a dense volume bake over ~2M points
-# doesn't degrade into a ~10us/point Python interpreter loop (was ~22s for a
-# single bake; this path is ~1-2s and is real numpy vectorization, not a
-# rewrite of the algorithm).
-
-# Above this many points the per-point eval() fallback is a multi-minute freeze;
-# contribute nothing and tell the user instead of hanging the UI.
-_MAX_SCALAR_FALLBACK_POINTS = 50_000
-
-
-def _fade_np(t): return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
-def _lerp_np(a, b, t): return a + t * (b - a)
-
-
-_U32_C = np.uint32(1664525)
-_U32_A = np.uint32(1013904223)
-_U32_S = np.uint32(16)
-
-
-def _to_u32(a):
-    """Integral float lattice coordinates as wrapped uint32, GLSL's uvec(ivec()).
-
-    The intermediate int64 is not optional: casting a negative float straight to
-    uint32 is undefined in numpy, while int64 -> uint32 wraps two's-complement,
-    which is what `uvec3(ivec3(p))` does in the shader.
+class SdfNoiseField(SdfField):
     """
-    return np.asarray(a, dtype=np.float64).astype(np.int64).astype(np.uint32)
+    Applies procedural noise to a base SDF field as a displacement, evaluated
+    in the object's own Placement -- object-local Cartesian xyz, not a
+    hand-rolled projection frame.
 
-
-def _pcg3d_np(x, y, z):
-    x = _to_u32(x) * _U32_C + _U32_A
-    y = _to_u32(y) * _U32_C + _U32_A
-    z = _to_u32(z) * _U32_C + _U32_A
-    x = x + y * z; y = y + z * x; z = z + x * y
-    x = x ^ (x >> _U32_S); y = y ^ (y >> _U32_S); z = z ^ (z >> _U32_S)
-    x = x + y * z; y = y + z * x; z = z + x * y
-    return x, y, z
-
-
-def _pcg2d_np(x, y):
-    x = _to_u32(x) * _U32_C + _U32_A
-    y = _to_u32(y) * _U32_C + _U32_A
-    x = x + y * _U32_C
-    y = y + x * _U32_C
-    x = x ^ (x >> _U32_S); y = y ^ (y >> _U32_S)
-    x = x + y * _U32_C
-    y = y + x * _U32_C
-    x = x ^ (x >> _U32_S); y = y ^ (y >> _U32_S)
-    return x, y
-
-
-def _u2f(h):
-    return (h >> np.uint32(8)).astype(np.float64) * _HASH_SCALE
-
-
-def _ghash3_np(px, py, pz):
-    hx, hy, hz = _pcg3d_np(px, py, pz)
-    return (-1.0 + 2.0 * _u2f(hx),
-            -1.0 + 2.0 * _u2f(hy),
-            -1.0 + 2.0 * _u2f(hz))
-
-def _perlin3d_np(px, py, pz, amp, freq):
-    px = px * freq; py = py * freq; pz = pz * freq
-    ix = np.floor(px); iy = np.floor(py); iz = np.floor(pz)
-    fx = px - ix; fy = py - iy; fz = pz - iz
-    ux = _fade_np(fx); uy = _fade_np(fy); uz = _fade_np(fz)
-    def n(dx, dy, dz):
-        gx, gy, gz = _ghash3_np(ix+dx, iy+dy, iz+dz)
-        return gx*(fx-dx) + gy*(fy-dy) + gz*(fz-dz)
-    v = _lerp_np(
-        _lerp_np(_lerp_np(n(0,0,0), n(1,0,0), ux), _lerp_np(n(0,1,0), n(1,1,0), ux), uy),
-        _lerp_np(_lerp_np(n(0,0,1), n(1,0,1), ux), _lerp_np(n(0,1,1), n(1,1,1), ux), uy), uz)
-    return amp * v
-
-
-def _vhash33_np(px, py, pz):
-    hx, hy, hz = _pcg3d_np(px, py, pz)
-    return _u2f(hx), _u2f(hy), _u2f(hz)
-
-def _voronoi3d_np(px, py, pz, amp, freq):
-    px = px * freq; py = py * freq; pz = pz * freq
-    ix = np.floor(px); iy = np.floor(py); iz = np.floor(pz)
-    fx = px - ix; fy = py - iy; fz = pz - iz
-    md = np.full(px.shape, 1e9, dtype=np.float64)
-    for xi in range(-1, 2):
-        for yi in range(-1, 2):
-            for zi in range(-1, 2):
-                hx, hy, hz = _vhash33_np(ix+xi, iy+yi, iz+zi)
-                rx = xi - fx + hx; ry = yi - fy + hy; rz = zi - fz + hz
-                d = rx*rx + ry*ry + rz*rz
-                md = np.minimum(md, d)
-    return amp * np.sqrt(md) / 0.866025 - amp * 0.5
-
-
-def _ghash2_np(x, y):
-    hx, hy = _pcg2d_np(x, y)
-    return -1.0 + 2.0 * _u2f(hx), -1.0 + 2.0 * _u2f(hy)
-
-def _perlin2d_np(x, y, amp, freq):
-    x = x * freq; y = y * freq
-    ix = np.floor(x); iy = np.floor(y)
-    fx = x - ix; fy = y - iy
-    ux = _fade_np(fx); uy = _fade_np(fy)
-    def n(dx, dy):
-        gx, gy = _ghash2_np(ix+dx, iy+dy)
-        return gx*(fx-dx) + gy*(fy-dy)
-    return amp * _lerp_np(_lerp_np(n(0,0), n(1,0), ux), _lerp_np(n(0,1), n(1,1), ux), uy)
-
-
-def _vhash22_np(x, y):
-    hx, hy = _pcg2d_np(x, y)
-    return _u2f(hx), _u2f(hy)
-
-def _voronoi2d_np(x, y, amp, freq):
-    x = x * freq; y = y * freq
-    ix = np.floor(x); iy = np.floor(y)
-    fx = x - ix; fy = y - iy
-    md = np.full(x.shape, 1e9, dtype=np.float64)
-    for xi in range(-1, 2):
-        for yi in range(-1, 2):
-            hx, hy = _vhash22_np(ix+xi, iy+yi)
-            rx = xi - fx + hx; ry = yi - fy + hy
-            d = rx*rx + ry*ry
-            md = np.minimum(md, d)
-    return amp * np.sqrt(md) / 0.707107 - amp * 0.5
-
-
-# ── GLSL helper strings ───────────────────────────────────────────────────────
-
-# The GPU half of the integer lattice hash -- see `_pcg3d_py` for why `sin` had
-# to go. These must stay a line-by-line match for the numpy versions; the whole
-# point is that both sides compute the same bits.
-_PCG3D_GLSL = """uvec3 fld_pcg3d(uvec3 v) {
-    v = v * 1664525u + 1013904223u;
-    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
-    v ^= v >> 16u;
-    v.x += v.y * v.z; v.y += v.z * v.x; v.z += v.x * v.y;
-    return v;
-}"""
-
-_PCG2D_GLSL = """uvec2 fld_pcg2d(uvec2 v) {
-    v = v * 1664525u + 1013904223u;
-    v.x += v.y * 1664525u;
-    v.y += v.x * 1664525u;
-    v ^= v >> 16u;
-    v.x += v.y * 1664525u;
-    v.y += v.x * 1664525u;
-    v ^= v >> 16u;
-    return v;
-}"""
-
-_GHASH3_GLSL = """vec3 fld_ghash3(vec3 p) {
-    uvec3 h = fld_pcg3d(uvec3(ivec3(p))) >> 8u;
-    return -1.0 + 2.0 * (vec3(h) * (1.0 / 16777216.0));
-}"""
-
-_PERLIN3D_GLSL = """float fld_perlin3d(vec3 p, float amp, float freq) {
-    p = p * freq;
-    vec3 i = floor(p);
-    vec3 f = fract(p);
-    vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    float n000 = dot(fld_ghash3(i),               f);
-    float n100 = dot(fld_ghash3(i+vec3(1.,0.,0.)), f-vec3(1.,0.,0.));
-    float n010 = dot(fld_ghash3(i+vec3(0.,1.,0.)), f-vec3(0.,1.,0.));
-    float n110 = dot(fld_ghash3(i+vec3(1.,1.,0.)), f-vec3(1.,1.,0.));
-    float n001 = dot(fld_ghash3(i+vec3(0.,0.,1.)), f-vec3(0.,0.,1.));
-    float n101 = dot(fld_ghash3(i+vec3(1.,0.,1.)), f-vec3(1.,0.,1.));
-    float n011 = dot(fld_ghash3(i+vec3(0.,1.,1.)), f-vec3(0.,1.,1.));
-    float n111 = dot(fld_ghash3(i+vec3(1.,1.,1.)), f-vec3(1.,1.,1.));
-    return amp * mix(
-        mix(mix(n000, n100, u.x), mix(n010, n110, u.x), u.y),
-        mix(mix(n001, n101, u.x), mix(n011, n111, u.x), u.y), u.z);
-}"""
-
-_VHASH33_GLSL = """vec3 fld_vhash33(vec3 p) {
-    uvec3 h = fld_pcg3d(uvec3(ivec3(p))) >> 8u;
-    return vec3(h) * (1.0 / 16777216.0);
-}"""
-
-_VORONOI3D_GLSL = """float fld_voronoi3d(vec3 p, float amp, float freq) {
-    p = p * freq;
-    vec3 pi = floor(p);
-    vec3 pf = fract(p);
-    float md = 1e9;
-    for(int x=-1; x<=1; x++) for(int y=-1; y<=1; y++) for(int z=-1; z<=1; z++) {
-        vec3 b = vec3(float(x), float(y), float(z));
-        vec3 r = b - pf + fld_vhash33(pi + b);
-        md = min(md, dot(r, r));
-    }
-    return amp * sqrt(md) / 0.866025 - amp * 0.5;
-}"""
-
-_GHASH2_GLSL = """vec2 fld_ghash2(vec2 p) {
-    uvec2 h = fld_pcg2d(uvec2(ivec2(p))) >> 8u;
-    return -1.0 + 2.0 * (vec2(h) * (1.0 / 16777216.0));
-}"""
-
-_PERLIN2D_GLSL = """float fld_perlin2d(vec3 p, float amp, float freq, vec3 u_ax, vec3 w_ax) {
-    vec2 q = vec2(dot(p, u_ax), dot(p, w_ax)) * freq;
-    vec2 i = floor(q);
-    vec2 f = fract(q);
-    vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    float n00 = dot(fld_ghash2(i),              f);
-    float n10 = dot(fld_ghash2(i+vec2(1.,0.)), f-vec2(1.,0.));
-    float n01 = dot(fld_ghash2(i+vec2(0.,1.)), f-vec2(0.,1.));
-    float n11 = dot(fld_ghash2(i+vec2(1.,1.)), f-vec2(1.,1.));
-    return amp * mix(mix(n00, n10, u.x), mix(n01, n11, u.x), u.y);
-}"""
-
-_VHASH22_GLSL = """vec2 fld_vhash22(vec2 p) {
-    uvec2 h = fld_pcg2d(uvec2(ivec2(p))) >> 8u;
-    return vec2(h) * (1.0 / 16777216.0);
-}"""
-
-_VORONOI2D_GLSL = """float fld_voronoi2d(vec3 p, float amp, float freq, vec3 u_ax, vec3 w_ax) {
-    vec2 q = vec2(dot(p, u_ax), dot(p, w_ax)) * freq;
-    vec2 pi = floor(q);
-    vec2 pf = fract(q);
-    float md = 1e9;
-    for(int x=-1; x<=1; x++) for(int y=-1; y<=1; y++) {
-        vec2 b = vec2(float(x), float(y));
-        vec2 r = b - pf + fld_vhash22(pi + b);
-        md = min(md, dot(r, r));
-    }
-    return amp * sqrt(md) / 0.707107 - amp * 0.5;
-}"""
-
-
-# ── Complex preset registries ─────────────────────────────────────────────────
-
-# Value noise was removed from both registries (2D first, 3D on 2026-08-03) as
-# not useful in practice. Its scalar, numpy and GLSL implementations and the
-# fld_vhash2/fld_vhash3 helpers that served only it went with it -- do not
-# resurrect one half. Perlin and Voronoi are the only genuinely 3D noise
-# functions here.
-_COMPLEX_PRESETS_3D = {
-    "Perlin": _ComplexPreset(
-        dep_helpers=[("fld_pcg3d", _PCG3D_GLSL), ("fld_ghash3", _GHASH3_GLSL)],
-        main_fn_name="fld_perlin3d",
-        main_fn_code=_PERLIN3D_GLSL,
-        python_fn=_perlin3d_py,
-        numpy_fn=_perlin3d_np,
-        display="# Classic Perlin gradient noise\n# Output: approx [-amp, +amp]",
-        lip_factor=2.0,
-        peak_factor=1.0,
-    ),
-    "Voronoi": _ComplexPreset(
-        dep_helpers=[("fld_pcg3d", _PCG3D_GLSL), ("fld_vhash33", _VHASH33_GLSL)],
-        main_fn_name="fld_voronoi3d",
-        main_fn_code=_VORONOI3D_GLSL,
-        python_fn=_voronoi3d_py,
-        numpy_fn=_voronoi3d_np,
-        display="# Voronoi cellular noise (centered)\n# Output: [-amp/2, +amp/2]",
-        lip_factor=1.5,
-        peak_factor=0.5,
-    ),
-}
-
-_COMPLEX_PRESETS_2D = {
-    "Perlin": _ComplexPreset(
-        dep_helpers=[("fld_pcg2d", _PCG2D_GLSL), ("fld_ghash2", _GHASH2_GLSL)],
-        main_fn_name="fld_perlin2d",
-        main_fn_code=_PERLIN2D_GLSL,
-        python_fn=_perlin2d_py,
-        numpy_fn=_perlin2d_np,
-        display="# Classic Perlin gradient noise projected onto plane\n# Output: approx [-amp, +amp]",
-        lip_factor=2.0,
-        peak_factor=1.0,
-    ),
-    "Voronoi": _ComplexPreset(
-        dep_helpers=[("fld_pcg2d", _PCG2D_GLSL), ("fld_vhash22", _VHASH22_GLSL)],
-        main_fn_name="fld_voronoi2d",
-        main_fn_code=_VORONOI2D_GLSL,
-        python_fn=_voronoi2d_py,
-        numpy_fn=_voronoi2d_np,
-        display="# Voronoi cellular noise projected onto plane (centered)\n# Output: [-amp/2, +amp/2]",
-        lip_factor=1.5,
-        peak_factor=0.5,
-    ),
-}
-
-
-# ── Python eval helpers (for Custom / simple formula presets) ─────────────────
-
-class _GlslVec3:
-    __slots__ = ('x', 'y', 'z')
-    def __init__(self, x, y, z):
-        self.x, self.y, self.z = x, y, z
-
-
-_EVAL_NS = {
-    "__builtins__": {},
-    "sin": math.sin, "cos": math.cos, "tan": math.tan,
-    "asin": math.asin, "acos": math.acos, "atan": math.atan,
-    "sqrt": math.sqrt, "abs": abs, "pow": pow,
-    "exp": math.exp, "log": math.log,
-    "tanh": math.tanh, "sinh": math.sinh, "cosh": math.cosh,
-    "min": min, "max": max,
-    "floor": math.floor, "ceil": math.ceil,
-    "fract": lambda x: x - math.floor(x),
-    "clamp": lambda x, lo, hi: max(lo, min(hi, x)),
-    "mix": lambda a, b, t: a * (1.0 - t) + b * t,
-    # GLSL mod() is x - y*floor(x/y), whose sign follows the DIVISOR. math.fmod's
-    # sign follows the dividend, so it disagreed with both GLSL and the numpy
-    # twin (np.mod) for every negative input -- mod(-3.7, 2.0) gave -1.7 here and
-    # 0.3 on the grid path. Pinned by test_noise_scalar_np_parity.py.
-    "mod": lambda a, b: a - b * math.floor(a / b) if b else 0.0,
-    "sign": lambda x: (1.0 if x > 0 else (-1.0 if x < 0 else 0.0)),
-    "step": lambda edge, x: 0.0 if x < edge else 1.0,
-    "smoothstep": lambda e0, e1, x: (
-        lambda t: t * t * (3 - 2 * t)
-    )(max(0.0, min(1.0, (x - e0) / (e1 - e0) if e1 != e0 else 0.0))),
-    "pi": math.pi,
-    "radians": lambda deg: deg * math.pi / 180.0,
-    "length": lambda v: math.sqrt(v.x ** 2 + v.y ** 2 + v.z ** 2),
-    "dot": lambda a, b: a.x * b.x + a.y * b.y + a.z * b.z,
-}
-
-
-def _np_fold(op, args):
-    """Left-fold a numpy binary ufunc over args, broadcasting mixed scalars and
-    arrays. Used for min()/max(), which take a variable number of arguments."""
-    if not args:
-        raise TypeError("min()/max() need at least one argument")
-    out = args[0]
-    for a in args[1:]:
-        out = op(out, a)
-    return out
-
-
-# Vectorized (numpy) counterpart of _EVAL_NS — used to evaluate a Custom/simple
-# formula string ONCE over a whole grid array instead of once per point. Most
-# GLSL-style formulas (the only kind these presets are meant to hold) broadcast
-# over numpy arrays with zero changes since they're built from +-*/ and the
-# functions below. If a formula does something non-vectorizable (e.g. a Python
-# `if/else` ternary on an array), eval() raises and the caller falls back to
-# the guaranteed-correct per-point loop.
-_EVAL_NS_NP = {
-    "__builtins__": {},
-    "sin": np.sin, "cos": np.cos, "tan": np.tan,
-    "asin": np.arcsin, "acos": np.arccos, "atan": np.arctan,
-    "sqrt": np.sqrt, "abs": np.abs, "pow": np.power,
-    "exp": np.exp, "log": np.log,
-    "tanh": np.tanh, "sinh": np.sinh, "cosh": np.cosh,
-    # Fold pairwise rather than np.minimum.reduce(a): reduce() builds one array
-    # out of its argument tuple first, so the ordinary `min(x, 0.5)` -- array
-    # against scalar -- raised "inhomogeneous shape". That exception is caught by
-    # the grid callers as "formula not vectorizable", and above
-    # _MAX_SCALAR_FALLBACK_POINTS they refuse the per-point fallback and return
-    # zeros, so any formula using min()/max() with a constant silently lost its
-    # noise on a large grid. Pairwise np.minimum broadcasts instead.
-    "min": lambda *a: _np_fold(np.minimum, a),
-    "max": lambda *a: _np_fold(np.maximum, a),
-    "floor": np.floor, "ceil": np.ceil,
-    "fract": lambda x: x - np.floor(x),
-    "clamp": lambda x, lo, hi: np.clip(x, lo, hi),
-    "mix": lambda a, b, t: a * (1.0 - t) + b * t,
-    "mod": np.mod,
-    "sign": np.sign,
-    "step": lambda edge, x: np.where(x < edge, 0.0, 1.0),
-    # e1==e0 would divide by zero here; caller wraps in errstate(ignore) +
-    # nan_to_num, matching the scalar _EVAL_NS version's try/except -> 0.0.
-    "smoothstep": lambda e0, e1, x: (
-        lambda t: t * t * (3.0 - 2.0 * t)
-    )(np.clip((x - e0) / (e1 - e0), 0.0, 1.0)),
-    "pi": math.pi,
-    "radians": np.radians,
-    "length": lambda v: np.sqrt(v.x ** 2 + v.y ** 2 + v.z ** 2),
-    "dot": lambda a, b: a.x * b.x + a.y * b.y + a.z * b.z,
-}
-
-
-def _eval_formula_grid_np(formula, custom_params, extra_ns, shape):
-    """Evaluate `formula` once over whole arrays via _EVAL_NS_NP. `extra_ns`
-    supplies the point/coordinate variables (e.g. {"p": _GlslVec3(...)} or
-    {"u": u_arr, "w": w_arr}). Raises on anything not vectorizable — callers
-    must catch and fall back to the per-point loop."""
-    ns = dict(_EVAL_NS_NP)
-    ns.update(extra_ns)
-    for k, v in custom_params.items():
-        if k == "radial":
-            continue
-        ns[k] = v
-    with np.errstate(all='ignore'):
-        result = eval(formula, {}, ns)
-        result = np.broadcast_to(np.asarray(result, dtype=np.float64), shape)
-        return np.nan_to_num(result, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-
-
-# ── SdfNoise2DField ───────────────────────────────────────────────────────────
-
-class SdfNoise2DField(SdfField):
+    Formula variables: x, y, z (object-local Cartesian), r (= sqrt(x*x+y*y)),
+    front, amp, freq. A scalar formula displaces along local Z only; a
+    vec3-valued graph may also slide the surface in x/y. `front` is 1 in front
+    of the base field's surface along `direction` (the local +Z axis, in world
+    space), fading to 0 behind it -- multiply it into a displacement to mask
+    out the back face. There is no dedicated "ignore back face" checkbox:
+    a formula/graph that wants the mask names `front` itself (a bool Custom
+    Parameter wired through `mix(1.0, front, that_param)` is the normal way to
+    make it optional), the same as any other named value.
     """
-    Applies 2D projected noise to a base SDF field.
-    Formula variables (Custom): u (float), w (float), amp (float), freq (float).
-    """
-    # Where the original surface sits on the waveform. The surface is displaced
-    # to `s + noise * direction` and `direction` points INTO the material (the
-    # arrow aims at the face it perturbs), so a positive noise value carves and a
-    # negative one grows. "Middle" leaves the wave centred on the surface -- half
-    # of it therefore sticks out past the stock it started from. "Top" adds one
-    # peak so the wave hangs entirely inside (removal only, stock never grows);
-    # "Bottom" subtracts one so it sits entirely outside (material only added).
-    # The wave keeps its peak-to-peak size in every mode -- this is a shift, not
-    # a rescale, exactly like Blender's Displace "Midlevel".
-    #
-    # The offset is a DC term, so it only means anything measured against a
-    # surface: applied to the whole field it slides the entire solid along the
-    # direction instead of sitting the wave on the face. It therefore always
-    # rides the front-face weight -- see _apply_front_weight.
-    BIAS_MODES = ["Bottom", "Middle", "Top"]
-    DEFAULT_BIAS = "Middle"
 
     PRESETS = {
+        # A plain sine along local X -- no in-formula rotation. Orienting the
+        # wave is the object's Placement (or an Orient node in the graph)
+        # job now, not a bespoke `angle` param duplicating it.
         "Waves": (
-            "// @param bool radial 0\n"
-            "// @param float angle 0.0 0.0 360.0 5.0\n"
-            "sin((mix(x, sqrt(x * x + y * y), radial) * cos(radians(angle)) + mix(y, z, radial) * sin(radians(angle))) * freq) * amp"
+            "// @param bool ignore_back_face 0\n"
+            "sin(x * freq) * amp * mix(1.0, front, ignore_back_face)"
         ),
         # `sharp` band-limits what used to be sign(sin(...)). A sign() step is a
         # jump discontinuity, so no finite Lipschitz constant exists for it and
@@ -666,46 +48,62 @@ class SdfNoise2DField(SdfField):
         # |d| <= half_diag * L) and lets the marcher overstep the wall.
         # tanh(k*sin(f*x)) is the same shape with a slope of exactly k*f.
         "Square": (
+            "// @param bool ignore_back_face 0\n"
             "// @param float angle 0.0 0.0 360.0 5.0\n"
             "// @param float sharp 4.0 1.0 20.0 0.5\n"
             "// @param float amp2 0.0 0.0 1.0 0.05\n"
             "// @param float freq2 1.0 0.1 10.0 0.1\n"
             "// @param float angle2 90.0 0.0 360.0 5.0\n"
-            "tanh(sharp * sin(mix(x * cos(radians(angle)) + y * sin(radians(angle)), r, radial) * freq)) * amp"
-            " + tanh(sharp * sin(mix(x * cos(radians(angle2)) + y * sin(radians(angle2)), r, radial) * freq2)) * amp2"
+            "(tanh(sharp * sin((x * cos(radians(angle)) - y * sin(radians(angle))) * freq)) * amp"
+            " + tanh(sharp * sin((x * cos(radians(angle2)) - y * sin(radians(angle2))) * freq2)) * amp2)"
+            " * mix(1.0, front, ignore_back_face)"
         ),
         "Sawtooth": (
+            "// @param bool ignore_back_face 0\n"
             "// @param float angle 0.0 0.0 360.0 5.0\n"
             "// @param float amp2 0.0 0.0 1.0 0.05\n"
             "// @param float freq2 1.0 0.1 10.0 0.1\n"
             "// @param float angle2 90.0 0.0 360.0 5.0\n"
-            "(4.0 * abs(fract(mix(x * cos(radians(angle)) + y * sin(radians(angle)), r, radial) * freq - 0.25) - 0.5) - 1.0) * amp"
-            " + (4.0 * abs(fract(mix(x * cos(radians(angle2)) + y * sin(radians(angle2)), r, radial) * freq2 - 0.25) - 0.5) - 1.0) * amp2"
+            "((4.0 * abs(fract((x * cos(radians(angle)) - y * sin(radians(angle))) * freq - 0.25) - 0.5) - 1.0) * amp"
+            " + (4.0 * abs(fract((x * cos(radians(angle2)) - y * sin(radians(angle2))) * freq2 - 0.25) - 0.5) - 1.0) * amp2)"
+            " * mix(1.0, front, ignore_back_face)"
         ),
     }
-    COMPLEX_PRESETS = _COMPLEX_PRESETS_2D
+    COMPLEX_PRESETS = NOISE_NODES
     PRESET_NAMES = list(PRESETS.keys()) + list(COMPLEX_PRESETS.keys()) + ["Custom"]
     DEFAULT_FORMULA = PRESETS["Waves"]
 
     def __init__(self, base_field: SdfField, amplitude: float = 1.0, frequency: float = 1.0,
-                 direction: FreeCAD.Vector = None, formula: str = None, normalization: float = 0.0,
-                 preset_name: str = None, custom_params: dict = None, ignore_back_face: bool = False,
-                 center: FreeCAD.Vector = None, radial: bool = False, roll: float = 0.0,
-                 bias: str = None):
+                 placement: FreeCAD.Placement = None, formula: str = None,
+                 normalization: float = 0.0, preset_name: str = None,
+                 custom_params: dict = None, radial: bool = False, disp_axis=None):
         self.base_field = base_field
         self.amplitude = amplitude
         self.frequency = frequency
-        d = FreeCAD.Vector(direction if direction is not None else FreeCAD.Vector(0, 0, -1))
-        length = d.Length
-        self.direction = d / length if length > 1e-8 else FreeCAD.Vector(0, 0, -1)
-        self.roll = float(roll)
-        self._u_axis, self._w_axis = self._make_basis(self.direction, self.roll)
-        self.center = FreeCAD.Vector(center) if center is not None else FreeCAD.Vector(0, 0, 0)
+        self.placement = placement if placement is not None else FreeCAD.Placement()
+        # world -> local, for the sample point.
+        self.inv_matrix = self._compute_inv_matrix(self.placement)
+        # local -> world, rotation only, for the displacement the graph returns.
+        # Rows are the world-space images of the local basis vectors, so that a
+        # row-vector array of local displacements transforms via `disp @ _rot_np.T`.
+        rot = self.placement.Rotation
+        ex = rot.multVec(FreeCAD.Vector(1, 0, 0))
+        ey = rot.multVec(FreeCAD.Vector(0, 1, 0))
+        ez = rot.multVec(FreeCAD.Vector(0, 0, 1))
+        self._rot_np = np.array(
+            [[ex.x, ex.y, ex.z],
+             [ey.x, ey.y, ey.z],
+             [ez.x, ez.y, ez.z]],
+            dtype=np.float32).T
         self._normalization = normalization
         self.custom_params = custom_params or {}
-        self._ignore_back_face = ignore_back_face
         self.radial = radial
-        self.bias = bias if bias in self.BIAS_MODES else self.DEFAULT_BIAS
+        # (x, y, z) unit tuple when the node graph's terminal Displace node has
+        # a literal (unwired) Direction -- a rank-1 displacement, so _lip()
+        # below can skip the sqrt(3) three-component bound. None (the common
+        # case for a hand-typed formula, or a wired/varying Direction) falls
+        # back to the honest three-component bound via `vector_output`.
+        self._disp_axis = disp_axis
         self._axis_extent_cache = None
 
         self._preset_name = preset_name or "Waves"
@@ -719,6 +117,32 @@ class SdfNoise2DField(SdfField):
                     if p['name'] not in self.custom_params and p['default'] is not None:
                         self.custom_params[p['name']] = p['default']
             self._clean_formula = clean_formula_code(self.formula)
+        # A formula/graph reaches the front-face mask by referencing `front`
+        # directly in its text, same as `radial` rides EVAL_NS without being a
+        # custom param. Detected once here (text doesn't change after
+        # construction) rather than re-scanned per sample.
+        self._formula_uses_front = bool(
+            self._clean_formula and re.search(r'\bfront\b', self._clean_formula)
+        )
+        self.vector_output = self._detect_vector_output()
+
+    def _detect_vector_output(self):
+        """Does this formula produce a vec3 displacement, or a scalar height?
+
+        GLSL is statically typed, so the answer is a property of the formula text
+        and never changes with the sample point -- one probe settles it. Deriving
+        it is what makes NU-026 (a flag that was always true) and NU-030 (a flag
+        that disagreed with the body, which killed the whole scene shader)
+        unrepresentable rather than merely fixed.
+        """
+        if self._preset_name in self.COMPLEX_PRESETS:
+            return False        # the node kernels are all scalar-valued
+        if not self._clean_formula:
+            return False
+        try:
+            return isinstance(self._eval_formula(0.37, -0.21, 0.11), GlslVec3)
+        except Exception:
+            return False        # a formula that cannot be evaluated cannot be vec3
 
     @staticmethod
     def _make_basis(d, roll: float = 0.0):
@@ -728,11 +152,17 @@ class SdfNoise2DField(SdfField):
         express it — rotating d about d is the identity — so without a stored roll
         the in-plane orientation of the pattern is not editable at all.
         """
-        ref = FreeCAD.Vector(1, 0, 0) if abs(d.x) < 0.9 else FreeCAD.Vector(0, 1, 0)
-        u = d.cross(ref)
-        u = u / u.Length if u.Length > 1e-8 else FreeCAD.Vector(0, 1, 0)
-        w = d.cross(u)
-        w = w / w.Length if w.Length > 1e-8 else FreeCAD.Vector(1, 0, 0)
+        ref = FreeCAD.Vector(0, 1, 0) if abs(d.x) > 0.9 else FreeCAD.Vector(1, 0, 0)
+        u = ref - d * ref.dot(d)
+        u = u / u.Length if u.Length > 1e-8 else FreeCAD.Vector(1, 0, 0)
+        # u x d, NOT d x u. (u, w, d) is deliberately LEFT-handed: the default
+        # direction is (0, 0, -1), and the frame exists so that a vec3 displacement
+        # reads the way the top view draws it -- u on +X, w on +Y. `d.cross(u)`
+        # is the right-handed choice and lands w on -Y, which leaves the pattern
+        # mirrored in y from the top. That is half of the swizzle NN-006 fixed,
+        # and it looks like a sign typo to anyone tidying this up. It is not.
+        w = u.cross(d)
+        w = w / w.Length if w.Length > 1e-8 else FreeCAD.Vector(0, 1, 0)
         if abs(roll) > 1e-9:
             rot = FreeCAD.Rotation(d, roll)
             u = rot.multVec(u)
@@ -746,27 +176,83 @@ class SdfNoise2DField(SdfField):
         Lets a caller rotate the whole frame (direction + u axis) with one rotation
         and hand the leftover spin back as a Roll value.
         """
-        u0, w0 = SdfNoise2DField._make_basis(d)
-        return math.degrees(math.atan2(u_vec.dot(w0), u_vec.dot(u0)))
+        u0, w0 = SdfNoiseField._make_basis(d)
+        return math.degrees(math.atan2(u_vec.dot(d.cross(u0)), u_vec.dot(u0)))
+
+    @property
+    def direction(self) -> FreeCAD.Vector:
+        """The local +Z axis in world space -- the historical Direction arrow.
+
+        Local q.z (what `evaluate`/`to_glsl` hand the formula as `z`) is the
+        component of a world point along this same axis: for a rotation matrix
+        R, `q = R^-1(p - base)` has `q.z = (p - base) . R(+Z)`. CN-001's default
+        placement rotates local +Z onto world (0, 0, -1), so this reproduces the
+        old default Direction with no stored vector.
+        """
+        return self.placement.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
+
+    def _to_world_vec(self, v):
+        """ToWorldLocalNode's 'To World' (transform.py): local -> world,
+        ROTATION ONLY -- matches apply_rot_mat's GLSL meaning (`vec4(v, 0.0)`
+        drops the translation). The formula text adds `to_world_base` itself
+        afterward, on both the GLSL and this CPU side, so translation is not
+        applied twice. Vectorized when v's components are numpy arrays, using
+        `_rot_np` -- the same matrix evaluate_grid uses for the opposite
+        direction."""
+        if isinstance(v.x, np.ndarray):
+            arr = np.stack([v.x, v.y, v.z], axis=-1).astype(np.float32)
+            rotated = arr @ self._rot_np.T
+            return GlslVec3(rotated[..., 0], rotated[..., 1], rotated[..., 2])
+        world = self.placement.Rotation.multVec(FreeCAD.Vector(v.x, v.y, v.z))
+        return GlslVec3(world.x, world.y, world.z)
+
+    def _to_local_vec(self, v):
+        """ToWorldLocalNode's 'To Local': world point -> local point
+        (translation included -- matches apply_inv_mat's GLSL meaning).
+        Reuses _to_local_point/_to_local_grid, the same placement transform
+        every other placed field goes through."""
+        if isinstance(v.x, np.ndarray):
+            pts = np.stack([v.x, v.y, v.z], axis=-1).astype(np.float32)
+            local = self._to_local_grid(pts)
+            return GlslVec3(local[:, 0], local[:, 1], local[:, 2])
+        local = self._to_local_point(FreeCAD.Vector(v.x, v.y, v.z))
+        return GlslVec3(local.x, local.y, local.z)
+
+    def _placement_ns_extra(self):
+        """Namespace entries ToWorldLocalNode's compiled text calls by name --
+        `apply_rot_mat`/`apply_inv_mat` (formula_eval.py) just invoke whichever
+        of these two closures is passed as `m`, so the identical formula text
+        means the identical thing on the CPU and the GPU (noise.py:to_glsl
+        wires the same two names to the real mat4 uniforms there)."""
+        b = self.placement.Base
+        return {
+            "to_world_rot": self._to_world_vec,
+            "to_world_base": GlslVec3(b.x, b.y, b.z),
+            "to_local_inv": self._to_local_vec,
+        }
 
     def _lip(self):
         if self._normalization > 0.0:
             return self._normalization
         if self._preset_name in self.COMPLEX_PRESETS:
             factor = self.COMPLEX_PRESETS[self._preset_name].lip_factor
-            return max(1.0 + abs(self.amplitude) * self.frequency * factor
-                       + self._front_weight_slope(), 1.0)
+            slope = abs(self.amplitude) * self.frequency * factor
+            if self._disp_axis is None and self.vector_output:
+                slope *= 1.7320508   # sqrt(3): three components, each with this slope
+            return max(1.0 + slope + self._front_weight_slope(), 1.0)
         factor = 1.414
         amp2 = abs(self.custom_params.get("amp2", 0.0))
         freq2 = abs(self.custom_params.get("freq2", 0.0))
-        slope = abs(self.amplitude) * self.frequency + amp2 * freq2
+        slope = (abs(self.amplitude) * self.frequency + amp2 * freq2) * factor
         # `Square` is a tanh-band-limited square wave: d/dx tanh(k*sin(f*x))
         # peaks at k*f (sech^2 == 1 at the zero crossing), so its slope is k
         # times a plain sinusoid's. Band-limiting is what makes this number
         # meaningful at all — a raw sign() step has no finite bound.
         if self._preset_name == "Square":
             slope *= max(abs(self.custom_params.get("sharp", 4.0)), 1.0)
-        return max(1.0 + slope * factor + self._front_weight_slope(), 1.0)
+        if self._disp_axis is None and self.vector_output:
+            slope *= 1.7320508   # sqrt(3): three components, each with this slope
+        return max(1.0 + slope + self._front_weight_slope(), 1.0)
 
     def lipschitz(self) -> float:
         """Upper bound on |grad| of the value this field returns.
@@ -796,85 +282,162 @@ class SdfNoise2DField(SdfField):
             return abs(self.amplitude) * self.COMPLEX_PRESETS[self._preset_name].peak_factor
         return abs(self.amplitude) + abs(self.custom_params.get("amp2", 0.0))
 
-    def _bias_offset(self):
-        """Constant added to the noise before it displaces the point.
-
-        It is a *constant*: it moves the wave, it never tilts it, so `_lip()` is
-        unaffected and needs no bias term.
-        """
-        if self.bias == "Top":
-            return self._wave_peak()
-        if self.bias == "Bottom":
-            return -self._wave_peak()
-        return 0.0
-
-    def _eval_formula(self, x, y, z=0.0):
+    def _eval_formula(self, x, y, z=0.0, front=None):
         if self._preset_name in self.COMPLEX_PRESETS:
-            return self.COMPLEX_PRESETS[self._preset_name].python_fn(x, y, self.amplitude, self.frequency)
-        ns = dict(_EVAL_NS)
+            return self.COMPLEX_PRESETS[self._preset_name].python_fn(
+                x, y, z, self.amplitude, self.frequency)
+        ns = dict(EVAL_NS)
         ns["x"] = x; ns["y"] = y; ns["z"] = z
-        ns["u"] = x; ns["w"] = y  # backward compatibility aliases
+        ns["p"] = GlslVec3(x, y, z)
         ns["r"] = math.sqrt(x * x + y * y)
         is_radial = bool(self.radial or self.custom_params.get("radial", False))
         ns["d"] = ns["r"] if is_radial else x
         ns["radial"] = 1.0 if is_radial else 0.0
+        ns["front"] = front if front is not None else 1.0
         ns["amp"] = self.amplitude; ns["freq"] = self.frequency
+        ns.update(self._placement_ns_extra())
         for k, v in self.custom_params.items():
-            if k == "radial":
+            if k == "radial" or k == "front":
                 continue
-            ns[k] = v
+            if isinstance(v, (tuple, list)):
+                if len(v) == 2:
+                    ns[k] = GlslVec2(float(v[0]), float(v[1]))
+                else:
+                    ns[k] = GlslVec3(float(v[0]), float(v[1]), float(v[2]))
+            elif hasattr(v, 'x') and hasattr(v, 'y'):
+                if hasattr(v, 'z'):
+                    ns[k] = GlslVec3(float(v.x), float(v.y), float(v.z))
+                else:
+                    ns[k] = GlslVec2(float(v.x), float(v.y))
+            else:
+                ns[k] = v
         try:
-            return float(eval(self._clean_formula, {}, ns))
+            res = eval(self._clean_formula, {}, ns)
+            if isinstance(res, (GlslVec3, GlslVec2)):
+                return res
+            return float(res)
         except Exception as e:
             from freecad.fields.core import fld_logger
             fld_logger.debug_throttled(
-                "noise2d_formula_eval_fail",
-                f"SdfNoise2DField: formula eval failed ({e}); contributing 0.0"
+                "noise_formula_eval_fail",
+                f"SdfNoiseField: formula eval failed ({e}); contributing 0.0",
             )
             return 0.0
 
-    def _eval_noise_grid(self, x_vals, y_vals, z_vals=None):
+    def _eval_noise_grid(self, x_vals, y_vals, z_vals=None, front_vals=None):
         """Vectorized counterpart of _eval_formula for a whole grid at once."""
         if z_vals is None:
             z_vals = np.zeros_like(x_vals)
         if self._preset_name in self.COMPLEX_PRESETS:
-            preset = self.COMPLEX_PRESETS[self._preset_name]
-            return preset.numpy_fn(x_vals, y_vals, self.amplitude, self.frequency).astype(np.float32)
+            node = self.COMPLEX_PRESETS[self._preset_name]
+            return node.numpy_fn(x_vals, y_vals, z_vals,
+                                 self.amplitude, self.frequency).astype(np.float32)
         try:
             is_radial = bool(self.radial or self.custom_params.get("radial", False))
             r_vals = np.sqrt(x_vals**2 + y_vals**2)
             d_vals = r_vals if is_radial else x_vals
             radial_val = np.float32(1.0 if is_radial else 0.0)
+            front_ns = front_vals if front_vals is not None else np.float32(1.0)
             return _eval_formula_grid_np(
                 self._clean_formula, self.custom_params,
                 {"x": x_vals, "y": y_vals, "z": z_vals,
-                 "u": x_vals, "w": y_vals,
-                 "r": r_vals, "d": d_vals, "radial": radial_val,
-                 "amp": self.amplitude, "freq": self.frequency},
+                 "p": GlslVec3(x_vals, y_vals, z_vals),
+                 "r": r_vals, "d": d_vals, "radial": radial_val, "front": front_ns,
+                 "amp": self.amplitude, "freq": self.frequency,
+                 **self._placement_ns_extra()},
                 x_vals.shape,
             )
         except Exception as e:
             from freecad.fields.core import fld_logger
             n = len(x_vals)
-            if n > _MAX_SCALAR_FALLBACK_POINTS:
+            if n > MAX_SCALAR_FALLBACK_POINTS:
                 fld_logger.error(
-                    f"SdfNoise2DField: formula not vectorizable ({e}) and grid is "
+                    f"SdfNoiseField: formula not vectorizable ({e}) and grid is "
                     f"{n} points — refusing the per-point fallback (would freeze). "
                     "Noise contributes 0; rewrite the formula using numpy-safe ops."
                 )
                 return np.zeros(x_vals.shape, dtype=np.float32)
             fld_logger.debug_throttled(
-                "noise2d_vectorize_fallback",
-                f"SdfNoise2DField: formula not vectorizable ({e}), falling back to per-point eval"
+                "noise_vectorize_fallback",
+                f"SdfNoiseField: formula not vectorizable ({e}), falling back to per-point eval",
             )
             return np.fromiter(
-                (self._eval_formula(float(x_vals[i]), float(y_vals[i]), float(z_vals[i])) for i in range(len(x_vals))),
+                (self._eval_formula(float(x_vals[i]), float(y_vals[i]), float(z_vals[i]),
+                                     front=(float(front_vals[i]) if front_vals is not None else None))
+                 for i in range(len(x_vals))),
                 dtype=np.float32, count=len(x_vals),
             )
 
+    def _eval_displacement(self, x, y, z, front=None):
+        """(du, dw, dn) in frame coords. Scalar noise fills only `dn`."""
+        n = self._eval_formula(x, y, z, front=front)
+        if isinstance(n, GlslVec3):
+            return (n.x, n.y, n.z)
+        if isinstance(n, GlslVec2):
+            return (n.x, n.y, 0.0)
+        return (0.0, 0.0, float(n))
+
+    def _eval_displacement_grid(self, x_vals, y_vals, z_vals=None, front_vals=None):
+        """(du, dw, dn) float32 arrays in frame coords."""
+        if z_vals is None:
+            z_vals = np.zeros_like(x_vals)
+        if self._preset_name in self.COMPLEX_PRESETS:
+            zeros = np.zeros_like(x_vals, dtype=np.float32)
+            noise = self._eval_noise_grid(x_vals, y_vals, z_vals)
+            return zeros, zeros, noise
+
+        try:
+            is_radial = bool(self.radial or self.custom_params.get("radial", False))
+            r_vals = np.sqrt(x_vals**2 + y_vals**2)
+            d_vals = r_vals if is_radial else x_vals
+            radial_val = np.float32(1.0 if is_radial else 0.0)
+            front_ns = front_vals if front_vals is not None else np.float32(1.0)
+            res = _eval_formula_grid_np(
+                self._clean_formula, self.custom_params,
+                {"x": x_vals, "y": y_vals, "z": z_vals,
+                 "p": GlslVec3(x_vals, y_vals, z_vals),
+                 "r": r_vals, "d": d_vals, "radial": radial_val, "front": front_ns,
+                 "amp": self.amplitude, "freq": self.frequency,
+                 **self._placement_ns_extra()},
+                x_vals.shape,
+            )
+            if isinstance(res, GlslVec3):
+                return res.x, res.y, res.z
+            if isinstance(res, GlslVec2):
+                zeros = np.zeros_like(x_vals, dtype=np.float32)
+                return res.x, res.y, zeros
+            zeros = np.zeros_like(x_vals, dtype=np.float32)
+            return zeros, zeros, res.astype(np.float32)
+        except Exception as e:
+            from freecad.fields.core import fld_logger
+            n = len(x_vals)
+            if n > MAX_SCALAR_FALLBACK_POINTS:
+                fld_logger.error(
+                    f"SdfNoiseField: formula not vectorizable ({e}) and grid is "
+                    f"{n} points — refusing the per-point fallback (would freeze). "
+                    "Noise contributes 0; rewrite the formula using numpy-safe ops."
+                )
+                zeros = np.zeros(x_vals.shape, dtype=np.float32)
+                return zeros, zeros, zeros
+            fld_logger.debug_throttled(
+                "noise_vectorize_fallback",
+                f"SdfNoiseField: formula not vectorizable ({e}), falling back to per-point eval"
+            )
+            dus = np.empty(n, dtype=np.float32)
+            dws = np.empty(n, dtype=np.float32)
+            dns = np.empty(n, dtype=np.float32)
+            for i in range(n):
+                front_i = float(front_vals[i]) if front_vals is not None else None
+                du, dw, dn = self._eval_displacement(
+                    float(x_vals[i]), float(y_vals[i]), float(z_vals[i]), front=front_i)
+                dus[i] = du
+                dws[i] = dw
+                dns[i] = dn
+            return dus, dws, dns
+
     def _reach(self):
-        """The furthest the surface can travel, in mm. Bias makes it two peaks."""
-        return self._wave_peak() + abs(self._bias_offset())
+        """The furthest the surface can travel, in mm."""
+        return self._wave_peak()
 
     def _axis_extent(self):
         """How thick the stock is along `direction`, from its own bounding box.
@@ -925,11 +488,7 @@ class SdfNoise2DField(SdfField):
         return lift, ramp
 
     def _uses_front_weight(self):
-        # A bias is a DC term. Left unanchored it does not sit the wave on the
-        # surface at all -- it translates the entire solid along the direction,
-        # back face and all -- so it needs the front-face weight even when the
-        # user has left the back face free to move.
-        return self._ignore_back_face or self._bias_offset() != 0.0
+        return self._formula_uses_front
 
     def _front_weight_slope(self):
         """The mask's own contribution to the Lipschitz bound.
@@ -941,83 +500,47 @@ class SdfNoise2DField(SdfField):
         """
         if not self._uses_front_weight():
             return 0.0
-        moved = self._reach() if self._ignore_back_face else abs(self._bias_offset())
-        return moved / self._front_face_band()[1]
+        return self._reach() / self._front_face_band()[1]
 
-    def _apply_front_weight(self, noise, weight):
-        """Fold the bias and the mask into the noise -- the one rule, three impls.
+    def _front_weight_at_point(self, point):
+        """Scalar twin of the weight `to_glsl` computes for `weight_expr`: how far
+        `point` sits in front of the base field's surface, clamped to [0, 1]."""
+        lift, ramp = self._front_face_band()
+        behind = FreeCAD.Vector(
+            point.x - self.direction.x * lift,
+            point.y - self.direction.y * lift,
+            point.z - self.direction.z * lift,
+        )
+        d_behind = self.base_field.evaluate(behind)
+        return max(0.0, min(1.0, d_behind / ramp))
 
-        With the back face ignored the whole displacement is masked, so the far
-        side of the stock does not move at all. Without it only the BIAS is
-        masked: the wave still runs through the solid symmetrically the way it
-        always has, while the constant that anchors it stays on the front face
-        instead of dragging the back one along.
-        """
-        bias = self._bias_offset()
-        if self._ignore_back_face:
-            return (noise + bias) * weight
-        if bias != 0.0:
-            return noise + bias * weight
-        return noise
+    def _front_weight_grid(self, points, da):
+        """Grid twin of `_front_weight_at_point`. `da` is `direction` as a
+        float32 array, already available to every caller in `evaluate_grid`."""
+        lift, ramp = self._front_face_band()
+        behind_points = points - da * lift
+        d_behind = self.base_field.evaluate_grid(behind_points)
+        return np.clip(d_behind / ramp, 0.0, 1.0).astype(np.float32)
 
     def evaluate(self, point: FreeCAD.Vector) -> float:
-        pc = point - self.center
-        x = pc.dot(self._u_axis)
-        y = pc.dot(self._w_axis)
-        z = pc.dot(self.direction)
-        noise_val = self._eval_formula(x, y, z)
-        if self._uses_front_weight():
-            lift, ramp = self._front_face_band()
-            behind = FreeCAD.Vector(
-                point.x - self.direction.x * lift,
-                point.y - self.direction.y * lift,
-                point.z - self.direction.z * lift,
-            )
-            d_behind = self.base_field.evaluate(behind)
-            weight = max(0.0, min(1.0, d_behind / ramp))
-            noise_val = self._apply_front_weight(noise_val, weight)
-        displaced = FreeCAD.Vector(
-            point.x - noise_val * self.direction.x,
-            point.y - noise_val * self.direction.y,
-            point.z - noise_val * self.direction.z,
-        )
-        return self.base_field.evaluate(displaced)
+        q = self._to_local_point(point)
+        weight = self._front_weight_at_point(point) if self._uses_front_weight() else None
+        dx, dy, dz = self._eval_displacement(q.x, q.y, q.z, front=weight)
+        disp = self.placement.Rotation.multVec(FreeCAD.Vector(dx, dy, dz))
+        return self.base_field.evaluate(point - disp)
 
     def evaluate_grid(self, points: np.ndarray) -> np.ndarray:
-        import time
-        from freecad.fields.core import fld_logger
-        t0 = time.perf_counter()
-        ua = np.array([self._u_axis.x, self._u_axis.y, self._u_axis.z], dtype=np.float32)
-        wa = np.array([self._w_axis.x, self._w_axis.y, self._w_axis.z], dtype=np.float32)
-        da = np.array([self.direction.x, self.direction.y, self.direction.z], dtype=np.float32)
-        center_arr = np.array([self.center.x, self.center.y, self.center.z], dtype=np.float32)
-        points_c = points - center_arr
-        x_vals = points_c @ ua
-        y_vals = points_c @ wa
-        z_vals = points_c @ da
-        t_base = time.perf_counter()
-        noise = self._eval_noise_grid(x_vals, y_vals, z_vals)
-        t_noise = time.perf_counter()
+        local = self._to_local_grid(points)
+        weight = None
         if self._uses_front_weight():
-            lift, ramp = self._front_face_band()
-            dir_arr = np.array([self.direction.x, self.direction.y, self.direction.z], dtype=np.float32)
-            behind_points = points - dir_arr * lift
-            d_behind = self.base_field.evaluate_grid(behind_points)
-            weight = np.clip(d_behind / ramp, 0.0, 1.0)
-            noise = self._apply_front_weight(noise, weight)
-        else:
-            noise = noise + np.float32(self._bias_offset())
-        dir_arr = np.array([self.direction.x, self.direction.y, self.direction.z], dtype=np.float32)
-        displaced = points - noise[:, np.newaxis] * dir_arr
-        d_eval = self.base_field.evaluate_grid(displaced)
-        res = d_eval.astype(np.float32)
-        t_total = time.perf_counter() - t0
-        fld_logger.debug(
-            f"SdfNoise2DField.evaluate_grid: points={len(points)}, "
-            f"noise_eval_time={t_noise - t_base:.4f}s, "
-            f"total_time={t_total:.4f}s"
-        )
-        return res
+            d = self.direction
+            da = np.array([d.x, d.y, d.z], dtype=np.float32)
+            weight = self._front_weight_grid(points, da)
+        dx, dy, dz = self._eval_displacement_grid(
+            local[:, 0], local[:, 1], local[:, 2], front_vals=weight)
+        disp_local = np.stack((dx, dy, dz), axis=1).astype(np.float32)
+        displaced = points - (disp_local @ self._rot_np.T)
+        return self.base_field.evaluate_grid(displaced).astype(np.float32)
 
     def bounding_box(self):
         bb_min, bb_max = self.base_field.bounding_box()
@@ -1037,42 +560,41 @@ class SdfNoise2DField(SdfField):
     def to_glsl(self, ctx, point_var="p"):
         amp_u = ctx.uniform("float", self.amplitude)
         freq_u = ctx.uniform("float", self.frequency)
-        u_ax_u = ctx.uniform("vec3", (self._u_axis.x, self._u_axis.y, self._u_axis.z))
-        w_ax_u = ctx.uniform("vec3", (self._w_axis.x, self._w_axis.y, self._w_axis.z))
-        dir_u = ctx.uniform("vec3", (self.direction.x, self.direction.y, self.direction.z))
-        center_u = ctx.uniform("vec3", (self.center.x, self.center.y, self.center.z))
-        pc_expr = f"({point_var} - {center_u})"
+        ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
+        inv_u = ctx.uniform("mat4", self.inv_matrix.tolist())
+        # mat4, not mat3: GLProgram.set_uniform (gl_program.py) has no mat3
+        # branch yet and would log "no setter for GLSL type" and bind nothing
+        # -- a silently black field. CN-024 adds mat3 as an optimisation later.
+        rot_mat = placement_matrix(
+            FreeCAD.Placement(FreeCAD.Vector(), self.placement.Rotation), dtype=np.float32)
+        rot_u = ctx.uniform("mat4", rot_mat.tolist())
+        ctx.add_custom_helper("apply_rot_mat", (
+            "vec3 apply_rot_mat(mat4 m, vec3 v) {\n"
+            "    return (m * vec4(v, 0.0)).xyz;\n"
+            "}"
+        ))
+        q_expr = f"apply_inv_mat({inv_u}, {point_var})"
         ctx.add_custom_helper("fld_pi_const", "const float pi = 3.14159265358979323846;")
 
         weight_expr = None
-        bias_u = None
         if self._uses_front_weight():
             lift, ramp = self._front_face_band()
             lift_u = ctx.uniform("float", lift)
             ramp_u = ctx.uniform("float", ramp)
-            offset_pt = f"({point_var} - {dir_u} * {lift_u})"
+            d = self.direction
+            front_dir_u = ctx.uniform("vec3", (d.x, d.y, d.z))
+            offset_pt = f"({point_var} - {front_dir_u} * {lift_u})"
             behind_glsl = self.base_field.to_glsl(ctx, offset_pt)
             weight_expr = f"clamp({behind_glsl} / {ramp_u}, 0.0, 1.0)"
-            # Emitted even at 0.0: once the weight exists the bias is a uniform
-            # VALUE inside otherwise identical source, so moving between the
-            # three modes pushes a number and never forces a recompile.
-            bias_u = ctx.uniform("float", self._bias_offset())
-
-        def displacement(noise_expr):
-            """GLSL twin of _apply_front_weight -- keep the three impls in step."""
-            if weight_expr is None:
-                return f"({noise_expr})"
-            if self._ignore_back_face:
-                return f"(({noise_expr} + {bias_u}) * {weight_expr})"
-            return f"({noise_expr} + {bias_u} * {weight_expr})"
 
         if self._preset_name in self.COMPLEX_PRESETS:
             preset = self.COMPLEX_PRESETS[self._preset_name]
             for dep_name, dep_code in preset.dep_helpers:
                 ctx.add_custom_helper(dep_name, dep_code)
             ctx.add_custom_helper(preset.main_fn_name, preset.main_fn_code)
-            h_scaled = displacement(
-                f"{preset.main_fn_name}({pc_expr}, {amp_u}, {freq_u}, {u_ax_u}, {w_ax_u})")
+            d = self.direction
+            dir_u = ctx.uniform("vec3", (d.x, d.y, d.z))
+            h_scaled = f"({preset.main_fn_name}({q_expr}, {amp_u}, {freq_u}))"
             displaced_pt = f"({point_var} - {h_scaled} * {dir_u})"
             base_at_displaced = self.base_field.to_glsl(ctx, displaced_pt)
             return f"({base_at_displaced})"
@@ -1081,7 +603,13 @@ class SdfNoise2DField(SdfField):
         param_args_decl = []
         param_args_call = []
         is_radial = bool(self.radial or self.custom_params.get("radial", False))
+        # `front` is never a real custom param -- it rides its own dedicated
+        # parameter (added below) fed by `weight_expr`, not the generic uniform
+        # loop, so a stray `@param ... front ...` can't double-declare it.
+        builtin_names = {"front"}
         for name, val in self.custom_params.items():
+            if name in builtin_names:
+                continue
             if name == "radial":
                 ptype = "float"
                 u_val = ctx.uniform(ptype, 1.0 if is_radial else 0.0)
@@ -1091,28 +619,77 @@ class SdfNoise2DField(SdfField):
             elif isinstance(val, int):
                 ptype = "int"
                 u_val = ctx.uniform(ptype, val)
+            elif isinstance(val, (tuple, list)):
+                if len(val) == 2:
+                    ptype = "vec2"
+                    u_val = ctx.uniform(ptype, (float(val[0]), float(val[1])))
+                else:
+                    ptype = "vec3"
+                    u_val = ctx.uniform(ptype, (float(val[0]), float(val[1]), float(val[2])))
+            elif hasattr(val, 'x') and hasattr(val, 'y'):
+                if hasattr(val, 'z'):
+                    ptype = "vec3"
+                    u_val = ctx.uniform(ptype, (float(val.x), float(val.y), float(val.z)))
+                else:
+                    ptype = "vec2"
+                    u_val = ctx.uniform(ptype, (float(val.x), float(val.y)))
             else:
                 ptype = "float"
                 u_val = ctx.uniform(ptype, float(val))
             param_args_decl.append(f"{ptype} {name}")
             param_args_call.append(u_val)
 
-        decl_str = ", ".join([f"vec3 p", "float amp", "float freq", "vec3 u_ax", "vec3 w_ax", "vec3 dir"] + param_args_decl)
-        call_str = ", ".join([pc_expr, amp_u, freq_u, u_ax_u, w_ax_u, dir_u] + param_args_call)
+        if weight_expr is not None:
+            # A formula naming `front` reads this directly, exactly like any
+            # other parameter.
+            param_args_decl.append("float front")
+            param_args_call.append(weight_expr)
 
-        fn = f"noise2d_{abs(hash((self._clean_formula, is_radial))) & 0xFFFFFF:06x}"
-        d_line = "r" if is_radial else "u"
+        # ToWorldLocalNode (transform.py) compiles to `apply_rot_mat(to_world_rot,
+        # v) + to_world_base` / `apply_inv_mat(to_local_inv, v)` -- well-known
+        # identifiers, not uniform names, so wire them to THIS field's own
+        # placement matrices only if the formula actually names them. A fixed
+        # global uniform name would let a second noise field with a different
+        # placement silently reuse the first field's transform (GlProgram
+        # dedups custom helpers by name); passing them as extra formula-helper
+        # parameters, like `front` above, keeps each field's own values.
+        formula_text = self._clean_formula or ""
+        if "to_world_rot" in formula_text:
+            param_args_decl.append("mat4 to_world_rot")
+            param_args_call.append(rot_u)
+        if "to_world_base" in formula_text:
+            b = self.placement.Base
+            base_u = ctx.uniform("vec3", (b.x, b.y, b.z))
+            param_args_decl.append("vec3 to_world_base")
+            param_args_call.append(base_u)
+        if "to_local_inv" in formula_text:
+            param_args_decl.append("mat4 to_local_inv")
+            param_args_call.append(inv_u)
+
+        decl_str = ", ".join(["vec3 p", "float amp", "float freq"] + param_args_decl)
+        call_str = ", ".join([q_expr, amp_u, freq_u] + param_args_call)
+
+        # Register the GLSL for every pattern node (CN-013/CN-014) the formula
+        # text actually calls. Substring matching is deliberate: the field
+        # holds compiled text, not the graph, and every kernel entry point is
+        # prefixed `fld_`, which glsl_param_identifier (base.py) cannot
+        # produce from a user-typed custom-param name -- a collision is not
+        # reachable.
+        from freecad.fields.core.gui.node_editor.nodes.patterns import PATTERN_NODES
+        for cls in PATTERN_NODES:
+            if cls.kernel.main_fn_name in (self._clean_formula or ""):
+                for dep_name, dep_code in cls.glsl_helpers():
+                    ctx.add_custom_helper(dep_name, dep_code)
+
+        fn = f"noise_{abs(hash((self._clean_formula, is_radial, self.vector_output))) & 0xFFFFFF:06x}"
+        d_line = "r" if is_radial else "x"
         radial_line = "1.0" if is_radial else "0.0"
 
         body_lines = [
-            "    float x = dot(p, u_ax);",
-            "    float y = dot(p, w_ax);",
-            "    float z = dot(p, dir);",
+            "    float x = p.x;",
+            "    float y = p.y;",
+            "    float z = p.z;",
         ]
-        if "u" not in self.custom_params:
-            body_lines.append("    float u = x;")
-        if "w" not in self.custom_params:
-            body_lines.append("    float w = y;")
         if "r" not in self.custom_params:
             body_lines.append("    float r = sqrt(x * x + y * y);")
         if "d" not in self.custom_params:
@@ -1122,210 +699,25 @@ class SdfNoise2DField(SdfField):
         body_lines.append(f"    return {self._clean_formula};")
 
         body_str = "\n".join(body_lines)
+        return_type = "vec3" if self.vector_output else "float"
         ctx.add_custom_helper(fn,
-            f"float {fn}({decl_str}) {{\n"
+            f"{return_type} {fn}({decl_str}) {{\n"
             f"{body_str}\n"
             f"}}"
         )
-        h_scaled = displacement(f"{fn}({call_str})")
-        displaced_pt = f"({point_var} - {h_scaled} * {dir_u})"
+        if self.vector_output:
+            # `front`, when the formula names it, already reached `fn` above as
+            # one of its own parameters (`call_str`), so the vec3 it returns is
+            # already weighted -- this wrapper only rotates the local-frame
+            # result (x, y, z components along the object's own axes) into world
+            # space, replacing the old u_ax/w_ax/dir basis reconstruction.
+            disp = f"apply_rot_mat({rot_u}, {fn}({call_str}))"
+        else:
+            d = self.direction
+            dir_u = ctx.uniform("vec3", (d.x, d.y, d.z))
+            h_scaled = f"({fn}({call_str}))"
+            disp = f"({h_scaled} * {dir_u})"
+
+        displaced_pt = f"({point_var} - {disp})"
         base_at_displaced = self.base_field.to_glsl(ctx, displaced_pt)
         return f"({base_at_displaced})"
-
-
-# ── SdfNoiseField ─────────────────────────────────────────────────────────────
-
-class SdfNoiseField(SdfField):
-    """
-    Applies procedural noise to a base SDF field.
-    Formula variables (Custom): p (vec3), amp (float), freq (float).
-    """
-    # No named formula presets. Sine, Ripple, Diagonal Waves and Turbulence were
-    # removed 2026-08-03: none of them is a 3D noise function. Sine and
-    # Turbulence are separable products/sums of 1D sines, Diagonal Waves is a
-    # plane wave (its isosurfaces are parallel planes, so it varies along one
-    # direction only), and Ripple is a 1D sine of the radius. Perlin and Voronoi
-    # are the only two entries here that are genuinely 3D, and they live in
-    # COMPLEX_PRESETS. Anything else belongs in Custom, where the user can see
-    # it is a formula rather than a noise field.
-    #
-    # Documents saved with any of those four names still open: the object keeps
-    # its `Formula` string, and FldNoiseProxy._build_field passes it through for
-    # every non-complex preset name, so the shape is unchanged. Do not add a
-    # legacy-name table here -- the formula is already persisted per object.
-    PRESETS = {}
-    COMPLEX_PRESETS = _COMPLEX_PRESETS_3D
-    PRESET_NAMES = list(PRESETS.keys()) + list(COMPLEX_PRESETS.keys()) + ["Custom"]
-    # Seed text for Custom, not a preset -- nothing selects it by name.
-    DEFAULT_FORMULA = "sin(p.x * freq) * sin(p.y * freq) * sin(p.z * freq) * amp"
-
-    def __init__(self, base_field: SdfField, amplitude: float = 1.0, frequency: float = 1.0,
-                 formula: str = None, normalization: float = 0.0, preset_name: str = None,
-                 custom_params: dict = None):
-        self.base_field = base_field
-        self.amplitude = amplitude
-        self.frequency = frequency
-        self._normalization = normalization
-        self.custom_params = custom_params or {}
-
-        self._preset_name = preset_name or "Perlin"
-        if self._preset_name in self.COMPLEX_PRESETS:
-            self.formula = None
-        elif self._preset_name == "Custom":
-            self.formula = formula or self.DEFAULT_FORMULA
-        else:
-            # PRESETS is empty, so this branch is now reached only by a document
-            # saved under a removed preset name. `formula` is that object's
-            # persisted Formula string; keeping it is what preserves the shape.
-            self.formula = self.PRESETS.get(self._preset_name, formula or self.DEFAULT_FORMULA)
-
-    def _lip(self):
-        if self._normalization > 0.0:
-            return self._normalization
-        if self._preset_name in self.COMPLEX_PRESETS:
-            factor = self.COMPLEX_PRESETS[self._preset_name].lip_factor
-        else:
-            factor = 1.0
-        return max(1.0 + abs(self.amplitude) * self.frequency * factor, 1.0)
-
-    def _eval_formula(self, px, py, pz):
-        if self._preset_name in self.COMPLEX_PRESETS:
-            return self.COMPLEX_PRESETS[self._preset_name].python_fn(px, py, pz, self.amplitude, self.frequency)
-        ns = dict(_EVAL_NS)
-        ns["p"] = _GlslVec3(px, py, pz)
-        ns["amp"] = self.amplitude; ns["freq"] = self.frequency
-        for k, v in self.custom_params.items():
-            ns[k] = v
-        try:
-            return float(eval(self.formula, {}, ns))
-        except Exception as e:
-            from freecad.fields.core import fld_logger
-            fld_logger.debug_throttled(
-                "noise3d_formula_eval_fail",
-                f"SdfNoiseField: formula eval failed ({e}); contributing 0.0"
-            )
-            return 0.0
-
-    def _eval_noise_grid(self, px, py, pz):
-        """Vectorized counterpart of _eval_formula for a whole grid at once."""
-        if self._preset_name in self.COMPLEX_PRESETS:
-            preset = self.COMPLEX_PRESETS[self._preset_name]
-            return preset.numpy_fn(px, py, pz, self.amplitude, self.frequency).astype(np.float32)
-        try:
-            return _eval_formula_grid_np(
-                self.formula, self.custom_params,
-                {"p": _GlslVec3(px, py, pz), "amp": self.amplitude, "freq": self.frequency},
-                px.shape,
-            )
-        except Exception as e:
-            from freecad.fields.core import fld_logger
-            n = len(px)
-            if n > _MAX_SCALAR_FALLBACK_POINTS:
-                fld_logger.error(
-                    f"SdfNoiseField: formula not vectorizable ({e}) and grid is "
-                    f"{n} points — refusing the per-point fallback (would freeze). "
-                    "Noise contributes 0; rewrite the formula using numpy-safe ops."
-                )
-                return np.zeros(px.shape, dtype=np.float32)
-            fld_logger.debug_throttled(
-                "noise3d_vectorize_fallback",
-                f"SdfNoiseField: formula not vectorizable ({e}), falling back to per-point eval"
-            )
-            return np.fromiter(
-                (self._eval_formula(px[i], py[i], pz[i]) for i in range(len(px))),
-                dtype=np.float32, count=len(px),
-            )
-
-    def lipschitz(self) -> float:
-        """Upper bound on |grad| of the value this field returns.
-
-        The value itself is NOT divided by `_lip()`. Dividing it keeps the ray
-        march's step safe and wrecks everything the march compares against a
-        constant in millimetres: it declares a hit at `d < 0.5*vmax`, so on a
-        field scaled down by L that fires `0.5*vmax*L` mm from the surface — 28 mm
-        at amp 100 on a 3.3 mm voxel, in every direction at once, which is the
-        "2D noise deforms in x and y as well as z" report. The bound belongs here,
-        where the octree, the bake's block scan and the march's STEP divisor read
-        it. Same resolution UX-009 took for `SdfCageDeformField`.
-        """
-        return self.base_field.lipschitz() * self._lip()
-
-    # All three implementations return the SAME value scale — millimetres, the
-    # base field's own units. They used to disagree (`to_glsl` divided by _lip()
-    # and these two did not, up to 57 mm apart at amp=12/freq=10); they now agree
-    # by not dividing at all, and `lipschitz()` above carries the bound instead.
-    # The zero set is the same either way (a positive constant divisor never moves
-    # it), so no mesh or slice ever came out a different shape — what the scale
-    # decides is every consumer that compares a value against a length in mm.
-    def evaluate(self, point: FreeCAD.Vector) -> float:
-        return (self.base_field.evaluate(point)
-                + self._eval_formula(point.x, point.y, point.z))
-
-    def evaluate_grid(self, points: np.ndarray) -> np.ndarray:
-        import time
-        from freecad.fields.core import fld_logger
-        t0 = time.perf_counter()
-        d = self.base_field.evaluate_grid(points)
-        t_base = time.perf_counter()
-        noise = self._eval_noise_grid(points[:, 0], points[:, 1], points[:, 2])
-        t_noise = time.perf_counter()
-        res = (d + noise).astype(np.float32)
-        t_total = time.perf_counter() - t0
-        fld_logger.debug(
-            f"SdfNoiseField.evaluate_grid: points={len(points)}, "
-            f"base_eval_time={t_base - t0:.4f}s, "
-            f"noise_eval_time={t_noise - t_base:.4f}s, "
-            f"total_time={t_total:.4f}s"
-        )
-        return res
-
-    def bounding_box(self):
-        bb_min, bb_max = self.base_field.bounding_box()
-        offset = FreeCAD.Vector(self.amplitude, self.amplitude, self.amplitude)
-        return (bb_min - offset, bb_max + offset)
-
-    def to_patch_cage(self):
-        # Noise perturbs the SDF value, not the coordinate space, so the base
-        # field's cage net is still positioned correctly -- forward it as-is
-        # rather than falling back to a bounding-box lattice that ignores the
-        # wrapped primitive's shape entirely (see design_primitive_cage_descriptor).
-        return self.base_field.to_patch_cage()
-
-    def to_glsl(self, ctx, point_var="p"):
-        base_glsl = self.base_field.to_glsl(ctx, point_var)
-        amp_u = ctx.uniform("float", self.amplitude)
-        freq_u = ctx.uniform("float", self.frequency)
-
-        if self._preset_name in self.COMPLEX_PRESETS:
-            preset = self.COMPLEX_PRESETS[self._preset_name]
-            for dep_name, dep_code in preset.dep_helpers:
-                ctx.add_custom_helper(dep_name, dep_code)
-            ctx.add_custom_helper(preset.main_fn_name, preset.main_fn_code)
-            return f"({base_glsl} + {preset.main_fn_name}({point_var}, {amp_u}, {freq_u}))"
-
-        # Register custom parameters as uniforms
-        param_args_decl = []
-        param_args_call = []
-        for name, val in self.custom_params.items():
-            if isinstance(val, bool):
-                ptype = "float"
-                u_val = ctx.uniform(ptype, 1.0 if val else 0.0)
-            elif isinstance(val, int):
-                ptype = "int"
-                u_val = ctx.uniform(ptype, val)
-            else:
-                ptype = "float"
-                u_val = ctx.uniform(ptype, float(val))
-            param_args_decl.append(f"{ptype} {name}")
-            param_args_call.append(u_val)
-
-        decl_str = ", ".join([f"vec3 p", "float amp", "float freq"] + param_args_decl)
-        call_str = ", ".join([point_var, amp_u, freq_u] + param_args_call)
-
-        fn = f"noise3d_{abs(hash(self.formula)) & 0xFFFFFF:06x}"
-        ctx.add_custom_helper(fn,
-            f"float {fn}({decl_str}) {{\n"
-            f"    return {self.formula};\n"
-            f"}}"
-        )
-        return f"({base_glsl} + {fn}({call_str}))"

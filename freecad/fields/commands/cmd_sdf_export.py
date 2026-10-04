@@ -11,7 +11,8 @@ import Part
 from PySide import QtCore, QtWidgets
 from freecad.fields.core import fld_logger
 from freecad.fields.core.render.field_appearance import DEFAULT_ADDITIVE_COLOR
-from freecad.fields.core.fld_mesh_to_shape import _triangles_to_shape
+from freecad.fields.core.mesh.fld_mesh_to_shape import _triangles_to_shape
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 import numpy as np
 
 
@@ -22,11 +23,7 @@ class CommandFldSdfToShape:
         return {
             'Pixmap': 'SDFToShape',
             'MenuText': 'SDF to Shape',
-            'ToolTip': (
-                'Generate a triangle mesh from the selected SDF object\n'
-                'and create a Part.Shape solid.\n\n'
-                'Meshing parameters are configured locally in the export dialog.'
-            ),
+            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Creates a Part solid from the selected SDF object by meshing it.\nSelect one SDF object.")),
         }
 
     def IsActive(self):
@@ -50,7 +47,6 @@ class CommandFldSdfToShape:
             return
 
         # Show local export dialog
-        from PySide import QtWidgets
         dlg = _ExportDialog(FreeCADGui.getMainWindow(), obj.Label)
         if not dlg.exec_():
             return
@@ -58,7 +54,7 @@ class CommandFldSdfToShape:
         params = dlg.get_params()
         
         try:
-            from freecad.fields.core.fld_mesher import get_active_mesher
+            from freecad.fields.core.mesh.fld_mesher import get_active_mesher
 
             cell_size = params['cell_size']
             m_type = params['meshing_type']
@@ -98,7 +94,7 @@ class CommandFldSdfToShape:
             QtCore.QTimer.singleShot(0, doc.recompute)
             FreeCADGui.Selection.clearSelection()
             FreeCADGui.Selection.addSelection(new_obj)
-            n_tris = len(flat_idx) // 4
+            n_tris = len(flat_idx) // 3
             fld_logger.info(
                 f"SDF to Shape: created '{new_obj.Label}' "
                 f"({n_tris} triangles, cell_size={cell_size:.2f} mm)"
@@ -132,19 +128,43 @@ class _ExportDialog(QtWidgets.QDialog):
         self._res_spin.setSingleStep(0.1)
         self._res_spin.setDecimals(2)
         self._res_spin.setValue(1.0)
-        self._res_spin.setToolTip("Cell size in mm (smaller = more detail). 0.1mm is high quality.")
+        self._res_spin.setToolTip(
+            rich_tooltip(
+                "_ExportDialog",
+                QT_TRANSLATE_NOOP(
+                    "_ExportDialog",
+                    "Size of one mesh cell, in mm.\n<b>Lower:</b> more detail, slower, larger file.\n<b>Higher:</b> coarser, faster.\n<b>Default:</b> 1.0 mm. <b>Typical:</b> 0.1–1 mm.",
+                ),
+            )
+        )
         layout.addRow("Resolution (mm):", self._res_spin)
         
         # Decimate
         self._decimate_check = QtWidgets.QCheckBox()
         self._decimate_check.setChecked(True)
-        self._decimate_check.setToolTip("Remove redundant triangles from flat areas.")
+        self._decimate_check.setToolTip(
+            rich_tooltip(
+                "_ExportDialog",
+                QT_TRANSLATE_NOOP(
+                    "_ExportDialog",
+                    "Removes redundant triangles from flat areas.",
+                ),
+            )
+        )
         layout.addRow("Decimate Mesh:", self._decimate_check)
 
         # Deduplicate 
         self._dedup_check = QtWidgets.QCheckBox()
         self._dedup_check.setChecked(True)
-        self._dedup_check.setToolTip("Merge coincidental vertices.")
+        self._dedup_check.setToolTip(
+            rich_tooltip(
+                "_ExportDialog",
+                QT_TRANSLATE_NOOP(
+                    "_ExportDialog",
+                    "Merges vertices that sit at the same position.",
+                ),
+            )
+        )
         layout.addRow("Deduplicate Vertices:", self._dedup_check)
 
         # Buttons

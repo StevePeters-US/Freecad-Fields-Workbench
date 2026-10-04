@@ -3,6 +3,7 @@ import FreeCAD
 import FreeCADGui
 import freecad.fields.tools as primitive_creators
 from freecad.fields.core import fld_logger
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 class CommandFldCreateCurve:
     """
@@ -12,7 +13,7 @@ class CommandFldCreateCurve:
         return {
             'Pixmap': 'Draft_BSpline', 
             'MenuText': 'Create Curve', 
-            'ToolTip': 'Click-to-place NURBS (BSpline) curve points. Enter to finish.'
+            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Creates a NURBS curve through the points you click in the view.\nEnter finishes the curve."))
         }
 
     def Activated(self):

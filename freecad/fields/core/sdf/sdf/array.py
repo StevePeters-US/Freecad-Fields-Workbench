@@ -5,7 +5,7 @@ import numpy as np
 from freecad.fields.core.sdf.sdf_field import SdfField
 from freecad.fields.core.sdf.sdf_constants import SURFACE_ID_UNSET
 from freecad.fields.core import fld_logger
-from freecad.fields.core.sdf.sdf.noise import _EVAL_NS
+from freecad.fields.core.sdf.sdf.formula_eval import EVAL_NS
 from freecad.fields.core.input.fld_gizmo import _perp_pair
 
 AXES = {"X": 0, "Y": 1, "Z": 2}
@@ -39,20 +39,10 @@ class SdfArrayField(SdfField):
         scale_formula: str = "",
         skipped=(),
         overlap_mode: str = "auto",
-        overlap_safe=None,
-        radial_axis=None,
-        radial_count=None,
-        radial_span=None,
     ):
         super().__init__()
         self.source = source
-        raw_mode = str(mode).lower() if mode is not None else "grid"
-        if raw_mode in ("grid", "linear"):
-            self.mode = "grid"
-        elif raw_mode in ("step", "radial"):
-            self.mode = "step"
-        else:
-            self.mode = "grid"
+        self.mode = "step" if str(mode).lower() == "step" else "grid"
 
         self.counts = (
             max(1, int(counts[0])),
@@ -64,15 +54,6 @@ class SdfArrayField(SdfField):
             float(spacing[1]),
             float(spacing[2]),
         )
-
-        # Backward compatibility for legacy radial parameters
-        if radial_count is not None:
-            step_count = radial_count
-        if radial_axis is not None:
-            step_axis = radial_axis
-        if radial_span is not None:
-            cnt = int(step_count) if step_count else 6
-            step_angle = float(radial_span) / max(cnt, 1)
 
         self.step_count = max(1, int(step_count))
         self.step_offset = (
@@ -96,35 +77,10 @@ class SdfArrayField(SdfField):
 
         self.skipped = set(skipped) if skipped else set()
 
-        if overlap_safe is not None:
-            self.overlap_mode = "always" if overlap_safe else "never"
-        else:
-            self.overlap_mode = str(overlap_mode).lower() if overlap_mode else "auto"
+        self.overlap_mode = str(overlap_mode).lower() if overlap_mode else "auto"
 
         self._warned_cap = False
         self._warned_formula = False
-
-    # ── Backward compatibility properties ─────────────────────────────
-
-    @property
-    def overlap_safe(self) -> bool:
-        return self.use_multi_cell()
-
-    @overlap_safe.setter
-    def overlap_safe(self, val: bool):
-        self.overlap_mode = "always" if val else "never"
-
-    @property
-    def radial_axis(self) -> str:
-        return self.step_axis
-
-    @property
-    def radial_count(self) -> int:
-        return self.step_count
-
-    @property
-    def radial_span(self) -> float:
-        return self.step_angle * self.step_count
 
     # ── Strategy switch ───────────────────────────────────────────────
 
@@ -203,8 +159,6 @@ class SdfArrayField(SdfField):
                     return True
             return False
         return False
-
-    needs_overlap_safe = needs_multi_cell
 
     # ── Bounds and Lipschitz ──────────────────────────────────────────
 
@@ -346,7 +300,7 @@ class SdfArrayField(SdfField):
 
         for i in range(n):
             t_param = float(i) / max(n - 1, 1)
-            scope = dict(_EVAL_NS)
+            scope = dict(EVAL_NS)
             scope.update({"i": i, "n": n, "t": t_param})
 
             # Angle

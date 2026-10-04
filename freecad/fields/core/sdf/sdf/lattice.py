@@ -247,7 +247,7 @@ class SdfLatticeField(SdfField):
             
         return self.source.evaluate_grid(p0).astype(np.float32)
 
-    def to_glsl(self, ctx, point_var="p"):
+    def _deformed_var(self, ctx, point_var="p") -> str:
         R = self.resolution
         
         # Format control points list
@@ -274,44 +274,15 @@ class SdfLatticeField(SdfField):
             
             p_local_expr = f"({mat_inv_u} * vec4({point_var}, 1.0)).xyz"
             p_def_local_expr = f"fld_ffd_inverse_res2({p_local_expr}, {origin_u}, {extent_u}, {ctrl_pts_u})"
-            deformed_var = f"({mat_u} * vec4({p_def_local_expr}, 1.0)).xyz"
+            return f"({mat_u} * vec4({p_def_local_expr}, 1.0)).xyz"
         else:
-            deformed_var = f"fld_ffd_inverse_res2({point_var}, {origin_u}, {extent_u}, {ctrl_pts_u})"
-            
-        return self.source.to_glsl(ctx, deformed_var)
+            return f"fld_ffd_inverse_res2({point_var}, {origin_u}, {extent_u}, {ctrl_pts_u})"
+
+    def to_glsl(self, ctx, point_var="p"):
+        return self.source.to_glsl(ctx, self._deformed_var(ctx, point_var))
 
     def to_glsl_sample(self, ctx, point_var="p"):
-        R = self.resolution
-        
-        # Format control points list
-        ctrl_flat = []
-        for i in range(R**3):
-            pt_local = self.deformed_grid[i]
-            ctrl_flat.extend([float(pt_local[0]), float(pt_local[1]), float(pt_local[2])])
-            
-        # Register uniforms
-        ctrl_pts_u = ctx.uniform(f"vec3[{R**3}]", ctrl_flat)
-        origin_u = ctx.uniform("vec3", [self.origin.x, self.origin.y, self.origin.z])
-        extent_u = ctx.uniform("vec3", [self.extent.x, self.extent.y, self.extent.z])
-        
-        # Add helper function
-        ctx.add_custom_helper("fld_ffd_inverse_res2", _GLSL_FFD_INVERSE_RES2)
-        
-        # Handle placement transformations
-        if self.placement is not None:
-            mat_val = placement_matrix(self.placement).tolist()
-            mat_inv_val = placement_matrix(self.placement, inverse=True).tolist()
-            
-            mat_u = ctx.uniform("mat4", mat_val)
-            mat_inv_u = ctx.uniform("mat4", mat_inv_val)
-            
-            p_local_expr = f"({mat_inv_u} * vec4({point_var}, 1.0)).xyz"
-            p_def_local_expr = f"fld_ffd_inverse_res2({p_local_expr}, {origin_u}, {extent_u}, {ctrl_pts_u})"
-            deformed_var = f"({mat_u} * vec4({p_def_local_expr}, 1.0)).xyz"
-        else:
-            deformed_var = f"fld_ffd_inverse_res2({point_var}, {origin_u}, {extent_u}, {ctrl_pts_u})"
-            
-        return self.source.to_glsl_sample(ctx, deformed_var)
+        return self.source.to_glsl_sample(ctx, self._deformed_var(ctx, point_var))
 
     # ------------------------------------------------------------------
     # Injectivity & Clamping checks (SD-003)

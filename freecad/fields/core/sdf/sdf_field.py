@@ -47,9 +47,9 @@ def _transform_grid(points: np.ndarray, placement, inverse: bool = False) -> np.
     `field.evaluate_grid`/`gradient_grid` always expect world-space input (they
     apply the field's own inverse-placement internally), but cage nets from
     `to_patch_cage()` are stored in the primitive's local (pre-placement) space
-    -- see `_primitive_to_patches` in commands/cmd_cage.py, which bakes the same
-    placement into world space explicitly. Callers that need to evaluate a
-    field against local-space cage points must convert to world space first.
+    -- see `to_deform_cage()` below, which bakes the same placement into world
+    space explicitly. Callers that need to evaluate a field against
+    local-space cage points must convert to world space first.
     """
     if placement is None or points is None or len(points) == 0:
         return points
@@ -185,6 +185,11 @@ class SdfField:
     """
     Abstract base class for all SDF (Signed Distance Field) fields.
     A field evaluates to a negative number inside the solid, positive outside, and 0 on the surface.
+
+    For 2D planar profiles (used as building blocks by SdfExtrusionField,
+    SdfRevolutionField, and similar wrappers), see the separate `Sdf2dField`
+    hierarchy in `core/sdf/sdf2d/` -- it is not a subclass of this class. See
+    AGENTS.md's "Two SDF Systems" section.
     """
     def evaluate(self, point: FreeCAD.Vector) -> float:
         """Returns the signed distance at the given point."""
@@ -200,6 +205,17 @@ class SdfField:
     def bounding_box(self):
         """Returns (min_corner: Vector, max_corner: Vector)."""
         raise NotImplementedError("Subclasses must implement bounding_box()")
+
+    def _bbox_from_local_corners(self, corners_local: list) -> tuple:
+        """Transforms local corner points through self.placement and returns (min_v, max_v)."""
+        if self.placement is not None:
+            corners = [self.placement.multVec(pt) for pt in corners_local]
+        else:
+            corners = corners_local
+        min_x = min(pt.x for pt in corners); max_x = max(pt.x for pt in corners)
+        min_y = min(pt.y for pt in corners); max_y = max(pt.y for pt in corners)
+        min_z = min(pt.z for pt in corners); max_z = max(pt.z for pt in corners)
+        return (FreeCAD.Vector(min_x, min_y, min_z), FreeCAD.Vector(max_x, max_y, max_z))
 
     def compute_bounding_box_margin(self, extent: float, floor: float = 5.0, fraction: float = 0.05) -> float:
         """Computes a dynamic margin for bounding boxes based on shape extent.
@@ -250,9 +266,38 @@ class SdfField:
         Erosion is NOT `evaluate() + distance`. That expression still measures to
         the original faces, so dilating it back by the same distance cancels term
         for term and leaves every corner as sharp as it started. The shrink has to
-        be pushed into the field's own parameters, which is why each subclass has
-        to answer for itself.
+        be pushed into the field's own parameters, which is why each subclass
+        implements `_eroded_impl()` rather than overriding this method directly.
+
+        This is the door that keeps the result's own identity: `_eroded_impl()`
+        constructs a brand-new field instance, which starts life at the class
+        default `surface_id = SURFACE_ID_UNSET` like any other fresh field, and
+        every leaf's `to_glsl_sample()` bakes `self.surface_id` straight into the
+        GLSL it emits. Skip the carry-over here and a rounded cutter's eroded core
+        renders unstamped -- 65535 in the id volume, the miss sentinel, so the
+        newly-cut face falls through to the global base colour instead of the
+        object's own (round_convex_edges wraps `field.eroded(r)` in
+        SdfOffsetField -- the Boolean Subtract & Bevels "Global Cutter Radius"
+        spinner going non-zero is what triggers it).
+        Only copied when `self` actually owns an id: wrapper fields (offset,
+        translate, the boolean composers) are never stamped themselves -- their
+        `to_glsl_sample()` always delegates to a child -- so for them this is a
+        no-op and whatever `_eroded_impl()` built (typically already carrying the
+        right id via its own recursive `.eroded()` calls) is left alone.
         """
+        result = self._eroded_impl(distance)
+        if result is not None:
+            sid = getattr(self, "surface_id", SURFACE_ID_UNSET)
+            if sid is not None and sid != SURFACE_ID_UNSET:
+                result.surface_id = sid
+            bid = getattr(self, "blend_surface_id", SURFACE_ID_UNSET)
+            if bid is not None and bid != SURFACE_ID_UNSET:
+                result.blend_surface_id = bid
+        return result
+
+    def _eroded_impl(self, distance: float):
+        """Subclass hook for `eroded()`. Return None if this field has no exact
+        closed-form erosion."""
         return None
 
     @property

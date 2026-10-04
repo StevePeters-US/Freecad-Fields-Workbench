@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: CC-BY-NC-SA-4.0
 import FreeCAD
 import FreeCADGui
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 
 class CommandFldCurveExtrude:
@@ -8,7 +9,7 @@ class CommandFldCurveExtrude:
         return {
             'Pixmap':   'SDF_Extrude',
             'MenuText': 'Extrude SDF Face',
-            'ToolTip':  'Extrude a selected SDF face into a solid. Drag to set depth.',
+            'ToolTip':  rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Extrudes the selected SDF face into a solid; drag in the view to set the depth.\nSelect one SDF face.")),
         }
 
     def IsActive(self):
@@ -40,7 +41,7 @@ class CommandFldCurvePipe:
         return {
             'Pixmap':   'SDF_RuledSurface',
             'MenuText': 'Pipe (3D Curve)',
-            'ToolTip':  'Create a round tube swept along a selected 3D curve path.',
+            'ToolTip':  rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Creates a round tube along the selected 3D curve.\nSelect one curve.")),
         }
 
     def IsActive(self):

@@ -15,7 +15,7 @@ from freecad.fields.core.sdf.sdf.cage_topology import (  # noqa: F401
 )
 from freecad.fields.core.sdf.sdf.cage_patch_math import (  # noqa: F401
     _bez3, _bez3d, _coons_eval, _coons_grad, _hermite,
-    _bez3_b, _bez3d_b, _coons_grad_b, _hermite_b,
+    _bez3_b, _bez3d_b, _coons_grad_b,
     _bicubic_coons_grad, _bicubic_coons_grad_b,
     _gregory_grad, _gregory_grad_b,
     _bez_tri3, _bez_tri3_b, _bez_tri3_homo_grads, _bez_tri3_homo_grads_b,
@@ -32,6 +32,18 @@ class BVHNode:
         self.left = None
         self.right = None
         self.face_count = 0
+
+
+#: A float32 cage bake costs nx*ny*nz*4 bytes and there is one per converted solid,
+#: so the budget -- not the cell size -- is what bounds the grid. Measured on a
+#: mid-size part: see the Observed block in C2S-016.
+BAKE_MEMORY_BUDGET_MB = 16
+
+#: Never bake finer than this, whatever the tolerance says. A 10 mm part at
+#: 0.1 mm cells costs 12.9 MB and 12.5 s to render detail no viewport shows
+#: (C2S-016). Consequence: get_model_tolerance() can only ever *coarsen* the
+#: bake, never refine it.
+MIN_BAKE_CELL_MM = 0.5
 
 
 class SdfCageField(SdfField):
@@ -53,7 +65,8 @@ class SdfCageField(SdfField):
     """
 
     def __init__(self, vertices, handles, face_verts, face_sizes,
-                 edges=None, placement=None, handle_types=None, edge_straight=None):
+                 edges=None, placement=None, handle_types=None, edge_straight=None,
+                 edge_sharpness=None):
         super().__init__()
         v_arr = np.array(vertices, dtype=np.float64)
         h_arr = np.array(handles,  dtype=np.float64)
@@ -97,6 +110,14 @@ class SdfCageField(SdfField):
             if len(self._edge_straight) < n_edges:
                 self._edge_straight += [False] * (n_edges - len(self._edge_straight))
 
+        # Edge sharpness data model
+        if edge_sharpness is None:
+            self._edge_sharpness = [0.0] * n_edges
+        else:
+            self._edge_sharpness = [float(s) for s in edge_sharpness]
+            if len(self._edge_sharpness) < n_edges:
+                self._edge_sharpness += [0.0] * (n_edges - len(self._edge_sharpness))
+
         # Enforce exact chord positions for straight edges
         for ei, is_straight in enumerate(self._edge_straight):
             if is_straight:
@@ -129,6 +150,7 @@ class SdfCageField(SdfField):
         self.recompute_face_aabbs()
         self.geometry_version = 0
         self.hot_faces = frozenset()
+        self.bake_resolution = None
 
     # ── Factory methods ───────────────────────────────────────────────────────
 
@@ -569,6 +591,8 @@ class SdfCageField(SdfField):
 
     def recompute_face_aabbs(self):
         self._winding_tris = None
+        self._baked_volume = None
+        self.geometry_version = getattr(self, "geometry_version", 0) + 1
         self._face_aabbs = []
         self._face_cached_ctrl_pts = []
         for fi in range(len(self._face_verts)):
@@ -675,7 +699,7 @@ class SdfCageField(SdfField):
 
     def _evaluate_local_grid(self, q, patch_type=None, simplify=None):
         if patch_type is None:
-            from freecad.fields.core.objects.fld_object import get_cage_patch_type
+            from freecad.fields.core.fld_settings import get_cage_patch_type
             patch_type = get_cage_patch_type()
         if simplify is None:
             simplify = getattr(self, "simplify", False)
@@ -918,8 +942,177 @@ class SdfCageField(SdfField):
 
         self.recompute_face_aabbs()
 
+    def bake_volume(self, resolution=None, pad_frac=0.05):
+        """Bake the cage SDF onto a uniform 3D grid.
+
+        Returns dict:
+          bytes        : bytes          -- float32 distance volume, laid out (nz, ny, nx), X fastest
+          nx, ny, nz   : int            -- grid point counts
+          bbox_min/max : FreeCAD.Vector -- world-space bounds of the grid
+          data         : np.ndarray     -- 3D numpy array of shape (nz, ny, nx)
+          xs, ys, zs   : np.ndarray     -- 1D axis coordinate arrays
+        """
+        effective_res = resolution if resolution is not None else getattr(self, "bake_resolution", None)
+        if effective_res is None:
+            from freecad.fields.core.fld_settings import (
+                get_voxel_grid_resolution, get_model_tolerance)
+            cache_key = (None, int(get_voxel_grid_resolution()),
+                         float(get_model_tolerance()), float(pad_frac))
+        else:
+            cache_key = (int(effective_res), None, None, float(pad_frac))
+        cached = getattr(self, "_baked_volume", None)
+        if cached is not None and cached.get("cache_key") == cache_key:
+            return cached
+
+        if len(self.vertices) == 0:
+            return None
+
+        bmin, bmax = self.bounding_box()
+        diag = float((bmax - bmin).Length)
+        pad = max(pad_frac * diag, 1.0)
+        cmin = FreeCAD.Vector(bmin.x - pad, bmin.y - pad, bmin.z - pad)
+        cmax = FreeCAD.Vector(bmax.x + pad, bmax.y + pad, bmax.z + pad)
+
+        dx = max(cmax.x - cmin.x, 1e-3)
+        dy = max(cmax.y - cmin.y, 1e-3)
+        dz = max(cmax.z - cmin.z, 1e-3)
+        longest = max(dx, dy, dz)
+
+        from freecad.fields.core.sdf.sdf.cage_limits import (
+            MAX_BAKE_RESOLUTION, check_bake_budget)
+
+        if effective_res is None:
+            from freecad.fields.core.fld_settings import (
+                get_voxel_grid_resolution, get_model_tolerance)
+            # C2S-021: the same ceiling the BakeResolution property gate enforces.
+            # A hardcoded 384 here let VoxelGridResolution reach a grid the property
+            # would refuse -- a 400x6x6 rod baked 384 wide at that setting, measured.
+            cap = max(32, min(int(get_voxel_grid_resolution()), MAX_BAKE_RESOLUTION))
+            target_cell = max(MIN_BAKE_CELL_MM, float(get_model_tolerance()))
+            resolution = max(32, min(cap, int(round(longest / target_cell))))
+
+            budget_voxels = BAKE_MEMORY_BUDGET_MB * 1024 * 1024 // 4
+            step = longest / max(1, resolution - 1)
+            nx = max(8, int(round(dx / step)) + 1)
+            ny = max(8, int(round(dy / step)) + 1)
+            nz = max(8, int(round(dz / step)) + 1)
+            total_voxels = nx * ny * nz
+
+            if total_voxels > budget_voxels and resolution > 32:
+                scale = (budget_voxels / total_voxels) ** (1.0 / 3.0)
+                resolution = max(32, int(resolution * scale))
+                step = longest / max(1, resolution - 1)
+                nx = max(8, int(round(dx / step)) + 1)
+                ny = max(8, int(round(dy / step)) + 1)
+                nz = max(8, int(round(dz / step)) + 1)
+                while (nx * ny * nz) > budget_voxels and resolution > 32:
+                    resolution -= 1
+                    step = longest / max(1, resolution - 1)
+                    nx = max(8, int(round(dx / step)) + 1)
+                    ny = max(8, int(round(dy / step)) + 1)
+                    nz = max(8, int(round(dz / step)) + 1)
+        else:
+            resolution = effective_res
+
+        step = longest / max(1, resolution - 1)
+        nx = max(8, int(round(dx / step)) + 1)
+        ny = max(8, int(round(dy / step)) + 1)
+        nz = max(8, int(round(dz / step)) + 1)
+
+        # Both paths, on the grid actually about to be built, before a single
+        # array is allocated. The automatic path was previously unchecked (C2S-021).
+        check_bake_budget(resolution=resolution, total_voxels=nx * ny * nz,
+                          operation="Cage bake")
+
+        xs = np.linspace(cmin.x, cmax.x, nx)
+        ys = np.linspace(cmin.y, cmax.y, ny)
+        zs = np.linspace(cmin.z, cmax.z, nz)
+
+        grid_z, grid_y, grid_x = np.meshgrid(zs, ys, xs, indexing='ij')
+        pts = np.column_stack([grid_x.ravel(), grid_y.ravel(), grid_z.ravel()])
+
+        vals = self.evaluate_grid(pts).astype(np.float32)
+        vol = np.ascontiguousarray(vals.reshape((nz, ny, nx)))
+
+        baked = {
+            "nx": nx,
+            "ny": ny,
+            "nz": nz,
+            "bbox_min": cmin,
+            "bbox_max": cmax,
+            "bytes": vol.tobytes(),
+            "data": vol,
+            "xs": xs,
+            "ys": ys,
+            "zs": zs,
+            "requested_resolution": effective_res,
+            "cache_key": cache_key,
+        }
+        self._baked_volume = baked
+        return baked
+
+    def texture3d_key(self):
+        """Cheap identity: no allocation, no copy. Bumps with geometry_version."""
+        if len(self.vertices) == 0:
+            return None
+        res = getattr(self, "bake_resolution", None)
+        if res is None:
+            from freecad.fields.core.fld_settings import (
+                get_voxel_grid_resolution, get_model_tolerance)
+            res = f"auto{int(get_voxel_grid_resolution())}_{float(get_model_tolerance()):g}"
+        return f"cage_{self.field_uid}_{getattr(self, 'geometry_version', 0)}_{res}"
+
+    def texture3d_data(self):
+        """3D texture payload for SceneVolume bake: R32F distance grid."""
+        baked = self.bake_volume(resolution=getattr(self, "bake_resolution", None))
+        if not baked:
+            return None
+        return {
+            "nx": baked["nx"],
+            "ny": baked["ny"],
+            "nz": baked["nz"],
+            "fmt": "r32f",
+            "bytes": baked["bytes"],
+            "uniforms": {
+                "cmin": ("vec3", (baked["bbox_min"].x, baked["bbox_min"].y, baked["bbox_min"].z)),
+                "cmax": ("vec3", (baked["bbox_max"].x, baked["bbox_max"].y, baked["bbox_max"].z)),
+                "cres": ("vec3", (float(baked["nx"]), float(baked["ny"]), float(baked["nz"]))),
+            },
+        }
+
     def to_glsl(self, ctx, point_var="p"):
-        raise NotImplementedError("SdfCageField analytical rendering is retired in favor of FFD solid deformation.")
+        if len(self.vertices) == 0:
+            return "1e30"
+
+        # Pass placeholder uniform values; the renderer updates uniforms per frame
+        # from texture3d_data(). Avoid forcing an early volume bake at compile time.
+        tex_name = ctx.sampler3d("cage", provider=self)
+        u_cmin = ctx.uniform("vec3", [0.0, 0.0, 0.0], name="cmin")
+        u_cmax = ctx.uniform("vec3", [1.0, 1.0, 1.0], name="cmax")
+        u_cres = ctx.uniform("vec3", [8.0, 8.0, 8.0], name="cres")
+        ctx.sampler3d_uniform(tex_name, "cmin", u_cmin)
+        ctx.sampler3d_uniform(tex_name, "cmax", u_cmax)
+        ctx.sampler3d_uniform(tex_name, "cres", u_cres)
+
+        func_name = ctx.get_unique_name("cage_lookup")
+        helper_body = f"""
+float {func_name}(vec3 p) {{
+    vec3 uvw = (p - {u_cmin}) / max({u_cmax} - {u_cmin}, vec3(1e-6));
+    if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) {{
+        // Outside the baked box: an analytic distance to the box itself is a valid
+        // conservative underestimate, so the marcher still steps safely.
+        vec3 q = max({u_cmin} - p, p - {u_cmax});
+        return length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+    }}
+    // Trilinear: map node [0, 1] to texel center [(0.5)/res, (res-0.5)/res]
+    vec3 uvw_tex = (uvw * ({u_cres} - vec3(1.0)) + vec3(0.5)) / {u_cres};
+    vec3 clamped_uvw = clamp(uvw_tex, vec3(0.5) / {u_cres}, ({u_cres} - vec3(0.5)) / {u_cres});
+    return texture({tex_name}, clamped_uvw).r;
+}}
+"""
+        ctx.add_custom_helper(func_name, helper_body)
+        return f"{func_name}({point_var})"
+
 
 
 

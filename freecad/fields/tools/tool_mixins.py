@@ -38,7 +38,7 @@ class DragTimerMixin:
             FldSceneVoxelRenderer.get_instance()._perf.session_reset()
             from freecad.fields.core.sdf import field_eval
             field_eval.eval_stats_reset()
-            from freecad.fields.core.objects.fld_object import get_simplify_cage_drag
+            from freecad.fields.core.fld_settings import get_simplify_cage_drag
             simplify = get_simplify_cage_drag()
             eff_quad_iters = 4 if simplify else 6
             fld_logger.debug(f"Drag started: setting interactive render state (effective u_cage_quad_iters = {eff_quad_iters})")
@@ -48,7 +48,7 @@ class DragTimerMixin:
         self._drag_timer = QtCore.QTimer()
         self._drag_timer.timeout.connect(self._drag_update_wrapper)
         if interval_ms is None:
-            from freecad.fields.core.objects.fld_object import get_drag_tick_rate
+            from freecad.fields.core.fld_settings import get_drag_tick_rate
             hz = get_drag_tick_rate()
             hz = max(1, min(120, hz))
             interval_ms = int(1000 / hz)
@@ -389,7 +389,7 @@ class ControlCageDrawMixin:
             else:
                 half_world_h = 100.0
             px_per_world = (vp_h / 2.0) / max(half_world_h, 1e-6)
-            from freecad.fields.core.objects.fld_object import get_point_size
+            from freecad.fields.core.fld_settings import get_point_size
             pt_sz = get_point_size()
             return max(0.01, (pt_sz * 1.33) / px_per_world)
         except Exception as e:
@@ -423,7 +423,7 @@ class ControlCageDrawMixin:
             self.fld_points.append(fld_pt)
             
         # Draw lines to handles
-        self._handle_lines = FldLineSet(self.points_root, color=(0.6, 0.6, 0.6), width=1.0, pattern=0x0F0F)
+        self._handle_lines = FldLineSet(self.points_root, color=HANDLE_TYPE_COLORS["LINKED"], width=1.0, pattern=0x0F0F)
         self._update_handle_lines(edges)
 
     def _update_point_colors(self, handle_types):

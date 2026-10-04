@@ -30,7 +30,7 @@ class SdfCageDeformField(SdfField):
     """
 
     def __init__(self, source: SdfField, vertices, handles, face_verts, edges,
-                 handle_types=None, edge_straight=None, rest_vertices=None,
+                 handle_types=None, edge_straight=None, edge_sharpness=None, rest_vertices=None,
                  rest_handles=None, displacements=None, placement=None,
                  mvc_rest_verts=None, mvc_tris=None):
         super().__init__()
@@ -95,6 +95,13 @@ class SdfCageDeformField(SdfField):
             self._edge_straight = [bool(es) for es in edge_straight]
             if len(self._edge_straight) < n_edges:
                 self._edge_straight += [False] * (n_edges - len(self._edge_straight))
+
+        if edge_sharpness is None:
+            self._edge_sharpness = [0.0] * n_edges
+        else:
+            self._edge_sharpness = [float(s) for s in edge_sharpness]
+            if len(self._edge_sharpness) < n_edges:
+                self._edge_sharpness += [0.0] * (n_edges - len(self._edge_sharpness))
 
         if displacements is not None:
             disp_arr = np.asarray(displacements, dtype=np.float64)
@@ -706,7 +713,7 @@ vec3 {func_name}(vec3 p) {{
     def texture3d_data(self):
         if getattr(self, "_is_identity", True):
             return None
-        from freecad.fields.core.objects.fld_object import get_sdf_warp_resolution
+        from freecad.fields.core.fld_settings import get_sdf_warp_resolution
         baked = self.bake_warp_volume(resolution=get_sdf_warp_resolution())
         return {
             "nx": baked["nx"], "ny": baked["ny"], "nz": baked["nz"],

@@ -12,6 +12,7 @@ default.
 from PySide import QtWidgets, QtCore, QtGui
 from freecad.fields.core import fld_logger
 from freecad.fields.core.input.fld_gui_utils import CollapsibleSection
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 
 class _SettingsDialog(QtWidgets.QDialog):
@@ -21,10 +22,10 @@ class _SettingsDialog(QtWidgets.QDialog):
         self.setMinimumWidth(380)
         self.resize(400, 550)
 
-        from freecad.fields.core.objects.fld_object import (get_show_wireframe, get_line_width, get_point_size,
+        from freecad.fields.core.fld_settings import (get_show_wireframe, get_line_width, get_point_size,
                                     get_interactive_throttle_interval, get_picking_radius, get_max_bounds,
                                     get_sdf_selection_outline_size, get_drag_tick_rate,
-                                    get_render_quality, get_show_cage_curves,
+                                    get_render_quality, get_show_cage_curves, get_cage_xray,
                                     get_cage_patch_type, get_simplify_cage_drag,
                                     get_heightmap_resolution, get_gpu_field_eval,
                                     get_sdf_warp_resolution,
@@ -32,6 +33,7 @@ class _SettingsDialog(QtWidgets.QDialog):
                                     get_hatch_size, get_hatch_color, get_hatch_strength)
         current_wire = get_show_wireframe()
         current_show_cage_curves = get_show_cage_curves()
+        current_cage_xray = get_cage_xray()
         current_simplify_cage_drag = get_simplify_cage_drag()
         current_lw = get_line_width()
         current_ps = get_point_size()
@@ -41,44 +43,48 @@ class _SettingsDialog(QtWidgets.QDialog):
         current_hatch_size     = get_hatch_size()
         current_hatch_color    = get_hatch_color()
         current_hatch_strength = get_hatch_strength()
-        from freecad.fields.core.objects.fld_object import get_max_sdf_render_size
+        from freecad.fields.core.fld_settings import get_max_sdf_render_size
         current_mss = get_max_sdf_render_size()
         current_dtr = get_drag_tick_rate()
 
         # Near Clip Distance spinbox
-        from freecad.fields.core.objects.fld_object import get_near_clip_distance, get_ray_march_cell_size
+        from freecad.fields.core.fld_settings import get_near_clip_distance, get_ray_march_cell_size
         self._near_clip_spin = QtWidgets.QDoubleSpinBox()
         self._near_clip_spin.setRange(0.0, 10000.0)
         self._near_clip_spin.setSingleStep(1.0)
         self._near_clip_spin.setDecimals(1)
         self._near_clip_spin.setValue(get_near_clip_distance())
-        self._near_clip_spin.setToolTip(
-            "Override camera near clipping distance in mm.\n"
-            "Set to 0 for automatic (FreeCAD default).\n"
-            "Increase if SDF objects are clipped when zoomed in."
-        )
+        self._near_clip_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Closest distance the camera draws, in mm.\n"
+            "Raise it if nearby geometry disappears when you zoom in.\n"
+            "0 uses FreeCAD's automatic value.\n"
+            "<b>Default:</b> 0."
+        )))
 
         self._tol_spin = QtWidgets.QDoubleSpinBox()
         self._tol_spin.setRange(0.001, 10.0)
         self._tol_spin.setSingleStep(0.01)
         self._tol_spin.setDecimals(3)
         self._tol_spin.setValue(get_model_tolerance())
-        self._tol_spin.setToolTip(
-            "Project accuracy target in mm — the maximum surface deviation\n"
-            "slicing and CAM toolpaths are allowed to leave behind.\n"
-            "Seeds the Tolerance field of the SDF Slice and SDF CAM panels.\n"
-            "Halving it multiplies control points and slice time. Default: 0.1 mm."
-        )
+        self._tol_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Maximum surface deviation slicing and CAM toolpaths may leave behind, in mm.\n"
+            "Seeds the tolerance field of the SDF Slice and SDF CAM panels.\n"
+            "<b>Lower:</b> more accurate, more control points, slower slicing.\n"
+            "<b>Higher:</b> faster slicing, fewer control points.\n"
+            "<b>Default:</b> 0.1 mm. <b>Typical:</b> 0.05–0.5 mm."
+        )))
 
         self._rm_res_spin = QtWidgets.QDoubleSpinBox()
         self._rm_res_spin.setRange(0.1, 20.0)
         self._rm_res_spin.setSingleStep(0.5)
         self._rm_res_spin.setDecimals(1)
         self._rm_res_spin.setValue(get_ray_march_cell_size())
-        self._rm_res_spin.setToolTip(
-            "SDF baking resolution for GPU ray march renderer in mm.\n"
-            "Smaller = smoother surface, higher GPU memory. Default: 2.0 mm."
-        )
+        self._rm_res_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Voxel cell size for the GPU ray march volume, in mm.\n"
+            "<b>Lower:</b> smoother surface, uses more GPU memory.\n"
+            "<b>Higher:</b> coarser surface, uses less GPU memory.\n"
+            "<b>Default:</b> 2.0 mm. <b>Typical:</b> 1.0–5.0 mm."
+        )))
 
         # Dialog main layout
         main_layout = QtWidgets.QVBoxLayout(self)
@@ -127,14 +133,26 @@ class _SettingsDialog(QtWidgets.QDialog):
         # Show Wireframe checkbox
         self._wire_check = QtWidgets.QCheckBox()
         self._wire_check.setChecked(current_wire)
-        self._wire_check.setToolTip("Show triangle wireframe on NURBS objects")
+        self._wire_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Draws triangle wireframes over NURBS surfaces."
+        )))
         section_display.addRow("Show Wireframe:", self._wire_check)
 
         # Show Cage Curves checkbox
         self._cage_curves_check = QtWidgets.QCheckBox()
         self._cage_curves_check.setChecked(current_show_cage_curves)
-        self._cage_curves_check.setToolTip("Show patch boundary curves for cage objects")
+        self._cage_curves_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Draws patch boundary curves on cage objects."
+        )))
         section_display.addRow("Show Cage Curves:", self._cage_curves_check)
+
+        # Cage X-ray checkbox
+        self._cage_xray_check = QtWidgets.QCheckBox()
+        self._cage_xray_check.setChecked(current_cage_xray)
+        self._cage_xray_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Draws cage edit points and curves through the model surface."
+        )))
+        section_display.addRow("Cage X-Ray:", self._cage_xray_check)
 
         # Line Width spinbox
         self._lw_spin = QtWidgets.QDoubleSpinBox()
@@ -152,7 +170,11 @@ class _SettingsDialog(QtWidgets.QDialog):
         self._sos_spin = QtWidgets.QSpinBox()
         self._sos_spin.setRange(0, 8)
         self._sos_spin.setValue(current_sos)
-        self._sos_spin.setToolTip("Selection highlight outline width in pixels (0 to disable)")
+        self._sos_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Width of the outline drawn around selected objects, in px.\n"
+            "0 turns it off.\n"
+            "<b>Default:</b> 2 px."
+        )))
         section_display.addRow("SDF Selection Outline (px):", self._sos_spin)
 
         # Crosshatch period spinbox
@@ -160,14 +182,19 @@ class _SettingsDialog(QtWidgets.QDialog):
         self._hatch_size_spin.setRange(0, 64)
         self._hatch_size_spin.setValue(current_hatch_size)
         self._hatch_size_spin.setSuffix(" px")
-        self._hatch_size_spin.setToolTip(
-            "Crosshatch period for subtractive SDFs, in screen pixels (0 to disable)")
+        self._hatch_size_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Spacing between crosshatch pattern lines on subtractive SDF objects, in px.\n"
+            "0 turns crosshatching off.\n"
+            "<b>Default:</b> 8 px."
+        )))
         section_display.addRow("Subtractive Crosshatch:", self._hatch_size_spin)
 
         # Crosshatch colour button -- opens QColorDialog, paints its own swatch.
         self._hatch_color = tuple(current_hatch_color)
         self._hatch_color_btn = QtWidgets.QPushButton()
-        self._hatch_color_btn.setToolTip("Crosshatch line colour")
+        self._hatch_color_btn.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Picks the line colour for subtractive crosshatching."
+        )))
         self._paint_hatch_swatch()
         self._hatch_color_btn.clicked.connect(self._on_pick_hatch_color)
         section_display.addRow("Crosshatch Colour:", self._hatch_color_btn)
@@ -178,15 +205,21 @@ class _SettingsDialog(QtWidgets.QDialog):
         self._hatch_strength_spin.setSingleStep(0.05)
         self._hatch_strength_spin.setDecimals(2)
         self._hatch_strength_spin.setValue(current_hatch_strength)
-        self._hatch_strength_spin.setToolTip(
-            "How strongly the hatch colour replaces the body colour (1.0 = opaque lines)")
+        self._hatch_strength_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Opacity of the crosshatch lines over the body colour.\n"
+            "<b>Lower:</b> fainter lines, body colour shows through.\n"
+            "<b>Higher:</b> bolder, more opaque lines.\n"
+            "<b>Default:</b> 1.0."
+        )))
         section_display.addRow("Crosshatch Strength:", self._hatch_strength_spin)
 
         # ── Group 2: Interaction and Dragging ──
         # Simplify Cage Drag checkbox
         self._simplify_cage_drag_check = QtWidgets.QCheckBox()
         self._simplify_cage_drag_check.setChecked(current_simplify_cage_drag)
-        self._simplify_cage_drag_check.setToolTip("Simplify cage model and reduce iterations during interactive dragging")
+        self._simplify_cage_drag_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Simplifies the cage surface and uses fewer iterations while dragging for smoother interaction."
+        )))
         section_interaction.addRow("Simplify Cage Drag:", self._simplify_cage_drag_check)
 
         # Picking Radius spinbox
@@ -201,7 +234,12 @@ class _SettingsDialog(QtWidgets.QDialog):
         self._throttle_spin.setSingleStep(0.005)
         self._throttle_spin.setDecimals(3)
         self._throttle_spin.setValue(get_interactive_throttle_interval())
-        self._throttle_spin.setToolTip("Interactive update throttle interval in seconds (lower = more frequent updates but higher CPU)")
+        self._throttle_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Shortest time between viewport updates while you drag, in s.\n"
+            "<b>Lower:</b> smoother, more CPU.\n"
+            "<b>Higher:</b> choppier, less CPU.\n"
+            "<b>Default:</b> 0.025 s."
+        )))
         section_interaction.addRow("Interactive Throttle (s):", self._throttle_spin)
 
         # Drag Tick Rate spinbox
@@ -209,7 +247,12 @@ class _SettingsDialog(QtWidgets.QDialog):
         self._drag_tick_spin.setRange(1, 120)
         self._drag_tick_spin.setValue(current_dtr)
         self._drag_tick_spin.setSuffix(" Hz")
-        self._drag_tick_spin.setToolTip("Interactive dragging tick/update rate in Hz (default 30 Hz)")
+        self._drag_tick_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Target update rate for interactive dragging, in Hz.\n"
+            "<b>Lower:</b> less CPU load, may feel sluggish.\n"
+            "<b>Higher:</b> more responsive cursor tracking, more CPU load.\n"
+            "<b>Default:</b> 30 Hz."
+        )))
         section_interaction.addRow("Drag Tick Rate:", self._drag_tick_spin)
 
         # ── Group: Controls and Keymap ──
@@ -228,16 +271,20 @@ class _SettingsDialog(QtWidgets.QDialog):
         idx = self._control_scheme_combo.findData(cur_scheme)
         if idx >= 0:
             self._control_scheme_combo.setCurrentIndex(idx)
-        self._control_scheme_combo.setToolTip(
-            "hybrid: direct drag and modal G/R/S both available\n"
-            "modal: direct drag orbits the view; transforms require G/R/S\n"
-            "direct: drag-first; modal transform keys inert"
-        )
+        self._control_scheme_combo.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Input interaction model.\n"
+            "Hybrid: direct drag and modal G/R/S both transform objects.\n"
+            "Modal: direct drag orbits the view; transforms require G/R/S.\n"
+            "Direct: direct drag transforms objects; modal keys are disabled.\n"
+            "<b>Default:</b> Hybrid."
+        )))
         section_controls.addRow("Control Scheme:", self._control_scheme_combo)
 
         self._snap_direct_drag_check = QtWidgets.QCheckBox()
         self._snap_direct_drag_check.setChecked(get_snap_during_direct_drag())
-        self._snap_direct_drag_check.setToolTip("When off, only G/R/S transforms snap.")
+        self._snap_direct_drag_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Snaps geometry during mouse drags as well as during modal G/R/S transforms."
+        )))
         section_controls.addRow("Snap During Direct Drag:", self._snap_direct_drag_check)
 
         self._snap_invert_combo = QtWidgets.QComboBox()
@@ -247,14 +294,17 @@ class _SettingsDialog(QtWidgets.QDialog):
         idx = self._snap_invert_combo.findData(cur_mod)
         if idx >= 0:
             self._snap_invert_combo.setCurrentIndex(idx)
-        self._snap_invert_combo.setToolTip("Modifier key that inverts snapping while held.")
+        self._snap_invert_combo.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Key that temporarily inverts snapping while held during a drag.\n"
+            "<b>Default:</b> Ctrl."
+        )))
         section_controls.addRow("Snap Invert Modifier:", self._snap_invert_combo)
 
         self._modal_req_sel_check = QtWidgets.QCheckBox()
         self._modal_req_sel_check.setChecked(get_modal_requires_selection())
-        self._modal_req_sel_check.setToolTip(
-            "When checked, Grab requires an active point selection to start."
-        )
+        self._modal_req_sel_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Requires an active point selection before the Grab command (G) can start."
+        )))
         section_controls.addRow("Modal Needs a Selection:", self._modal_req_sel_check)
 
         # Keymap table
@@ -267,7 +317,8 @@ class _SettingsDialog(QtWidgets.QDialog):
                 header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
                 header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
                 header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
-            except Exception:
+            except Exception as exc:  # safe: best-effort table header resize configuration
+                fld_logger.debug(f"[settings_dialog] table header setSectionResizeMode failed: {exc}")
                 pass
 
         self._keymap_edits = {}  # action -> QKeySequenceEdit
@@ -281,7 +332,7 @@ class _SettingsDialog(QtWidgets.QDialog):
             # Action description item
             act_item = QtWidgets.QTableWidgetItem(desc)
             act_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-            act_item.setToolTip(action)
+            act_item.setToolTip(rich_tooltip("_SettingsDialog", action))
             self._keymap_table.setItem(row, 1, act_item)
 
             # Binding widget
@@ -294,7 +345,9 @@ class _SettingsDialog(QtWidgets.QDialog):
             is_locked = action in fld_keymap.LOCKED_ACTIONS
             if is_locked:
                 seq_edit.setEnabled(False)
-                seq_edit.setToolTip("This binding is structural and cannot be rebound.")
+                seq_edit.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+                    "This binding is structural and cannot be rebound."
+                )))
             else:
                 def _on_seq_changed(*args, a=action, se=seq_edit):
                     self._validate_keymap_conflicts()
@@ -307,7 +360,7 @@ class _SettingsDialog(QtWidgets.QDialog):
 
             # Reset button
             reset_btn = QtWidgets.QPushButton("Reset")
-            reset_btn.setToolTip(f"Reset to default ({default_b})")
+            reset_btn.setToolTip(rich_tooltip("_SettingsDialog", f"Resets this binding to its default key ({default_b})."))
             if is_locked:
                 reset_btn.setEnabled(False)
             else:
@@ -325,7 +378,9 @@ class _SettingsDialog(QtWidgets.QDialog):
 
         # Reset All Bindings button
         reset_all_btn = QtWidgets.QPushButton("Reset All Bindings")
-        reset_all_btn.setToolTip("Reset all key bindings to default workbench values.")
+        reset_all_btn.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Resets all key bindings to their default workbench values."
+        )))
         def _do_reset_all():
             for action, def_b, ctx, desc in fld_keymap.ACTIONS:
                 if action in self._keymap_edits:
@@ -345,7 +400,10 @@ class _SettingsDialog(QtWidgets.QDialog):
         )
         self._snap_enabled_check = QtWidgets.QCheckBox()
         self._snap_enabled_check.setChecked(get_snap_enabled())
-        self._snap_enabled_check.setToolTip("Enable snapping by default during transform drags (Ctrl inverts during drag).")
+        self._snap_enabled_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Turns on snapping by default during transform drags.\n"
+            "Hold the invert modifier to drag smoothly."
+        )))
         section_snapping.addRow("Enable Snapping:", self._snap_enabled_check)
 
         self._snap_grid_spin = QtWidgets.QDoubleSpinBox()
@@ -354,7 +412,11 @@ class _SettingsDialog(QtWidgets.QDialog):
         self._snap_grid_spin.setDecimals(2)
         self._snap_grid_spin.setSuffix(" mm")
         self._snap_grid_spin.setValue(get_snap_grid_step())
-        self._snap_grid_spin.setToolTip("Grid translation quantum in mm. Set to 0 to disable grid snap.")
+        self._snap_grid_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Step that moves snap to, in mm.\n"
+            "0 turns grid snapping off.\n"
+            "<b>Default:</b> 1.0 mm."
+        )))
         section_snapping.addRow("Grid Step:", self._snap_grid_spin)
 
         self._snap_angle_spin = QtWidgets.QDoubleSpinBox()
@@ -363,12 +425,18 @@ class _SettingsDialog(QtWidgets.QDialog):
         self._snap_angle_spin.setDecimals(1)
         self._snap_angle_spin.setSuffix(" °")
         self._snap_angle_spin.setValue(get_snap_angle_step())
-        self._snap_angle_spin.setToolTip("Rotation angle quantum in degrees. Set to 0 to disable angle snap.")
+        self._snap_angle_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Angle that rotations snap to, in °.\n"
+            "0 turns angle snapping off.\n"
+            "<b>Default:</b> 15.0°."
+        )))
         section_snapping.addRow("Angle Step:", self._snap_angle_spin)
 
         self._snap_vertex_check = QtWidgets.QCheckBox()
         self._snap_vertex_check.setChecked(get_snap_vertex_enabled())
-        self._snap_vertex_check.setToolTip("Snap to nearby control points and primitive origins.")
+        self._snap_vertex_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Snaps cursor positions to nearby control points and primitive origins."
+        )))
         section_snapping.addRow("Vertex Snapping:", self._snap_vertex_check)
 
         self._snap_pixel_spin = QtWidgets.QDoubleSpinBox()
@@ -377,7 +445,12 @@ class _SettingsDialog(QtWidgets.QDialog):
         self._snap_pixel_spin.setDecimals(1)
         self._snap_pixel_spin.setSuffix(" px")
         self._snap_pixel_spin.setValue(get_snap_pixel_radius())
-        self._snap_pixel_spin.setToolTip("Pixel radius on screen within which a candidate point is snapped.")
+        self._snap_pixel_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Screen distance within which the cursor snaps to a point or origin, in px.\n"
+            "<b>Lower:</b> requires more precise targeting.\n"
+            "<b>Higher:</b> grabs points from farther away.\n"
+            "<b>Default:</b> 12.0 px."
+        )))
         section_snapping.addRow("Pixel Radius:", self._snap_pixel_spin)
 
         self._snap_guide_enabled_check = QtWidgets.QCheckBox()
@@ -386,7 +459,9 @@ class _SettingsDialog(QtWidgets.QDialog):
 
         self._guide_line_color = tuple(get_snap_guide_line_color())
         self._guide_line_color_btn = QtWidgets.QPushButton()
-        self._guide_line_color_btn.setToolTip("Guide line colour")
+        self._guide_line_color_btn.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Picks the colour for snap guide lines."
+        )))
         self._paint_guide_line_swatch()
         self._guide_line_color_btn.clicked.connect(self._on_pick_guide_line_color)
         section_snapping.addRow("Guide Line Colour:", self._guide_line_color_btn)
@@ -401,7 +476,9 @@ class _SettingsDialog(QtWidgets.QDialog):
 
         self._detent_color = tuple(get_snap_detent_color())
         self._detent_color_btn = QtWidgets.QPushButton()
-        self._detent_color_btn.setToolTip("Detent dot colour")
+        self._detent_color_btn.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Picks the colour for snap detent dots."
+        )))
         self._paint_detent_swatch()
         self._detent_color_btn.clicked.connect(self._on_pick_detent_color)
         section_snapping.addRow("Detent Colour:", self._detent_color_btn)
@@ -410,22 +487,29 @@ class _SettingsDialog(QtWidgets.QDialog):
         self._detent_size_spin.setRange(0, 20)
         self._detent_size_spin.setSuffix(" px")
         self._detent_size_spin.setValue(get_snap_detent_size())
-        self._detent_size_spin.setToolTip("0 = hide dots")
+        self._detent_size_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Diameter of the snap detent dots, in px.\n"
+            "0 hides the dots.\n"
+            "<b>Default:</b> 5 px."
+        )))
         section_snapping.addRow("Detent Size:", self._detent_size_spin)
 
         self._detent_interval_spin = QtWidgets.QSpinBox()
         self._detent_interval_spin.setRange(1, 1000)
         self._detent_interval_spin.setSuffix(" steps")
         self._detent_interval_spin.setValue(get_snap_detent_interval())
-        self._detent_interval_spin.setToolTip(
-            "Draw a guide dot every N snap steps. Snapping still uses every step; "
-            "this only controls how often a landmark is drawn."
-        )
+        self._detent_interval_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Number of snap steps between visible detent dots.\n"
+            "Snapping still stops at every step; this only controls visual landmarks.\n"
+            "<b>Default:</b> 10 steps."
+        )))
         section_snapping.addRow("Detent Every:", self._detent_interval_spin)
 
         self._grid_color = tuple(get_snap_grid_color())
         self._grid_color_btn = QtWidgets.QPushButton()
-        self._grid_color_btn.setToolTip("Grid line colour")
+        self._grid_color_btn.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Picks the colour for the planar snap grid lines."
+        )))
         self._paint_grid_swatch()
         self._grid_color_btn.clicked.connect(self._on_pick_grid_color)
         section_snapping.addRow("Grid Colour:", self._grid_color_btn)
@@ -466,11 +550,14 @@ class _SettingsDialog(QtWidgets.QDialog):
         idx = self._quality_combo.findData(get_render_quality())
         if idx >= 0:
             self._quality_combo.setCurrentIndex(idx)
-        self._quality_combo.setToolTip(
-            "Overall SDF rendering quality preset.\n"
-            "Controls viewport downscaling during navigation and ray march step counts.\n"
-            "Draft = fastest, Ultra = full resolution everywhere."
-        )
+        self._quality_combo.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "SDF ray-marching quality preset.\n"
+            "Draft: fastest navigation, lowest step count.\n"
+            "Balanced: good balance of smoothness and interactive speed.\n"
+            "High: detailed surfaces, higher GPU load.\n"
+            "Ultra: full resolution without viewport downscaling.\n"
+            "<b>Default:</b> Balanced."
+        )))
         section_rendering.addRow("Rendering Quality:", self._quality_combo)
 
         # Project accuracy target (slicing / CAM)
@@ -479,7 +566,9 @@ class _SettingsDialog(QtWidgets.QDialog):
         # GPU evaluation checkbox
         self._gpu_eval_check = QtWidgets.QCheckBox()
         self._gpu_eval_check.setChecked(get_gpu_field_eval())
-        self._gpu_eval_check.setToolTip("Enable OpenGL compute-shader acceleration for SDF field evaluation and volume baking (when supported).")
+        self._gpu_eval_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Uses OpenGL compute shaders to accelerate SDF evaluation and volume baking where supported."
+        )))
         section_rendering.addRow("Enable GPU Evaluation:", self._gpu_eval_check)
 
         # Voxel Grid Resolution combo box
@@ -490,7 +579,12 @@ class _SettingsDialog(QtWidgets.QDialog):
         idx = self._voxel_res_combo.findData(get_voxel_grid_resolution())
         if idx >= 0:
             self._voxel_res_combo.setCurrentIndex(idx)
-        self._voxel_res_combo.setToolTip("Scene volume resolution along its longest axis (default 256).")
+        self._voxel_res_combo.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Resolution of the baked scene volume along its longest axis.\n"
+            "<b>Lower:</b> faster volume bakes, less VRAM.\n"
+            "<b>Higher:</b> sharper features, more VRAM.\n"
+            "<b>Default:</b> 256³ (67 MB)."
+        )))
         section_rendering.addRow("Voxel Grid Resolution:", self._voxel_res_combo)
 
         # Warp Resolution combo box
@@ -501,7 +595,12 @@ class _SettingsDialog(QtWidgets.QDialog):
         idx = self._warp_res_combo.findData(get_sdf_warp_resolution())
         if idx >= 0:
             self._warp_res_combo.setCurrentIndex(idx)
-        self._warp_res_combo.setToolTip("Resolution of the 3D deformation warp texture (points along longest axis, default 32).")
+        self._warp_res_combo.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Grid resolution for the 3D cage deformation warp volume.\n"
+            "<b>Lower:</b> faster cage drag updates.\n"
+            "<b>Higher:</b> smoother deformation transitions.\n"
+            "<b>Default:</b> 32 (balanced)."
+        )))
         section_rendering.addRow("Warp Resolution:", self._warp_res_combo)
 
         # Ray March cell size / resolution
@@ -511,7 +610,11 @@ class _SettingsDialog(QtWidgets.QDialog):
         self._mss_spin = QtWidgets.QDoubleSpinBox()
         self._mss_spin.setRange(10.0, 100000.0) # 10mm to 100m
         self._mss_spin.setValue(current_mss)
-        self._mss_spin.setToolTip("Maximum allowed dimension for an individual SDF field (mm). Larger fields will be clipped during preview rendering.")
+        self._mss_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Largest dimension allowed for an individual SDF field, in mm.\n"
+            "Fields exceeding this are clipped during preview rendering.\n"
+            "<b>Default:</b> 2000.0 mm."
+        )))
         section_rendering.addRow("Max SDF Render Size (mm):", self._mss_spin)
 
         # Near Clip Distance
@@ -525,7 +628,13 @@ class _SettingsDialog(QtWidgets.QDialog):
         idx = self._cage_patch_combo.findData(get_cage_patch_type())
         if idx >= 0:
             self._cage_patch_combo.setCurrentIndex(idx)
-        self._cage_patch_combo.setToolTip("Interpolation algorithm for quad faces in cage objects")
+        self._cage_patch_combo.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Surface interpolation method for quad faces in cage objects.\n"
+            "Bilinear Coons: linear boundary blending, fastest.\n"
+            "Bicubic Coons: C1 tangent continuity across patches.\n"
+            "Gregory-Coons: compatible corner twists without twist artifacts.\n"
+            "<b>Default:</b> Bilinear Coons."
+        )))
         section_rendering.addRow("Cage Patch Type:", self._cage_patch_combo)
 
         # Heightmap Resolution combo box
@@ -536,7 +645,12 @@ class _SettingsDialog(QtWidgets.QDialog):
         idx = self._hmap_res_combo.findData(get_heightmap_resolution())
         if idx >= 0:
             self._hmap_res_combo.setCurrentIndex(idx)
-        self._hmap_res_combo.setToolTip("Resolution of the baked heightmap texture for curved surface extrusions")
+        self._hmap_res_combo.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Texture resolution used when baking heightmaps for curved surface extrusions.\n"
+            "<b>Lower:</b> faster baking, uses less memory.\n"
+            "<b>Higher:</b> finer displacement detail.\n"
+            "<b>Default:</b> 256x256."
+        )))
         section_rendering.addRow("Heightmap Resolution:", self._hmap_res_combo)
 
 
@@ -552,15 +666,18 @@ class _SettingsDialog(QtWidgets.QDialog):
         from freecad.fields.core.fld_logger import get_enable_crash_log
         self._log_check = QtWidgets.QCheckBox()
         self._log_check.setChecked(get_enable_crash_log())
-        self._log_check.setToolTip("Enable persistent crash logging to Fields.log")
+        self._log_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Writes unexpected errors and crash tracebacks to ~/.FreeCAD/Fields.log."
+        )))
         section_system.addRow("Enable Crash Logs:", self._log_check)
 
         # Performance Profiler
-        from freecad.fields.core.objects.fld_object import get_perf_profiler_enabled
+        from freecad.fields.core.fld_settings import get_perf_profiler_enabled
         self._perf_check = QtWidgets.QCheckBox()
         self._perf_check.setChecked(get_perf_profiler_enabled())
-        self._perf_check.setToolTip("Enable detailed performance logging (mesh generation, "
-                                     "SDF baking, and ray march render pass timings)")
+        self._perf_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Logs execution timings for mesh generation, volume baking, and render passes."
+        )))
         section_system.addRow("Enable Performance Profiler:", self._perf_check)
 
         # Debug Logging — master switch + per-category toggles
@@ -568,8 +685,10 @@ class _SettingsDialog(QtWidgets.QDialog):
                                      DEBUG_CATEGORIES)
         self._debug_check = QtWidgets.QCheckBox()
         self._debug_check.setChecked(get_enable_debug_log())
-        self._debug_check.setToolTip("Master switch for all debug-level logging. "
-                                     "When off, no debug() output is printed regardless of categories.")
+        self._debug_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "Master toggle for debug output in the FreeCAD Report View and console.\n"
+            "When off, suppresses all category debug messages."
+        )))
         section_system.addRow("Enable Debug Logging:", self._debug_check)
 
         # Per-category checkboxes (Render is very verbose and off by default)
@@ -582,10 +701,12 @@ class _SettingsDialog(QtWidgets.QDialog):
             chk = QtWidgets.QCheckBox()
             chk.setChecked(get_debug_category(cat))
             if cat == "render":
-                chk.setToolTip("Verbose GPU ray-march / renderer debug output. "
-                               "Off by default; enable only when diagnosing render issues.")
+                chk.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+                    "Logs detailed GPU ray-march and render pass operations.\n"
+                    "Produces very verbose output; leave off unless diagnosing rendering issues."
+                )))
             else:
-                chk.setToolTip(f"Emit '{cat}' category debug messages (requires master Debug Logging on).")
+                chk.setToolTip(rich_tooltip("_SettingsDialog", f"Prints debug messages for the {cat} subsystem.\nRequires Enable Debug Logging to be on."))
             # Gray out category rows when the master switch is off
             chk.setEnabled(self._debug_check.isChecked())
             self._debug_cat_checks[cat] = chk
@@ -694,22 +815,23 @@ class _SettingsDialog(QtWidgets.QDialog):
         return conflicts
 
     def _on_accept(self):
-        from freecad.fields.core.objects.fld_object import (set_show_wireframe, set_line_width, set_point_size,
+        from freecad.fields.core.objects.fld_object import refresh_all_fld_objects
+        from freecad.fields.core.fld_settings import (set_show_wireframe, set_line_width, set_point_size,
                                     set_picking_radius, 
                                     set_max_bounds, set_perf_profiler_enabled,
-                                    refresh_all_fld_objects,
                                      set_near_clip_distance, apply_near_clip_override,
                                      set_interactive_throttle_interval, set_ray_march_cell_size,
                                      set_max_sdf_render_size, set_sdf_selection_outline_size,
                                      set_hatch_size, set_hatch_color, set_hatch_strength,
-                                     set_drag_tick_rate, set_render_quality,
-                                     set_show_cage_curves, set_cage_patch_type, set_simplify_cage_drag,
-                                     set_heightmap_resolution, set_gpu_field_eval,
-                                     set_sdf_warp_resolution, set_voxel_grid_resolution,
-                                     set_model_tolerance)
+                                      set_drag_tick_rate, set_render_quality,
+                                      set_show_cage_curves, set_cage_xray, set_cage_patch_type, set_simplify_cage_drag,
+                                      set_heightmap_resolution, set_gpu_field_eval,
+                                      set_sdf_warp_resolution, set_voxel_grid_resolution,
+                                      set_model_tolerance)
         from freecad.fields.core.fld_logger import set_enable_crash_log
         wire = self._wire_check.isChecked()
         show_cage_curves = self._cage_curves_check.isChecked()
+        cage_xray = self._cage_xray_check.isChecked()
         simplify_cage_drag = self._simplify_cage_drag_check.isChecked()
         lw = self._lw_spin.value()
         ps = self._ps_spin.value()
@@ -720,6 +842,7 @@ class _SettingsDialog(QtWidgets.QDialog):
 
         set_show_wireframe(wire)
         set_show_cage_curves(show_cage_curves)
+        set_cage_xray(cage_xray)
         set_simplify_cage_drag(simplify_cage_drag)
         set_line_width(lw)
         set_point_size(ps)
@@ -799,13 +922,6 @@ class _SettingsDialog(QtWidgets.QDialog):
         for action, edit in getattr(self, "_keymap_edits", {}).items():
             seq_str = edit.keySequence().toString()
             fld_keymap.set_binding(action, seq_str)
-
-        # Update Fields_Translate command accelerator if global.translate changed
-        translate_seq = fld_keymap.binding_for("global.translate")
-        import FreeCADGui
-        cmd = FreeCADGui.getCommand("Fields_Translate")
-        if cmd and hasattr(cmd, "accel"):
-            cmd.accel = translate_seq
 
         set_snap_enabled(self._snap_enabled_check.isChecked())
         set_snap_grid_step(self._snap_grid_spin.value())

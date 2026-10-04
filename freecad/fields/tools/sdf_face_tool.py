@@ -5,6 +5,7 @@ from PySide import QtWidgets, QtCore
 from freecad.fields.tools.fld_base import FldBase
 from freecad.fields.core import fld_logger
 from freecad.fields.core.input.fld_gui_utils import DynamicLimitIntSlider, DynamicLimitSlider
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 class SdfFaceTaskPanel:
     """Task panel for modifying the SDF face parameters."""
@@ -88,11 +89,23 @@ class SdfFaceTaskPanel:
 
         for w in (self.tension_label, self.tension_spin):
             w.setEnabled(live)
-        self.tension_spin.setToolTip(
-            "1.0 = membrane (taut, creases into the boundary); 0.0 = thin plate "
-            "(follows the boundary slope and bulges)." if live else
-            "This curve is flat, so its fill is an exact plane -- there is no height "
-            "field to tension. Lift the curve out of plane to use this.")
+        if live:
+            tip = rich_tooltip(
+                "SdfFaceTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "SdfFaceTaskPanel",
+                    "Balance between membrane and thin-plate bending.\n1.0 is taut membrane (creases into boundary); 0.0 is thin plate (follows boundary slope and bulges).\n<b>Default:</b> 1.0.",
+                ),
+            )
+        else:
+            tip = rich_tooltip(
+                "SdfFaceTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "SdfFaceTaskPanel",
+                    "Curve is planar, so its fill is an exact flat plane with no height field to tension. Lift curve vertices out of plane to enable.",
+                ),
+            )
+        self.tension_spin.setToolTip(tip)
         self.tension_label.setToolTip(self.tension_spin.toolTip())
 
     def _on_params_changed(self):
@@ -141,8 +154,6 @@ class SdfFaceEditTool(FldBase):
                 obj.addProperty("App::PropertyInteger", "UCount", "SDF Face", "Width of grid")
                 obj.addProperty("App::PropertyInteger", "VCount", "SDF Face", "Height of grid")
                 obj.addProperty("App::PropertyLink", "SourceCurve", "SDF Face", "The curve this surface depends on")
-            if "FillType" in obj.PropertiesList:
-                obj.removeProperty("FillType")  # see onDocumentRestored -- nothing reads it
             if "Iterations" not in obj.PropertiesList:
                 obj.addProperty("App::PropertyInteger", "Iterations", "SDF Face", "Number of Laplacian iterations")
                 obj.Iterations = 200

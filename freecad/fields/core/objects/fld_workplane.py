@@ -49,20 +49,12 @@ class FldWorkPlane:
         self.is_fld_workplane = True
 
 class FldWorkPlaneViewProvider:
-    """Renamed from `ViewProviderFldWorkPlane` (CR-055) to match the
-    prefix-first convention every other `core/objects/` ViewProvider uses
-    (`FldViewProvider`).
+    """ViewProvider for the workplane.
 
     `vobj.Proxy = self` below means FreeCAD persists this class's module path
-    + name into the saved document, the same restoration mechanism as a
-    document object's own `Proxy`. A document saved under the old class name
-    therefore cannot load its ViewProvider here: nothing rewrites the stored
-    name at runtime, and nothing should -- this codebase's "delete replaced
-    code, write no migrations" convention forbids a back-compat shim. The dev
-    repo carries a one-time migration macro whose `REWRITES` table has an
-    explicit rule for this rename (both the fresh `ViewProviderFldWorkPlane`
-    -> here, and the pre-namespace `ViewProviderDMWorkPlane` chain updated to
-    target here directly); it is a developer tool and is not shipped.
+    + name into the saved document, so renaming the class breaks documents
+    saved under the old name. That is accepted: this codebase deletes replaced
+    code and writes no migrations.
     """
 
     def __init__(self, vobj):

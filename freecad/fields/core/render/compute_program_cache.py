@@ -15,6 +15,7 @@ class ComputeProgramCache:
         self._lru = []          # sources, least-recently-used first
         self._max = max_entries
         self._dump_path = dump_path
+        self._failed = {}       # cache_key -> error message string
 
     def get(self, src, key=None, protected=None):
         """The program for this source or structural key, compiling only if new.
@@ -25,6 +26,9 @@ class ComputeProgramCache:
         from freecad.fields.core.gl.gl_program import GLProgram
 
         cache_key = key if key is not None else src
+        if cache_key in self._failed:
+            raise RuntimeError(self._failed[cache_key])
+
         hit = self._progs.get(cache_key)
         if hit is not None:
             self._lru.remove(cache_key)
@@ -42,7 +46,11 @@ class ComputeProgramCache:
         except Exception as e:
             fld_logger.render_debug(f"ComputeProgramCache: Failed to dump shader source: {e}")
         prog = GLProgram()
-        prog.compile_compute(src)
+        try:
+            prog.compile_compute(src)
+        except RuntimeError as e:
+            self._failed[cache_key] = str(e)
+            raise
         t_gpu_total = time.perf_counter() - t_gpu_start
         _msg = (f"SceneRayMarch: GPU compile_compute MISS done in "
                 f"{t_gpu_total*1000:.2f}ms (source len={len(src)})")
@@ -64,9 +72,15 @@ class ComputeProgramCache:
                         f"SceneRayMarch: evicting cached compute program failed: {e}")
         return prog
 
+    def is_failed(self, src, key=None):
+        """True if this source or structural key previously failed compilation."""
+        cache_key = key if key is not None else src
+        return cache_key in self._failed
+
     def discard(self, src, key=None):
         """Forget a source or key (used after its compile raised). Does not destroy."""
         cache_key = key if key is not None else src
+        self._failed.pop(cache_key, None)
         self._progs.pop(cache_key, None)
         if cache_key in self._lru:
             self._lru.remove(cache_key)
@@ -80,6 +94,7 @@ class ComputeProgramCache:
                 fld_logger.render_debug(f"ComputeProgramCache.destroy_all failed: {e}")
         self._progs.clear()
         self._lru.clear()
+        self._failed.clear()
 
     def __len__(self):
         return len(self._progs)

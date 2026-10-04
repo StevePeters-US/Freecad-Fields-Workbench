@@ -86,14 +86,6 @@ class FldSculptLayerProxy(FldModifierProxyBase):
         # fresh session has no save observer and silently never flushes its grids.
         super().onDocumentRestored(obj)
         install_observer()
-        if not hasattr(obj, "SculptMode"):
-            obj.addProperty("App::PropertyEnumeration", "SculptMode", "Sculpt",
-                            "Sculpt layer mode: Additive (deposit) or Subtractive (carve)")
-            obj.SculptMode = ["Additive", "Subtractive"]
-            obj.SculptMode = getattr(obj, "Group", "Additive")
-        if not hasattr(obj, "StrokeCount"):
-            obj.addProperty("App::PropertyInteger", "StrokeCount", "Sculpt",
-                            "Number of sculpt strokes committed").StrokeCount = 0
         self._undo_journal = collections.deque(maxlen=32)
         self._stroke_dabs = []
         self._last_stroke_count = getattr(obj, "StrokeCount", 0)

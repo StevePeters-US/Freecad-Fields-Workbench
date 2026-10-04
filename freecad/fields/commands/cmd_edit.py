@@ -10,14 +10,11 @@ class CommandFldEditObject:
     """
 
     def GetResources(self):
+        from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
         return {
             'Pixmap': 'Fields_EditTool', # custom Fields icon
             'MenuText': 'Edit Lattice',
-            'ToolTip': ("Edit the lattice that drives the selected SDF shape."
-                        "\n\nIn edit mode: G move, R rotate, S scale."
-                        "\nX/Y/Z lock an axis (Shift for the perpendicular plane); "
-                        "type a number for an exact value."
-                        "\nEnter or left-click applies, Esc or right-click cancels.")
+            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Edits the points, curve, lattice or modifier of the selected Fields object.\nSelect one Fields object or modifier.")),
         }
 
     def IsActive(self):

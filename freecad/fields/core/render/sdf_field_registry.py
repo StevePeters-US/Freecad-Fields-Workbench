@@ -147,7 +147,7 @@ class SdfFieldRegistry:
                         mn, mx = f.bounding_box()
                         bmin = FreeCAD.Vector(mn)
                         bmax = FreeCAD.Vector(mx)
-                        from freecad.fields.core.objects.fld_object import get_max_sdf_render_size
+                        from freecad.fields.core.fld_settings import get_max_sdf_render_size
                         limit = get_max_sdf_render_size()
                         for attr in ['x', 'y', 'z']:
                             mn_val = getattr(bmin, attr)

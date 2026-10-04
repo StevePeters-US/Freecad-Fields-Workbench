@@ -7,7 +7,13 @@ The compiler does NOT contain primitive-specific GLSL — every primitive
 registers its own helper bodies via `ctx.add_custom_helper(name, body)`.
 """
 
+import re
 import uuid
+
+
+def _glsl_ident(text):
+    """Legal GLSL identifier text: GLSL reserves any name containing '__' (error C7528)."""
+    return re.sub(r"_{2,}", "_", re.sub(r"[^A-Za-z0-9_]", "_", str(text)))
 
 
 class GlslContext:
@@ -28,15 +34,14 @@ class GlslContext:
         if prefix is None:
             self._prefix = f"u_{uuid.uuid4().hex[:8]}_"
         else:
-            clean_prefix = prefix.replace(".", "_").replace(" ", "_").replace("-", "_")
-            self._prefix = f"u_{clean_prefix}_"
+            self._prefix = f"u_{_glsl_ident(prefix).strip('_')}_"
 
     @property
     def prefix(self) -> str:
         return self._prefix
 
     def get_unique_name(self, base_name: str) -> str:
-        name = f"{self._prefix}{base_name}_{self._helper_counter}"
+        name = f"{self._prefix}{_glsl_ident(base_name).strip('_')}_{self._helper_counter}"
         self._helper_counter += 1
         return name
 
@@ -47,7 +52,7 @@ class GlslContext:
             # The hint is a readability aid, not an identity. One context compiles a
             # whole field tree, so two fields of the same class asking for "vsize"
             # must not collide -- that is a shader-wide redefinition error.
-            name = f"{self._prefix}{name}_{self._counter}"
+            name = f"{self._prefix}{_glsl_ident(name).strip('_')}_{self._counter}"
         self._counter += 1
         self._uniforms.append((name, glsl_type, value))
         return name

@@ -166,7 +166,7 @@ class NurbsEditTool(FldBase, DragTimerMixin):
         
         dist, detail = shape.distToShape(Part.Point(pos_global).toShape())
         
-        from freecad.fields.core.objects.fld_object import get_picking_radius
+        from freecad.fields.core.fld_settings import get_picking_radius
         if dist < get_picking_radius():
             return detail[0][2] # Closest point on shape (Global)
             
@@ -799,12 +799,14 @@ class NurbsEditTool(FldBase, DragTimerMixin):
         if self._target_obj:
             self._target_obj.EditMode = False
         self._is_editing = False
+        self._restore_cursor()
         super().cancel()
 
     def finish(self):
         if self._target_obj:
             self._target_obj.EditMode = False
         self._is_editing = False
+        self._restore_cursor()
         self.terminate()
 
     def _do_terminate(self):
@@ -813,5 +815,6 @@ class NurbsEditTool(FldBase, DragTimerMixin):
                 self._target_obj.EditMode = False
         except Exception as e:
             fld_logger.debug(f"NurbsEditTool._do_terminate exception: {e}")
+        self._restore_cursor()
         super()._do_terminate()
 

@@ -2,15 +2,14 @@
 """Fields user preferences / parameter storage accessors.
 
 Split out of core/objects/fld_object.py (ST-007). Centralizes all ParamGet
-calls under `User parameter:BaseApp/Preferences/Mod/Fields`.
+calls under `User parameter:BaseApp/Preferences/fields` (fld_prefs.PREFS_PATH).
 """
 import FreeCAD
 import FreeCADGui
 from freecad.fields.core import fld_logger
+from freecad.fields.core.fld_prefs import PREFS_PATH
 
-_PARAM_PATH = "User parameter:BaseApp/Preferences/Mod/Fields"
-def _param_get():
-    return FreeCAD.ParamGet(_PARAM_PATH)
+_PARAM_PATH = PREFS_PATH
 
 
 def get_show_wireframe():
@@ -126,6 +125,13 @@ def get_show_cage_curves():
 
 def set_show_cage_curves(show):
     FreeCAD.ParamGet(_PARAM_PATH).SetBool("ShowCageCurves", bool(show))
+
+def get_cage_xray():
+    """Return whether the cage edit overlay draws through the SDF surface (x-ray)."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("CageXRay", True)
+
+def set_cage_xray(on):
+    FreeCAD.ParamGet(_PARAM_PATH).SetBool("CageXRay", bool(on))
 
 
 def get_max_sdf_render_size():

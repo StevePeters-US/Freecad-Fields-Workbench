@@ -8,7 +8,9 @@ event against a literal -- call action_for() instead.
 import FreeCAD
 from PySide import QtCore, QtGui
 
-_PARAM_PATH = "User parameter:BaseApp/Preferences/Mod/Fields/Keymap"
+from freecad.fields.core.fld_prefs import KEYMAP_PATH
+
+_PARAM_PATH = KEYMAP_PATH
 
 # Contexts, most specific first. action_for() walks them in this order and the
 # first context that both applies and binds the event wins.
@@ -25,7 +27,6 @@ ACTIONS = (
     ("global.edit_mode_alt",  "E",         CTX_GLOBAL, "Enter edit mode (alias)"),
     ("global.context_menu",   "D",         CTX_GLOBAL, "Show the Fields context menu"),
     ("global.toggle_group",   "Q",         CTX_GLOBAL, "Toggle Additive/Subtractive on the selection"),
-    ("global.translate",      "T",         CTX_GLOBAL, "Start the Translate tool"),
     ("global.maximize_view",  "Ctrl+Space",CTX_GLOBAL, "Toggle viewport maximize"),
 
     # -- Tool active --
@@ -35,6 +36,7 @@ ACTIONS = (
     ("tool.menu",             "D",         CTX_TOOL,   "Show the tool options menu"),
     ("tool.snap_menu",        "S",         CTX_TOOL,   "Show the snapping menu (outside edit mode)"),
     ("tool.toggle_group",     "Q",         CTX_TOOL,   "Toggle Additive/Subtractive on the selection"),
+    ("cage.toggle_xray",      "Alt+Z",     CTX_TOOL,   "Toggle X-ray on the cage overlay"),
 
     # -- Edit mode --
     ("edit.grab",             "G",         CTX_EDIT,   "Start a modal grab (translate)"),

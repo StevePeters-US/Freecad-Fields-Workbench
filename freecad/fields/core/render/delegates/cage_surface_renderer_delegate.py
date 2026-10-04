@@ -11,7 +11,7 @@ try:
 except ImportError:
     coin = None
 
-from freecad.fields.core.objects.fld_object import get_line_width, get_show_cage_curves
+from freecad.fields.core.fld_settings import get_line_width, get_show_cage_curves
 from freecad.fields.core.render.delegates import add_to_scene
 
 

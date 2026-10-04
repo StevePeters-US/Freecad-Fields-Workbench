@@ -1,4 +1,62 @@
 # SPDX-License-Identifier: CC-BY-NC-SA-4.0
+from freecad.fields.core import fld_logger
+
+
+def _grid_to_preview_shape(grid):
+    """Flatten a 2D grid of points into a quad-split triangle preview Part.Shape."""
+    import FreeCAD
+    import numpy as np
+    res_v = len(grid)
+    res_u = len(grid[0])
+    verts_list = []
+    for j in range(res_v):
+        for i in range(res_u):
+            p = grid[j][i]
+            v = p if isinstance(p, FreeCAD.Vector) else FreeCAD.Vector(*p)
+            verts_list.append([v.x, v.y, v.z])
+    verts_arr = np.array(verts_list, dtype=np.float32)
+
+    tris_idx = []
+    for j in range(res_v - 1):
+        for i in range(res_u - 1):
+            idx00 = j * res_u + i
+            idx01 = j * res_u + (i + 1)
+            idx10 = (j + 1) * res_u + i
+            idx11 = (j + 1) * res_u + (i + 1)
+            tris_idx.append([idx00, idx10, idx01, -1])
+            tris_idx.append([idx01, idx10, idx11, -1])
+
+    idx_arr = np.array(tris_idx, dtype=np.int32)
+    from freecad.fields.core.objects.fld_curve_fill_geometry import _triangles_to_preview_shape
+    return _triangles_to_preview_shape(verts_arr, idx_arr)
+
+
+def _compute_ring_point(B_i, T_i, centroid, normal, R_outer, k, extra_v, fraction, blend_factor):
+    """One point of the extension ring: tangent extrapolation blended with a
+    linear planar transition toward the outer radius."""
+    T_len = T_i.Length
+    if T_len < 1e-4:
+        T_i = B_i - centroid
+        T_len = T_i.Length
+
+    dir_i = B_i - centroid
+    dir_plane = dir_i - normal * dir_i.dot(normal)
+    if dir_plane.Length > 1e-4:
+        dir_plane.normalize()
+    else:
+        dir_plane = T_i.normalize()
+
+    outer_pt = centroid + dir_plane * R_outer
+
+    # Tangent extrapolation
+    P_tangent = B_i + T_i * (k * (R_outer - dir_i.Length) / (extra_v * T_len))
+    # Linear planar transition
+    P_linear = B_i * (1.0 - fraction) + outer_pt * fraction
+
+    # Blend
+    return P_tangent * (1.0 - blend_factor) + P_linear * blend_factor
+
+
 class FldSurface:
     """NURBS surface built from a grid of control points or 4 boundary curves."""
 
@@ -8,44 +66,17 @@ class FldSurface:
 
     def to_shape(self):
         import Part
-        import FreeCAD
-        import numpy as np
         if not self.grid or not self.grid[0]:
             return Part.Shape()
         try:
-            res_v = len(self.grid)
-            res_u = len(self.grid[0])
-            verts_list = []
-            for j in range(res_v):
-                for i in range(res_u):
-                    p = self.grid[j][i]
-                    v = p if isinstance(p, FreeCAD.Vector) else FreeCAD.Vector(*p)
-                    verts_list.append([v.x, v.y, v.z])
-            verts_arr = np.array(verts_list, dtype=np.float32)
-
-            tris_idx = []
-            for j in range(res_v - 1):
-                for i in range(res_u - 1):
-                    idx00 = j * res_u + i
-                    idx01 = j * res_u + (i + 1)
-                    idx10 = (j + 1) * res_u + i
-                    idx11 = (j + 1) * res_u + (i + 1)
-                    tris_idx.append([idx00, idx10, idx01, -1])
-                    tris_idx.append([idx01, idx10, idx11, -1])
-
-            idx_arr = np.array(tris_idx, dtype=np.int32)
-            from freecad.fields.core.objects.fld_curve_fill_geometry import _triangles_to_preview_shape
-            return _triangles_to_preview_shape(verts_arr, idx_arr)
+            return _grid_to_preview_shape(self.grid)
         except Exception as e:
-            from freecad.fields.core import fld_logger
             fld_logger.debug(f"FldSurface to_shape failed: {e}")
             return Part.Shape()
 
     def to_extended_shape(self, extra_u=8, extra_v=8, is_u_periodic=False, R_outer=800.0):
         import Part
         import FreeCAD
-        import math
-        import numpy as np  # both branches below build the ring mesh with it
         if not self.grid or not self.grid[0]:
             return Part.Shape()
 
@@ -104,56 +135,12 @@ class FldSurface:
                 for i in range(num_cols):
                     B_i = self.grid[-1][i]
                     T_i = self.grid[-1][i] - self.grid[-2][i]
-                    T_len = T_i.Length
-                    if T_len < 1e-4:
-                        T_i = B_i - centroid
-                        T_len = T_i.Length
-                    
-                    dir_i = B_i - centroid
-                    dir_plane = dir_i - normal * dir_i.dot(normal)
-                    if dir_plane.Length > 1e-4:
-                        dir_plane.normalize()
-                    else:
-                        dir_plane = T_i.normalize()
-                        
-                    outer_pt = centroid + dir_plane * R_outer
-                    
-                    # Tangent extrapolation
-                    P_tangent = B_i + T_i * (k * (R_outer - dir_i.Length) / (extra_v * T_len))
-                    # Linear planar transition
-                    P_linear = B_i * (1.0 - fraction) + outer_pt * fraction
-                    
-                    # Blend
-                    P_k = P_tangent * (1.0 - blend_factor) + P_linear * blend_factor
-                    row.append(P_k)
+                    row.append(_compute_ring_point(B_i, T_i, centroid, normal, R_outer, k, extra_v, fraction, blend_factor))
                 ring_grid.append(row)
-                
+
             try:
-                res_v = len(ring_grid)
-                res_u = len(ring_grid[0])
-                verts_list = []
-                for j in range(res_v):
-                    for i in range(res_u):
-                        p = ring_grid[j][i]
-                        v = p if isinstance(p, FreeCAD.Vector) else FreeCAD.Vector(*p)
-                        verts_list.append([v.x, v.y, v.z])
-                verts_arr = np.array(verts_list, dtype=np.float32)
-
-                tris_idx = []
-                for j in range(res_v - 1):
-                    for i in range(res_u - 1):
-                        idx00 = j * res_u + i
-                        idx01 = j * res_u + (i + 1)
-                        idx10 = (j + 1) * res_u + i
-                        idx11 = (j + 1) * res_u + (i + 1)
-                        tris_idx.append([idx00, idx10, idx01, -1])
-                        tris_idx.append([idx01, idx10, idx11, -1])
-
-                idx_arr = np.array(tris_idx, dtype=np.int32)
-                from freecad.fields.core.objects.fld_curve_fill_geometry import _triangles_to_preview_shape
-                return _triangles_to_preview_shape(verts_arr, idx_arr)
+                return _grid_to_preview_shape(ring_grid)
             except Exception as e:
-                from freecad.fields.core import fld_logger
                 fld_logger.warn(f"FldSurface: failed to construct periodic extension mesh: {e}")
                 return Part.Shape()
         else:
@@ -186,51 +173,11 @@ class FldSurface:
                 row = []
                 for i in range(num_cols):
                     B_i, T_i = boundary_loop[i]
-                    T_len = T_i.Length
-                    if T_len < 1e-4:
-                        T_i = B_i - centroid
-                        T_len = T_i.Length
-                        
-                    dir_i = B_i - centroid
-                    dir_plane = dir_i - normal * dir_i.dot(normal)
-                    if dir_plane.Length > 1e-4:
-                        dir_plane.normalize()
-                    else:
-                        dir_plane = T_i.normalize()
-                        
-                    outer_pt = centroid + dir_plane * R_outer
-                    
-                    P_tangent = B_i + T_i * (k * (R_outer - dir_i.Length) / (extra_v * T_len))
-                    P_linear = B_i * (1.0 - fraction) + outer_pt * fraction
-                    P_k = P_tangent * (1.0 - blend_factor) + P_linear * blend_factor
-                    row.append(P_k)
+                    row.append(_compute_ring_point(B_i, T_i, centroid, normal, R_outer, k, extra_v, fraction, blend_factor))
                 ring_grid.append(row)
-                
+
             try:
-                res_v = len(ring_grid)
-                res_u = len(ring_grid[0])
-                verts_list = []
-                for j in range(res_v):
-                    for i in range(res_u):
-                        p = ring_grid[j][i]
-                        v = p if isinstance(p, FreeCAD.Vector) else FreeCAD.Vector(*p)
-                        verts_list.append([v.x, v.y, v.z])
-                verts_arr = np.array(verts_list, dtype=np.float32)
-
-                tris_idx = []
-                for j in range(res_v - 1):
-                    for i in range(res_u - 1):
-                        idx00 = j * res_u + i
-                        idx01 = j * res_u + (i + 1)
-                        idx10 = (j + 1) * res_u + i
-                        idx11 = (j + 1) * res_u + (i + 1)
-                        tris_idx.append([idx00, idx10, idx01, -1])
-                        tris_idx.append([idx01, idx10, idx11, -1])
-
-                idx_arr = np.array(tris_idx, dtype=np.int32)
-                from freecad.fields.core.objects.fld_curve_fill_geometry import _triangles_to_preview_shape
-                return _triangles_to_preview_shape(verts_arr, idx_arr)
+                return _grid_to_preview_shape(ring_grid)
             except Exception as e:
-                from freecad.fields.core import fld_logger
                 fld_logger.warn(f"FldSurface: failed to construct non-periodic extension mesh: {e}")
                 return Part.Shape()

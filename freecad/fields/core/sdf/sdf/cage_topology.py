@@ -7,7 +7,12 @@ this layer is pure connectivity plus the canonical box and octahedron nets.
 import math
 import numpy as np
 
-MAX_CAGE_FACES = 64
+# Re-exported so `from ...cage_topology import MAX_CAGE_FACES` keeps working.
+# The definition lives in cage_limits.py -- one budget, one home.
+from freecad.fields.core.sdf.sdf.cage_limits import (  # noqa: F401
+    MAX_CAGE_FACES, CageBudgetError, CageTopologyError,
+    MAX_BAKE_RESOLUTION, MAX_BAKE_MEMORY_MB, check_bake_budget,
+)
 
 class HandleType(int):
     FREE    = 0  # absolute position, no constraints
@@ -180,17 +185,7 @@ class CageTopology:
     def extrude_face(self, face_idx, distance):
         """Extrude the face at face_idx by distance along its normal."""
         # 1. Get current face lists
-        faces_list = []
-        for f in self.faces:
-            he_start = f.half_edge
-            he = he_start
-            f_verts = []
-            while True:
-                f_verts.append(he.prev.vertex.idx)
-                he = he.next
-                if he == he_start:
-                    break
-            faces_list.append(f_verts)
+        faces_list = self.face_vertex_lists()
             
         # 2. Get face to extrude
         target_face_verts = faces_list[face_idx]
@@ -236,40 +231,27 @@ class CageTopology:
         
         self.__init__(face_verts_flat, face_sizes, vertices_np)
 
-    def insert_edge_loop(self, edge_idx, t):
-        """Insert an edge loop perpendicular to edge_idx at parameter t [0..1]."""
-        # Get current faces
-        faces_list = []
-        for f in self.faces:
-            he_start = f.half_edge
-            he = he_start
-            f_verts = []
-            while True:
-                f_verts.append(he.prev.vertex.idx)
-                he = he.next
-                if he == he_start:
-                    break
-            faces_list.append(f_verts)
-            
-        split_verts = {} # (u, v) -> new_v_idx
-        
+    def edge_loop(self, edge_idx, return_half_edges=False):
+        """Return the ordered edge indices of the edge loop through edge_idx."""
         he_start = None
         for he in self.half_edges:
             if he.edge_idx == edge_idx:
                 he_start = he
                 break
-                 
+
         if he_start is None:
-            return
-             
+            raise CageTopologyError(
+                f"Edge loop refused: edge {edge_idx} has no half-edge")
+
         queue = []
+        is_closed = False
         # Propagate in one direction
         curr = he_start
         while curr is not None:
             queue.append(curr)
             if curr.face is None:
                 break
-            
+
             # Check if face is quad
             he_f = curr.face.half_edge
             he_curr = he_f
@@ -281,22 +263,23 @@ class CageTopology:
                     break
             if f_len != 4:
                 break
-                
+
             opposite_he = curr.next.next
             curr = opposite_he.twin
             if curr == he_start or curr == he_start.twin:
+                is_closed = True
                 break
-                 
-        # Propagate in other direction from twin
-        if he_start.twin is not None:
+
+        # Propagate in other direction from twin if loop is not closed
+        if not is_closed and he_start.twin is not None:
             curr = he_start.twin
             while curr is not None:
                 if curr in queue:
-                     break
+                    break
                 queue.insert(0, curr)
                 if curr.face is None:
                     break
-                
+
                 he_f = curr.face.half_edge
                 he_curr = he_f
                 f_len = 0
@@ -307,11 +290,24 @@ class CageTopology:
                         break
                 if f_len != 4:
                     break
-                    
+
                 opposite_he = curr.next.next
                 curr = opposite_he.twin
                 if curr == he_start or curr == he_start.twin:
                     break
+
+        if return_half_edges:
+            return queue
+        return [he.edge_idx for he in queue]
+
+    def insert_edge_loop(self, edge_idx, t):
+        """Insert an edge loop perpendicular to edge_idx at parameter t [0..1]."""
+        faces_list = self.face_vertex_lists()
+        split_verts = {} # (u, v) -> new_v_idx
+        try:
+            queue = self.edge_loop(edge_idx, return_half_edges=True)
+        except CageTopologyError as e:
+            raise CageTopologyError(f"Insert edge loop refused: edge {edge_idx} has no half-edge") from e
                      
         faces_to_remove = set()
         new_faces = []
@@ -364,17 +360,7 @@ class CageTopology:
     def weld_vertices(self, v_from, v_to):
         """Weld vertex v_from to v_to, removing degenerate faces and shifting indices."""
         # 1. Get current face lists
-        faces_list = []
-        for f in self.faces:
-            he_start = f.half_edge
-            he = he_start
-            f_verts = []
-            while True:
-                f_verts.append(he.prev.vertex.idx)
-                he = he.next
-                if he == he_start:
-                    break
-            faces_list.append(f_verts)
+        faces_list = self.face_vertex_lists()
             
         # 2. Update indices: replace v_from with v_to
         for fi, f in enumerate(faces_list):
@@ -410,9 +396,9 @@ class CageTopology:
         vertices_np = np.array([v.pos for v in self.vertices], dtype=np.float64)
         self.__init__(face_verts_flat, face_sizes, vertices_np)
 
-    def subdivide_smooth(self):
+    def subdivide_smooth(self, edge_sharpness=None):
         """Catmull-Clark subdivision on the control cage.
-        Returns: (vertices, handles, edges, face_verts, handle_types)
+        Returns: (vertices, handles, edges, face_verts, handle_types, new_sharpness)
         """
         # 1. Face points
         face_pts = []
@@ -437,12 +423,16 @@ class CageTopology:
                     break
             pos_i = self.vertices[vi].pos
             pos_j = self.vertices[vj].pos
+            mid_pt = (pos_i + pos_j) / 2.0
             if he_found and he_found.twin is not None:
                 f1 = he_found.face.idx
                 f2 = he_found.twin.face.idx
-                edge_pts.append((pos_i + pos_j + face_pts[f1] + face_pts[f2]) / 4.0)
+                smooth_pt = (pos_i + pos_j + face_pts[f1] + face_pts[f2]) / 4.0
             else:
-                edge_pts.append((pos_i + pos_j) / 2.0)
+                smooth_pt = mid_pt
+            s = edge_sharpness[ei] if (edge_sharpness is not None and ei < len(edge_sharpness)) else 0.0
+            s_blend = max(0.0, min(float(s), 1.0))
+            edge_pts.append(smooth_pt * (1.0 - s_blend) + mid_pt * s_blend)
 
         # 3. Vertex updates
         updated_verts = []
@@ -481,9 +471,29 @@ class CageTopology:
                         edge_mids.append(0.5 * (self.vertices[vi].pos + v_other))
                     R = np.mean(edge_mids, axis=0)
                     n = len(he_incoming)
-                    v_new = (F + 2.0 * R + (n - 3.0) * self.vertices[vi].pos) / n
+                    v_smooth = (F + 2.0 * R + (n - 3.0) * self.vertices[vi].pos) / n
                 else:
-                    v_new = self.vertices[vi].pos
+                    v_smooth = self.vertices[vi].pos
+
+                # Sharp edge crease rule at vertex
+                sharp_neighbors = []
+                for he in he_incoming:
+                    ei = he.edge_idx
+                    s_edge = edge_sharpness[ei] if (edge_sharpness is not None and ei < len(edge_sharpness)) else 0.0
+                    if s_edge > 0.0:
+                        sharp_neighbors.append((he.prev.vertex.pos, float(s_edge)))
+
+                if len(sharp_neighbors) >= 2:
+                    if len(sharp_neighbors) == 2:
+                        M0 = 0.5 * (self.vertices[vi].pos + sharp_neighbors[0][0])
+                        M1 = 0.5 * (self.vertices[vi].pos + sharp_neighbors[1][0])
+                        v_crease = (6.0 * self.vertices[vi].pos + M0 + M1) / 8.0
+                    else:
+                        v_crease = self.vertices[vi].pos
+                    avg_s = max(0.0, min(1.0, float(np.mean([sn[1] for sn in sharp_neighbors]))))
+                    v_new = v_smooth * (1.0 - avg_s) + v_crease * avg_s
+                else:
+                    v_new = v_smooth
             updated_verts.append(v_new)
 
         # 4. New topology: each face of size n becomes n quads
@@ -507,7 +517,25 @@ class CageTopology:
         # Build sub_topo to get new edges
         sub_topo = CageTopology(new_face_verts_flat, new_face_sizes, new_vertices_np)
 
-        # 5. Default handles
+        # 5. Edge sharpness and default handles for refined topology
+        new_sharpness = []
+        is_crease_edge = []
+        for ei, (va, vb) in enumerate(sub_topo.edges):
+            orig_e = None
+            if va < V and vb >= V + F:
+                orig_e = vb - (V + F)
+            elif vb < V and va >= V + F:
+                orig_e = va - (V + F)
+
+            if orig_e is not None and edge_sharpness is not None and orig_e < len(edge_sharpness):
+                orig_s = float(edge_sharpness[orig_e])
+            else:
+                orig_s = 0.0
+
+            s_ref = max(0.0, orig_s - 1.0)
+            new_sharpness.append(s_ref)
+            is_crease_edge.append(orig_s > 0.0)
+
         handles = np.zeros((2 * len(sub_topo.edges), 3), dtype=np.float64)
         handle_types = [1] * (2 * len(sub_topo.edges))  # LINKED = 1
         for ei, (va, vb) in enumerate(sub_topo.edges):
@@ -515,16 +543,26 @@ class CageTopology:
             pos_b = sub_topo.vertices[vb].pos
             handles[2*ei] = pos_a + (pos_b - pos_a) / 3.0
             handles[2*ei+1] = pos_a + (pos_b - pos_a) * 2.0 / 3.0
+            if is_crease_edge[ei]:
+                handle_types[2*ei] = HandleType.FREE
+                handle_types[2*ei+1] = HandleType.FREE
 
-        # Project handles onto vertex tangent planes for valence >= 3
+        # Project handles onto vertex tangent planes for valence >= 3 (skip crease vertices/edges)
         _svd_failed = 0
         _svd_attempted = 0
         for vi in range(len(sub_topo.vertices)):
             he_incoming = [he for he in sub_topo.half_edges if he.vertex.idx == vi]
             if len(he_incoming) >= 3:
+                # If vertex is on a crease (>= 2 sharp edges meeting), keep handles unprojected
+                sharp_count = sum(1 for he in he_incoming if is_crease_edge[he.edge_idx])
+                if sharp_count >= 2:
+                    continue
+
                 aligned_hi = []
                 aligned_vectors = []
                 for ei, (va, vb) in enumerate(sub_topo.edges):
+                    if is_crease_edge[ei]:
+                        continue
                     if va == vi:
                         aligned_hi.append(2*ei)
                         aligned_vectors.append(handles[2*ei] - new_vertices_np[vi])
@@ -558,4 +596,4 @@ class CageTopology:
                 f"not be tangent-continuous there."
             )
 
-        return new_vertices_np, handles, sub_topo.edges, new_face_verts_flat, handle_types
+        return new_vertices_np, handles, sub_topo.edges, new_face_verts_flat, handle_types, new_sharpness

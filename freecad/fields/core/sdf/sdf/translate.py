@@ -46,7 +46,7 @@ class SdfTranslateField(SdfField):
     def max_erosion(self) -> float:
         return self.source.max_erosion()
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         core = self.source.eroded(distance)
         if core is None:
             return None

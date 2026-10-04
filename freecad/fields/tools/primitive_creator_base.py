@@ -17,7 +17,7 @@ from freecad.fields.core.objects.fld_point import FldPoint
 from freecad.fields.core.objects.fld_line import FldLineSet
 from freecad.fields.core.objects.fld_object import (
     create_fld_object, apply_shaded_display_mode)
-from freecad.fields.core.fld_mesher import mesh_timer
+from freecad.fields.core.mesh.fld_mesher import mesh_timer
 from freecad.fields.tools.fld_base import DragTimerMixin, ToolState
 from freecad.fields.tools.fld_sdf_tool_base import FldSdfToolBase
 from freecad.fields.tools.primitive_panel import PrimitiveTaskPanel
@@ -28,6 +28,7 @@ _PREVIEW_CELL_SIZE = 20.0
 
 MIN_PRIMITIVE_DIM_MM = 0.5         # smallest legal drag-created half-dimension
 MIN_PRIMITIVE_DIM_TYPED_MM = 0.01  # smallest legal typed-in dimension
+GIZMO_HIT_TOLERANCE_MULT = 2.5     # tolerance multiplier for gizmo hit testing
 
 _STAGE_HINTS = {
     ToolState.PLACE_ANCHOR: "Click to place anchor",
@@ -774,7 +775,7 @@ class PrimitiveCreatorBase(FldSdfToolBase, DragTimerMixin):
             return None, None
 
         r = self._compute_handle_radius(self._gizmo_center())
-        near_tol = r * 2.5
+        near_tol = r * GIZMO_HIT_TOLERANCE_MULT
         privileged = set(getattr(self, "_selected_indices", ()))
         anchor = self._anchor_idx()
 
@@ -810,7 +811,7 @@ class PrimitiveCreatorBase(FldSdfToolBase, DragTimerMixin):
         else:
             # Also test gizmo handles (translation arrows + rotation rings)
             if self._gizmo and self.working_plane:
-                tol  = self._compute_handle_radius(self._gizmo_center()) * 2.5
+                tol  = self._compute_handle_radius(self._gizmo_center()) * GIZMO_HIT_TOLERANCE_MULT
                 axis = self._gizmo.hit_test(ray_p, ray_d, tol)
                 if self._gizmo.set_highlight(axis) and self.view:
                     self.view.redraw()
@@ -850,7 +851,7 @@ class PrimitiveCreatorBase(FldSdfToolBase, DragTimerMixin):
 
         # 2. Test gizmo handles (translation arrows + rotation rings) only if no control point was hit
         if self._gizmo and self.working_plane:
-            tol  = self._compute_handle_radius(self._gizmo_center()) * 2.5
+            tol  = self._compute_handle_radius(self._gizmo_center()) * GIZMO_HIT_TOLERANCE_MULT
             axis = self._gizmo.hit_test(ray_p, ray_d, tol)
             if axis:
                 self._dragging_idx = f'gizmo_{axis}'
@@ -1126,7 +1127,8 @@ class PrimitiveCreatorBase(FldSdfToolBase, DragTimerMixin):
                 sb = mw.statusBar()
                 if sb:
                     sb.showMessage(f"Rotate: {deg:.1f}°", 1000)
-        except Exception:
+        except Exception as exc:  # safe: status bar display is best-effort (e.g. in headless mode)
+            fld_logger.debug_throttled("primitive_creator_base:_drag_rotate_plane", f"[primitive_creator_base] statusBar showMessage failed: {exc}")
             pass
 
         rot = FreeCAD.Rotation(ax_vec, deg)
@@ -1610,11 +1612,13 @@ class PrimitiveCreatorBase(FldSdfToolBase, DragTimerMixin):
     def _add_transform_handles(self):
         pass  # Gizmo rings/arrows are the transform handles; legacy center/rot dots removed
 
-    def _update_handle_positions(self, world_pts, color=(1.0, 0.5, 0.0)):
+    def _update_handle_positions(self, world_pts, color=None):
         """Update fld_points to match the given world-space positions.
         
         Creates new FldPoint objects as needed, updates existing ones.
         """
+        if color is None:
+            color = self.HANDLE_COLOR
         while len(self.fld_points) < len(world_pts):
             self.fld_points.append(FldPoint(world_pts[len(self.fld_points)]))
         

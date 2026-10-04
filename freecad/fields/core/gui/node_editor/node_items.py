@@ -5,7 +5,9 @@ core/gui/node_editor/node_items.py
 QGraphicsItem implementations for Node cards, Sockets, and Bezier Wires.
 """
 from PySide import QtWidgets, QtGui, QtCore
-from freecad.fields.core.gui.node_editor.node_definitions import (
+from freecad.fields.core import fld_logger
+from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
+from freecad.fields.core.gui.node_editor.nodes import (
     SocketType, SOCKET_TYPE_NAMES, SOCKET_TYPE_SHORT_LABELS, NODE_REGISTRY
 )
 
@@ -43,13 +45,16 @@ class NodeSocketItem(QtWidgets.QGraphicsItem):
         stype = getattr(socket_def, "socket_type", SocketType.FLOAT)
         type_name = SOCKET_TYPE_NAMES.get(stype, "1D Float")
         dir_label = "Input" if is_input else "Output"
-        self.setToolTip(f"{socket_def.name} ({dir_label}, {type_name})")
+        base = f"{type_name} ({dir_label.lower()})"
+        sdoc = getattr(socket_def, "doc", "")
+        self.setToolTip(rich_tooltip("NodeSocketItem", f"{base}\n{sdoc}" if sdoc else base))
 
     def setToolTip(self, text):
         self._tooltip_text = text
         try:
             super().setToolTip(text)
-        except Exception:
+        except Exception as exc:  # safe: base setToolTip may be absent in mock/headless
+            fld_logger.debug_throttled("node_items:setToolTip", f"[node_items] setToolTip failed: {exc}")
             pass
 
     def toolTip(self):
@@ -95,7 +100,8 @@ class NodeSocketItem(QtWidgets.QGraphicsItem):
             self._local_pos = QtCore.QPointF(float(args[0]), float(args[1]))
         try:
             super().setPos(*args)
-        except Exception:
+        except Exception as exc:  # safe: base setPos may be absent in mock/headless
+            fld_logger.debug_throttled("node_items:setPos", f"[node_items] setPos failed: {exc}")
             pass
 
     def pos(self):
@@ -103,7 +109,8 @@ class NodeSocketItem(QtWidgets.QGraphicsItem):
             p = super().pos()
             if hasattr(p, "x") and isinstance(p.x(), (int, float)):
                 return p
-        except Exception:
+        except Exception as exc:  # safe: base pos may be absent in mock/headless; falls back to _local_pos
+            fld_logger.debug_throttled("node_items:pos", f"[node_items] pos failed: {exc}")
             pass
         return getattr(self, "_local_pos", QtCore.QPointF(0.0, 0.0))
 
@@ -112,7 +119,8 @@ class NodeSocketItem(QtWidgets.QGraphicsItem):
             pt = self.mapToScene(QtCore.QPointF(0, 0))
             if hasattr(pt, "x") and isinstance(pt.x(), (int, float)):
                 return pt
-        except Exception:
+        except Exception as exc:  # safe: mapToScene may fail in mock; falls back to parent_node offset
+            fld_logger.debug_throttled("node_items:get_center_scene_pos", f"[node_items] mapToScene failed: {exc}")
             pass
         # Fallback when mapToScene is not implemented (e.g. mock)
         try:
@@ -137,7 +145,8 @@ class NodeWireItem(QtWidgets.QGraphicsPathItem):
         if flag_sel is not None:
             try:
                 self.setFlag(flag_sel, True)
-            except Exception:
+            except Exception as exc:  # safe: setFlag may fail in mock/headless
+                fld_logger.debug_throttled("node_items:NodeWireItem.__init__", f"[node_items] setFlag failed: {exc}")
                 pass
         self.update_path()
 
@@ -149,12 +158,14 @@ class NodeWireItem(QtWidgets.QGraphicsPathItem):
             if cap is not None:
                 try:
                     stroker.setCapStyle(cap)
-                except Exception:
+                except Exception as exc:  # safe: stroker setCapStyle is best-effort styling
+                    fld_logger.debug_throttled("node_items:shape", f"[node_items] stroker setCapStyle failed: {exc}")
                     pass
             stroke = stroker.createStroke(self.path())
             if stroke is not None and hasattr(stroke, "boundingRect"):
                 return stroke
-        except Exception:
+        except Exception as exc:  # safe: stroker fallback to super().shape()
+            fld_logger.debug_throttled("node_items:shape", f"[node_items] stroker createStroke failed: {exc}")
             pass
         return super().shape()
 
@@ -170,7 +181,8 @@ class NodeWireItem(QtWidgets.QGraphicsPathItem):
         except Exception:
             try:
                 super().paint(painter, option, widget)
-            except Exception:
+            except Exception as exc:  # safe: fallback paint may fail in headless/mock
+                fld_logger.debug_throttled("node_items:paint", f"[node_items] fallback paint failed: {exc}")
                 pass
 
     def update_path(self):
@@ -223,7 +235,8 @@ class NodeWireItem(QtWidgets.QGraphicsPathItem):
         if cap is not None:
             try:
                 pen.setCapStyle(cap)
-            except Exception:
+            except Exception as exc:  # safe: pen setCapStyle is best-effort styling
+                fld_logger.debug_throttled("node_items:update_path", f"[node_items] pen setCapStyle failed: {exc}")
                 pass
         self.setPen(pen)
 
@@ -237,19 +250,21 @@ class NodeWireItem(QtWidgets.QGraphicsPathItem):
                 s1_name = getattr(getattr(self.start_socket, "socket_def", None), "name", "")
                 s2_name = getattr(getattr(self.end_socket, "socket_def", None), "name", "")
                 if stype1 == stype2:
-                    self.setToolTip(f"Wire: {t1} ({p1_name}.{s1_name} → {p2_name}.{s2_name})")
+                    self.setToolTip(rich_tooltip("NodeWireItem", f"Wire: {t1} ({p1_name}.{s1_name} → {p2_name}.{s2_name})"))
                 else:
-                    self.setToolTip(f"Wire: {t1} → {t2} ({p1_name}.{s1_name} → {p2_name}.{s2_name})")
+                    self.setToolTip(rich_tooltip("NodeWireItem", f"Wire: {t1} → {t2} ({p1_name}.{s1_name} → {p2_name}.{s2_name})"))
             else:
-                self.setToolTip(f"Wire: {t1}")
-        except Exception:
+                self.setToolTip(rich_tooltip("NodeWireItem", f"Wire: {t1}"))
+        except Exception as exc:  # safe: dynamic tooltip generation is best-effort
+            fld_logger.debug_throttled("node_items:update_path", f"[node_items] dynamic tooltip generation failed: {exc}")
             pass
 
     def setToolTip(self, text):
         self._tooltip_text = text
         try:
             super().setToolTip(text)
-        except Exception:
+        except Exception as exc:  # safe: base setToolTip may be absent in mock/headless
+            fld_logger.debug_throttled("node_items:setToolTip", f"[node_items] wire setToolTip failed: {exc}")
             pass
 
     def toolTip(self):
@@ -276,15 +291,24 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
         self.output_sockets = []
         self._proxy_widgets = []
         self.on_changed_cb = None
+        self._radial_checkbox = None
+        self._radial_socket_item = None
+        self._ignore_back_face_checkbox = None
+        self._ignore_back_face_socket_item = None
+        self._proj_ctrl_dir_widget = None
+        self._proj_ctrl_dir_socket_item = None
+        self._proj_ctrl_roll_widget = None
+        self._proj_ctrl_roll_socket_item = None
 
         for flag_name in ("ItemIsMovable", "ItemIsSelectable", "ItemSendsGeometryChanges"):
             flag_val = getattr(QtWidgets.QGraphicsItem, flag_name, None)
             if flag_val is not None:
                 try:
                     self.setFlag(flag_val, True)
-                except Exception:
+                except Exception as exc:  # safe: setFlag may fail in mock/headless
+                    fld_logger.debug_throttled("node_items:NodeCardItem.__init__", f"[node_items] setFlag failed: {exc}")
                     pass
-        self.WIDTH = 220.0 if node_type == "custom_param" else 190.0
+        self.WIDTH = 220.0 if node_type in ("custom_param", "projection_control") else 190.0
         self._card_pos = QtCore.QPointF(0.0, 0.0)
         self._build_ui()
 
@@ -295,7 +319,8 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             self._card_pos = QtCore.QPointF(float(args[0]), float(args[1]))
         try:
             super().setPos(*args)
-        except Exception:
+        except Exception as exc:  # safe: base setPos may be absent in mock/headless
+            fld_logger.debug_throttled("node_items:setPos", f"[node_items] card setPos failed: {exc}")
             pass
 
     def pos(self):
@@ -303,7 +328,8 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             p = super().pos()
             if hasattr(p, "x") and isinstance(p.x(), (int, float)):
                 return p
-        except Exception:
+        except Exception as exc:  # safe: base pos may fail in mock/headless; falls back to _card_pos
+            fld_logger.debug_throttled("node_items:pos", f"[node_items] card pos failed: {exc}")
             pass
         return getattr(self, "_card_pos", QtCore.QPointF(0.0, 0.0))
 
@@ -312,7 +338,8 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             p = super().scenePos()
             if hasattr(p, "x") and isinstance(p.x(), (int, float)):
                 return p
-        except Exception:
+        except Exception as exc:  # safe: base scenePos may fail in mock/headless; falls back to self.pos()
+            fld_logger.debug_throttled("node_items:scenePos", f"[node_items] card scenePos failed: {exc}")
             pass
         return self.pos()
 
@@ -321,20 +348,39 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             s = super().scene()
             if s is not None and type(s).__name__ != "MockClass":
                 return s
-        except Exception:
+        except Exception as exc:  # safe: base scene query may fail in mock; falls back to _scene_ref
+            fld_logger.debug_throttled("node_items:scene", f"[node_items] card scene query failed: {exc}")
             pass
         return getattr(self, "_scene_ref", None)
+
+    def setToolTip(self, text):
+        self._tooltip_text = text
+        try:
+            super().setToolTip(text)
+        except Exception as exc:  # safe: base setToolTip may be absent in mock/headless
+            fld_logger.debug_throttled("node_items:setToolTip", f"[node_items] card setToolTip failed: {exc}")
+            pass
+
+    def toolTip(self):
+        return getattr(self, "_tooltip_text", "")
 
     def _build_ui(self):
         if not self.node_instance:
             return
 
+        ndoc = getattr(self.node_instance, "doc", "")
+        if ndoc:
+            self.setToolTip(rich_tooltip("NodeCardItem", ndoc.replace("\n\n", "\n")))
+        self.setAcceptHoverEvents(True)
+
         # Create sockets
-        for sdef in self.node_instance.inputs:
+        in_defs = self.node_instance.get_inputs(self.params) if hasattr(self.node_instance, "get_inputs") else self.node_instance.inputs
+        for sdef in in_defs:
             s_item = NodeSocketItem(sdef, is_input=True, parent_node=self)
             self.input_sockets.append(s_item)
 
-        for sdef in self.node_instance.outputs:
+        out_defs = self.node_instance.get_outputs(self.params) if hasattr(self.node_instance, "get_outputs") else self.node_instance.outputs
+        for sdef in out_defs:
             s_item = NodeSocketItem(sdef, is_input=False, parent_node=self)
             self.output_sockets.append(s_item)
 
@@ -376,7 +422,7 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
         if ntype == "math":
             combo = QtWidgets.QComboBox()
             combo.setStyleSheet(dark_combo_style)
-            from freecad.fields.core.gui.node_editor.node_definitions import MathNode
+            from freecad.fields.core.gui.node_editor.nodes import MathNode
             combo.addItems(list(MathNode.OPS.keys()))
             cur_op = self.params.get("op", "Add (+)")
             idx = combo.findText(cur_op)
@@ -385,16 +431,14 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             combo.currentIndexChanged.connect(lambda _idx, c=combo: self._on_math_op_changed(c.currentText()))
             self._add_embedded_widget(combo, start_y, 24)
 
-        elif ntype in ("trig", "function", "min_max"):
+        elif ntype in ("trig", "min_max"):
             combo = QtWidgets.QComboBox()
             combo.setStyleSheet(dark_combo_style)
-            from freecad.fields.core.gui.node_editor.node_definitions import (
-                TrigNode, FunctionNode, MinMaxNode
+            from freecad.fields.core.gui.node_editor.nodes import (
+                TrigNode, MinMaxNode
             )
             if ntype == "trig":
                 items = TrigNode.FNS
-            elif ntype == "function":
-                items = FunctionNode.FNS
             else:
                 items = ["min", "max"]
             combo.addItems(items)
@@ -417,7 +461,7 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
                     font-size: 11px;
                 }
             """)
-            spin.setRange(-99999.0, 99999.0)
+            spin.setRange(-999999.0, 999999.0)
             spin.setSingleStep(0.1)
             spin.setDecimals(3)
             spin.setValue(float(self.params.get("val", 1.0)))
@@ -430,7 +474,8 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             if flag_trans is not None:
                 try:
                     container.setAttribute(flag_trans, True)
-                except Exception:
+                except Exception as exc:  # safe: setAttribute may fail in mock/headless
+                    fld_logger.debug_throttled("node_items:_setup_internal_widgets", f"[node_items] custom_param setAttribute failed: {exc}")
                     pass
             container.setStyleSheet("""
                 QWidget {
@@ -471,12 +516,14 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             layout.setSpacing(3)
 
             name_edit = QtWidgets.QLineEdit(str(self.params.get("name", "param")))
+            # editingFinished only: a name is pasted into GLSL text, so committing it
+            # per keystroke recompiles the scene shader for every half-typed name and
+            # steals focus back from the field being typed into.
             name_edit.editingFinished.connect(lambda: self._on_custom_param_field("name", name_edit.text().strip()))
-            name_edit.textChanged.connect(lambda t: self._on_custom_param_field("name", t.strip()))
             layout.addRow("Name:", name_edit)
 
             type_combo = QtWidgets.QComboBox()
-            type_combo.addItems(["float", "slider", "int", "bool"])
+            type_combo.addItems(["float", "slider", "int", "bool", "vec2", "vec3"])
             t_idx = type_combo.findText(str(self.params.get("ptype", "float")))
             if t_idx >= 0:
                 type_combo.setCurrentIndex(t_idx)
@@ -484,8 +531,8 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             layout.addRow("Type:", type_combo)
 
             def_spin = QtWidgets.QDoubleSpinBox()
-            def_spin.setRange(-99999.0, 99999.0)
-            def_spin.setValue(float(self.params.get("default", 1.0)))
+            def_spin.setRange(-999999.0, 999999.0)
+            def_spin.setValue(float(self.params.get("default", 1.0)) if not isinstance(self.params.get("default"), (tuple, list)) else 1.0)
             def_spin.valueChanged.connect(lambda v: self._on_custom_param_field("default", v))
 
             def_chk = QtWidgets.QCheckBox("Default On")
@@ -494,21 +541,58 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             def_chk.setChecked(bool(cur_def_bool))
             def_chk.toggled.connect(lambda checked: self._on_custom_param_field("default", 1 if checked else 0))
 
+            vec_container = QtWidgets.QWidget()
+            vec_layout = QtWidgets.QHBoxLayout(vec_container)
+            vec_layout.setContentsMargins(0, 0, 0, 0)
+            vec_layout.setSpacing(2)
+            vec_x = QtWidgets.QDoubleSpinBox()
+            vec_x.setRange(-999999.0, 999999.0)
+            vec_x.setDecimals(2)
+            vec_x.setMinimumWidth(38)
+            vec_y = QtWidgets.QDoubleSpinBox()
+            vec_y.setRange(-999999.0, 999999.0)
+            vec_y.setDecimals(2)
+            vec_y.setMinimumWidth(38)
+            vec_z = QtWidgets.QDoubleSpinBox()
+            vec_z.setRange(-999999.0, 999999.0)
+            vec_z.setDecimals(2)
+            vec_z.setMinimumWidth(38)
+            cur_def_v = self.params.get("default", 0.0)
+            if isinstance(cur_def_v, (tuple, list)):
+                vec_x.setValue(float(cur_def_v[0]))
+                vec_y.setValue(float(cur_def_v[1]) if len(cur_def_v) > 1 else 0.0)
+                vec_z.setValue(float(cur_def_v[2]) if len(cur_def_v) > 2 else 0.0)
+            vec_layout.addWidget(vec_x)
+            vec_layout.addWidget(vec_y)
+            vec_layout.addWidget(vec_z)
+
+            def _on_vec_changed():
+                cur_t = type_combo.currentText()
+                if cur_t == "vec2":
+                    self._on_custom_param_field("default", (vec_x.value(), vec_y.value()))
+                elif cur_t == "vec3":
+                    self._on_custom_param_field("default", (vec_x.value(), vec_y.value(), vec_z.value()))
+
+            vec_x.valueChanged.connect(lambda _: _on_vec_changed())
+            vec_y.valueChanged.connect(lambda _: _on_vec_changed())
+            vec_z.valueChanged.connect(lambda _: _on_vec_changed())
+
             def_container = QtWidgets.QWidget()
             def_layout = QtWidgets.QHBoxLayout(def_container)
             def_layout.setContentsMargins(0, 0, 0, 0)
             def_layout.addWidget(def_spin)
             def_layout.addWidget(def_chk)
+            def_layout.addWidget(vec_container)
             layout.addRow("Default:", def_container)
 
             min_spin = QtWidgets.QDoubleSpinBox()
-            min_spin.setRange(-99999.0, 99999.0)
+            min_spin.setRange(-999999.0, 999999.0)
             min_spin.setValue(float(self.params.get("min", 0.0)))
             min_spin.valueChanged.connect(lambda v: self._on_custom_param_field("min", v))
             min_spin.setMinimumWidth(45)
 
             max_spin = QtWidgets.QDoubleSpinBox()
-            max_spin.setRange(-99999.0, 99999.0)
+            max_spin.setRange(-999999.0, 999999.0)
             max_spin.setValue(float(self.params.get("max", 5.0)))
             max_spin.valueChanged.connect(lambda v: self._on_custom_param_field("max", v))
             max_spin.setMinimumWidth(45)
@@ -526,22 +610,33 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
 
             def _update_spin_mode(ptype):
                 is_bool = (ptype == "bool")
-                def_spin.setVisible(not is_bool)
+                is_vec = (ptype in ("vec2", "vec3"))
+                is_vec2 = (ptype == "vec2")
+                is_vec3 = (ptype == "vec3")
+                def_spin.setVisible(not is_bool and not is_vec)
                 def_chk.setVisible(is_bool)
-                range_widget.setVisible(not is_bool)
-                # Find and toggle visibility of range label in form layout
+                vec_container.setVisible(is_vec)
+                vec_z.setVisible(is_vec3)
+                range_widget.setVisible(not is_bool and not is_vec)
                 lbl = layout.labelForField(range_widget)
                 if lbl:
-                    lbl.setVisible(not is_bool)
+                    lbl.setVisible(not is_bool and not is_vec)
 
                 # Update output socket type and color
                 if self.output_sockets:
                     s_item = self.output_sockets[0]
-                    target_stype = SocketType.BOOL if is_bool else SocketType.FLOAT
+                    if is_bool:
+                        target_stype = SocketType.BOOL
+                    elif is_vec2:
+                        target_stype = SocketType.VEC2
+                    elif is_vec3:
+                        target_stype = SocketType.VEC3
+                    else:
+                        target_stype = SocketType.FLOAT
                     s_item.socket_def.socket_type = target_stype
                     s_item.color = SOCKET_COLORS.get(target_stype, DEFAULT_SOCKET_COLOR)
                     stype_name = SOCKET_TYPE_NAMES.get(target_stype, target_stype)
-                    s_item.setToolTip(f"{s_item.socket_def.name} ({stype_name})")
+                    s_item.setToolTip(rich_tooltip("NodeSocketItem", f"{s_item.socket_def.name} ({stype_name})"))
                     s_item.update()
                     self.update()
 
@@ -552,7 +647,7 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
                     min_spin.setSingleStep(1)
                     max_spin.setDecimals(0)
                     max_spin.setSingleStep(1)
-                elif not is_bool:
+                elif not is_bool and not is_vec:
                     def_spin.setDecimals(3)
                     def_spin.setSingleStep(0.1)
                     min_spin.setDecimals(2)
@@ -571,7 +666,8 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             if flag_trans is not None:
                 try:
                     container.setAttribute(flag_trans, True)
-                except Exception:
+                except Exception as exc:  # safe: setAttribute may fail in mock/headless
+                    fld_logger.debug_throttled("node_items:_setup_internal_widgets", f"[node_items] radial setAttribute failed: {exc}")
                     pass
             c_layout = QtWidgets.QVBoxLayout(container)
             c_layout.setContentsMargins(4, 2, 4, 2)
@@ -583,16 +679,135 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             chk.toggled.connect(lambda v: self._on_radial_toggled(v))
             c_layout.addWidget(chk)
 
+            self._radial_checkbox = chk
+            self._radial_socket_item = next(
+                (s for s in self.input_sockets if s.socket_def.name == "Radial"), None
+            )
+            if self._radial_socket_item is not None:
+                # A wire already decides the value (NE-018); showing a checkbox
+                # that does nothing is what the user reported as a bug.
+                chk.setVisible(not self._radial_socket_item.wires)
+
             btn = QtWidgets.QPushButton("Edit Subgraph ⤢")
             btn.setStyleSheet(
                 "font-weight: bold; background-color: #334155; color: #38bdf8; "
                 "border: 1px solid #0284c7; border-radius: 4px; padding: 2px;"
             )
-            btn.setToolTip("Open and edit the internal node network of this subgraph (or double-click node)")
+            btn.setToolTip(
+                rich_tooltip(
+                    "NodeCardItem",
+                    QT_TRANSLATE_NOOP(
+                        "NodeCardItem",
+                        "Opens the subgraph's own node network for editing. Double-clicking the node does the same.",
+                    ),
+                )
+            )
             btn.clicked.connect(self._on_open_subgraph)
             c_layout.addWidget(btn)
 
             self._add_embedded_widget(container, start_y, 48)
+
+        elif ntype == "ignore_back_face":
+            container = QtWidgets.QWidget()
+            flag_trans = getattr(QtCore.Qt, "WA_TranslucentBackground", None)
+            if flag_trans is not None:
+                try:
+                    container.setAttribute(flag_trans, True)
+                except Exception as exc:  # safe: setAttribute may fail in mock/headless
+                    fld_logger.debug_throttled("node_items:_setup_internal_widgets", f"[node_items] ignore_back_face setAttribute failed: {exc}")
+                    pass
+            c_layout = QtWidgets.QVBoxLayout(container)
+            c_layout.setContentsMargins(4, 2, 4, 2)
+            c_layout.setSpacing(4)
+
+            chk = QtWidgets.QCheckBox("Ignore Back Face")
+            chk.setStyleSheet("color: #f8fafc; font-size: 10px; font-weight: bold;")
+            chk.setChecked(bool(self.params.get("ignore_back_face", True)))
+            chk.toggled.connect(lambda v: self._on_ignore_back_face_toggled(v))
+            c_layout.addWidget(chk)
+
+            self._ignore_back_face_checkbox = chk
+            self._ignore_back_face_socket_item = next(
+                (s for s in self.input_sockets if s.socket_def.name == "Ignore Back Face"), None
+            )
+            if self._ignore_back_face_socket_item is not None:
+                # Same rule NE-018 established for Radial Mode: a wire already
+                # decides the value, so a checkbox that does nothing is a bug.
+                chk.setVisible(not self._ignore_back_face_socket_item.wires)
+
+            self._add_embedded_widget(container, start_y, 26)
+
+        elif ntype == "projection_control":
+            container = QtWidgets.QWidget()
+            flag_trans = getattr(QtCore.Qt, "WA_TranslucentBackground", None)
+            if flag_trans is not None:
+                try:
+                    container.setAttribute(flag_trans, True)
+                except Exception as exc:
+                    fld_logger.debug_throttled("node_items:_setup_internal_widgets", f"[node_items] projection_control setAttribute failed: {exc}")
+                    pass
+            c_layout = QtWidgets.QFormLayout(container)
+            c_layout.setContentsMargins(2, 2, 2, 2)
+            c_layout.setSpacing(3)
+
+            dir_container = QtWidgets.QWidget()
+            dir_layout = QtWidgets.QHBoxLayout(dir_container)
+            dir_layout.setContentsMargins(0, 0, 0, 0)
+            dir_layout.setSpacing(2)
+
+            dx_spin = QtWidgets.QDoubleSpinBox()
+            dy_spin = QtWidgets.QDoubleSpinBox()
+            dz_spin = QtWidgets.QDoubleSpinBox()
+            cur_dir = self.params.get("direction", [0.0, 0.0, 1.0])
+            for sp, val in zip((dx_spin, dy_spin, dz_spin), cur_dir):
+                sp.setRange(-1000.0, 1000.0)
+                sp.setDecimals(2)
+                sp.setSingleStep(0.1)
+                sp.setMinimumWidth(38)
+                sp.setValue(float(val))
+                dir_layout.addWidget(sp)
+
+            def _on_dir_spin():
+                self.params["direction"] = [dx_spin.value(), dy_spin.value(), dz_spin.value()]
+                self._notify_changed()
+
+            dx_spin.valueChanged.connect(lambda _: _on_dir_spin())
+            dy_spin.valueChanged.connect(lambda _: _on_dir_spin())
+            dz_spin.valueChanged.connect(lambda _: _on_dir_spin())
+
+            c_layout.addRow("Dir:", dir_container)
+
+            roll_spin = QtWidgets.QDoubleSpinBox()
+            roll_spin.setRange(-360.0, 360.0)
+            roll_spin.setDecimals(1)
+            roll_spin.setSingleStep(5.0)
+            roll_spin.setValue(float(self.params.get("roll", 0.0)))
+            roll_spin.valueChanged.connect(self._on_proj_roll_changed)
+            c_layout.addRow("Roll:", roll_spin)
+
+            self._proj_ctrl_dir_widget = dir_container
+            self._proj_ctrl_dir_socket_item = next(
+                (s for s in self.input_sockets if s.socket_def.name == "Direction"), None
+            )
+            if self._proj_ctrl_dir_socket_item is not None:
+                vis = not self._proj_ctrl_dir_socket_item.wires
+                dir_container.setVisible(vis)
+                lbl = c_layout.labelForField(dir_container)
+                if lbl:
+                    lbl.setVisible(vis)
+
+            self._proj_ctrl_roll_widget = roll_spin
+            self._proj_ctrl_roll_socket_item = next(
+                (s for s in self.input_sockets if s.socket_def.name == "Roll"), None
+            )
+            if self._proj_ctrl_roll_socket_item is not None:
+                vis = not self._proj_ctrl_roll_socket_item.wires
+                roll_spin.setVisible(vis)
+                lbl = c_layout.labelForField(roll_spin)
+                if lbl:
+                    lbl.setVisible(vis)
+
+            self._add_embedded_widget(container, start_y, 52)
 
         elif getattr(self.node_instance, "is_subgraph", False):
             btn = QtWidgets.QPushButton("Edit Subgraph ⤢")
@@ -600,13 +815,59 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
                 "font-weight: bold; background-color: #334155; color: #38bdf8; "
                 "border: 1px solid #0284c7; border-radius: 4px; padding: 2px;"
             )
-            btn.setToolTip("Open and edit the internal node network of this subgraph (or double-click node)")
+            btn.setToolTip(
+                rich_tooltip(
+                    "NodeCardItem",
+                    QT_TRANSLATE_NOOP(
+                        "NodeCardItem",
+                        "Opens the subgraph's own node network for editing. Double-clicking the node does the same.",
+                    ),
+                )
+            )
             btn.clicked.connect(self._on_open_subgraph)
             self._add_embedded_widget(btn, start_y, 26)
 
     def _on_radial_toggled(self, val):
         self.params["radial"] = bool(val)
         self._notify_changed()
+
+    def _on_ignore_back_face_toggled(self, val):
+        self.params["ignore_back_face"] = bool(val)
+        self._notify_changed()
+
+    def _on_proj_roll_changed(self, val):
+        self.params["roll"] = float(val)
+        self._notify_changed()
+
+    def on_socket_wire_changed(self, socket_item):
+        """Live-updates widgets that mirror a socket's wired state.
+
+        Radial Projection's checkbox (and Ignore Back Face's, same pattern) is
+        built once in _build_ui, before any wire exists, so connecting/
+        disconnecting the input later needs this separate hook (called from
+        node_scene.py) to keep it in sync.
+        """
+        if socket_item is self._radial_socket_item and self._radial_checkbox is not None:
+            self._radial_checkbox.setVisible(not socket_item.wires)
+        if (socket_item is self._ignore_back_face_socket_item
+                and self._ignore_back_face_checkbox is not None):
+            self._ignore_back_face_checkbox.setVisible(not socket_item.wires)
+        if socket_item is self._proj_ctrl_dir_socket_item and self._proj_ctrl_dir_widget is not None:
+            vis = not socket_item.wires
+            self._proj_ctrl_dir_widget.setVisible(vis)
+            parent = self._proj_ctrl_dir_widget.parentWidget()
+            if parent and hasattr(parent, "layout"):
+                lbl = parent.layout().labelForField(self._proj_ctrl_dir_widget)
+                if lbl:
+                    lbl.setVisible(vis)
+        if socket_item is self._proj_ctrl_roll_socket_item and self._proj_ctrl_roll_widget is not None:
+            vis = not socket_item.wires
+            self._proj_ctrl_roll_widget.setVisible(vis)
+            parent = self._proj_ctrl_roll_widget.parentWidget()
+            if parent and hasattr(parent, "layout"):
+                lbl = parent.layout().labelForField(self._proj_ctrl_roll_widget)
+                if lbl:
+                    lbl.setVisible(vis)
 
     def _on_open_subgraph(self):
         sc = self.scene()
@@ -677,6 +938,14 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
                     elif ptype == "int":
                         new_val = int(val)
                         prop_type = "App::PropertyInteger"
+                    elif ptype in ("vec2", "vec3"):
+                        prop_type = "App::PropertyVector"
+                        import FreeCAD
+                        if isinstance(val, (tuple, list)):
+                            z_val = float(val[2]) if len(val) > 2 else 0.0
+                            new_val = FreeCAD.Vector(float(val[0]), float(val[1]), z_val)
+                        else:
+                            new_val = FreeCAD.Vector(0.0, 0.0, 0.0)
                     else:
                         new_val = float(val)
                         prop_type = "App::PropertyFloat"
@@ -684,11 +953,13 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
                     if not hasattr(target_obj, prop_name) and hasattr(target_obj, "addProperty"):
                         try:
                             target_obj.addProperty(prop_type, prop_name, "Custom Params", f"Custom parameter {prop_name}")
-                        except Exception:
+                        except Exception as exc:  # safe: property may already exist or cannot be added dynamically
+                            fld_logger.debug_throttled("node_items:_on_custom_param_field", f"[node_items] addProperty failed: {exc}")
                             pass
                     try:
                         setattr(target_obj, prop_name, new_val)
-                    except Exception:
+                    except Exception as exc:  # safe: property assignment may fail if read-only or invalid
+                        fld_logger.debug_throttled("node_items:_on_custom_param_field", f"[node_items] setattr failed: {exc}")
                         pass
         self._notify_changed()
 

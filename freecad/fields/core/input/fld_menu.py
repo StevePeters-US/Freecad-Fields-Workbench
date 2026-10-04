@@ -54,6 +54,7 @@ class FldMenuManager:
         self._menu_open = False
         self._active_menu = None
         self._ignore_hotkeys = True
+        # 150ms is standard human-response-time window to prevent accidental key-repeat consumption on menu close.
         QtCore.QTimer.singleShot(150, lambda: setattr(self, '_ignore_hotkeys', False))
 
     def trigger_dynamic_menu(self, items):
@@ -107,7 +108,6 @@ class FldMenuManager:
 
         items = [
             (f"Edit  {label}",      _run_command_action("Fields_EditObject")),
-            (f"Translate  {label}", _run_command_action("Fields_Translate")),
             ("Operations",          self._build_operations_submenu()),
         ]
 

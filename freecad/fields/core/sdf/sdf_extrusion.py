@@ -85,7 +85,7 @@ class SdfExtrusionField(SdfField):
         prof_cap = getattr(self.profile, 'max_erosion', lambda: h_cap)()
         return min(h_cap, prof_cap)
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         d = float(distance)
         if d <= 0.0 or d > self.max_erosion():
             return None

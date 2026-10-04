@@ -9,6 +9,7 @@ through to the general Bezier/Coons patch decomposition in sdf_brep_decompose.py
 import math
 import numpy as np
 import FreeCAD
+from freecad.fields.core import fld_logger
 
 from freecad.fields.core.sdf.sdf.box import SdfBoxField
 from freecad.fields.core.sdf.sdf.sphere import SdfSphereField
@@ -143,12 +144,16 @@ def detect_exact_primitive_shape(shape, placement=None):
                 if n is not None:
                     n_np = _vec_to_np(n)
                     ln = np.linalg.norm(n_np)
+                    # 1e-8: deliberately looser than 1e-12 canonical normal extraction tolerance because
+                    # B-Rep face normals can have minor numerical jitter on degenerate faces, but tighter
+                    # than 1e-6 geometry tolerances.
                     if ln > 1e-8:
                         n_np /= ln
                     face_normals.append(n_np)
                 c = f.CenterOfMass if hasattr(f, "CenterOfMass") else _vec_to_np(getattr(f.Surface, "Center", (0, 0, 0)))
                 face_centers.append(_vec_to_np(c))
-            except Exception:
+            except Exception as exc:  # safe: best-effort primitive face extraction; falls back if != 6 faces
+                fld_logger.debug(f"[sdf_brep_primitive_detect] face extraction failed: {exc}")
                 pass
 
         if len(face_normals) == 6:

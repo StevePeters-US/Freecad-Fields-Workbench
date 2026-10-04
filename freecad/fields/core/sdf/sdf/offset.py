@@ -44,7 +44,7 @@ class SdfOffsetField(SdfField):
         # radius, so eroding back by up to `distance` costs nothing.
         return self.source.max_erosion() + self.distance
 
-    def eroded(self, distance: float):
+    def _eroded_impl(self, distance: float):
         d = float(distance)
         if d <= 0.0:
             return None

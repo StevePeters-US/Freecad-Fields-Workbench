@@ -68,10 +68,11 @@ class CommandFldCageFromSurfaces:
     """Command to build a cage from selected surface patches and curve loops."""
 
     def GetResources(self):
+        from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
         return {
             'Pixmap': 'SDF_Cage', # Reuse the cage icon
             'MenuText': 'Cage from Surfaces',
-            'ToolTip': 'Build an editable cage from the selected surface patches and curve loops',
+            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Builds an editable cage from the selected surface patches and curve loops.\nSelect surface patches or closed curve loops.")),
         }
 
     def IsActive(self):
@@ -92,6 +93,7 @@ class CommandFldCageFromSurfaces:
             doc = FreeCAD.activeDocument()
             if not doc:
                 return
+            transaction_open = False
             try:
                 # 1. Build initial field from members
                 patch_specs = []
@@ -133,7 +135,8 @@ class CommandFldCageFromSurfaces:
                 cage = SdfCageField.from_patches(patch_specs, sign_mode="winding")
                 
                 doc.openTransaction("Cage from Surfaces")
-                
+                transaction_open = True
+
                 # 2. Create the cage Fields object
                 obj = fld_object.create_fld_object(name="FldCage", shape_type="sdf")
                 
@@ -152,6 +155,8 @@ class CommandFldCageFromSurfaces:
                     obj.addProperty("App::PropertyIntegerList", "HandleTypes", "Sdf", "Handle type per handle")
                 if not hasattr(obj, "EdgeStraight"):
                     obj.addProperty("App::PropertyIntegerList", "EdgeStraight", "Sdf", "Straight edge flags")
+                if not hasattr(obj, "EdgeSharpness"):
+                    obj.addProperty("App::PropertyFloatList", "EdgeSharpness", "Sdf", "Edge sharpness values")
                 if not hasattr(obj, "SignMode"):
                     obj.addProperty("App::PropertyEnumeration", "SignMode", "Sdf", "Inside/Outside sign mode")
                     obj.SignMode = ["closest", "winding"]
@@ -174,6 +179,7 @@ class CommandFldCageFromSurfaces:
                 obj.EdgeVertices = [v for edge in cage._edges for v in edge]
                 obj.HandleTypes = list(cage._handle_types)
                 obj.EdgeStraight = [1 if es else 0 for es in getattr(cage, "_edge_straight", [])]
+                obj.EdgeSharpness = [float(s) for s in getattr(cage, "_edge_sharpness", [])]
                 obj.Placement = FreeCAD.Placement() # world space coordinates
                 
                 obj.Proxy.SdfField = cage
@@ -197,7 +203,8 @@ class CommandFldCageFromSurfaces:
                 QtCore.QTimer.singleShot(0, start_edit)
                 
             except Exception as e:
-                doc.abortTransaction()
+                if transaction_open:
+                    doc.abortTransaction()
                 fld_logger.error(f"Assemble Solid error: {e}")
                 
         QtCore.QTimer.singleShot(0, action)
