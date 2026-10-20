@@ -35,7 +35,10 @@ class PointRendererDelegate:
         if not self._point_marker:
             return
 
-        pos = getattr(fp, "Coordinates", getattr(fp, "Position", FreeCAD.Vector(0,0,0)))
-        self._point_marker.position = pos
+        # The marker lives under the object's own root, after FreeCAD's SoFCTransform,
+        # which already applies Placement (kept equal to Coordinates by the proxy).
+        # So it sits at the local origin. Placing it at Coordinates drew it at twice
+        # the point's position: a second, "mirrored" marker away from the real point.
+        self._point_marker.position = FreeCAD.Vector(0, 0, 0)
         # Use the same 8px logic as corners/handles for consistency
         self._point_marker.update_draw(radius=renderer._corner_sphere_radius())

@@ -72,8 +72,11 @@ class Voronoi2DNode(SdfNoiseNode):
     planar = True
     display = ("# Voronoi cellular noise projected onto plane (centered)\n"
                "# Output: [-amp/2, +amp/2]")
-    lip_factor = 1.5
-    peak_factor = 0.5
+    # NV-055: measured max gradient 1.4213 at amp 1, freq 1 (declared was 1.5);
+    # declared = ceil(1.15 * measured / 0.05) * 0.05.
+    lip_factor = 1.65
+    # NV-055: measured max |value| 1.1609 at amp 1 (declared was 0.5); same rule.
+    peak_factor = 1.35
     dep_helpers = (("fld_pcg2d", _PCG2D_GLSL), ("fld_vhash22", _VHASH22_GLSL))
     main_fn_name = "fld_voronoi2d"
     main_fn_code = _VORONOI2D_GLSL

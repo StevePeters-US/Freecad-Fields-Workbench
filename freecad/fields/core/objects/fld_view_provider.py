@@ -20,6 +20,42 @@ from freecad.fields.core.fld_settings import apply_near_clip_override, get_line_
 from freecad.fields.core.render.field_appearance import DEFAULT_ADDITIVE_COLOR
 
 
+def refresh_matcap_choices(vobj):
+    """Set `Matcap`'s choices to the built-ins plus the document's variants.
+
+    Keeps the current value when it is still a choice, else falls back to "studio"
+    (callers that remove a variant reassign its objects to the base first, so the
+    fallback covers a document edited elsewhere, and an undo that restores the name of
+    a variant since removed: its recipe, and so its base, is gone). Called by `attach`
+    and by `refresh_document_matcap_choices`.
+    """
+    from freecad.fields.core.render.matcap_texture_cache import MATCAP_NAMES_WITH_NONE
+    from freecad.fields.core.render.matcap_variants import variants
+    choices = MATCAP_NAMES_WITH_NONE + [v["name"] for v in variants(vobj.Object.Document)]
+    current = vobj.Matcap
+    try:
+        existing = list(vobj.getEnumerationsOfProperty("Matcap"))
+    except Exception:
+        existing = None
+    if existing == choices and current in choices:
+        return                          # nothing to change; skip the onChanged chatter
+    vobj.Matcap = choices
+    vobj.Matcap = current if current in choices else "studio"
+
+
+def fields_objects(doc):
+    """Every object of `doc` whose view provider carries a Matcap property."""
+    return [o for o in doc.Objects
+            if getattr(o, "ViewObject", None) is not None and hasattr(o.ViewObject, "Matcap")]
+
+
+def refresh_document_matcap_choices(doc):
+    """Re-derive every Fields object's Matcap choices from doc.Meta. Meta decides:
+    the choice list is a view property and rides the undo stack, Meta does not."""
+    for o in fields_objects(doc):
+        refresh_matcap_choices(o.ViewObject)
+
+
 class FldViewProvider:
     """ViewProvider for Fields objects. Shows an orange part icon."""
     def __init__(self, vobj):
@@ -90,6 +126,32 @@ class FldViewProvider:
                              "Colour of this object's selection outline")
             vobj.SelectionColor = DEFAULT_SELECTION_COLOR
 
+        # Per-object matcap choice. Same guard as above so the properties exist on
+        # creation and on restore alike, including for objects saved before them;
+        # FieldAppearance.matcap reads them with defaults for the same reason.
+        #
+        # Matcap is ON by default: the fixed world-space light leaves the side
+        # facing FreeCAD's default views flat on the ambient floor, and a matcap
+        # follows the camera. The matcap owns the colour; ShapeColor shades only the
+        # Matcap = None path.
+        from freecad.fields.core.render.matcap_texture_cache import (
+            MATCAP_NAMES_WITH_NONE)
+        if not hasattr(vobj, "Matcap"):
+            vobj.addProperty("App::PropertyEnumeration", "Matcap", "Fields",
+                             "Material capture texture; None uses the directional light")
+            vobj.Matcap = MATCAP_NAMES_WITH_NONE
+            vobj.Matcap = "studio"
+        if not hasattr(vobj, "MatcapNoAO"):
+            vobj.addProperty("App::PropertyBool", "MatcapNoAO", "Fields",
+                             "Skip ambient occlusion; forced on for the normals, zebra and curvature layers")
+            vobj.MatcapNoAO = False
+        # The choice list is the built-ins plus THIS document's variants, so it is
+        # refreshed on every attach, not only on creation: a reopened document
+        # carries its variants in Meta, not in the saved enumeration.
+        from freecad.fields.core.render import matcap_variants
+        matcap_variants.ensure_loaded(vobj.Object.Document)
+        refresh_matcap_choices(vobj)
+
         if coin:
             from freecad.fields.core.render.fld_renderer import FldRenderer, SdfRendererStrategy, NURBSRendererStrategy
             self.renderer = FldRenderer(vobj)
@@ -151,15 +213,34 @@ class FldViewProvider:
                 from freecad.fields.core.render.fld_scene_voxel_renderer import FldSceneVoxelRenderer
                 sr = FldSceneVoxelRenderer.get_instance()
                 sr.set_field_visible(self._scene_rm_label, vobj.Visibility)
-        elif prop in ("ShapeAppearance", "SelectionColor"):
+            fp = getattr(vobj, "Object", None)
+            if fp is not None and getattr(fp, "ShapeType", None) == "curve" and getattr(fp, "ControlNodes", None):
+                for node in fp.ControlNodes:
+                    if node is None:
+                        continue
+                    in_list = getattr(node, "InList", []) or []
+                    want = False
+                    for parent in in_list:
+                        if (getattr(parent, "ShapeType", None) == "curve"
+                                and hasattr(parent, "ControlNodes")
+                                and node in (parent.ControlNodes or [])):
+                            p_vobj = getattr(parent, "ViewObject", None)
+                            if p_vobj and getattr(p_vobj, "Visibility", False):
+                                want = True
+                                break
+                    n_vobj = getattr(node, "ViewObject", None)
+                    if n_vobj is not None and getattr(n_vobj, "Visibility", None) != want:
+                        n_vobj.Visibility = want
+        elif prop in ("ShapeAppearance", "SelectionColor", "Matcap",
+                      "MatcapNoAO"):
             # SelectionColor is ours and arrives under its own name. The body
             # colour does not: "ShapeAppearance", not "ShapeColor" --
-            # FreeCAD 1.1 keeps ShapeColor and
+            # FreeCAD 1.1 and 26.3rc1 (2026-10-14) keep ShapeColor and
             # ShapeMaterial as live aliases you can still read and assign, but the
             # change it NOTIFIES is always the underlying ShapeAppearance material
             # array -- setting ViewObject.ShapeColor produces exactly one
             # onChanged, with prop == "ShapeAppearance". Instrumenting the live
-            # proxy on 2026-08-28 recorded that and nothing else, so a branch on
+            # proxy on 2026-08-28 and 2026-10-14 recorded that and nothing else, so a branch on
             # ("ShapeColor", "ShapeMaterial") never runs and the user's colour
             # edit never leaves the property editor.
             #
@@ -312,7 +393,7 @@ class FldViewProvider:
         # a different subset -- 'point' only ever worked because the else branch
         # fell through to the router below.
         from freecad.fields.tools import edit_tool
-        edit_tool.activate()
+        edit_tool.activate(vobj.Object)
             
         # Return True to indicate the double-click was handled,
         # preventing FreeCAD from opening the default transform tool.

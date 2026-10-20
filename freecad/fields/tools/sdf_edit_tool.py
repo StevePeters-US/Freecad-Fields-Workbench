@@ -35,7 +35,7 @@ class SdfEditTool(FldBase):
 
         # 1. Handle Noise Objects
         from freecad.fields.core.objects.fld_noise_object import FldNoiseProxy
-        from freecad.fields.core.objects.fld_deform_objects import FldTwistProxy, FldBendProxy, FldLatticeProxy, FldDeformCageProxy, FldArrayProxy
+        from freecad.fields.core.objects.fld_deform_objects import FldTwistProxy, FldBendProxy, FldLatticeProxy, FldDeformCageProxy, FldArrayProxy, FldPanelProxy
         from freecad.fields.core.objects.fld_heightmap_object import FldHeightmapProxy
         from freecad.fields.core.objects.fld_voxel_field import FldVoxelFieldProxy
         if isinstance(proxy, FldNoiseProxy):
@@ -61,6 +61,11 @@ class SdfEditTool(FldBase):
         if isinstance(proxy, FldArrayProxy):
             from freecad.fields.tools.modifiers.array_tool import ArrayTool
             tool = ArrayTool()
+            tool.edit_object(obj)
+            return
+        if isinstance(proxy, FldPanelProxy):
+            from freecad.fields.tools.modifiers.panel_tool import PanelTool
+            tool = PanelTool()
             tool.edit_object(obj)
             return
         if isinstance(proxy, FldDeformCageProxy):
@@ -93,6 +98,7 @@ class SdfEditTool(FldBase):
         from freecad.fields.tools.modifiers.bend_tool import BendTool
         from freecad.fields.tools.modifiers.lattice_tool import LatticeTool
         from freecad.fields.tools.modifiers.array_tool import ArrayTool
+        from freecad.fields.tools.modifiers.panel_tool import PanelTool
         from freecad.fields.tools.tool_voxel_field import VoxelFieldTool
         
         from freecad.fields.core.sdf.sdf.box import SdfBoxField
@@ -109,6 +115,7 @@ class SdfEditTool(FldBase):
         from freecad.fields.core.sdf.sdf.bend import SdfBendField
         from freecad.fields.core.sdf.sdf.lattice import SdfLatticeField
         from freecad.fields.core.sdf.sdf.array import SdfArrayField
+        from freecad.fields.core.sdf.sdf.panel import SdfPanelField
         from freecad.fields.core.sdf.sdf.voxel_field import SdfVoxelField
 
         # Mapping from SdfField type to Creator class
@@ -127,6 +134,7 @@ class SdfEditTool(FldBase):
             SdfBendField: BendTool,
             SdfLatticeField: LatticeTool,
             SdfArrayField: ArrayTool,
+            SdfPanelField: PanelTool,
             SdfVoxelField: VoxelFieldTool,
         }
 

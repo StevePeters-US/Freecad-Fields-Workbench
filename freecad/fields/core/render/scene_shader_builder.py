@@ -20,6 +20,11 @@ class CompiledField:
     shape_color: Tuple[float, float, float]
     selection_color: Tuple[float, float, float]
     specular: Tuple[float, float, float, float]  # (sr, sg, sb, exponent)
+    # Matcap row, see FieldAppearance.matcap. Defaults mean "off": layer < 0 keeps
+    # the directional light.
+    matcap_layer: float = -1.0
+    matcap_uv_source: float = 0.0
+    matcap_ao_bypass: float = 0.0
 
 
 @dataclass
@@ -47,6 +52,8 @@ class SceneShaderBuilder:
                 shape_color=d["shape_color"],
                 selection_color=d["selection_color"],
                 specular=d["specular"],
+                **dict(zip(("matcap_layer", "matcap_uv_source",
+                            "matcap_ao_bypass"), d["matcap"])),
             )
             compiled_fields.append(cf)
 

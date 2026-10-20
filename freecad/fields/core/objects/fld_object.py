@@ -7,7 +7,8 @@ NURBS/BRep rendering.
 
 Factory
 -------
-    obj = create_fld_object("Box", shape_type="box", params={"length": 10, ...})
+    obj = create_fld_object("Box", shape_type="sdf")   # or "curve", "point", "surface"
+    obj.Proxy.SdfField = SdfBoxField(...)              # an "sdf" object starts with no field
 
 The Proxy.execute() reads parametric properties and calls build_shape() to 
 generate the native BRep geometry.
@@ -196,11 +197,6 @@ def refresh_all_fld_objects():
             # Fields Proxy properties
             if hasattr(obj, "ShowWireframe"):
                 obj.ShowWireframe = bool(show_wire)
-                
-            # Invalidate SdfField cache (e.g. for octree cache during patch type preference changes)
-            doc_proxy = getattr(obj, "Proxy", None)
-            if doc_proxy and hasattr(doc_proxy, "SdfField") and doc_proxy.SdfField:
-                doc_proxy.SdfField.invalidate_cache()
                 
             if hasattr(obj, "ShapeType") and obj.ShapeType == "sdf":
                 obj.touch()

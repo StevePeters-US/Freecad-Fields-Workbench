@@ -20,54 +20,48 @@ class FldNoiseProxy(FldModifierProxyBase):
     def __init__(self, obj):
         super().__init__(obj)
         setup_amplitude_frequency_properties(obj)
-        if not hasattr(obj, "NodeGraphJson"):
-            try:
-                import json
-                from freecad.fields.core.gui.node_editor.nodes import get_template_graph
-                tmpl = get_template_graph("Waves")
-                default_graph = json.dumps(tmpl) if tmpl else ""
-            except Exception:
-                default_graph = ""
-            obj.addProperty("App::PropertyString", "NodeGraphJson", "Noise",
-                            "Serialized node graph").NodeGraphJson = default_graph
+        from freecad.fields.core.gui.node_editor.nodes import get_template_graph
+        from freecad.fields.core.objects.fld_noise_shared import apply_graph
+        from freecad.fields.core import fld_logger
+        err = apply_graph(obj, get_template_graph("Waves"), "Waves")
+        if err:
+            fld_logger.error(f"FldNoiseProxy.__init__: failed to apply Waves graph: {err}")
 
     def _build_field(self, fp):
         from freecad.fields.core.sdf.sdf.noise import SdfNoiseField
         base_field = self._resolve_source_field(fp)
         if base_field:
-            noise_type = getattr(fp, "NoiseType", "Waves")
-            # The stored Formula is passed for ANY non-complex preset, not just
-            # "Custom": a preset's formula text is user-editable and lives in that
-            # property, so reading it only for "Custom" throws away every edit.
-            is_complex = noise_type in SdfNoiseField.COMPLEX_PRESETS
-            custom_formula = getattr(fp, "Formula", None) if not is_complex else None
-            custom_params = resolve_custom_params(fp, custom_formula)
+            wl = getattr(fp, "Wavelength", 0.0)
+            if wl <= 0.0:
+                label = getattr(fp, "Label", "") or "Noise"
+                raise ValueError(f"{label}: Wavelength must be > 0")
+            formula = getattr(fp, "Formula", "")
+            custom_params = resolve_custom_params(fp, formula)
 
+            gates = self._graph_gates(fp)
             self.SdfField = SdfNoiseField(
-                base_field, fp.Amplitude, fp.Frequency,
+                base_field, fp.Amplitude, 1.0 / wl,
                 placement=fp.Placement,
-                formula=custom_formula, normalization=getattr(fp, "Normalization", 0.0),
-                preset_name=noise_type, custom_params=custom_params,
-                radial=getattr(fp, "Custom_radial", False),
-                disp_axis=self._graph_disp_axis(fp) if not is_complex else None,
+                formula=formula, normalization=getattr(fp, "Normalization", 0.0),
+                custom_params=custom_params,
+                gates=gates,
+                label=getattr(fp, "Label", ""),
             )
 
     @staticmethod
-    def _graph_disp_axis(fp):
-        """A literal (unwired) Direction on the graph's terminal Displace node
-        means the displacement is pinned to one fixed axis, which lets _lip()
-        (noise.py) skip the sqrt(3) three-component Lipschitz bound. Best-effort:
-        a hand-typed formula with no graph, or a malformed NodeGraphJson, just
-        means no axis information -- not an error."""
+    def _graph_gates(fp):
+        """Extracts the builtin gates from fp.NodeGraphJson."""
         json_str = getattr(fp, "NodeGraphJson", "")
         if not json_str:
-            return None
+            return {}
         try:
             import json
             from freecad.fields.core.gui.node_editor.nodes import compile_graph
-            return compile_graph(json.loads(json_str)).disp_axis
+            res = compile_graph(json.loads(json_str))
+            return res.gates
         except Exception:
-            return None
+            return {}
+
 
 
 def create_noise_modifier(name, source_obj):
@@ -96,6 +90,12 @@ def create_noise_modifier(name, source_obj):
     except Exception as e:
         from freecad.fields.core import fld_logger
         fld_logger.debug(f"create_noise_modifier: default Center ray-march failed: {e}")
+
+    from freecad.fields.core.objects.fld_noise_types import apply_noise_type
+    err = apply_noise_type(obj, "Waves")
+    if err:
+        from freecad.fields.core import fld_logger
+        fld_logger.error(f"create_noise_modifier: apply_noise_type('Waves') failed: {err}")
 
     if FreeCAD.GuiUp:
         FldViewProvider(obj.ViewObject)

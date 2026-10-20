@@ -17,7 +17,7 @@ from freecad.fields.core.sdf.sdf_extrusion import SdfExtrusionField
 from freecad.fields.core.sdf.sdf_field import placement_matrix
 from freecad.fields.tools.fld_base import ToolState
 from freecad.fields.tools.primitive_creator_base import (
-    PrimitiveCreatorBase, MIN_PRIMITIVE_DIM_TYPED_MM
+    PrimitiveCreatorBase, StageEntry, MIN_PRIMITIVE_DIM_TYPED_MM
 )
 from freecad.fields.tools.extrude_gizmo import ExtrudeGizmo
 import math
@@ -155,6 +155,16 @@ class CurveExtrudeCreator(_BaseExtrudeCreator):
             norm = wp.Rotation.multVec(FreeCAD.Vector(0, 0, 1)) if wp else FreeCAD.Vector(0, 0, 1)
             self._height = self._clamp_height((pos - self._anchor_pt).dot(norm))
             self._update_extrude_handles()
+
+    def _stage_entry(self, state):
+        if state == ToolState.DRAG_Z and self._anchor_pt is not None:
+            return StageEntry("Height", "mm", [self._height], [1])
+        return None
+
+    def _stage_point_for(self, state, values):
+        if state == ToolState.DRAG_Z:
+            return self._normal_stage_point(values[0])
+        raise NotImplementedError
 
     def _update_extrude_handles(self):
         """Draw/update base + top curve rings and vertical connector lines via ExtrudeGizmo."""
@@ -297,6 +307,16 @@ class CurveExtrude3DCreator(_BaseExtrudeCreator):
             if self._cached_pipe is not None:
                 self._cached_pipe.radius = self._radius
             self._update_pipe_handles()
+
+    def _stage_entry(self, state):
+        if state == ToolState.DRAG_Z and self._anchor_pt is not None:
+            return StageEntry("Radius", "mm", [self._radius], [1])
+        return None
+
+    def _stage_point_for(self, state, values):
+        if state == ToolState.DRAG_Z:
+            return self._normal_stage_point(values[0])
+        raise NotImplementedError
 
     @staticmethod
     def _sample_seg_3d_world(p0, p1, p2, p3, n=12):
@@ -542,6 +562,16 @@ class SdfCurveFillExtrudeCreator(_BaseExtrudeCreator):
             norm = self.working_plane.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
             self._height = self._clamp_height(abs((pos - self._anchor_pt).dot(norm)))
             self._update_extrude_handles()
+
+    def _stage_entry(self, state):
+        if state == ToolState.DRAG_Z and self._anchor_pt is not None:
+            return StageEntry("Height", "mm", [self._height], [1])
+        return None
+
+    def _stage_point_for(self, state, values):
+        if state == ToolState.DRAG_Z:
+            return self._normal_stage_point(values[0])
+        raise NotImplementedError
 
     def _update_extrude_handles(self):
         """Draw the base ring on the curve itself, and the top ring one height above it.

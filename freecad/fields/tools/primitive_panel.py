@@ -192,20 +192,3 @@ class PrimitiveTaskPanel:
         self.creator.cancel()
         return True
 
-    def clear_focus(self):
-        if hasattr(self, "pos_x") and hasattr(self, "pos_y") and hasattr(self, "pos_z"):
-            self.pos_x.clearFocus()
-            self.pos_y.clearFocus()
-            self.pos_z.clearFocus()
-
-    def focus_field(self, axis):
-        le = None
-        if axis == 'x' and hasattr(self, "pos_x"):
-            le = self.pos_x
-        elif axis == 'y' and hasattr(self, "pos_y"):
-            le = self.pos_y
-        elif axis == 'z' and hasattr(self, "pos_z"):
-            le = self.pos_z
-        if le:
-            le.setFocus()
-            le.selectAll()

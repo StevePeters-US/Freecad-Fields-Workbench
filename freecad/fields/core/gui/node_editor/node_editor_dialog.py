@@ -364,12 +364,46 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
 
     def _populate_templates_menu(self):
         self.templates_menu.clear()
-        templates = ["Waves", "Radial Ripple", "Square Wave",
-                     "Simple Sine", "Multi-Frequency", "Wavy Panel"]
-
-        for tname in templates:
+        from freecad.fields.core.gui.node_editor.nodes import template_names
+        for tname in template_names():
             act = self.templates_menu.addAction(tname)
-            act.triggered.connect(lambda checked=False, tn=tname: self._load_template(tn))
+            act.triggered.connect(lambda checked=False, tn=tname: self._apply_pick(tn))
+
+        from freecad.fields.core.objects.fld_noise_user_presets import user_preset_names
+        u_names = user_preset_names()
+        if u_names:
+            self.templates_menu.addSeparator()
+            for uname in u_names:
+                act = self.templates_menu.addAction(uname)
+                act.triggered.connect(lambda checked=False, un=uname: self._apply_pick(un))
+
+    def _check_confirm_replace(self):
+        from freecad.fields.tools.noise_preset_dialogs import confirm_graph_replace
+        from freecad.fields.core.gui.node_editor.nodes import compile_graph
+        graph = self.root_graph_data if self.current_subgraph_node_id else self.scene.get_graph_data()
+        res = compile_graph(graph)
+        formula = res.formula if res and not res.err else ""
+        if not confirm_graph_replace(self, self.target_obj, graph, formula):
+            return False
+        self._populate_templates_menu()
+        if self.tool and getattr(self.tool, "panel", None) and hasattr(self.tool.panel, "_fill_type_combo"):
+            self.tool.panel._fill_type_combo()
+        return True
+
+    def _apply_pick(self, name):
+        """A Templates-menu pick: confirm, apply through the panel's rule, show
+        the result (NV-025)."""
+        if not self._check_confirm_replace():
+            return
+        if self.current_subgraph_node_id:
+            self.close_subgraph()
+        from freecad.fields.core.objects.fld_noise_types import apply_picked
+        err = apply_picked(self.target_obj, name)
+        if err:
+            fld_logger.warn(f"Node editor: {name!r} not applied ({err})")
+            return
+        self.load_from_object()
+        self._refresh_panel_and_commit()
 
     def _add_node_to_center(self, node_type):
         center_pos = self.view.mapToScene(self.view.viewport().rect().center())
@@ -441,13 +475,6 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
 
         QtCore.QTimer.singleShot(50, self.view.zoom_to_fit)
         self._on_graph_changed()
-
-    def _load_template(self, template_name):
-        if self.current_subgraph_node_id:
-            self.close_subgraph()
-        data = get_template_graph(template_name)
-        self.scene.load_graph_data(data)
-        self.save_to_object()
 
     def _on_clear(self):
         res = QtWidgets.QMessageBox.question(
@@ -542,55 +569,35 @@ class FldNoiseNodeEditorDialog(QtWidgets.QDialog):
             gdata = self.scene.get_graph_data()
 
         res = compile_graph(gdata)
-        formula, comments, err = res
-        if err or not formula:
+        if res.err or not res.formula:
+            return
+        # Applying the graph a template seeded, unchanged, keeps that label; any
+        # edit makes the object Custom (NV-008).
+        label = getattr(self.target_obj, "NoiseType", "Custom")
+        if res.formula != getattr(self.target_obj, "Formula", ""):
+            label = "Custom"
+        from freecad.fields.core.objects.fld_noise_shared import apply_graph
+        err = apply_graph(self.target_obj, gdata, label)
+        if err:
+            fld_logger.warn(f"Node editor: graph not applied ({err})")
             return
 
-        # Ensure NodeGraphJson property exists
-        if not hasattr(self.target_obj, "NodeGraphJson"):
-            try:
-                self.target_obj.addProperty(
-                    "App::PropertyString", "NodeGraphJson", "Noise", "Serialized node graph"
-                )
-            except Exception as e:
-                fld_logger.debug(f"save_to_object: could not add NodeGraphJson ({e})")
+        self._refresh_panel_and_commit()
 
-        try:
-            self.target_obj.NodeGraphJson = json.dumps(gdata, default=str)
-            self.target_obj.Formula = formula
-            from freecad.fields.core.sdf.sdf.formula_eval import parse_custom_params
-            parsed_params = parse_custom_params(formula)
-            for p_info in parsed_params:
-                p_name = p_info["name"]
-                p_type = p_info["type"]
-                p_def = p_info["default"]
-                prop_name = "Custom_" + p_name
-                if not hasattr(self.target_obj, prop_name) and hasattr(self.target_obj, "addProperty"):
-                    if p_type == "bool":
-                        prop_type = "App::PropertyBool"
-                    elif p_type == "int":
-                        prop_type = "App::PropertyInteger"
-                    else:
-                        prop_type = "App::PropertyFloat"
-                    try:
-                        self.target_obj.addProperty(prop_type, prop_name, "Custom Params", f"Custom parameter {prop_name}")
-                        setattr(self.target_obj, prop_name, bool(p_def) if p_type == "bool" else p_def)
-                    except Exception as e:
-                        fld_logger.debug(f"FldNoiseNodeEditorDialog: could not add custom property {prop_name}: {e}")
-        except Exception as e:
-            fld_logger.warn(f"Failed to set Formula or NodeGraphJson: {e}")
-
-        # If tool is open, trigger commit
+    def _refresh_panel_and_commit(self):
+        """Update the tool's panel widgets and commit changes (NV-025)."""
         panel = None
         if self.tool:
             panel = getattr(self.tool, "panel", getattr(self.tool, "_panel", None))
         if not panel and hasattr(self, "parent"):
             p = self.parent()
-            if hasattr(p, "_update_custom_widgets"):
+            if hasattr(p, "update_ui"):
                 panel = p
 
         if panel:
-            if hasattr(panel, "_update_custom_widgets"):
+            if hasattr(panel, "update_ui"):
+                panel.update_ui()
+            elif hasattr(panel, "_update_custom_widgets"):
                 panel._update_custom_widgets()
 
         if self.tool:

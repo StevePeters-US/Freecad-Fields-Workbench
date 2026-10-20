@@ -144,6 +144,14 @@ class GLProgram:
         arr = (ctypes.c_float * 16)(*mat16)
         f(self._loc(name), 1, False, arr)
 
+    def set_mat3(self, name: str, mat9):
+        """Set a mat3 from a flat 9-float column-major sequence."""
+        f = _loader.get("glUniformMatrix3fv",
+            [ctypes.c_int, ctypes.c_int, ctypes.c_bool,
+             ctypes.POINTER(ctypes.c_float)], None)
+        arr = (ctypes.c_float * 9)(*mat9)
+        f(self._loc(name), 1, False, arr)
+
     def set_int(self, name: str, v: int):
         f = _loader.get("glUniform1i", [ctypes.c_int, ctypes.c_int], None)
         f(self._loc(name), int(v))
@@ -179,6 +187,15 @@ class GLProgram:
                 self.set_mat4(name, flat)
             else:
                 self.set_mat4(name, value)
+        elif glsl_type == "mat3":
+            if isinstance(value[0], (list, tuple)):
+                flat = [0.0] * 9
+                for r in range(3):
+                    for c in range(3):
+                        flat[c * 3 + r] = value[r][c]
+                self.set_mat3(name, flat)
+            else:
+                self.set_mat3(name, value)
         elif glsl_type == "int":
             self.set_int(name, value)
         elif glsl_type == "uint":

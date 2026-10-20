@@ -9,6 +9,7 @@ import FreeCADGui
 from PySide import QtCore
 from freecad.fields.core import fld_logger
 from freecad.fields.core.input.input_manager import FldInputManager
+from freecad.fields.core.input.fld_menu_tree import MenuItem, SEPARATOR
 from freecad.fields.core.render.field_appearance import DEFAULT_ADDITIVE_COLOR
 
 HANDLE_TYPE_COLORS = {
@@ -204,7 +205,6 @@ class DragTimerMixin:
             self._stop_drag_timer()
             from freecad.fields.tools.fld_base import ToolState
             self.state = getattr(self, '_drag_return_state', ToolState.IDLE)
-            if hasattr(self, "_selected_element"): self._selected_element = None
             if hasattr(self, "_dragging_idx"): self._dragging_idx = None
             
             # Trigger final full update if supported (e.g. PrimitiveCreatorBase)
@@ -215,152 +215,10 @@ class DragTimerMixin:
         return False
 
 
-class AxisConstraintMixin:
-    """X/Y/Z (and plane) drag constraint, plus the Coin3D guide line that shows it.
-
-    Moved verbatim out of FldBase (ST-008). Not usable on its own: every body
-    below reads FldBase state (self.view, self.points, self.panel,
-    self._constraint_axis, self.active_axis, ...) and Python resolves those
-    through the MRO. The point is readability and fld_base.py's line count, not
-    reuse.
-    """
-
-    def _get_constraint_vectors(self):
-        """Returns (axis_vec, plane_normal) in world space, or (None, None) if no constraint."""
-        rot = None
-        if getattr(self, "_constraint_space", 'global') == 'local':
-            if getattr(self, "working_plane", None):
-                rot = self.working_plane.Rotation
-            elif getattr(self, "_target_obj", None) and hasattr(self._target_obj, "Placement"):
-                rot = self._target_obj.Placement.Rotation
-                
-        if rot is not None:
-            axes = {
-                'x': rot.multVec(FreeCAD.Vector(1, 0, 0)),
-                'y': rot.multVec(FreeCAD.Vector(0, 1, 0)),
-                'z': rot.multVec(FreeCAD.Vector(0, 0, 1)),
-            }
-        else:
-            axes = {
-                'x': FreeCAD.Vector(1, 0, 0),
-                'y': FreeCAD.Vector(0, 1, 0),
-                'z': FreeCAD.Vector(0, 0, 1),
-            }
-        plane_normals = {'yz': axes['x'], 'xz': axes['y'], 'xy': axes['z']}
-        axis = getattr(self, "_constraint_axis", None) or getattr(self, "active_axis", None)
-        if axis:
-            return axes[axis], None
-        if getattr(self, "_constraint_plane", None):
-            return None, plane_normals[self._constraint_plane]
-        return None, None
-
-    def _update_constraint_visual(self):
-        """Draw or hide the colored axis line or plane that indicates the active constraint."""
-        if getattr(self, "_constraint_line", None):
-            self._constraint_line.undraw()
-            self._constraint_line = None
-        if getattr(self, "_constraint_plane_vis", None):
-            self._constraint_plane_vis.undraw()
-            self._constraint_plane_vis = None
-
-        axis = getattr(self, "_constraint_axis", None) or getattr(self, "active_axis", None)
-        plane = getattr(self, "_constraint_plane", None)
-        if not axis and not plane:
-            return
-
-        base = getattr(self, "_drag_constraint_base", None) or getattr(self, "center_w", None)
-        if base is None and hasattr(self, "points") and isinstance(getattr(self, "_dragging_idx", None), int):
-            idx = self._dragging_idx
-            if idx < len(self.points):
-                base = self.points[idx]
-        if base is None:
-            return
-
-        parent = getattr(self, "points_root", None)
-        if parent is None and self.view:
-            parent = self.view.getSceneGraph()
-            
-        if parent:
-            if axis:
-                axis_vec, _ = self._get_constraint_vectors()
-                if axis_vec is None:
-                    return
-                colors = {'x': (1.0, 0.15, 0.15), 'y': (0.15, 0.85, 0.15), 'z': (0.25, 0.45, 1.0)}
-                color = colors.get(axis, (1.0, 1.0, 1.0))
-                length = 1000
-                from freecad.fields.core.objects.fld_line import FldLineSet
-                self._constraint_line = FldLineSet(parent, color=color, width=2.0)
-                self._constraint_line.update_lines([base - axis_vec * length, base + axis_vec * length])
-            elif plane:
-                plane_colors = {'yz': (1.0, 0.15, 0.15), 'xz': (0.15, 0.85, 0.15), 'xy': (0.25, 0.45, 1.0)}
-                plane_normals = {'yz': FreeCAD.Vector(1, 0, 0), 'xz': FreeCAD.Vector(0, 1, 0), 'xy': FreeCAD.Vector(0, 0, 1)}
-                
-                rot = None
-                if getattr(self, "_constraint_space", 'global') == 'local':
-                    if getattr(self, "working_plane", None):
-                        rot = self.working_plane.Rotation
-                    elif getattr(self, "_target_obj", None) and hasattr(self._target_obj, "Placement"):
-                        rot = self._target_obj.Placement.Rotation
-                
-                normal = plane_normals[plane]
-                if rot is not None:
-                    normal = rot.multVec(normal)
-                    
-                color = plane_colors.get(plane, (1.0, 1.0, 1.0))
-                from freecad.fields.core.objects.fld_line import FldPlaneVisual
-                self._constraint_plane_vis = FldPlaneVisual(parent, color=color, transparency=0.8)
-                self._constraint_plane_vis.update_plane(base, normal, size=150.0)
-
-            if self.view:
-                self.view.redraw()
-
-    def _clear_constraint_visual(self):
-        if getattr(self, "_constraint_line", None):
-            self._constraint_line.undraw()
-            self._constraint_line = None
-        if getattr(self, "_constraint_plane_vis", None):
-            self._constraint_plane_vis.undraw()
-            self._constraint_plane_vis = None
-
-    def constrain_vector(self, delta_vec):
-        if not self._axis_lock:
-            return delta_vec
-        
-        # Mask components out of locked directions
-        cx = delta_vec.x if "X" in self._axis_lock else 0.0
-        cy = delta_vec.y if "Y" in self._axis_lock else 0.0
-        cz = delta_vec.z if "Z" in self._axis_lock else 0.0
-        import FreeCAD
-        return FreeCAD.Vector(cx, cy, cz)
-
-    def toggle_axis(self, target_axis):
-        if not self.panel:
-            return
-            
-        if self.active_axis == target_axis:
-            # Toggle OFF
-            self.active_axis = None
-            if target_axis == 'x': self.locked_length = None
-            if target_axis == 'y': self.locked_width = None
-            if target_axis == 'z': self.locked_height = None
-            
-            # Clear focus from panel fields
-            if hasattr(self.panel, "clear_focus"):
-                self.panel.clear_focus()
-            # Trigger update to snap back to mouse
-            self.update_from_locks()
-        else:
-            # Focus Field
-            self.active_axis = target_axis
-            if hasattr(self.panel, "focus_field"):
-                self.panel.focus_field(target_axis)
-
-
 class ControlCageDrawMixin:
     """SoSphere handle + SoLineSet cage overlay for NURBS-style tools.
 
-    Moved verbatim out of FldBase (ST-008); same MRO caveat as
-    AxisConstraintMixin. `_compute_handle_radius` has callers in eight other
+    Moved verbatim out of FldBase (ST-008). `_compute_handle_radius` has callers in eight other
     tool modules, all of them FldBase subclasses calling it through self.
     """
 
@@ -485,8 +343,8 @@ class ControlCageDrawMixin:
 class SnapPreferencesMixin:
     """Snap toggles + increment menus, shared by every tool's RMB menu and the S menu.
 
-    Split out of FldBase (CR-063) following the same pattern ControlCageDrawMixin and
-    AxisConstraintMixin already used in this file. Lives here rather than on
+    Split out of FldBase (CR-063) following the same pattern ControlCageDrawMixin
+    already used in this file. Lives here rather than on
     PrimitiveCreatorBase because the tools that most need to change an increment
     mid-transform -- Translate, Rotate, Scale -- are FldBase subclasses and had no
     snapping menu at all before this existed. FldBase.get_context_menu() still calls
@@ -494,88 +352,71 @@ class SnapPreferencesMixin:
     way a same-class method would.
     """
 
-    GRID_STEP_PRESETS  = (0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0)
-    ANGLE_STEP_PRESETS = (1.0, 5.0, 10.0, 15.0, 22.5, 30.0, 45.0, 90.0)
-
     def get_snapping_menu(self):
         """Snap toggles + increments. Subclasses with projection modes prepend their own."""
         return self.get_snap_pref_menu()
 
     def get_snap_pref_menu(self):
-        """The master snap switch, the three on/off toggles, and the two increment submenus.
+        """The three on/off toggles and the two increment submenus.
 
-        Grid/Vertices/Angle are independent toggles -- turning one off leaves the
-        others live, so "I turned snapping off" via a single entry used to be
-        impossible (you'd have to know to also flip Vertices and Angle). "Enable
-        Snapping" is the pre-existing `SnapEnabled` setting (previously only
-        reachable from the settings dialog, Ctrl inverts it live during a drag) --
-        every quantize/vertex-snap call site already gates on it via
-        fld_snap.snap_active(), so surfacing it here as one click actually
-        disables all snapping without changing any of the other three, which
-        stay as *what* would snap once this is back on.
+        Snapping applies while Ctrl is held; these toggles choose what it snaps to.
+        Grid/Vertices/Angle are independent -- turning one off leaves the others live.
         """
-        from freecad.fields.core.fld_settings import (
-            get_snap_enabled, get_snap_grid_step, get_snap_vertex_enabled, get_snap_angle_step
-        )
+        from freecad.fields.core.fld_settings import get_snap_step, get_snap_vertex_enabled
         return [
-            ("Enable Snapping",  lambda *args: self._toggle_snap_pref('enabled'), get_snap_enabled()),
-            None,  # separator
-            ("Snap to Grid",     lambda *args: self._toggle_snap_pref('grid'),   get_snap_grid_step() > 0),
-            ("Grid Step",        self._build_snap_step_menu('grid')),
-            ("Snap to Vertices", lambda *args: self._toggle_snap_pref('vertex'), get_snap_vertex_enabled()),
-            ("Snap to Angle",    lambda *args: self._toggle_snap_pref('angle'),  get_snap_angle_step() > 0),
-            ("Angle Step",       self._build_snap_step_menu('angle')),
+            MenuItem("Snap to Grid", action=lambda: self._toggle_snap_pref('grid'),
+                     checked=get_snap_step('grid') > 0),
+            MenuItem("Grid Step", children=self._build_snap_step_menu('grid')),
+            MenuItem("Snap to Vertices", action=lambda: self._toggle_snap_pref('vertex'),
+                     checked=get_snap_vertex_enabled()),
+            MenuItem("Snap to Angle", action=lambda: self._toggle_snap_pref('angle'),
+                     checked=get_snap_step('angle') > 0),
+            MenuItem("Angle Step", children=self._build_snap_step_menu('angle')),
+            MenuItem("Snap to Scale", action=lambda: self._toggle_snap_pref('scale'),
+                     checked=get_snap_step('scale') > 0),
+            MenuItem("Scale Step", children=self._build_snap_step_menu('scale')),
         ]
 
     def _build_snap_step_menu(self, kind):
-        """Preset increments for 'grid' (mm) or 'angle' (degrees), plus a Custom entry.
+        """Preset increments for 'grid' (mm), 'angle' (degrees) or 'scale', plus a Custom entry.
 
         The current value is checked. If it is not one of the presets -- set from the
         settings dialog or from Custom -- it is added to the list so the menu always
         shows what is actually in force rather than silently checking nothing.
         """
-        from freecad.fields.core.fld_settings import get_snap_grid_step, get_snap_angle_step
-        if kind == 'grid':
-            cur, presets, fmt = get_snap_grid_step(), self.GRID_STEP_PRESETS, "{0:g} mm"
-        else:
-            cur, presets, fmt = get_snap_angle_step(), self.ANGLE_STEP_PRESETS, "{0:g}\u00b0"
-        values = list(presets)
+        from freecad.fields.core.fld_settings import get_snap_step
+        from freecad.fields.core.input import fld_snap
+        cur = get_snap_step(kind)
+        fmt = fld_snap.SNAP_STEP_FORMATS[kind]
+        values = list(fld_snap.SNAP_STEP_PRESETS[kind])
         if cur > 0 and not any(abs(cur - v) < 1e-9 for v in values):
             values = sorted(values + [cur])
-        items = [(fmt.format(v),
-                  lambda *args, _v=v: self._set_snap_step(kind, _v),
-                  abs(cur - v) < 1e-9)
+        items = [MenuItem(fmt.format(v),
+                          action=lambda _v=v: self._set_snap_step(kind, _v),
+                          checked=abs(cur - v) < 1e-9)
                  for v in values]
-        items.append(None)
-        items.append(("Custom\u2026", lambda *args: self._prompt_snap_step(kind)))
+        items.append(SEPARATOR)
+        items.append(MenuItem("Custom\u2026", action=lambda: self._prompt_snap_step(kind)))
         return items
 
     def _set_snap_step(self, kind, value):
-        """Set the grid or angle increment. Any non-zero value also turns that snap on,
+        """Set a snap increment. Any non-zero value also turns that snap on,
         because `step > 0` IS the enabled state -- there is no separate flag to set."""
-        from freecad.fields.core.fld_settings import set_snap_grid_step, set_snap_angle_step
-        value = float(value)
-        if kind == 'grid':
-            set_snap_grid_step(value)
-            if value > 0:
-                self._last_snap_grid_step = value
-        else:
-            set_snap_angle_step(value)
-            if value > 0:
-                self._last_snap_angle_step = value
+        from freecad.fields.core.fld_settings import set_snap_step
+        set_snap_step(kind, value)
         if getattr(self, "view", None):
             self.view.redraw()
 
     def _prompt_snap_step(self, kind):
         """Ask for an increment outside the preset list. 0 disables that snap."""
         from PySide import QtWidgets
-        from freecad.fields.core.fld_settings import get_snap_grid_step, get_snap_angle_step
-        if kind == 'grid':
-            cur, title, label, hi, dec = (get_snap_grid_step(), "Grid Step",
-                                          "Translation increment (mm), 0 to disable:", 1000.0, 3)
-        else:
-            cur, title, label, hi, dec = (get_snap_angle_step(), "Angle Step",
-                                          "Rotation increment (degrees), 0 to disable:", 180.0, 2)
+        from freecad.fields.core.fld_settings import get_snap_step
+        title, label, hi, dec = {
+            'grid': ("Grid Step", "Translation increment (mm), 0 to disable:", 1000.0, 3),
+            'angle': ("Angle Step", "Rotation increment (degrees), 0 to disable:", 180.0, 2),
+            'scale': ("Scale Step", "Scale increment (factor), 0 to disable:", 10.0, 3),
+        }[kind]
+        cur = get_snap_step(kind)
         try:
             val, ok = QtWidgets.QInputDialog.getDouble(
                 FreeCADGui.getMainWindow(), title, label, float(cur), 0.0, hi, dec)
@@ -586,31 +427,15 @@ class SnapPreferencesMixin:
             self._set_snap_step(kind, val)
 
     def _toggle_snap_pref(self, kind):
-        """Toggle master/grid/vertex/angle snapping, remembering the step so it
-        survives a round trip through off -- turning grid snap off must not lose
-        a custom 0.25."""
+        """Toggle grid/vertex/angle/scale snapping; the last non-zero step is a
+        parameter (INP-023), so it survives off and on."""
         from freecad.fields.core.fld_settings import (
-            get_snap_enabled, set_snap_enabled,
-            get_snap_grid_step, set_snap_grid_step,
+            get_snap_step, set_snap_step, get_last_snap_step,
             get_snap_vertex_enabled, set_snap_vertex_enabled,
-            get_snap_angle_step, set_snap_angle_step,
         )
-        if kind == 'enabled':
-            set_snap_enabled(not get_snap_enabled())
-        elif kind == 'grid':
-            cur = get_snap_grid_step()
-            if cur > 0:
-                self._last_snap_grid_step = cur
-                set_snap_grid_step(0.0)
-            else:
-                set_snap_grid_step(getattr(self, '_last_snap_grid_step', 1.0) or 1.0)
-        elif kind == 'vertex':
+        if kind == 'vertex':
             set_snap_vertex_enabled(not get_snap_vertex_enabled())
-        elif kind == 'angle':
-            cur = get_snap_angle_step()
-            if cur > 0:
-                self._last_snap_angle_step = cur
-                set_snap_angle_step(0.0)
-            else:
-                set_snap_angle_step(getattr(self, '_last_snap_angle_step', 15.0) or 15.0)
-
+        elif get_snap_step(kind) > 0:
+            set_snap_step(kind, 0.0)
+        else:
+            set_snap_step(kind, get_last_snap_step(kind))

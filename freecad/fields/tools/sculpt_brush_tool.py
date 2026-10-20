@@ -20,6 +20,7 @@ from freecad.fields.core.objects.fld_surface_id import stamp_surface_id
 from freecad.fields.core.objects.fld_modifier_stack import get_chain
 from freecad.fields.core.input.fld_gui_utils import DynamicLimitSlider
 from freecad.fields.core.gui.brush_editor_panel import FalloffCurveWidget, render_cross_section_pixmap
+from freecad.fields.core.input.fld_menu_tree import MenuItem, SEPARATOR
 
 
 class SculptBrushTaskPanel:
@@ -68,6 +69,13 @@ class SculptBrushTaskPanel:
         param_grp = QtWidgets.QGroupBox("Parameters")
         pl = QtWidgets.QFormLayout(param_grp)
 
+        self.mode_combo = QtWidgets.QComboBox()
+        self.mode_combo.addItem("Deposit")
+        self.mode_combo.addItem("Carve")
+        self.mode_combo.setCurrentIndex(1 if tool._carve else 0)
+        self.mode_combo.currentIndexChanged.connect(lambda idx: self.tool.set_carve(idx == 1))
+        pl.addRow("Mode:", self.mode_combo)
+
         self.radius_slider = DynamicLimitSlider(value=tool._radius, min_val=1.0, max_val=200.0, step=1.0, decimals=1)
         self.radius_slider.valueChanged.connect(self._on_param_changed)
         pl.addRow("Radius (mm):", self.radius_slider)
@@ -94,7 +102,7 @@ class SculptBrushTaskPanel:
         info_lbl = QtWidgets.QLabel(
             "<b>Controls:</b><br>"
             "• <b>Left Drag:</b> Sculpt (Deposit)<br>"
-            "• <b>Ctrl + Drag:</b> Carve (Subtract)<br>"
+            "• <b>Mode:</b> Deposit adds material, Carve removes it<br>"
             "• <b>[ / ]:</b> Adjust Radius<br>"
             "• <b>Enter:</b> Commit | <b>Esc:</b> Cancel"
         )
@@ -121,6 +129,10 @@ class SculptBrushTaskPanel:
         self._update_preview()
 
     def update_ui(self):
+        self.mode_combo.blockSignals(True)
+        self.mode_combo.setCurrentIndex(1 if self.tool._carve else 0)
+        self.mode_combo.blockSignals(False)
+
         brush = self.tool._brush
         if brush:
             self.strength_slider.blockSignals(True)
@@ -205,8 +217,11 @@ class SculptBrushTaskPanel:
 class SculptBrushTool(FldSdfModifierToolBase):
     """Interactive sculpting brush tool."""
 
-    SUPPORTS_MODAL = False
     _active_brush = None  # Class variable holding last chosen brush across sessions
+    _session_carve = False
+    # Deposit/Carve is the add-or-remove choice here; the inherited group toggle would flip
+    # the sculpted object's Group, and its panel has no group button to update.
+    OFFERS_GROUP_TOGGLE = False
 
     def __init__(self):
         super().__init__()
@@ -220,7 +235,7 @@ class SculptBrushTool(FldSdfModifierToolBase):
         self._last_dab_pos = None
         self._current_layer = None
         self._ghost_label = None
-        self._ctrl_down = False
+        self._carve = SculptBrushTool._session_carve
         self._target = None
 
     def get_command_id(self):
@@ -259,26 +274,15 @@ class SculptBrushTool(FldSdfModifierToolBase):
         if getattr(self, "panel", None) and hasattr(self.panel, "update_ui"):
             self.panel.update_ui()
 
-    def _is_ctrl_pressed(self, event_dict=None):
-        if isinstance(event_dict, dict):
-            if event_dict.get("ctrl", False):
-                return True
-            mods = event_dict.get("Modifiers", 0)
-            if bool(mods & QtCore.Qt.ControlModifier):
-                return True
-            key_code = event_dict.get("Key", 0)
-            if key_code == QtCore.Qt.Key_Control:
-                return True
-            key_str = event_dict.get("key", "")
-            if key_str in ("Control", "ctrl", "Ctrl"):
-                return True
-        if FreeCAD.GuiUp:
-            from freecad.fields.core.input.input_manager import FldInputManager
-            return FldInputManager.get_instance().is_ctrl_down()
-        return False
+    def set_carve(self, on):
+        self._carve = bool(on)
+        SculptBrushTool._session_carve = self._carve
+        if getattr(self, "panel", None) and hasattr(self.panel, "update_ui"):
+            self.panel.update_ui()
+        self._update_status()
 
     def _update_status(self):
-        msg = f"Sculpt Brush | Radius: {self._radius:.1f} mm | Mode: {'Carve (Ctrl / Subtractive)' if self._ctrl_down else 'Deposit (Additive)'}"
+        msg = f"Sculpt Brush | Radius: {self._radius:.1f} mm | Mode: {'Carve' if self._carve else 'Deposit'}"
         if FreeCAD.GuiUp:
             mw = FreeCADGui.getMainWindow()
             if mw and mw.statusBar():
@@ -314,42 +318,9 @@ class SculptBrushTool(FldSdfModifierToolBase):
     def handle_move(self, event_dict):
         if self._is_dragging:
             return True
-        is_ctrl = self._is_ctrl_pressed(event_dict)
-        if is_ctrl != self._ctrl_down:
-            self._ctrl_down = is_ctrl
-            self._update_status()
         hit = self._get_mouse_hit(event_dict)
         self._update_ghost(hit)
         return True
-
-    # -- Hotkeys ---------------------------------------------------------------
-
-    def handle_keyboard(self, event_dict):
-        key_code = event_dict.get("Key", 0) if isinstance(event_dict, dict) else 0
-        key = event_dict.get("key", "") if isinstance(event_dict, dict) else ""
-        text = event_dict.get("Text", "") if isinstance(event_dict, dict) else ""
-        type_str = event_dict.get("type", "") if isinstance(event_dict, dict) else ""
-
-        is_ctrl = self._is_ctrl_pressed(event_dict)
-        if is_ctrl != self._ctrl_down:
-            self._ctrl_down = is_ctrl
-            self._update_status()
-
-        is_down = type_str == "key_down" or key_code != 0 or bool(text)
-        if is_down:
-            if key == "[" or text == "[":
-                self.set_radius(self._radius * 0.9)
-                return True
-            elif key == "]" or text == "]":
-                self.set_radius(self._radius * 1.1)
-                return True
-            elif key in ("Escape", "escape") or key_code == QtCore.Qt.Key_Escape:
-                self.cancel()
-                return True
-            elif key in ("Return", "Enter") or key_code in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
-                self.finish()
-                return True
-        return super().handle_keyboard(event_dict)
 
     # -- Stroke Drag Loop ------------------------------------------------------
     # _start_drag_timer/_stop_drag_timer are no longer overridden here (CR-050)
@@ -364,7 +335,6 @@ class SculptBrushTool(FldSdfModifierToolBase):
     # just a rename; confirm interactively.
 
     def on_button1_down(self, event_dict):
-        self._ctrl_down = self._is_ctrl_pressed(event_dict)
         pos = self._get_mouse_hit(event_dict)
         if pos is None and isinstance(event_dict, dict):
             pos = event_dict.get("pos", None)
@@ -377,7 +347,7 @@ class SculptBrushTool(FldSdfModifierToolBase):
         if doc and hasattr(doc, "openTransaction"):
             doc.openTransaction("Sculpt Brush")
 
-        self._current_layer = find_or_create_layer(self._target, subtractive=self._ctrl_down, smooth_k=self._smooth_k)
+        self._current_layer = find_or_create_layer(self._target, subtractive=self._carve, smooth_k=self._smooth_k)
         if hasattr(self._current_layer, "SmoothK"):
             self._current_layer.SmoothK = float(self._smooth_k)
 
@@ -421,7 +391,7 @@ class SculptBrushTool(FldSdfModifierToolBase):
             op = "add"
             smooth_k = 0.0
         else:
-            op = "cut" if self._ctrl_down else "add"
+            op = "cut" if self._carve else "add"
             smooth_k = self._smooth_k
 
         grid = proxy._grid_field(layer)
@@ -444,7 +414,6 @@ class SculptBrushTool(FldSdfModifierToolBase):
             if not (buttons & QtCore.Qt.LeftButton):
                 self._end_stroke()
                 return
-            self._ctrl_down = bool(QtWidgets.QApplication.keyboardModifiers() & QtCore.Qt.ControlModifier)
         from freecad.fields.core.input.input_manager import FldInputManager
         event_dict = {"Position": FldInputManager.get_instance()._last_qt_pos}
         pos = self._get_mouse_hit(event_dict)
@@ -487,3 +456,18 @@ class SculptBrushTool(FldSdfModifierToolBase):
     def restore_original(self):
         self._hide_ghost()
         super().restore_original()
+
+    def get_context_menu(self, event_dict=None):
+        items = [
+            MenuItem("Smaller Brush", action=lambda: self.set_radius(self._radius * 0.9), shortcut="["),
+            MenuItem("Larger Brush", action=lambda: self.set_radius(self._radius * 1.1), shortcut="]"),
+            MenuItem(
+                "Mode",
+                children=[
+                    MenuItem("Deposit", action=lambda: self.set_carve(False), checked=not self._carve),
+                    MenuItem("Carve", action=lambda: self.set_carve(True), checked=self._carve),
+                ],
+            ),
+            SEPARATOR,
+        ]
+        return items + super().get_context_menu(event_dict)

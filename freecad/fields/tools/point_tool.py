@@ -110,14 +110,6 @@ class PointCreator(NURBSPrimitiveCreator):
                 QtCore.QTimer.singleShot(0, _deferred_remove)
             self._active_obj = None
 
-    def handle_keyboard(self, event_dict):
-        key_code = event_dict.get("Key")
-        # ESC to cancel and remove all points created in this session
-        if key_code == QtCore.Qt.Key_Escape:
-            self.cancel_points()
-            return True
-        return super().handle_keyboard(event_dict)
-
     def cancel_points(self):
         doc = self.doc or FreeCAD.ActiveDocument
         if doc:
@@ -142,11 +134,5 @@ class PointCreator(NURBSPrimitiveCreator):
         self._finished = True # prevent terminate from trying to remove again
         self.terminate()
 
-    def on_tool_option_0(self):
-        fld_logger.info("snapping point tool")
-        
-    def on_tool_option_1(self):
-        fld_logger.info("snapping point tool")
-
-    def get_context_menu(self, event_dict=None):
-        return super().get_context_menu(event_dict)
+    def cancel(self):
+        self.cancel_points()

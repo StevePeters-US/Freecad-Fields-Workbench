@@ -8,7 +8,7 @@ import FreeCAD
 from freecad.fields.core.sdf.sdf.torus import SdfTorusField
 from freecad.fields.tools.fld_base import ToolState
 from freecad.fields.tools.primitive_creator_base import (
-    PrimitiveCreatorBase, MIN_PRIMITIVE_DIM_MM, MIN_PRIMITIVE_DIM_TYPED_MM
+    PrimitiveCreatorBase, StageEntry, MIN_PRIMITIVE_DIM_MM, MIN_PRIMITIVE_DIM_TYPED_MM
 )
 import math
 
@@ -59,6 +59,7 @@ class TorusCreator(PrimitiveCreatorBase):
 
     def _on_stage_accept(self, state, pos):
         if state == ToolState.PLACE_ANCHOR:
+            self._anchor_pt = pos
             self.points = [pos, pos, pos]
             self._field_placement = self._get_placement()
         elif state == ToolState.DRAG_XY:
@@ -78,6 +79,25 @@ class TorusCreator(PrimitiveCreatorBase):
         elif state == ToolState.CUSTOM_1:
             if len(self.points) >= 3:
                 self.points[2] = pos
+
+    def _stage_entry(self, state):
+        if state == ToolState.DRAG_XY and len(self.points) >= 2 and self.points[0] is not None and self.points[1] is not None:
+            r = self._in_plane(self.points[0], self.points[1]).Length
+            return StageEntry("Major Radius", "mm", [r], [1])
+        if state == ToolState.CUSTOM_1 and len(self.points) >= 3 and self.points[0] is not None and self.points[1] is not None and self.points[2] is not None:
+            R = self._in_plane(self.points[0], self.points[1]).Length
+            dist_t = self._in_plane(self.points[0], self.points[2]).Length
+            tube = abs(dist_t - R)
+            return StageEntry("Tube Radius", "mm", [tube], [1])
+        return None
+
+    def _stage_point_for(self, state, values):
+        if state == ToolState.DRAG_XY:
+            return self._radial_stage_point(self.points[0], self.points[1], values[0])
+        if state == ToolState.CUSTOM_1:
+            R = self._in_plane(self.points[0], self.points[1]).Length
+            return self._radial_stage_point(self.points[0], self.points[2], R + values[0])
+        raise NotImplementedError
 
     # ------------------------------------------------------------------
     # Field builders

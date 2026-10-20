@@ -154,6 +154,11 @@ class FldToolManager:
         self._active_tool = None
 
     def set_active_tool(self, tool):
+        old_tool = self._active_tool
+        fld_logger.debug(
+            f"FldToolManager.set_active_tool: {type(old_tool).__name__ if old_tool else None} -> {type(tool).__name__ if tool else None}",
+            category="input",
+        )
         self._active_tool = tool
 
     def get_active_tool(self):

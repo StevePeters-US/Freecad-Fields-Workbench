@@ -4,13 +4,13 @@ from freecad.fields.core.sdf.sdf_field import SdfField, _GLSL_APPLY_INV_MAT, pla
 import math
 import re
 import numpy as np
-from freecad.fields.core.sdf.sdf.noise_nodes import NOISE_NODES
 from freecad.fields.core.sdf.sdf.formula_eval import (
     parse_custom_params, update_formula_param_comment, clean_formula_code,
-    GlslVec2, GlslVec3,
-    EVAL_NS, EVAL_NS_NP,
+    GlslVec2, GlslVec3, GlslVec4,
+    EVAL_NS, EVAL_NS_NP, eval_bound,
     MAX_SCALAR_FALLBACK_POINTS,
     _eval_formula_grid_np,
+    safe_compile,
 )
 
 
@@ -21,62 +21,35 @@ class SdfNoiseField(SdfField):
     """
     Applies procedural noise to a base SDF field as a displacement, evaluated
     in the object's own Placement -- object-local Cartesian xyz, not a
-    hand-rolled projection frame.
+    hand-rolled projection frame. The field always evaluates formula.
+    Lipschitz and peak bounds are derived from what the formula contains
+    (which kernels it calls, whether it has periodic terms, and declared params).
 
-    Formula variables: x, y, z (object-local Cartesian), r (= sqrt(x*x+y*y)),
-    front, amp, freq. A scalar formula displaces along local Z only; a
-    vec3-valued graph may also slide the surface in x/y. `front` is 1 in front
-    of the base field's surface along `direction` (the local +Z axis, in world
-    space), fading to 0 behind it -- multiply it into a displacement to mask
-    out the back face. There is no dedicated "ignore back face" checkbox:
-    a formula/graph that wants the mask names `front` itself (a bool Custom
-    Parameter wired through `mix(1.0, front, that_param)` is the normal way to
-    make it optional), the same as any other named value.
+    Formula variables: x, y, z (world space point), p (GlslVec3(x, y, z)),
+    surf_n (surface normal of base field), amp, freq.
     """
 
-    PRESETS = {
-        # A plain sine along local X -- no in-formula rotation. Orienting the
-        # wave is the object's Placement (or an Orient node in the graph)
-        # job now, not a bespoke `angle` param duplicating it.
-        "Waves": (
-            "// @param bool ignore_back_face 0\n"
-            "sin(x * freq) * amp * mix(1.0, front, ignore_back_face)"
-        ),
-        # `sharp` band-limits what used to be sign(sin(...)). A sign() step is a
-        # jump discontinuity, so no finite Lipschitz constant exists for it and
-        # _lip() below could only ever lie — which pits the octree (it culls with
-        # |d| <= half_diag * L) and lets the marcher overstep the wall.
-        # tanh(k*sin(f*x)) is the same shape with a slope of exactly k*f.
-        "Square": (
-            "// @param bool ignore_back_face 0\n"
-            "// @param float angle 0.0 0.0 360.0 5.0\n"
-            "// @param float sharp 4.0 1.0 20.0 0.5\n"
-            "// @param float amp2 0.0 0.0 1.0 0.05\n"
-            "// @param float freq2 1.0 0.1 10.0 0.1\n"
-            "// @param float angle2 90.0 0.0 360.0 5.0\n"
-            "(tanh(sharp * sin((x * cos(radians(angle)) - y * sin(radians(angle))) * freq)) * amp"
-            " + tanh(sharp * sin((x * cos(radians(angle2)) - y * sin(radians(angle2))) * freq2)) * amp2)"
-            " * mix(1.0, front, ignore_back_face)"
-        ),
-        "Sawtooth": (
-            "// @param bool ignore_back_face 0\n"
-            "// @param float angle 0.0 0.0 360.0 5.0\n"
-            "// @param float amp2 0.0 0.0 1.0 0.05\n"
-            "// @param float freq2 1.0 0.1 10.0 0.1\n"
-            "// @param float angle2 90.0 0.0 360.0 5.0\n"
-            "((4.0 * abs(fract((x * cos(radians(angle)) - y * sin(radians(angle))) * freq - 0.25) - 0.5) - 1.0) * amp"
-            " + (4.0 * abs(fract((x * cos(radians(angle2)) - y * sin(radians(angle2))) * freq2 - 0.25) - 0.5) - 1.0) * amp2)"
-            " * mix(1.0, front, ignore_back_face)"
-        ),
-    }
-    COMPLEX_PRESETS = NOISE_NODES
-    PRESET_NAMES = list(PRESETS.keys()) + list(COMPLEX_PRESETS.keys()) + ["Custom"]
-    DEFAULT_FORMULA = PRESETS["Waves"]
+    #: An unboundable graph -- an Expression node, a discontinuous op (floor, sign,
+    #: fract), or a formula with no `// @bound` lines -- is charged this per unit of
+    #: |amp| * freq, unless Normalization overrides it. A stated guess (4x a sine's
+    #: 2*pi); the warning tells the user to set Normalization.
+    _UNBOUNDED_SLOPE_FACTOR = 4.0 * 6.2831853
+    #: Its peak, per unit of |amp|.
+    _UNBOUNDED_PEAK_FACTOR = 4.0
 
-    def __init__(self, base_field: SdfField, amplitude: float = 1.0, frequency: float = 1.0,
+    def __init__(self, base_field: SdfField, amplitude: float, frequency: float,
                  placement: FreeCAD.Placement = None, formula: str = None,
-                 normalization: float = 0.0, preset_name: str = None,
-                 custom_params: dict = None, radial: bool = False, disp_axis=None):
+                 normalization: float = 0.0,
+                 custom_params: dict = None,
+                 gates: dict = None,
+                 label: str = ""):
+        """Procedural noise SDF field.
+
+        Args:
+            label: Human-readable object label (e.g. from Part object Label) used to name
+                the object in logs and warnings.
+        """
+        self.label = label
         self.base_field = base_field
         self.amplitude = amplitude
         self.frequency = frequency
@@ -97,52 +70,52 @@ class SdfNoiseField(SdfField):
             dtype=np.float32).T
         self._normalization = normalization
         self.custom_params = custom_params or {}
-        self.radial = radial
-        # (x, y, z) unit tuple when the node graph's terminal Displace node has
-        # a literal (unwired) Direction -- a rank-1 displacement, so _lip()
-        # below can skip the sqrt(3) three-component bound. None (the common
-        # case for a hand-typed formula, or a wired/varying Direction) falls
-        # back to the honest three-component bound via `vector_output`.
-        self._disp_axis = disp_axis
+        self.gates = dict(gates) if gates else {}
         self._axis_extent_cache = None
 
-        self._preset_name = preset_name or "Waves"
-        if self._preset_name in self.COMPLEX_PRESETS:
-            self.formula = None
-            self._clean_formula = None
-        else:
-            self.formula = formula if formula is not None else self.PRESETS.get(self._preset_name, self.DEFAULT_FORMULA)
-            if self.formula:
-                for p in parse_custom_params(self.formula):
-                    if p['name'] not in self.custom_params and p['default'] is not None:
-                        self.custom_params[p['name']] = p['default']
-            self._clean_formula = clean_formula_code(self.formula)
-        # A formula/graph reaches the front-face mask by referencing `front`
-        # directly in its text, same as `radial` rides EVAL_NS without being a
-        # custom param. Detected once here (text doesn't change after
-        # construction) rather than re-scanned per sample.
+        if not formula:
+            raise ValueError("SdfNoiseField needs a formula")
+        self.formula = formula
+        for p in parse_custom_params(self.formula):
+            if p['name'] not in self.custom_params and p['default'] is not None:
+                self.custom_params[p['name']] = p['default']
+        self._formula_valid = True
+        self._clean_formula = clean_formula_code(self.formula)
+        if self._clean_formula:
+            try:
+                safe_compile(self._clean_formula)
+            except Exception as e:
+                self._formula_valid = False
+                from freecad.fields.core import fld_logger
+                fld_logger.warn(f"SdfNoiseField: formula validation failed ({e})")
+
+        self._formula_uses_surf_n = bool(
+            self._clean_formula and re.search(r'\bsurf_n\b', self._clean_formula)
+        )
         self._formula_uses_front = bool(
             self._clean_formula and re.search(r'\bfront\b', self._clean_formula)
         )
-        self.vector_output = self._detect_vector_output()
+        self._h_step = None
+        self._returns_vec4 = self._check_return_shape()
+        self._warned_fallback = False
+        self._peak_cache = None
+        self._slope_cache = None
+        self._warned_unbounded = False
 
-    def _detect_vector_output(self):
-        """Does this formula produce a vec3 displacement, or a scalar height?
+    def _check_return_shape(self):
+        """Enforce that the formula returns a vec3 displacement or a vec4
+        displacement + offset (NV-029/NV-038), and return True for vec4.
 
-        GLSL is statically typed, so the answer is a property of the formula text
-        and never changes with the sample point -- one probe settles it. Deriving
-        it is what makes NU-026 (a flag that was always true) and NU-030 (a flag
-        that disagreed with the body, which killed the whole scene shader)
-        unrepresentable rather than merely fixed.
-        """
-        if self._preset_name in self.COMPLEX_PRESETS:
-            return False        # the node kernels are all scalar-valued
-        if not self._clean_formula:
+        GLSL is statically typed, so the shape is a property of the formula text:
+        decided once here, and read by to_glsl, which must declare the helper's
+        return type to match its body (NV-039)."""
+        if not self._formula_valid:
             return False
-        try:
-            return isinstance(self._eval_formula(0.37, -0.21, 0.11), GlslVec3)
-        except Exception:
-            return False        # a formula that cannot be evaluated cannot be vec3
+        res = self._eval_formula(0.37, -0.21, 0.11) if self._clean_formula else None
+        if not isinstance(res, (GlslVec3, GlslVec4)):
+            name = self.label or "SdfNoiseField"
+            raise ValueError(f"{name}: noise formula must return a vec3 or vec4")
+        return isinstance(res, GlslVec4)
 
     @staticmethod
     def _make_basis(d, roll: float = 0.0):
@@ -193,8 +166,8 @@ class SdfNoiseField(SdfField):
 
     def _to_world_vec(self, v):
         """ToWorldLocalNode's 'To World' (transform.py): local -> world,
-        ROTATION ONLY -- matches apply_rot_mat's GLSL meaning (`vec4(v, 0.0)`
-        drops the translation). The formula text adds `to_world_base` itself
+        ROTATION ONLY -- matches apply_rot_mat's GLSL meaning (a mat3 carries
+        no translation). The formula text adds `to_world_base` itself
         afterward, on both the GLSL and this CPU side, so translation is not
         applied twice. Vectorized when v's components are numpy arrays, using
         `_rot_np` -- the same matrix evaluate_grid uses for the opposite
@@ -223,7 +196,7 @@ class SdfNoiseField(SdfField):
         `apply_rot_mat`/`apply_inv_mat` (formula_eval.py) just invoke whichever
         of these two closures is passed as `m`, so the identical formula text
         means the identical thing on the CPU and the GPU (noise.py:to_glsl
-        wires the same two names to the real mat4 uniforms there)."""
+        wires the same two names to the real matrix uniforms there)."""
         b = self.placement.Base
         return {
             "to_world_rot": self._to_world_vec,
@@ -231,74 +204,176 @@ class SdfNoiseField(SdfField):
             "to_local_inv": self._to_local_vec,
         }
 
+    def _builtin_active(self, name: str) -> bool:
+        """Returns True if the builtin (surf_n or front) should be computed and charged.
+
+        If gated by a custom parameter, checks that parameter value (>0 or True).
+        If not gated, active if referenced by the formula.
+        """
+        if name == "surf_n" and not self._formula_uses_surf_n:
+            return False
+        if name == "front" and not self._formula_uses_front:
+            return False
+        gate_param = self.gates.get(name)
+        if not gate_param:
+            return True
+        val = self.custom_params.get(gate_param, 0.0)
+        if isinstance(val, bool):
+            return val
+        try:
+            return float(val) > 0.0
+        except Exception:
+            return bool(val)
+
+    def _front_face_band(self):
+        """(lift, ramp) for the front-face weight, `clamp(base(p - dir*lift) / ramp)`."""
+        reach = max(self._reach(), 1e-6)
+        lift = min(max(self._axis_extent() * 0.5, reach), reach * 2.0)
+        ramp = max(lift * 0.5, reach)
+        lift = max(lift, ramp)
+        return lift, ramp
+
+    def _bound_values(self, front_slope, surf_n_slope):
+        return {"amp": self.amplitude, "freq": self.frequency, **self.custom_params,
+                "front_slope": front_slope, "surf_n_slope": surf_n_slope}
+
+    def _warn_unbounded(self, what):
+        if self._normalization > 0.0 or self._warned_unbounded:
+            return
+        self._warned_unbounded = True
+        from freecad.fields.core import fld_logger
+        fld_logger.warn(f"{self.label or 'Noise'}: the noise graph's {what} has no "
+                        f"bound (an Expression node or a discontinuous op); the march "
+                        f"uses a guessed one. Set Normalization to override it.")
+
+    def _wave_peak(self):
+        """Upper bound on |noise| in mm: the graph's peak (NV-053). Evaluated with
+        both builtin slopes at 0 -- no peak reads a slope -- because those slopes
+        need _reach(), which is this."""
+        if self._peak_cache is None:
+            got = eval_bound(self.formula, self._bound_values(0.0, 0.0))
+            if got is None or not math.isfinite(got[0]):
+                self._warn_unbounded("peak")
+                self._peak_cache = abs(self.amplitude) * self._UNBOUNDED_PEAK_FACTOR
+            else:
+                self._peak_cache = abs(got[0])
+        return self._peak_cache
+
+    def _graph_slope(self):
+        """Upper bound on |d displacement / d position| (NV-053)."""
+        if self._slope_cache is None:
+            front = (1.0 / self._front_face_band()[1]) if self._builtin_active("front") else 0.0
+            surf = self._normal_slope() if self._builtin_active("surf_n") else 0.0
+            got = eval_bound(self.formula, self._bound_values(front, surf))
+            if got is None or not math.isfinite(got[1]):
+                self._warn_unbounded("slope")
+                peak = self._wave_peak()
+                self._slope_cache = (abs(self.amplitude) * self.frequency
+                                     * self._UNBOUNDED_SLOPE_FACTOR
+                                     + front * peak + 2.0 * surf * peak)
+            else:
+                self._slope_cache = abs(got[1])
+        return self._slope_cache
+
     def _lip(self):
         if self._normalization > 0.0:
             return self._normalization
-        if self._preset_name in self.COMPLEX_PRESETS:
-            factor = self.COMPLEX_PRESETS[self._preset_name].lip_factor
-            slope = abs(self.amplitude) * self.frequency * factor
-            if self._disp_axis is None and self.vector_output:
-                slope *= 1.7320508   # sqrt(3): three components, each with this slope
-            return max(1.0 + slope + self._front_weight_slope(), 1.0)
-        factor = 1.414
-        amp2 = abs(self.custom_params.get("amp2", 0.0))
-        freq2 = abs(self.custom_params.get("freq2", 0.0))
-        slope = (abs(self.amplitude) * self.frequency + amp2 * freq2) * factor
-        # `Square` is a tanh-band-limited square wave: d/dx tanh(k*sin(f*x))
-        # peaks at k*f (sech^2 == 1 at the zero crossing), so its slope is k
-        # times a plain sinusoid's. Band-limiting is what makes this number
-        # meaningful at all — a raw sign() step has no finite bound.
-        if self._preset_name == "Square":
-            slope *= max(abs(self.custom_params.get("sharp", 4.0)), 1.0)
-        if self._disp_axis is None and self.vector_output:
-            slope *= 1.7320508   # sqrt(3): three components, each with this slope
-        return max(1.0 + slope + self._front_weight_slope(), 1.0)
+        return 1.0 + self._graph_slope()
+
+    def _step_h(self):
+        """The finite-difference step h for surface normal computation."""
+        if self._h_step is None:
+            self._h_step = max(2.0 * self._reach(), 0.1)
+        return self._h_step
+
+    def _normal_slope(self):
+        """|grad surf_n| <= 4 * sqrt(3) * L_b / h."""
+        h = self._step_h()
+        l_b = self.base_field.lipschitz()
+        return 4.0 * math.sqrt(3.0) * l_b / h
+
+    def _eval_surface_normal(self, p: FreeCAD.Vector):
+        """Compute outward surface normal at world point p over tetrahedral step h."""
+        h = self._step_h()
+        # Tetrahedral offsets k:
+        # k1 = (1, -1, -1), k2 = (-1, -1, 1), k3 = (-1, 1, -1), k4 = (1, 1, 1)
+        k1 = FreeCAD.Vector(1.0, -1.0, -1.0)
+        k2 = FreeCAD.Vector(-1.0, -1.0, 1.0)
+        k3 = FreeCAD.Vector(-1.0, 1.0, -1.0)
+        k4 = FreeCAD.Vector(1.0, 1.0, 1.0)
+        d1 = self.base_field.evaluate(p + k1 * h)
+        d2 = self.base_field.evaluate(p + k2 * h)
+        d3 = self.base_field.evaluate(p + k3 * h)
+        d4 = self.base_field.evaluate(p + k4 * h)
+        g = k1 * d1 + k2 * d2 + k3 * d3 + k4 * d4
+        denom = max(g.Length, 2.0 * h)
+        n = g * (1.0 / denom)
+        return GlslVec3(n.x, n.y, n.z)
+
+    def _eval_surface_normal_grid(self, points: np.ndarray):
+        """Compute outward surface normal for points (N, 3) over tetrahedral step h."""
+        h = np.float32(self._step_h())
+        k1 = np.array([1.0, -1.0, -1.0], dtype=np.float32)
+        k2 = np.array([-1.0, -1.0, 1.0], dtype=np.float32)
+        k3 = np.array([-1.0, 1.0, -1.0], dtype=np.float32)
+        k4 = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+
+        d1 = self.base_field.evaluate_grid(points + k1 * h)
+        d2 = self.base_field.evaluate_grid(points + k2 * h)
+        d3 = self.base_field.evaluate_grid(points + k3 * h)
+        d4 = self.base_field.evaluate_grid(points + k4 * h)
+
+        gx = k1[0] * d1 + k2[0] * d2 + k3[0] * d3 + k4[0] * d4
+        gy = k1[1] * d1 + k2[1] * d2 + k3[1] * d3 + k4[1] * d4
+        gz = k1[2] * d1 + k2[2] * d2 + k3[2] * d3 + k4[2] * d4
+
+        g_len = np.sqrt(gx**2 + gy**2 + gz**2)
+        denom = np.maximum(g_len, 2.0 * h)
+        nx = gx / denom
+        ny = gy / denom
+        nz = gz / denom
+        return GlslVec3(nx, ny, nz)
 
     def lipschitz(self) -> float:
-        """Upper bound on |grad| of the value this field returns.
-
-        The value itself is NOT divided by `_lip()`. Dividing it keeps the ray
-        march's step safe and wrecks everything the march compares against a
-        constant in millimetres: it declares a hit at `d < 0.5*vmax`, so on a
-        field scaled down by L that fires `0.5*vmax*L` mm from the surface — 28 mm
-        at amp 100 on a 3.3 mm voxel, in every direction at once, which is the
-        "2D noise deforms in x and y as well as z" report. The bound belongs here,
-        where the octree, the bake's block scan and the march's STEP divisor read
-        it. Same resolution UX-009 took for `SdfCageDeformField`.
-        """
+        """Upper bound on |grad| of the value this field returns."""
         return self.base_field.lipschitz() * self._lip()
 
-    def _wave_peak(self):
-        """Upper bound on |noise| — how far the wave can push the surface either way.
+    def _front_weight_at_point(self, point: FreeCAD.Vector):
+        """Scalar twin of the weight `to_glsl` computes for `weight_expr`: how far
+        `point` sits in front of the base field's surface, clamped to [0, 1]."""
+        lift, ramp = self._front_face_band()
+        d = self.direction
+        behind = FreeCAD.Vector(
+            point.x - d.x * lift,
+            point.y - d.y * lift,
+            point.z - d.z * lift,
+        )
+        d_behind = self.base_field.evaluate(behind)
+        return max(0.0, min(1.0, d_behind / ramp))
 
-        Bias shifts the whole wave by exactly this, so it has to be an
-        OVER-estimate: too small and "Top" would still let the stock grow. The
-        presets stay bounded by amp + amp2 (`Waves` also multiplies by
-        exp(-r*decay) <= 1, `Square` by tanh() < 1, `Sawtooth` by a triangle in
-        [-1, 1]); a Custom formula can of course exceed it, which costs accuracy
-        of the anchor, not validity of the field.
-        """
-        if self._preset_name in self.COMPLEX_PRESETS:
-            return abs(self.amplitude) * self.COMPLEX_PRESETS[self._preset_name].peak_factor
-        return abs(self.amplitude) + abs(self.custom_params.get("amp2", 0.0))
+    def _front_weight_grid(self, points: np.ndarray, da: np.ndarray):
+        """Grid twin of `_front_weight_at_point`. `da` is `direction` as a
+        float32 array, already available to every caller in `evaluate_grid`."""
+        lift, ramp = self._front_face_band()
+        behind_points = points - da * lift
+        d_behind = self.base_field.evaluate_grid(behind_points)
+        return np.clip(d_behind / ramp, 0.0, 1.0).astype(np.float32)
 
-    def _eval_formula(self, x, y, z=0.0, front=None):
-        if self._preset_name in self.COMPLEX_PRESETS:
-            return self.COMPLEX_PRESETS[self._preset_name].python_fn(
-                x, y, z, self.amplitude, self.frequency)
+    def _eval_formula(self, x, y, z=0.0, surf_n=None, front=None):
         ns = dict(EVAL_NS)
         ns["x"] = x; ns["y"] = y; ns["z"] = z
         ns["p"] = GlslVec3(x, y, z)
-        ns["r"] = math.sqrt(x * x + y * y)
-        is_radial = bool(self.radial or self.custom_params.get("radial", False))
-        ns["d"] = ns["r"] if is_radial else x
-        ns["radial"] = 1.0 if is_radial else 0.0
-        ns["front"] = front if front is not None else 1.0
+        if surf_n is not None:
+            ns["surf_n"] = surf_n
+        elif self._formula_uses_surf_n:
+            ns["surf_n"] = GlslVec3(0.0, 0.0, 0.0)
+        if front is not None:
+            ns["front"] = front
+        elif self._formula_uses_front:
+            ns["front"] = 1.0
         ns["amp"] = self.amplitude; ns["freq"] = self.frequency
         ns.update(self._placement_ns_extra())
         for k, v in self.custom_params.items():
-            if k == "radial" or k == "front":
-                continue
             if isinstance(v, (tuple, list)):
                 if len(v) == 2:
                     ns[k] = GlslVec2(float(v[0]), float(v[1]))
@@ -312,8 +387,8 @@ class SdfNoiseField(SdfField):
             else:
                 ns[k] = v
         try:
-            res = eval(self._clean_formula, {}, ns)
-            if isinstance(res, (GlslVec3, GlslVec2)):
+            res = eval(safe_compile(self._clean_formula), {"__builtins__": {}}, ns)
+            if isinstance(res, (GlslVec4, GlslVec3, GlslVec2)):
                 return res
             return float(res)
         except Exception as e:
@@ -324,25 +399,15 @@ class SdfNoiseField(SdfField):
             )
             return 0.0
 
-    def _eval_noise_grid(self, x_vals, y_vals, z_vals=None, front_vals=None):
+    def _eval_noise_grid(self, x_vals, y_vals, z_vals=None):
         """Vectorized counterpart of _eval_formula for a whole grid at once."""
         if z_vals is None:
             z_vals = np.zeros_like(x_vals)
-        if self._preset_name in self.COMPLEX_PRESETS:
-            node = self.COMPLEX_PRESETS[self._preset_name]
-            return node.numpy_fn(x_vals, y_vals, z_vals,
-                                 self.amplitude, self.frequency).astype(np.float32)
         try:
-            is_radial = bool(self.radial or self.custom_params.get("radial", False))
-            r_vals = np.sqrt(x_vals**2 + y_vals**2)
-            d_vals = r_vals if is_radial else x_vals
-            radial_val = np.float32(1.0 if is_radial else 0.0)
-            front_ns = front_vals if front_vals is not None else np.float32(1.0)
             return _eval_formula_grid_np(
                 self._clean_formula, self.custom_params,
                 {"x": x_vals, "y": y_vals, "z": z_vals,
                  "p": GlslVec3(x_vals, y_vals, z_vals),
-                 "r": r_vals, "d": d_vals, "radial": radial_val, "front": front_ns,
                  "amp": self.amplitude, "freq": self.frequency,
                  **self._placement_ns_extra()},
                 x_vals.shape,
@@ -357,57 +422,67 @@ class SdfNoiseField(SdfField):
                     "Noise contributes 0; rewrite the formula using numpy-safe ops."
                 )
                 return np.zeros(x_vals.shape, dtype=np.float32)
+            if not self._warned_fallback:
+                self._warned_fallback = True
+                fld_snippet = (self._clean_formula[:80] if self._clean_formula else "")
+                name = self.label or "SdfNoiseField"
+                fld_logger.warn(
+                    f"{name}: formula not vectorizable ({e}), falling back to per-point eval; "
+                    f"formula[:80]={fld_snippet!r}"
+                )
             fld_logger.debug_throttled(
                 "noise_vectorize_fallback",
                 f"SdfNoiseField: formula not vectorizable ({e}), falling back to per-point eval",
             )
             return np.fromiter(
-                (self._eval_formula(float(x_vals[i]), float(y_vals[i]), float(z_vals[i]),
-                                     front=(float(front_vals[i]) if front_vals is not None else None))
+                (self._eval_formula(float(x_vals[i]), float(y_vals[i]), float(z_vals[i]))
                  for i in range(len(x_vals))),
                 dtype=np.float32, count=len(x_vals),
             )
 
-    def _eval_displacement(self, x, y, z, front=None):
-        """(du, dw, dn) in frame coords. Scalar noise fills only `dn`."""
-        n = self._eval_formula(x, y, z, front=front)
+    def _eval_displacement(self, x, y, z, surf_n=None, front=None):
+        """(dx, dy, dz, offset) world displacement and additive offset."""
+        if not self._formula_valid:
+            return (0.0, 0.0, 0.0, 0.0)
+        n = self._eval_formula(x, y, z, surf_n=surf_n, front=front)
+        if isinstance(n, GlslVec4):
+            return (n.x, n.y, n.z, n.w)
         if isinstance(n, GlslVec3):
-            return (n.x, n.y, n.z)
-        if isinstance(n, GlslVec2):
-            return (n.x, n.y, 0.0)
-        return (0.0, 0.0, float(n))
+            return (n.x, n.y, n.z, 0.0)
+        raise ValueError("noise formula must return a vec3 or vec4")
 
-    def _eval_displacement_grid(self, x_vals, y_vals, z_vals=None, front_vals=None):
-        """(du, dw, dn) float32 arrays in frame coords."""
+    def _eval_displacement_grid(self, x_vals, y_vals, z_vals=None, surf_n_vals=None, front_vals=None):
+        """(dx, dy, dz, offset) float32 arrays of world displacement and additive offset."""
         if z_vals is None:
             z_vals = np.zeros_like(x_vals)
-        if self._preset_name in self.COMPLEX_PRESETS:
-            zeros = np.zeros_like(x_vals, dtype=np.float32)
-            noise = self._eval_noise_grid(x_vals, y_vals, z_vals)
-            return zeros, zeros, noise
 
         try:
-            is_radial = bool(self.radial or self.custom_params.get("radial", False))
-            r_vals = np.sqrt(x_vals**2 + y_vals**2)
-            d_vals = r_vals if is_radial else x_vals
-            radial_val = np.float32(1.0 if is_radial else 0.0)
-            front_ns = front_vals if front_vals is not None else np.float32(1.0)
+            grid_env = {
+                "x": x_vals, "y": y_vals, "z": z_vals,
+                "p": GlslVec3(x_vals, y_vals, z_vals),
+                "amp": self.amplitude, "freq": self.frequency,
+                **self._placement_ns_extra()
+            }
+            if surf_n_vals is not None:
+                grid_env["surf_n"] = surf_n_vals
+            elif self._formula_uses_surf_n:
+                zeros = np.zeros_like(x_vals, dtype=np.float32)
+                grid_env["surf_n"] = GlslVec3(zeros, zeros, zeros)
+            if front_vals is not None:
+                grid_env["front"] = front_vals
+            elif self._formula_uses_front:
+                grid_env["front"] = np.ones_like(x_vals, dtype=np.float32)
             res = _eval_formula_grid_np(
                 self._clean_formula, self.custom_params,
-                {"x": x_vals, "y": y_vals, "z": z_vals,
-                 "p": GlslVec3(x_vals, y_vals, z_vals),
-                 "r": r_vals, "d": d_vals, "radial": radial_val, "front": front_ns,
-                 "amp": self.amplitude, "freq": self.frequency,
-                 **self._placement_ns_extra()},
+                grid_env,
                 x_vals.shape,
             )
+            if isinstance(res, GlslVec4):
+                return res.x, res.y, res.z, res.w
             if isinstance(res, GlslVec3):
-                return res.x, res.y, res.z
-            if isinstance(res, GlslVec2):
                 zeros = np.zeros_like(x_vals, dtype=np.float32)
-                return res.x, res.y, zeros
-            zeros = np.zeros_like(x_vals, dtype=np.float32)
-            return zeros, zeros, res.astype(np.float32)
+                return res.x, res.y, res.z, zeros
+            raise ValueError("noise formula must return a vec3 or vec4")
         except Exception as e:
             from freecad.fields.core import fld_logger
             n = len(x_vals)
@@ -418,7 +493,15 @@ class SdfNoiseField(SdfField):
                     "Noise contributes 0; rewrite the formula using numpy-safe ops."
                 )
                 zeros = np.zeros(x_vals.shape, dtype=np.float32)
-                return zeros, zeros, zeros
+                return zeros, zeros, zeros, zeros
+            if not self._warned_fallback:
+                self._warned_fallback = True
+                fld_snippet = (self._clean_formula[:80] if self._clean_formula else "")
+                name = self.label or "SdfNoiseField"
+                fld_logger.warn(
+                    f"{name}: formula not vectorizable ({e}), falling back to per-point eval; "
+                    f"formula[:80]={fld_snippet!r}"
+                )
             fld_logger.debug_throttled(
                 "noise_vectorize_fallback",
                 f"SdfNoiseField: formula not vectorizable ({e}), falling back to per-point eval"
@@ -426,25 +509,24 @@ class SdfNoiseField(SdfField):
             dus = np.empty(n, dtype=np.float32)
             dws = np.empty(n, dtype=np.float32)
             dns = np.empty(n, dtype=np.float32)
+            offs = np.empty(n, dtype=np.float32)
             for i in range(n):
+                sn_i = GlslVec3(float(surf_n_vals.x[i]), float(surf_n_vals.y[i]), float(surf_n_vals.z[i])) if surf_n_vals is not None else None
                 front_i = float(front_vals[i]) if front_vals is not None else None
-                du, dw, dn = self._eval_displacement(
-                    float(x_vals[i]), float(y_vals[i]), float(z_vals[i]), front=front_i)
+                du, dw, dn, off = self._eval_displacement(
+                    float(x_vals[i]), float(y_vals[i]), float(z_vals[i]), surf_n=sn_i, front=front_i)
                 dus[i] = du
                 dws[i] = dw
                 dns[i] = dn
-            return dus, dws, dns
+                offs[i] = off
+            return dus, dws, dns, offs
 
     def _reach(self):
         """The furthest the surface can travel, in mm."""
         return self._wave_peak()
 
     def _axis_extent(self):
-        """How thick the stock is along `direction`, from its own bounding box.
-
-        Cached: the base field is fixed at construction, but bounding_box()
-        recurses the whole tree and _front_face_band runs once per sample.
-        """
+        """How thick the stock is along `direction`, from its own bounding box."""
         if self._axis_extent_cache is None:
             bb_min, bb_max = self.base_field.bounding_box()
             size = bb_max - bb_min
@@ -453,108 +535,57 @@ class SdfNoiseField(SdfField):
                                        + abs(size.z * d.z))
         return self._axis_extent_cache
 
-    def _front_face_band(self):
-        """(lift, ramp) for the front-face weight, `clamp(base(p - dir*lift) / ramp)`.
-
-        `lift` is how far a sample is carried back along the direction to ask "is
-        there still material above me?", and it is squeezed from both sides.
-
-        Too long and it clears the whole part: the back face reads as
-        front-facing and travels with the wave -- 5.6 mm of growth on a 20 mm
-        plate, the exact thing "Top never grows the stock" rules out. The stock's
-        own extent is what caps it, halved, since a bounding box over-states the
-        local thickness of anything that is not a slab.
-
-        Too short and it clears the part the other way. A point sitting `s` below
-        the back face lifts to `s - lift`, and once that is out the far side the
-        mask switches back ON down there; the wave then drags a phantom skin off
-        the bottom of the solid (measured: a second surface 20 mm adrift). Only
-        points within `_reach()` of the solid can be pulled into it at all, so a
-        lift of `_reach()` covers every one that matters -- and that floor wins,
-        because a back face creeping is a smaller lie than a detached one.
-
-        `ramp` is the width of the 0..1 fade. On a planar front face the weight
-        works out to `(lift - depth)/ramp`, so it holds at a flat 1 down to
-        `lift - ramp` and only then fades: that plateau has to cover the whole
-        displacement or the wave fights its own mask, losing weight with every mm
-        it sinks and settling short (at ramp = lift there is no plateau at all
-        and a full trough lands 20% shallow). Half the lift is the plateau, which
-        covers the displacement whenever the stock is thick enough to hold it.
-        """
-        reach = max(self._reach(), 1e-6)
-        lift = min(max(self._axis_extent() * 0.5, reach), reach * 2.0)
-        ramp = max(lift * 0.5, reach)
-        lift = max(lift, ramp)
-        return lift, ramp
-
-    def _uses_front_weight(self):
-        return self._formula_uses_front
-
-    def _front_weight_slope(self):
-        """The mask's own contribution to the Lipschitz bound.
-
-        The weight is a clamped distance ramp, so it tilts by up to 1/ramp, and
-        it multiplies a displacement of up to `_reach()` mm. Ignoring that term
-        under-reports the bound by ~1 for a full mask, which is the number the
-        octree culls with and the marcher steps by.
-        """
-        if not self._uses_front_weight():
-            return 0.0
-        return self._reach() / self._front_face_band()[1]
-
-    def _front_weight_at_point(self, point):
-        """Scalar twin of the weight `to_glsl` computes for `weight_expr`: how far
-        `point` sits in front of the base field's surface, clamped to [0, 1]."""
-        lift, ramp = self._front_face_band()
-        behind = FreeCAD.Vector(
-            point.x - self.direction.x * lift,
-            point.y - self.direction.y * lift,
-            point.z - self.direction.z * lift,
-        )
-        d_behind = self.base_field.evaluate(behind)
-        return max(0.0, min(1.0, d_behind / ramp))
-
-    def _front_weight_grid(self, points, da):
-        """Grid twin of `_front_weight_at_point`. `da` is `direction` as a
-        float32 array, already available to every caller in `evaluate_grid`."""
-        lift, ramp = self._front_face_band()
-        behind_points = points - da * lift
-        d_behind = self.base_field.evaluate_grid(behind_points)
-        return np.clip(d_behind / ramp, 0.0, 1.0).astype(np.float32)
-
     def evaluate(self, point: FreeCAD.Vector) -> float:
-        q = self._to_local_point(point)
-        weight = self._front_weight_at_point(point) if self._uses_front_weight() else None
-        dx, dy, dz = self._eval_displacement(q.x, q.y, q.z, front=weight)
-        disp = self.placement.Rotation.multVec(FreeCAD.Vector(dx, dy, dz))
-        return self.base_field.evaluate(point - disp)
+        if self._builtin_active("surf_n"):
+            surf_n = self._eval_surface_normal(point)
+        elif self._formula_uses_surf_n:
+            surf_n = GlslVec3(0.0, 0.0, 0.0)
+        else:
+            surf_n = None
+
+        if self._builtin_active("front"):
+            front = self._front_weight_at_point(point)
+        elif self._formula_uses_front:
+            front = 1.0
+        else:
+            front = None
+
+        dx, dy, dz, offset = self._eval_displacement(point.x, point.y, point.z, surf_n=surf_n, front=front)
+        disp = FreeCAD.Vector(dx, dy, dz)
+        return self.base_field.evaluate(point - disp) + float(offset)
 
     def evaluate_grid(self, points: np.ndarray) -> np.ndarray:
-        local = self._to_local_grid(points)
-        weight = None
-        if self._uses_front_weight():
+        if self._builtin_active("surf_n"):
+            surf_n = self._eval_surface_normal_grid(points)
+        elif self._formula_uses_surf_n:
+            zeros = np.zeros(len(points), dtype=np.float32)
+            surf_n = GlslVec3(zeros, zeros, zeros)
+        else:
+            surf_n = None
+
+        if self._builtin_active("front"):
             d = self.direction
             da = np.array([d.x, d.y, d.z], dtype=np.float32)
-            weight = self._front_weight_grid(points, da)
-        dx, dy, dz = self._eval_displacement_grid(
-            local[:, 0], local[:, 1], local[:, 2], front_vals=weight)
-        disp_local = np.stack((dx, dy, dz), axis=1).astype(np.float32)
-        displaced = points - (disp_local @ self._rot_np.T)
-        return self.base_field.evaluate_grid(displaced).astype(np.float32)
+            front = self._front_weight_grid(points, da)
+        elif self._formula_uses_front:
+            front = np.ones(len(points), dtype=np.float32)
+        else:
+            front = None
+
+        dx, dy, dz, offsets = self._eval_displacement_grid(
+            points[:, 0], points[:, 1], points[:, 2], surf_n_vals=surf_n, front_vals=front)
+        disp = np.stack((dx, dy, dz), axis=1).astype(np.float32)
+        displaced = points - disp
+        base_vals = self.base_field.evaluate_grid(displaced).astype(np.float32)
+        return (base_vals + offsets).astype(np.float32)
 
     def bounding_box(self):
         bb_min, bb_max = self.base_field.bounding_box()
-        # A biased wave reaches two peaks to one side instead of one peak to
-        # each, so the box has to grow with the bias or "Bottom" would push
-        # geometry straight through the wall of its own bounds.
         reach = self._reach()
         offset = FreeCAD.Vector(reach, reach, reach)
         return (bb_min - offset, bb_max + offset)
 
     def to_patch_cage(self):
-        # Same rationale as SdfNoiseField.to_patch_cage: 2D noise perturbs the
-        # SDF value along the projection direction, not the coordinate space,
-        # so the base field's cage net is still valid to forward as-is.
         return self.base_field.to_patch_cage()
 
     def to_glsl(self, ctx, point_var="p"):
@@ -562,58 +593,65 @@ class SdfNoiseField(SdfField):
         freq_u = ctx.uniform("float", self.frequency)
         ctx.add_custom_helper("apply_inv_mat", _GLSL_APPLY_INV_MAT)
         inv_u = ctx.uniform("mat4", self.inv_matrix.tolist())
-        # mat4, not mat3: GLProgram.set_uniform (gl_program.py) has no mat3
-        # branch yet and would log "no setter for GLSL type" and bind nothing
-        # -- a silently black field. CN-024 adds mat3 as an optimisation later.
         rot_mat = placement_matrix(
             FreeCAD.Placement(FreeCAD.Vector(), self.placement.Rotation), dtype=np.float32)
-        rot_u = ctx.uniform("mat4", rot_mat.tolist())
+        rot_u = ctx.uniform("mat3", rot_mat[:3, :3].tolist())
         ctx.add_custom_helper("apply_rot_mat", (
-            "vec3 apply_rot_mat(mat4 m, vec3 v) {\n"
-            "    return (m * vec4(v, 0.0)).xyz;\n"
+            "vec3 apply_rot_mat(mat3 m, vec3 v) {\n"
+            "    return m * v;\n"
             "}"
         ))
         q_expr = f"apply_inv_mat({inv_u}, {point_var})"
         ctx.add_custom_helper("fld_pi_const", "const float pi = 3.14159265358979323846;")
 
-        weight_expr = None
-        if self._uses_front_weight():
-            lift, ramp = self._front_face_band()
-            lift_u = ctx.uniform("float", lift)
-            ramp_u = ctx.uniform("float", ramp)
-            d = self.direction
-            front_dir_u = ctx.uniform("vec3", (d.x, d.y, d.z))
-            offset_pt = f"({point_var} - {front_dir_u} * {lift_u})"
-            behind_glsl = self.base_field.to_glsl(ctx, offset_pt)
-            weight_expr = f"clamp({behind_glsl} / {ramp_u}, 0.0, 1.0)"
+        surf_n_expr = None
+        if self._formula_uses_surf_n:
+            if not self._builtin_active("surf_n"):
+                surf_n_expr = "vec3(0.0)"
+            else:
+                h = self._step_h()
+                h_u = ctx.uniform("float", h)
+                # Tetrahedral offsets: k = (1,-1,-1), (-1,-1,1), (-1,1,-1), (1,1,1)
+                # p here is world space point_var
+                d1 = self.base_field.to_glsl(ctx, f"({point_var} + {h_u} * vec3(1.0, -1.0, -1.0))")
+                d2 = self.base_field.to_glsl(ctx, f"({point_var} + {h_u} * vec3(-1.0, -1.0, 1.0))")
+                d3 = self.base_field.to_glsl(ctx, f"({point_var} + {h_u} * vec3(-1.0, 1.0, -1.0))")
+                d4 = self.base_field.to_glsl(ctx, f"({point_var} + {h_u} * vec3(1.0, 1.0, 1.0))")
+                ctx.add_custom_helper("fld_calc_surf_n", (
+                    "vec3 fld_calc_surf_n(float d1, float d2, float d3, float d4, float h) {\n"
+                    "    vec3 g = vec3(1.0, -1.0, -1.0) * d1 +\n"
+                    "             vec3(-1.0, -1.0, 1.0) * d2 +\n"
+                    "             vec3(-1.0, 1.0, -1.0) * d3 +\n"
+                    "             vec3(1.0, 1.0, 1.0) * d4;\n"
+                    "    float lg = length(g);\n"
+                    "    return g / max(lg, 2.0 * h);\n"
+                    "}"
+                ))
+                surf_n_expr = f"fld_calc_surf_n({d1}, {d2}, {d3}, {d4}, {h_u})"
 
-        if self._preset_name in self.COMPLEX_PRESETS:
-            preset = self.COMPLEX_PRESETS[self._preset_name]
-            for dep_name, dep_code in preset.dep_helpers:
-                ctx.add_custom_helper(dep_name, dep_code)
-            ctx.add_custom_helper(preset.main_fn_name, preset.main_fn_code)
-            d = self.direction
-            dir_u = ctx.uniform("vec3", (d.x, d.y, d.z))
-            h_scaled = f"({preset.main_fn_name}({q_expr}, {amp_u}, {freq_u}))"
-            displaced_pt = f"({point_var} - {h_scaled} * {dir_u})"
-            base_at_displaced = self.base_field.to_glsl(ctx, displaced_pt)
-            return f"({base_at_displaced})"
+        front_expr = None
+        if self._formula_uses_front:
+            if not self._builtin_active("front"):
+                front_expr = "1.0"
+            else:
+                lift, ramp = self._front_face_band()
+                lift_u = ctx.uniform("float", lift)
+                ramp_u = ctx.uniform("float", ramp)
+                d = self.direction
+                front_dir_u = ctx.uniform("vec3", (d.x, d.y, d.z))
+                offset_pt = f"({point_var} - {front_dir_u} * {lift_u})"
+                behind_glsl = self.base_field.to_glsl(ctx, offset_pt)
+                front_expr = f"clamp({behind_glsl} / {ramp_u}, 0.0, 1.0)"
 
         # Register custom parameters as uniforms
         param_args_decl = []
         param_args_call = []
-        is_radial = bool(self.radial or self.custom_params.get("radial", False))
-        # `front` is never a real custom param -- it rides its own dedicated
-        # parameter (added below) fed by `weight_expr`, not the generic uniform
-        # loop, so a stray `@param ... front ...` can't double-declare it.
-        builtin_names = {"front"}
+        # `surf_n` and `front` are built-ins fed by their respective expressions.
+        builtin_names = {"surf_n", "front"}
         for name, val in self.custom_params.items():
             if name in builtin_names:
                 continue
-            if name == "radial":
-                ptype = "float"
-                u_val = ctx.uniform(ptype, 1.0 if is_radial else 0.0)
-            elif isinstance(val, bool):
+            if isinstance(val, bool):
                 ptype = "float"
                 u_val = ctx.uniform(ptype, 1.0 if val else 0.0)
             elif isinstance(val, int):
@@ -639,11 +677,15 @@ class SdfNoiseField(SdfField):
             param_args_decl.append(f"{ptype} {name}")
             param_args_call.append(u_val)
 
-        if weight_expr is not None:
-            # A formula naming `front` reads this directly, exactly like any
-            # other parameter.
+        if surf_n_expr is not None:
+            # A formula naming `surf_n` reads this directly.
+            param_args_decl.append("vec3 surf_n")
+            param_args_call.append(surf_n_expr)
+
+        if front_expr is not None:
+            # A formula naming `front` reads this directly.
             param_args_decl.append("float front")
-            param_args_call.append(weight_expr)
+            param_args_call.append(front_expr)
 
         # ToWorldLocalNode (transform.py) compiles to `apply_rot_mat(to_world_rot,
         # v) + to_world_base` / `apply_inv_mat(to_local_inv, v)` -- well-known
@@ -652,10 +694,10 @@ class SdfNoiseField(SdfField):
         # global uniform name would let a second noise field with a different
         # placement silently reuse the first field's transform (GlProgram
         # dedups custom helpers by name); passing them as extra formula-helper
-        # parameters, like `front` above, keeps each field's own values.
+        # parameters keeps each field's own values.
         formula_text = self._clean_formula or ""
         if "to_world_rot" in formula_text:
-            param_args_decl.append("mat4 to_world_rot")
+            param_args_decl.append("mat3 to_world_rot")
             param_args_call.append(rot_u)
         if "to_world_base" in formula_text:
             b = self.placement.Base
@@ -667,7 +709,7 @@ class SdfNoiseField(SdfField):
             param_args_call.append(inv_u)
 
         decl_str = ", ".join(["vec3 p", "float amp", "float freq"] + param_args_decl)
-        call_str = ", ".join([q_expr, amp_u, freq_u] + param_args_call)
+        call_str = ", ".join([point_var, amp_u, freq_u] + param_args_call)
 
         # Register the GLSL for every pattern node (CN-013/CN-014) the formula
         # text actually calls. Substring matching is deliberate: the field
@@ -681,43 +723,39 @@ class SdfNoiseField(SdfField):
                 for dep_name, dep_code in cls.glsl_helpers():
                     ctx.add_custom_helper(dep_name, dep_code)
 
-        fn = f"noise_{abs(hash((self._clean_formula, is_radial, self.vector_output))) & 0xFFFFFF:06x}"
-        d_line = "r" if is_radial else "x"
-        radial_line = "1.0" if is_radial else "0.0"
+        is_vec4 = self._returns_vec4
+        fn = f"noise_{abs(hash((self._clean_formula, is_vec4))) & 0xFFFFFF:06x}"
 
         body_lines = [
             "    float x = p.x;",
             "    float y = p.y;",
             "    float z = p.z;",
         ]
-        if "r" not in self.custom_params:
-            body_lines.append("    float r = sqrt(x * x + y * y);")
-        if "d" not in self.custom_params:
-            body_lines.append(f"    float d = {d_line};")
-        if "radial" not in self.custom_params:
-            body_lines.append(f"    float radial = {radial_line};")
         body_lines.append(f"    return {self._clean_formula};")
 
+        ret_type = "vec4" if is_vec4 else "vec3"
         body_str = "\n".join(body_lines)
-        return_type = "vec3" if self.vector_output else "float"
         ctx.add_custom_helper(fn,
-            f"{return_type} {fn}({decl_str}) {{\n"
+            f"{ret_type} {fn}({decl_str}) {{\n"
             f"{body_str}\n"
             f"}}"
         )
-        if self.vector_output:
-            # `front`, when the formula names it, already reached `fn` above as
-            # one of its own parameters (`call_str`), so the vec3 it returns is
-            # already weighted -- this wrapper only rotates the local-frame
-            # result (x, y, z components along the object's own axes) into world
-            # space, replacing the old u_ax/w_ax/dir basis reconstruction.
-            disp = f"apply_rot_mat({rot_u}, {fn}({call_str}))"
-        else:
-            d = self.direction
-            dir_u = ctx.uniform("vec3", (d.x, d.y, d.z))
-            h_scaled = f"({fn}({call_str}))"
-            disp = f"({h_scaled} * {dir_u})"
+        call_expr = f"{fn}({call_str})"
 
-        displaced_pt = f"({point_var} - {disp})"
-        base_at_displaced = self.base_field.to_glsl(ctx, displaced_pt)
-        return f"({base_at_displaced})"
+        if is_vec4:
+            # The vec4 reaches a wrapper as one argument, so the noise -- and the
+            # base samples its front/surf_n take -- runs once per sample. Inlining
+            # `call.xyz` and `call.w` would run the whole formula twice (NV-039).
+            base_at_displaced = self.base_field.to_glsl(ctx, "(nz_q - nz_r.xyz)")
+            wrap = f"nzapply_{abs(hash(base_at_displaced)) & 0xFFFFFF:06x}"
+            ctx.add_custom_helper(wrap, (
+                f"float {wrap}(vec4 nz_r, vec3 nz_q) {{\n"
+                f"    return ({base_at_displaced}) + nz_r.w;\n"
+                f"}}"
+            ))
+            return f"{wrap}({call_expr}, {point_var})"
+        else:
+            displaced_pt = f"({point_var} - {call_expr})"
+            base_at_displaced = self.base_field.to_glsl(ctx, displaced_pt)
+            return f"({base_at_displaced})"
+

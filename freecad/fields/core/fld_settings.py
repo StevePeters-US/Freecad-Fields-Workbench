@@ -96,6 +96,18 @@ def get_model_tolerance():
 def set_model_tolerance(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetFloat("ModelTolerance", float(val))
 
+def get_slice_preview_planes():
+    """How many planes the Slice tool's preview draws, at most (default 20).
+
+    Only the preview is capped: Slice Now always traces every plane. Each preview
+    plane is a translucent grid, so a long stack crowds the view. Edited from the
+    Slice panel's Preview spin box, which writes it back.
+    """
+    return FreeCAD.ParamGet(_PARAM_PATH).GetInt("SlicePreviewPlanes", 20)
+
+def set_slice_preview_planes(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetInt("SlicePreviewPlanes", max(1, int(val)))
+
 def get_voxel_grid_resolution():
     """Return the scene volume resolution along its longest axis (default 256).
 
@@ -118,6 +130,19 @@ def get_voxel_band_voxels():
 
 def set_voxel_band_voxels(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetInt("VoxelBandVoxels", int(val))
+
+def get_normal_tap_voxels():
+    """Return the spacing of the scene bake's normal taps, in scene voxels (default 0.1).
+
+    Each baked normal is a tetrahedron finite difference of the field, taken this far
+    from the voxel centre. The GPU's trilinear filter weights are 8-bit, so taps much
+    closer than ~0.05 voxel differ by only a few weight steps: the normal quantises and
+    smooth surfaces show contour banding. Much wider than ~0.3 rounds sharp edges.
+    """
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("NormalTapVoxels", 0.1)
+
+def set_normal_tap_voxels(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("NormalTapVoxels", float(val))
 
 def get_show_cage_curves():
     """Return whether to draw curves representing the edges of the patches for cage objects."""
@@ -288,26 +313,50 @@ def set_gpu_field_eval(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetBool("GpuFieldEval", bool(val))
 
 
-def get_snap_enabled():
-    """Whether snapping is on by default (Ctrl inverts it during a drag)."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("SnapEnabled", True)
+# kind -> (parameter, default). 0 turns that snap off.
+_SNAP_STEPS = {
+    "grid":  ("SnapGridStep", 1.0),     # mm
+    "angle": ("SnapAngleStep", 15.0),   # degrees
+    "scale": ("SnapScaleStep", 0.1),    # factor increment
+}
 
-def set_snap_enabled(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetBool("SnapEnabled", bool(val))
+
+def get_snap_step(kind):
+    """The snap increment for `kind` ("grid", "angle" or "scale"). 0 means that snap is off."""
+    name, default = _SNAP_STEPS[kind]
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat(name, default)
+
+
+def set_snap_step(kind, val):
+    """Set the `kind` increment, clamped at 0. A non-zero value is also remembered as
+    the last one, which `get_last_snap_step` returns when the snap is turned back on."""
+    name, _default = _SNAP_STEPS[kind]
+    val = max(0.0, float(val))
+    grp = FreeCAD.ParamGet(_PARAM_PATH)
+    grp.SetFloat(name, val)
+    if val > 0:
+        grp.SetFloat("Last" + name, val)
+
+
+def get_last_snap_step(kind):
+    """The last non-zero `kind` increment; the default if none was ever set."""
+    name, default = _SNAP_STEPS[kind]
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("Last" + name, default)
+
 
 def get_snap_grid_step():
     """Translation quantum in mm. 0 disables grid snap."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("SnapGridStep", 1.0)
+    return get_snap_step("grid")
 
 def set_snap_grid_step(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("SnapGridStep", max(0.0, float(val)))
+    set_snap_step("grid", val)
 
 def get_snap_angle_step():
     """Rotation quantum in degrees. 0 disables angle snap."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("SnapAngleStep", 15.0)
+    return get_snap_step("angle")
 
 def set_snap_angle_step(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("SnapAngleStep", max(0.0, float(val)))
+    set_snap_step("angle", val)
 
 def get_snap_vertex_enabled():
     """Whether drags snap to nearby control points and primitive origins."""
@@ -446,44 +495,10 @@ def set_snap_marker_size_px(val):
     FreeCAD.ParamGet(_PARAM_PATH).SetInt("SnapMarkerSizePx", max(2, int(val)))
 
 
-# --- Control scheme -------------------------------------------------------
-# One of: "hybrid" (default -- direct drag and modal G/R/S both available),
-# "modal" (drag orbits; transforms require G/R/S), "direct" (drag-first;
-# modal keys inert). Tools must not branch on this themselves -- FldBase does.
-CONTROL_SCHEMES = ("hybrid", "modal", "direct")
 
-def get_control_scheme():
-    """Which input idiom is in force. See CONTROL_SCHEMES."""
-    val = FreeCAD.ParamGet(_PARAM_PATH).GetString("ControlScheme", "hybrid")
-    return val if val in CONTROL_SCHEMES else "hybrid"
+def get_curvature_scale():
+    """Curvature magnitude (1/mm) that saturates the curvature matcap ramp."""
+    return FreeCAD.ParamGet(_PARAM_PATH).GetFloat("CurvatureScale", 0.1)
 
-def set_control_scheme(val):
-    if val not in CONTROL_SCHEMES:
-        raise ValueError(f"unknown control scheme: {val!r}")
-    FreeCAD.ParamGet(_PARAM_PATH).SetString("ControlScheme", val)
-
-def get_snap_during_direct_drag():
-    """Whether a plain LMB drag snaps, or only a modal G/R/S transform does."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("SnapDuringDirectDrag", True)
-
-def set_snap_during_direct_drag(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetBool("SnapDuringDirectDrag", bool(val))
-
-def get_snap_invert_modifier():
-    """Modifier that inverts the snap default while held: "ctrl", "shift" or "alt"."""
-    val = FreeCAD.ParamGet(_PARAM_PATH).GetString("SnapInvertModifier", "ctrl")
-    return val if val in ("ctrl", "shift", "alt") else "ctrl"
-
-def set_snap_invert_modifier(val):
-    if val not in ("ctrl", "shift", "alt"):
-        raise ValueError(f"unknown snap modifier: {val!r}")
-    FreeCAD.ParamGet(_PARAM_PATH).SetString("SnapInvertModifier", val)
-
-def get_modal_requires_selection():
-    """Whether GRAB refuses to start with nothing selected (True) or grabs the
-    whole object (False)."""
-    return FreeCAD.ParamGet(_PARAM_PATH).GetBool("ModalRequiresSelection", False)
-
-def set_modal_requires_selection(val):
-    FreeCAD.ParamGet(_PARAM_PATH).SetBool("ModalRequiresSelection", bool(val))
-
+def set_curvature_scale(val):
+    FreeCAD.ParamGet(_PARAM_PATH).SetFloat("CurvatureScale", float(val))

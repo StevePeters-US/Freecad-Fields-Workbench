@@ -70,7 +70,6 @@ class BendTaskPanel(BaseModifierTaskPanel):
 
 
 class BendTool(FldSdfModifierToolBase):
-    SUPPORTS_MODAL = False
     SNAPSHOT_PROPERTIES = [
         ("Axis", "Z"),
         ("BendAngle", 45.0),

@@ -74,8 +74,11 @@ class Voronoi3DNode(SdfNoiseNode):
     planar = False
     display = ("# Voronoi cellular noise evaluated in the projection frame (centered)\n"
                "# Output: [-amp/2, +amp/2]")
-    lip_factor = 1.5
-    peak_factor = 0.5
+    # NV-055: measured max gradient 1.1679 at amp 1, freq 1 (declared was 1.5);
+    # declared = ceil(1.15 * measured / 0.05) * 0.05.
+    lip_factor = 1.35
+    # NV-055: measured max |value| 0.8738 at amp 1 (declared was 0.5); same rule.
+    peak_factor = 1.05
     dep_helpers = (("fld_pcg3d", _PCG3D_GLSL), ("fld_vhash33", _VHASH33_GLSL))
     main_fn_name = "fld_voronoi3d"
     main_fn_code = _VORONOI3D_GLSL

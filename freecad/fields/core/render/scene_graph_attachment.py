@@ -13,7 +13,8 @@ import FreeCADGui
 from freecad.fields.core import fld_logger
 from freecad.fields.core.render.render_state import _RS_QUALITY
 from freecad.fields.core.render.renderer_observers import (
-    _FldNavFilter, _FldSelectionObserver, _FldDocumentObserver
+    _FldNavFilter, _FldSelectionObserver, _FldDocumentObserver,
+    _FldViewActivationObserver
 )
 from freecad.fields.core.render.scene_shader_builder import CompiledScene
 
@@ -30,17 +31,22 @@ def install_doc_observer(r):
     concern, not a view one, so it must not be tied to whether a view happens to
     have the switch in it.
     """
-    if r._doc_observer is not None:
-        return
     add = getattr(FreeCAD, "addDocumentObserver", None)
-    if add is None:
+    if r._doc_observer is None and add is not None:
+        try:
+            r._doc_observer = _FldDocumentObserver(r)
+            add(r._doc_observer)
+        except Exception as e:
+            r._doc_observer = None
+            fld_logger.render_debug(f"FldSceneVoxelRenderer: document observer install failed: {e}")
+    if r._view_observer is not None:
         return
     try:
-        r._doc_observer = _FldDocumentObserver(r)
-        add(r._doc_observer)
+        obs = _FldViewActivationObserver(r)
+        if obs.connect():
+            r._view_observer = obs
     except Exception as e:
-        r._doc_observer = None
-        fld_logger.render_debug(f"FldSceneVoxelRenderer: document observer install failed: {e}")
+        fld_logger.render_debug(f"FldSceneVoxelRenderer: view activation observer install failed: {e}")
 
 
 def active_scene_graph():
@@ -84,6 +90,8 @@ def prune_attached_graphs(r):
         return
     r._attached_graphs = [g for g in r._attached_graphs
                           if any(g == l for l in live)]
+    r._graph_docs = [(g, d) for g, d in r._graph_docs
+                     if any(g == a for a in r._attached_graphs)]
 
 
 def switch_in(r, sg):
@@ -121,6 +129,10 @@ def attach(r):
         try:
             sg.addChild(r._switch)
             r._attached_graphs.append(sg)
+            doc = getattr(FreeCADGui, "ActiveDocument", None)
+            doc_name = getattr(getattr(doc, "Document", None), "Name", None)
+            if doc_name is not None:
+                r._graph_docs.append((sg, doc_name))
         except Exception as e:
             fld_logger.render_debug(f"FldSceneVoxelRenderer._attach addChild failed: {e}")
     if r._nav_filter is None and getattr(QApplication, "instance", None) and QApplication.instance():
@@ -146,6 +158,8 @@ def detach(r):
         except Exception as e:
             fld_logger.render_debug(f"FldSceneVoxelRenderer._detach removeChild failed: {e}")
     r._attached_graphs = []
+    r._graph_docs = []
+    r._active_graph = None
 
     # Destroy multi-pass GL resources (best-effort; called outside GL context)
     for prog in (r._prog_ssao, r._prog_blur, r._prog_comp):
@@ -161,6 +175,8 @@ def detach(r):
     # as well would be a double free.
     if getattr(r, "_prog_cache", None) is not None:
         r._prog_cache.destroy_all()
+    if getattr(r, "_matcap_cache", None) is not None:
+        r._matcap_cache.destroy_all()
 
     if getattr(r, "_cage_ssbo_cache", None) and getattr(r._gl_buf, "glDeleteBuffers", None) is not None:
         try:
@@ -225,6 +241,7 @@ def detach(r):
         r._sel_observer = None
 
     if r._nav_filter is not None:
+        r._nav_filter.stop_timers()
         try:
             QApplication.instance().removeEventFilter(r._nav_filter)
         except Exception as e:

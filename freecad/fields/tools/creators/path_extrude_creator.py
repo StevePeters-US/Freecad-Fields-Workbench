@@ -2,7 +2,7 @@
 import FreeCAD
 import FreeCADGui
 from freecad.fields.core import fld_logger
-from freecad.fields.tools.primitive_creator_base import PrimitiveCreatorBase
+from freecad.fields.tools.primitive_creator_base import PrimitiveCreatorBase, StageEntry
 from freecad.fields.tools.fld_base import ToolState
 from freecad.fields.core.sdf.sdf_curve_sweep import SdfCurveSweepField
 from freecad.fields.core.sdf.curve_sampler import extract_bezier_segments_3d
@@ -90,7 +90,8 @@ class PathExtrudeCreator(PrimitiveCreatorBase):
             return
         from freecad.fields.tools.path_extrude_panel import PathExtrudeTaskPanel
         self.panel = PathExtrudeTaskPanel(self)
-        FreeCADGui.Control.showDialog(self.panel)
+        gui_doc = FreeCADGui.getDocument(self.doc.Name)
+        FreeCADGui.Control.showDialog(self.panel, gui_doc)
         self._dialog_open = True
 
     # ── parameters ──────────────────────────────────────────────────────────
@@ -123,6 +124,20 @@ class PathExtrudeCreator(PrimitiveCreatorBase):
 
     def _on_stage_accept(self, state, pos):
         self._set_size_from_drag(state, pos)
+
+    def _stage_entry(self, state):
+        if state == ToolState.DRAG_Z and self._anchor_pt is not None:
+            if self._params["ProfileType"] == "Circle":
+                return StageEntry("Radius", "mm", [self._params["Radius"]], [1])
+            return StageEntry("Width", "mm", [self._params["Width"]], [1])
+        return None
+
+    def _stage_point_for(self, state, values):
+        if state == ToolState.DRAG_Z:
+            if self._params["ProfileType"] == "Circle":
+                return self._normal_stage_point(values[0])
+            return self._normal_stage_point(values[0] / 2.0)
+        raise NotImplementedError
 
     def _set_size_from_drag(self, state, pos):
         """DRAG_Z sizes the profile: the radius directly, or the width with the

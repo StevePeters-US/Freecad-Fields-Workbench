@@ -5,305 +5,199 @@ Starter templates for standard presets in the visual noise formula node editor.
 """
 
 
+def _facing_mask_nodes_and_wires(ibf_param_id="ibf_param",
+                                  wave_out_node="wave", wave_out_socket="Out",
+                                  disp_node="disp", base_pos=(1280, 160)):
+    """Standard facing mask subgraph (NV-037):
+    - Front Face Front (0..1)
+    - Mix(1.0, front, ibf_param)
+    - Math Multiply(wave_output, mask) -> disp.Amount
+    - ibf_param -> front_face.Enabled
+    """
+    bx, by = base_pos
+    nodes = [
+        {"id": "front_face", "type": "front_face", "pos": [bx, by + 160], "params": {}},
+        {"id": "mix_facing", "type": "mix", "pos": [bx + 160, by + 160], "params": {"a": 1.0}},
+        {"id": "mul_facing", "type": "math", "pos": [bx + 320, by], "params": {"op": "Multiply (*)"}},
+    ]
+    wires = [
+        {"from_node": ibf_param_id, "from_socket": "Val", "to_node": "front_face", "to_socket": "Enabled"},
+        {"from_node": "front_face", "from_socket": "Front", "to_node": "mix_facing", "to_socket": "B"},
+        {"from_node": ibf_param_id, "from_socket": "Val", "to_node": "mix_facing", "to_socket": "T"},
+        {"from_node": wave_out_node, "from_socket": wave_out_socket, "to_node": "mul_facing", "to_socket": "A"},
+        {"from_node": "mix_facing", "from_socket": "Out", "to_node": "mul_facing", "to_socket": "B"},
+        {"from_node": "mul_facing", "from_socket": "Out", "to_node": disp_node, "to_socket": "Amount"},
+    ]
+    return nodes, wires
+
+
+
+def _param(pid, name, ptype, default, pos, lo=None, hi=None, step=None):
+    p = {"name": name, "ptype": ptype, "default": default}
+    if lo is not None:
+        p.update({"min": lo, "max": hi, "step": step})
+    return {"id": pid, "type": "custom_param", "pos": pos, "params": p}
+
+
+def _tmpl_wave(profile_type, extra_nodes=(), extra_wires=()):
+    """A 1D wave, propagated (Background item 10): coordinate (linear or radial,
+    with an additive warp), frequency decay, profile, amplitude envelope, front mask, Displace.
+    Every knob defaults to off; the decays and the warp are per wavelength."""
+    mask_nodes, mask_wires = _facing_mask_nodes_and_wires(
+        ibf_param_id="ibf_param", wave_out_node="env", wave_out_socket="Out",
+        disp_node="disp", base_pos=(1700, 160))
+    nodes = [
+        {"id": "pos", "type": "part", "pos": [40, 100], "params": {}},
+        {"id": "dt", "type": "direction_transform", "pos": [180, 100], "params": {}},
+        {"id": "sep", "type": "separate_3d", "pos": [360, 60], "params": {}},
+        {"id": "pol", "type": "polar", "pos": [360, 220], "params": {}},
+        {"id": "mix_rad", "type": "mix", "pos": [560, 100], "params": {}},
+        {"id": "inputs", "type": "noise_inputs", "pos": [40, 400], "params": {}},
+        _param("rad_param", "radial", "bool", False, [40, 260]),
+        _param("warp_str", "warp_str", "float", 0.0, [40, 540], 0.0, 0.5, 0.01),
+        _param("warp_ratio", "warp_ratio", "float", 0.5, [40, 680], 0.05, 4.0, 0.05),
+        _param("freq_decay", "freq_decay", "float", 0.0, [40, 820], 0.0, 2.0, 0.05),
+        _param("amp_decay", "amp_decay", "float", 0.0, [40, 960], 0.0, 2.0, 0.05),
+        _param("ibf_param", "ignore_back_face", "bool", True, [40, 1100]),
+        {"id": "warp", "type": "warp", "pos": [780, 100], "params": {}},
+        {"id": "k_f", "type": "math", "pos": [780, 300], "params": {"op": "Multiply (*)"}},
+        {"id": "f_decay", "type": "freq_decay", "pos": [980, 100], "params": {}},
+        {"id": "prof", "type": profile_type, "pos": [1180, 100], "params": {}},
+        {"id": "k_a", "type": "math", "pos": [1180, 300], "params": {"op": "Multiply (*)"}},
+        {"id": "env", "type": "envelope", "pos": [1400, 160], "params": {}},
+        {"id": "disp", "type": "displace", "pos": [2200, 160], "params": {}},
+        {"id": "out", "type": "output", "pos": [2360, 160], "params": {}},
+    ] + list(extra_nodes) + mask_nodes
+    wires = [
+        ("pos", "p", "dt", "In"),
+        ("dt", "Local", "sep", "In"), ("dt", "Local", "pol", "V"),
+        ("sep", "X", "mix_rad", "A"), ("pol", "R", "mix_rad", "B"), ("rad_param", "Val", "mix_rad", "T"),
+        ("mix_rad", "Out", "warp", "Coord"), ("sep", "Y", "warp", "Across"),
+        ("inputs", "freq", "warp", "Freq"), ("warp_str", "Val", "warp", "Strength"),
+        ("warp_ratio", "Val", "warp", "Ratio"),
+        ("freq_decay", "Val", "k_f", "A"), ("inputs", "freq", "k_f", "B"),
+        ("warp", "Out", "f_decay", "Coord"), ("k_f", "Out", "f_decay", "Rate"),
+        ("f_decay", "Out", "prof", "Coord"), ("inputs", "freq", "prof", "Freq"),
+        ("inputs", "amp", "prof", "Amp"),
+        ("amp_decay", "Val", "k_a", "A"), ("inputs", "freq", "k_a", "B"),
+        ("prof", "Out", "env", "In"), ("mix_rad", "Out", "env", "Coord"), ("k_a", "Out", "env", "Rate"),
+        ("dt", "Direction", "disp", "Direction"), ("disp", "Out", "out", "Displacement"),
+    ] + list(extra_wires)
+    return {"nodes": nodes,
+            "wires": [{"from_node": a, "from_socket": b, "to_node": c, "to_socket": d}
+                      for a, b, c, d in wires] + mask_wires}
+
+
 def _tmpl_waves():
-    """Node-graph twin of SdfNoiseField.PRESETS["Waves"].
-
-    Pinned against the preset string by test_template_graph_matches_preset (NE-006).
-    A plain sine wave projected along local X onto the displacement axis.
-    Direction and projection are controlled via ProjectionControlNode.
-    """
-    return {
-        "nodes": [
-            {"id": "c2d", "type": "position", "pos": [40, 100], "params": {}},
-            {"id": "proj", "type": "projection_control", "pos": [240, 100],
-             "params": {"direction": [0.0, 0.0, 1.0], "roll": 0.0}},
-            {"id": "inputs", "type": "noise_inputs", "pos": [40, 320], "params": {}},
-            {"id": "ibf_param", "type": "custom_param", "pos": [40, 480],
-             "params": {"name": "ignore_back_face", "ptype": "bool", "default": False}},
-            {"id": "wave", "type": "wave_gen", "pos": [480, 160], "params": {}},
-            {"id": "ignore_back", "type": "ignore_back_face", "pos": [680, 160], "params": {}},
-            {"id": "disp", "type": "displace", "pos": [880, 160], "params": {"dir": [0.0, 0.0, 1.0]}},
-            {"id": "out", "type": "output", "pos": [1040, 160], "params": {}},
-        ],
-        "wires": [
-            {"from_node": "c2d", "from_socket": "p", "to_node": "proj", "to_socket": "Position"},
-            {"from_node": "proj", "from_socket": "U", "to_node": "wave", "to_socket": "Coord"},
-            {"from_node": "inputs", "from_socket": "freq", "to_node": "wave", "to_socket": "Freq"},
-            {"from_node": "inputs", "from_socket": "amp", "to_node": "wave", "to_socket": "Amp"},
-            {"from_node": "wave", "from_socket": "Out", "to_node": "ignore_back", "to_socket": "Value"},
-            {"from_node": "ibf_param", "from_socket": "Val", "to_node": "ignore_back", "to_socket": "Ignore Back Face"},
-            {"from_node": "ignore_back", "from_socket": "Out", "to_node": "disp", "to_socket": "Amount"},
-            {"from_node": "proj", "from_socket": "Direction", "to_node": "disp", "to_socket": "Direction"},
-            {"from_node": "disp", "from_socket": "Out", "to_node": "out", "to_socket": "Displacement"},
-        ]
-    }
-
-
-def _tmpl_lobed_wave(wave_type, id_prefix, sharp_node=None):
-    """Shared builder for Square and Sawtooth: two lobes at coord = rotate(U, V, angle_n).U',
-    feeding a wave node each, summed, masked with ignore_back_face, and displaced along Direction.
-    """
-    def _lobe(sfx, ang_id, freq_from, amp_from, y_off):
-        nodes = [
-            {"id": "rot" + sfx, "type": "rotate_2d", "pos": [460, 60 + y_off], "params": {}},
-            {"id": id_prefix + sfx, "type": wave_type, "pos": [700, 60 + y_off], "params": {}},
-        ]
-        wires = [
-            {"from_node": "proj", "from_socket": "U", "to_node": "rot" + sfx, "to_socket": "U"},
-            {"from_node": "proj", "from_socket": "V", "to_node": "rot" + sfx, "to_socket": "V"},
-            {"from_node": ang_id, "from_socket": "Val", "to_node": "rot" + sfx, "to_socket": "Angle"},
-            {"from_node": "rot" + sfx, "from_socket": "U'", "to_node": id_prefix + sfx, "to_socket": "Coord"},
-        ]
-        if sharp_node is not None:
-            wires.append({"from_node": "sharp", "from_socket": "Val",
-                          "to_node": id_prefix + sfx, "to_socket": "Sharp"})
-        wires.append(dict(freq_from, to_node=id_prefix + sfx, to_socket="Freq"))
-        wires.append(dict(amp_from, to_node=id_prefix + sfx, to_socket="Amp"))
-        return nodes, wires
-
-    n1, w1 = _lobe("1", "ang",
-                   {"from_node": "inputs", "from_socket": "freq"},
-                   {"from_node": "inputs", "from_socket": "amp"}, 0)
-    n2, w2 = _lobe("2", "ang2",
-                   {"from_node": "freq2", "from_socket": "Val"},
-                   {"from_node": "amp2", "from_socket": "Val"}, 300)
-
-    y = 590
-    param_nodes = []
-    if sharp_node is not None:
-        param_nodes.append(dict(sharp_node, pos=[40, y]))
-        y += 140
-    param_nodes.append({"id": "amp2", "type": "custom_param", "pos": [40, y],
-                        "params": {"name": "amp2", "ptype": "float", "default": 0.0,
-                                   "min": 0.0, "max": 1.0, "step": 0.05}})
-    y += 140
-    param_nodes.append({"id": "freq2", "type": "custom_param", "pos": [40, y],
-                        "params": {"name": "freq2", "ptype": "float", "default": 1.0,
-                                   "min": 0.1, "max": 10.0, "step": 0.1}})
-    y += 140
-    param_nodes.append({"id": "ang2", "type": "custom_param", "pos": [40, y],
-                        "params": {"name": "angle2", "ptype": "float", "default": 90.0,
-                                   "min": 0.0, "max": 360.0, "step": 5.0}})
-    y += 140
-    param_nodes.append({"id": "ibf_param", "type": "custom_param", "pos": [40, y],
-                        "params": {"name": "ignore_back_face", "ptype": "bool", "default": False}})
-
-    return {
-        "nodes": [
-            {"id": "c2d", "type": "position", "pos": [40, 100], "params": {}},
-            {"id": "proj", "type": "projection_control", "pos": [220, 100],
-             "params": {"direction": [0.0, 0.0, 1.0], "roll": 0.0}},
-            {"id": "inputs", "type": "noise_inputs", "pos": [40, 330], "params": {}},
-            {"id": "ang", "type": "custom_param", "pos": [40, 450],
-             "params": {"name": "angle", "ptype": "float", "default": 0.0,
-                        "min": 0.0, "max": 360.0, "step": 5.0}},
-        ] + param_nodes + [
-            {"id": "sum", "type": "math", "pos": [1160, 220], "params": {"op": "Add (+)"}},
-            {"id": "ignore_back", "type": "ignore_back_face", "pos": [1300, 220], "params": {}},
-            {"id": "disp", "type": "displace", "pos": [1460, 220], "params": {"dir": [0.0, 0.0, 1.0]}},
-            {"id": "out", "type": "output", "pos": [1600, 220], "params": {}},
-        ] + n1 + n2,
-        "wires": w1 + w2 + [
-            {"from_node": "c2d", "from_socket": "p", "to_node": "proj", "to_socket": "Position"},
-            {"from_node": id_prefix + "1", "from_socket": "Out", "to_node": "sum", "to_socket": "A"},
-            {"from_node": id_prefix + "2", "from_socket": "Out", "to_node": "sum", "to_socket": "B"},
-            {"from_node": "sum", "from_socket": "Out", "to_node": "ignore_back", "to_socket": "Value"},
-            {"from_node": "ibf_param", "from_socket": "Val", "to_node": "ignore_back", "to_socket": "Ignore Back Face"},
-            {"from_node": "ignore_back", "from_socket": "Out", "to_node": "disp", "to_socket": "Amount"},
-            {"from_node": "proj", "from_socket": "Direction", "to_node": "disp", "to_socket": "Direction"},
-            {"from_node": "disp", "from_socket": "Out", "to_node": "out", "to_socket": "Displacement"},
-        ]
-    }
+    """Waves: a sine, propagated linearly or radially."""
+    return _tmpl_wave("wave_gen")
 
 
 def _tmpl_square():
-    """Node-graph twin of SdfNoiseField.PRESETS["Square"].
-
-    Each lobe is coord = rotate(U, V, angle_n).U' -- same shape as the Sine Wave
-    Generator, just with a Square Wave node on the end.
-    """
-    sharp_node = {"id": "sharp", "type": "custom_param",
-                  "params": {"name": "sharp", "ptype": "float", "default": 4.0,
-                             "min": 1.0, "max": 20.0, "step": 0.5}}
-    return _tmpl_lobed_wave("square_wave", "sq", sharp_node=sharp_node)
+    """Square: tanh(sharp * sine), band-limited so it stays continuous."""
+    return _tmpl_wave("square_wave",
+                      extra_nodes=[_param("sharp", "sharp", "float", 4.0, [40, 1240], 1.0, 20.0, 0.5)],
+                      extra_wires=[("sharp", "Val", "prof", "Sharp")])
 
 
 def _tmpl_sawtooth():
-    """Node-graph twin of SdfNoiseField.PRESETS["Sawtooth"]."""
-    return _tmpl_lobed_wave("triangle_wave", "tri")
+    """Sawtooth: the triangle profile (named for the look, not the waveform)."""
+    return _tmpl_wave("triangle_wave")
 
 
-def _tmpl_radial_ripple():
-    return {
-        "nodes": [
-            {"id": "c2d", "type": "position", "pos": [50, 100], "params": {}},
-            {"id": "proj", "type": "projection_control", "pos": [230, 100],
-             "params": {"direction": [0.0, 0.0, 1.0], "roll": 0.0}},
-            {"id": "inputs", "type": "noise_inputs", "pos": [50, 300], "params": {}},
-            {"id": "decay_param", "type": "custom_param", "pos": [50, 460],
-             "params": {"name": "decay", "ptype": "float", "default": 0.05, "min": 0.0, "max": 1.0, "step": 0.01}},
-            {"id": "ibf_param", "type": "custom_param", "pos": [50, 600],
-             "params": {"name": "ignore_back_face", "ptype": "bool", "default": False}},
-            {"id": "rad_wave", "type": "radial_wave", "pos": [490, 140], "params": {}},
-            {"id": "ignore_back", "type": "ignore_back_face", "pos": [690, 140], "params": {}},
-            {"id": "disp", "type": "displace", "pos": [870, 140], "params": {"dir": [0.0, 0.0, 1.0]}},
-            {"id": "out", "type": "output", "pos": [1030, 140], "params": {}},
-        ],
-        "wires": [
-            {"from_node": "c2d", "from_socket": "p", "to_node": "proj", "to_socket": "Position"},
-            {"from_node": "proj", "from_socket": "R", "to_node": "rad_wave", "to_socket": "R"},
-            {"from_node": "inputs", "from_socket": "freq", "to_node": "rad_wave", "to_socket": "Freq"},
-            {"from_node": "inputs", "from_socket": "amp", "to_node": "rad_wave", "to_socket": "Amp"},
-            {"from_node": "decay_param", "from_socket": "Val", "to_node": "rad_wave", "to_socket": "Decay"},
-            {"from_node": "rad_wave", "from_socket": "Out", "to_node": "ignore_back", "to_socket": "Value"},
-            {"from_node": "ibf_param", "from_socket": "Val", "to_node": "ignore_back", "to_socket": "Ignore Back Face"},
-            {"from_node": "ignore_back", "from_socket": "Out", "to_node": "disp", "to_socket": "Amount"},
-            {"from_node": "proj", "from_socket": "Direction", "to_node": "disp", "to_socket": "Direction"},
-            {"from_node": "disp", "from_socket": "Out", "to_node": "out", "to_socket": "Displacement"},
+def _tmpl_pattern(kernel_name):
+    """A NOISE_NODES kernel as a graph: the kernel at the object-local point, masked.
+    2D kernels displace along local +Z; 3D kernels wire into additive Offset (NV-038)."""
+    from .patterns import PATTERN_NODES
+    cls = next(c for c in PATTERN_NODES if c.kernel.name == kernel_name)
+    is_planar = "2D" in kernel_name
+
+    if is_planar:
+        mask_nodes, mask_wires = _facing_mask_nodes_and_wires(
+            ibf_param_id="ibf_param",
+            wave_out_node="pat", wave_out_socket="Out",
+            disp_node="disp", base_pos=(520, 160)
+        )
+        return {
+            "nodes": [
+                {"id": "pos", "type": "part", "pos": [40, 100], "params": {}},
+                {"id": "dt", "type": "direction_transform", "pos": [140, 100], "params": {}},
+                {"id": "inputs", "type": "noise_inputs", "pos": [40, 300], "params": {}},
+                {"id": "ibf_param", "type": "custom_param", "pos": [40, 460],
+                 "params": {"name": "ignore_back_face", "ptype": "bool", "default": True}},
+                {"id": "pat", "type": cls.node_type, "pos": [320, 140], "params": {}},
+                {"id": "disp", "type": "displace", "pos": [1340, 160], "params": {}},
+                {"id": "out", "type": "output", "pos": [1500, 160], "params": {}},
+            ] + mask_nodes,
+            "wires": [
+                {"from_node": "pos", "from_socket": "p", "to_node": "dt", "to_socket": "In"},
+                {"from_node": "dt", "from_socket": "Local", "to_node": "pat", "to_socket": "Position"},
+                {"from_node": "inputs", "from_socket": "amp", "to_node": "pat", "to_socket": "Amp"},
+                {"from_node": "inputs", "from_socket": "freq", "to_node": "pat", "to_socket": "Freq"},
+                {"from_node": "dt", "from_socket": "Direction", "to_node": "disp", "to_socket": "Direction"},
+                {"from_node": "disp", "from_socket": "Out", "to_node": "out", "to_socket": "Displacement"},
+            ] + mask_wires,
+        }
+    else:
+        # 3D kernel: pattern multiplied by mix(1.0, front, ignore_back_face), wired to Offset
+        bx, by = 520, 160
+        mask_nodes = [
+            {"id": "front_face", "type": "front_face", "pos": [bx, by + 160], "params": {}},
+            {"id": "mix_facing", "type": "mix", "pos": [bx + 160, by + 160], "params": {"a": 1.0}},
+            {"id": "mul_facing", "type": "math", "pos": [bx + 320, by], "params": {"op": "Multiply (*)"}},
         ]
-    }
-
-
-def _tmpl_simple_sine():
-    return {
-        "nodes": [
-            {"id": "c3d", "type": "position", "pos": [50, 100], "params": {}},
-            {"id": "proj", "type": "projection_control", "pos": [230, 100],
-             "params": {"direction": [0.0, 0.0, 1.0], "roll": 0.0}},
-            {"id": "inputs", "type": "noise_inputs", "pos": [50, 300], "params": {}},
-            {"id": "ibf_param", "type": "custom_param", "pos": [50, 460],
-             "params": {"name": "ignore_back_face", "ptype": "bool", "default": False}},
-            {"id": "wave", "type": "wave_gen", "pos": [470, 120], "params": {}},
-            {"id": "ignore_back", "type": "ignore_back_face", "pos": [670, 120], "params": {}},
-            {"id": "disp", "type": "displace", "pos": [850, 120], "params": {"dir": [0.0, 0.0, 1.0]}},
-            {"id": "out", "type": "output", "pos": [990, 120], "params": {}},
-        ],
-        "wires": [
-            {"from_node": "c3d", "from_socket": "p", "to_node": "proj", "to_socket": "Position"},
-            {"from_node": "proj", "from_socket": "U", "to_node": "wave", "to_socket": "Coord"},
-            {"from_node": "inputs", "from_socket": "freq", "to_node": "wave", "to_socket": "Freq"},
-            {"from_node": "inputs", "from_socket": "amp", "to_node": "wave", "to_socket": "Amp"},
-            {"from_node": "wave", "from_socket": "Out", "to_node": "ignore_back", "to_socket": "Value"},
-            {"from_node": "ibf_param", "from_socket": "Val", "to_node": "ignore_back", "to_socket": "Ignore Back Face"},
-            {"from_node": "ignore_back", "from_socket": "Out", "to_node": "disp", "to_socket": "Amount"},
-            {"from_node": "proj", "from_socket": "Direction", "to_node": "disp", "to_socket": "Direction"},
-            {"from_node": "disp", "from_socket": "Out", "to_node": "out", "to_socket": "Displacement"},
+        mask_wires = [
+            {"from_node": "ibf_param", "from_socket": "Val", "to_node": "front_face", "to_socket": "Enabled"},
+            {"from_node": "front_face", "from_socket": "Front", "to_node": "mix_facing", "to_socket": "B"},
+            {"from_node": "ibf_param", "from_socket": "Val", "to_node": "mix_facing", "to_socket": "T"},
+            {"from_node": "pat", "from_socket": "Out", "to_node": "mul_facing", "to_socket": "A"},
+            {"from_node": "mix_facing", "from_socket": "Out", "to_node": "mul_facing", "to_socket": "B"},
+            {"from_node": "mul_facing", "from_socket": "Out", "to_node": "out", "to_socket": "Offset"},
         ]
-    }
+        return {
+            "nodes": [
+                {"id": "pos", "type": "part", "pos": [40, 100], "params": {}},
+                {"id": "dt", "type": "direction_transform", "pos": [140, 100], "params": {}},
+                {"id": "inputs", "type": "noise_inputs", "pos": [40, 300], "params": {}},
+                {"id": "ibf_param", "type": "custom_param", "pos": [40, 460],
+                 "params": {"name": "ignore_back_face", "ptype": "bool", "default": False}},
+                {"id": "pat", "type": cls.node_type, "pos": [320, 140], "params": {}},
+                {"id": "out", "type": "output", "pos": [1100, 160], "params": {}},
+            ] + mask_nodes,
+            "wires": [
+                {"from_node": "pos", "from_socket": "p", "to_node": "dt", "to_socket": "In"},
+                {"from_node": "dt", "from_socket": "Local", "to_node": "pat", "to_socket": "Position"},
+                {"from_node": "inputs", "from_socket": "amp", "to_node": "pat", "to_socket": "Amp"},
+                {"from_node": "inputs", "from_socket": "freq", "to_node": "pat", "to_socket": "Freq"},
+            ] + mask_wires,
+        }
 
 
-def _tmpl_multi_freq():
-    return {
-        "nodes": [
-            {"id": "c3d", "type": "position", "pos": [50, 100], "params": {}},
-            {"id": "proj", "type": "projection_control", "pos": [230, 80],
-             "params": {"direction": [0.0, 0.0, 1.0], "roll": 0.0}},
-            {"id": "inputs", "type": "noise_inputs", "pos": [50, 320], "params": {}},
-            {"id": "ibf_param", "type": "custom_param", "pos": [50, 480],
-             "params": {"name": "ignore_back_face", "ptype": "bool", "default": False}},
-            {"id": "m1", "type": "math", "pos": [450, 80], "params": {"op": "Multiply (*)"}},
-            {"id": "m2", "type": "math", "pos": [450, 200], "params": {"op": "Multiply (*)"}},
-            {"id": "m3", "type": "math", "pos": [450, 320], "params": {"op": "Multiply (*)"}},
-            {"id": "sin1", "type": "trig", "pos": [630, 80], "params": {"fn": "sin"}},
-            {"id": "sin2", "type": "trig", "pos": [630, 200], "params": {"fn": "sin"}},
-            {"id": "sin3", "type": "trig", "pos": [630, 320], "params": {"fn": "sin"}},
-            {"id": "mul12", "type": "math", "pos": [810, 120], "params": {"op": "Multiply (*)"}},
-            {"id": "mul123", "type": "math", "pos": [990, 160], "params": {"op": "Multiply (*)"}},
-            {"id": "mul_amp", "type": "math", "pos": [1170, 200], "params": {"op": "Multiply (*)"}},
-            {"id": "ignore_back", "type": "ignore_back_face", "pos": [1330, 200], "params": {}},
-            {"id": "disp", "type": "displace", "pos": [1490, 200], "params": {"dir": [0.0, 0.0, 1.0]}},
-            {"id": "out", "type": "output", "pos": [1610, 200], "params": {}},
-        ],
-        "wires": [
-            {"from_node": "c3d", "from_socket": "p", "to_node": "proj", "to_socket": "Position"},
-            {"from_node": "proj", "from_socket": "U", "to_node": "m1", "to_socket": "A"},
-            {"from_node": "inputs", "from_socket": "freq", "to_node": "m1", "to_socket": "B"},
-            {"from_node": "proj", "from_socket": "V", "to_node": "m2", "to_socket": "A"},
-            {"from_node": "inputs", "from_socket": "freq", "to_node": "m2", "to_socket": "B"},
-            {"from_node": "proj", "from_socket": "Depth", "to_node": "m3", "to_socket": "A"},
-            {"from_node": "inputs", "from_socket": "freq", "to_node": "m3", "to_socket": "B"},
-            {"from_node": "m1", "from_socket": "Out", "to_node": "sin1", "to_socket": "In"},
-            {"from_node": "m2", "from_socket": "Out", "to_node": "sin2", "to_socket": "In"},
-            {"from_node": "m3", "from_socket": "Out", "to_node": "sin3", "to_socket": "In"},
-            {"from_node": "sin1", "from_socket": "Out", "to_node": "mul12", "to_socket": "A"},
-            {"from_node": "sin2", "from_socket": "Out", "to_node": "mul12", "to_socket": "B"},
-            {"from_node": "mul12", "from_socket": "Out", "to_node": "mul123", "to_socket": "A"},
-            {"from_node": "sin3", "from_socket": "Out", "to_node": "mul123", "to_socket": "B"},
-            {"from_node": "mul123", "from_socket": "Out", "to_node": "mul_amp", "to_socket": "A"},
-            {"from_node": "inputs", "from_socket": "amp", "to_node": "mul_amp", "to_socket": "B"},
-            {"from_node": "mul_amp", "from_socket": "Out", "to_node": "ignore_back", "to_socket": "Value"},
-            {"from_node": "ibf_param", "from_socket": "Val", "to_node": "ignore_back", "to_socket": "Ignore Back Face"},
-            {"from_node": "ignore_back", "from_socket": "Out", "to_node": "disp", "to_socket": "Amount"},
-            {"from_node": "proj", "from_socket": "Direction", "to_node": "disp", "to_socket": "Direction"},
-            {"from_node": "disp", "from_socket": "Out", "to_node": "out", "to_socket": "Displacement"},
-        ]
-    }
-
-
-def _tmpl_wavy_panel():
-    """Wavy panel template using DomainWarp2D and Distance2D with a 1D sine wave perturbation."""
-    return {
-        "nodes": [
-            {"id": "c3d", "type": "position", "pos": [40, 100], "params": {}},
-            {"id": "proj", "type": "projection_control", "pos": [220, 80],
-             "params": {"direction": [0.0, 0.0, 1.0], "roll": 0.0}},
-            {"id": "inputs", "type": "noise_inputs", "pos": [40, 300], "params": {}},
-            {"id": "warp_freq", "type": "custom_param", "pos": [40, 440],
-             "params": {"name": "warp_freq", "ptype": "float", "default": 0.05, "min": 0.001, "max": 1.0, "step": 0.01}},
-            {"id": "warp_str", "type": "custom_param", "pos": [40, 580],
-             "params": {"name": "warp_str", "ptype": "float", "default": 0.15, "min": 0.0, "max": 1.0, "step": 0.01}},
-            {"id": "cx", "type": "custom_param", "pos": [40, 720],
-             "params": {"name": "cx", "ptype": "float", "default": -44.2, "min": -1000.0, "max": 1000.0, "step": 1.0}},
-            {"id": "cy", "type": "custom_param", "pos": [40, 860],
-             "params": {"name": "cy", "ptype": "float", "default": -23.6, "min": -1000.0, "max": 1000.0, "step": 1.0}},
-            {"id": "ibf_param", "type": "custom_param", "pos": [40, 1000],
-             "params": {"name": "ignore_back_face", "ptype": "bool", "default": False}},
-            {"id": "sine_warp", "type": "wave_gen", "pos": [440, 200], "params": {}},
-            {"id": "warp", "type": "domain_warp_2d", "pos": [640, 100], "params": {}},
-            {"id": "dist", "type": "distance_2d", "pos": [860, 120], "params": {}},
-            {"id": "wave", "type": "wave_gen", "pos": [1060, 160], "params": {}},
-            {"id": "ignore_back", "type": "ignore_back_face", "pos": [1240, 180], "params": {}},
-            {"id": "disp", "type": "displace", "pos": [1400, 180], "params": {"dir": [0.0, 0.0, 1.0]}},
-            {"id": "out", "type": "output", "pos": [1520, 180], "params": {}},
-        ],
-        "wires": [
-            {"from_node": "c3d", "from_socket": "p", "to_node": "proj", "to_socket": "Position"},
-            {"from_node": "proj", "from_socket": "U", "to_node": "sine_warp", "to_socket": "Coord"},
-            {"from_node": "warp_freq", "from_socket": "Val", "to_node": "sine_warp", "to_socket": "Freq"},
-            {"from_node": "proj", "from_socket": "U", "to_node": "warp", "to_socket": "X"},
-            {"from_node": "proj", "from_socket": "V", "to_node": "warp", "to_socket": "Y"},
-            {"from_node": "sine_warp", "from_socket": "Out", "to_node": "warp", "to_socket": "Noise"},
-            {"from_node": "warp_str", "from_socket": "Val", "to_node": "warp", "to_socket": "Strength"},
-            {"from_node": "warp", "from_socket": "X'", "to_node": "dist", "to_socket": "X"},
-            {"from_node": "warp", "from_socket": "Y'", "to_node": "dist", "to_socket": "Y"},
-            {"from_node": "cx", "from_socket": "Val", "to_node": "dist", "to_socket": "CenterX"},
-            {"from_node": "cy", "from_socket": "Val", "to_node": "dist", "to_socket": "CenterY"},
-            {"from_node": "dist", "from_socket": "Dist", "to_node": "wave", "to_socket": "Coord"},
-            {"from_node": "inputs", "from_socket": "freq", "to_node": "wave", "to_socket": "Freq"},
-            {"from_node": "inputs", "from_socket": "amp", "to_node": "wave", "to_socket": "Amp"},
-            {"from_node": "wave", "from_socket": "Out", "to_node": "ignore_back", "to_socket": "Value"},
-            {"from_node": "ibf_param", "from_socket": "Val", "to_node": "ignore_back", "to_socket": "Ignore Back Face"},
-            {"from_node": "ignore_back", "from_socket": "Out", "to_node": "disp", "to_socket": "Amount"},
-            {"from_node": "proj", "from_socket": "Direction", "to_node": "disp", "to_socket": "Direction"},
-            {"from_node": "disp", "from_socket": "Out", "to_node": "out", "to_socket": "Displacement"},
-        ]
-    }
-
+from freecad.fields.core.sdf.sdf.noise_nodes import NOISE_NODES
 
 _TEMPLATES = {
     "Waves": _tmpl_waves,
     "Square": _tmpl_square,
     "Sawtooth": _tmpl_sawtooth,
-    "Radial Ripple": _tmpl_radial_ripple,
-    "Square Wave": _tmpl_square,
-    "Simple Sine": _tmpl_simple_sine,
-    "Multi-Frequency": _tmpl_multi_freq,
-    "Wavy Panel": _tmpl_wavy_panel,
 }
+
+for _kname in NOISE_NODES:
+    _TEMPLATES[_kname] = (lambda n=_kname: _tmpl_pattern(n))
+
+#: The templates the task panel's Type combo offers, in combo order. Every other
+#: _TEMPLATES entry is a node-editor starter only. "Custom" is a label, not a template.
+NOISE_TYPE_TEMPLATES = ["Waves", "Square", "Sawtooth",
+                        "Perlin 2D", "Perlin 3D", "Voronoi 2D", "Voronoi 3D"]
+NOISE_TYPE_NAMES = NOISE_TYPE_TEMPLATES + ["Custom"]
 
 
 def get_template_graph(name):
     """Returns starter node graph dictionary for name, or None if there is no template."""
     builder = _TEMPLATES.get(name)
     return builder() if builder else None
+
+
+def template_names():
+    """Every built-in template name: the Type-combo set and the editor starters."""
+    return list(_TEMPLATES)
 

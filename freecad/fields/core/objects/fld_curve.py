@@ -150,7 +150,7 @@ class FldCurve:
         weights = [1.0] * len(poles)
         knots = [float(j) for j in range(num_segments + 1)]
 
-        # FreeCAD 0.21+ signature. package.xml declares freecadmin 1.1.0, so the
+        # FreeCAD 0.21+ signature. package.xml declares freecadmin 26.3.0, so the
         # legacy buildFromPolesMultsKnots / 4-arg-constructor / interpolate
         # cascade that used to live here could never fire, and its interpolate
         # rungs silently returned a DIFFERENT curve (handles discarded, only the

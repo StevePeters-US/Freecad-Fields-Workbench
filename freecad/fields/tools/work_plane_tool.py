@@ -3,11 +3,14 @@ import FreeCAD
 import FreeCADGui
 from PySide import QtCore
 from .fld_base import FldBase
+from freecad.fields.tools.gizmo_driver import GizmoDriverMixin
 from freecad.fields.core.objects.fld_workplane import create_fld_workplane
 from freecad.fields.core import fld_logger
 from freecad.fields.core.input.input_manager import FldInputManager
 import math
 from pivy import coin
+from freecad.fields.core.input.gizmo.models import GizmoFrame, HandleId, Kind, handle_set
+from freecad.fields.core.input.gizmo.transform import delta_rotation
 
 class WorkPlaneTaskPanel:
     """Task panel for the Work Plane tool to ensure proper cleanup."""
@@ -16,7 +19,7 @@ class WorkPlaneTaskPanel:
         from PySide import QtWidgets
         self.form = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(self.form)
-        label = QtWidgets.QLabel("Work Plane Tool active.\n\nClick to drop plane.\nDrag corners to resize.\n\nESC to cancel.")
+        label = QtWidgets.QLabel("Work Plane Tool active.\n\nClick to drop plane.\nClick a corner to edit it with the gizmo.\n\nESC to cancel.")
         layout.addWidget(label)
         
     def accept(self):
@@ -30,7 +33,105 @@ class WorkPlaneTaskPanel:
         self.creator.cancel()
         return True
 
-class WorkPlaneCreator(FldBase):
+def _mm(q):
+    """A length property's value in mm (a Quantity or a float)."""
+    return q.Value if hasattr(q, "Value") else float(q)
+
+
+# Corners 0-3 in the plane's local x/y, as update_handles draws them.
+CORNER_SIGNS = ((-1, -1), (1, -1), (1, 1), (-1, 1))
+
+
+def _corner_local(length, width, k):
+    sx, sy = CORNER_SIGNS[k]
+    return FreeCAD.Vector(sx * length / 2.0, sy * width / 2.0, 0)
+
+
+from freecad.fields.tools.selection_gizmo import SelectionGizmoMixin, SelectionGizmoTarget
+
+
+class WorkPlaneGizmoTarget(SelectionGizmoTarget):
+    """The universal gizmo's `GizmoTarget` for a work plane (Round 10 design). Arrows and
+    plane squares move the origin; ring Z spins it about its normal; cubes X/Y resize
+    Length/Width. World offers only the moves: a world ring would tilt the plane and world
+    cubes don't line up with Length/Width. With a corner selected (Round 10b) the frame sits
+    on that corner and an arrow or square moves it: the in-plane parts resize the plane with
+    the opposite corner held, the normal part moves the whole plane. The ring and the cubes
+    still act about the centre. Every apply is a total from the snapshot. The centre box is
+    uniform scale only (Length and Width together), in both spaces: its plain press belongs to
+    the centre sphere, which drops the plane onto a surface (`WorkPlaneCreator._tool_press`)."""
+
+    LOCAL = handle_set(move="xyz", planes=("xy", "xz", "yz"), rotate="z", scale="xy",
+                       uniform_scale=True)
+    WORLD = handle_set(move="xyz", planes=("xy", "xz", "yz"), uniform_scale=True)
+    MIN_SIZE = 1.0      # mm; the corner drag's floor (`_drag_update`)
+
+    def live(self):
+        return self.tool._plane_obj() is not None
+
+    def rotation(self):
+        obj = self.tool._plane_obj()
+        return FreeCAD.Rotation(obj.Placement.Rotation) if obj is not None else FreeCAD.Rotation()
+
+    def pivot(self, centre):
+        obj = self.tool._plane_obj()
+        return FreeCAD.Vector(obj.Placement.Base) if obj is not None else centre
+
+    def offered(self):
+        return self.WORLD if self.tool._gizmo_space == "world" else self.LOCAL
+
+    def geometry(self):
+        obj = self.tool._plane_obj()
+        return {
+            "placement": FreeCAD.Placement(obj.Placement),
+            "length": _mm(obj.Length),
+            "width": _mm(obj.Width),
+        }
+
+    def gizmo_apply(self, snap, delta):
+        obj = self.tool._plane_obj()
+        pl0 = snap["placement"]
+        l0 = snap["length"]
+        w0 = snap["width"]
+        corner = snap["selection"][0] if snap["selection"] else None
+        kind = delta.handle.kind
+        if kind is Kind.ROTATE:
+            pl = FreeCAD.Placement(pl0)
+            pl.Rotation = delta_rotation(delta).multiply(pl0.Rotation)
+            obj.Placement = pl
+        elif kind is Kind.SCALE:
+            obj.Length = max(self.MIN_SIZE, l0 * delta.scale["x"])
+            obj.Width = max(self.MIN_SIZE, w0 * delta.scale["y"])
+        else:
+            pl = FreeCAD.Placement(pl0)
+            if corner is None:
+                pl.move(delta.translation)
+            else:
+                # The corner follows the translation; the opposite corner stays put in the
+                # plane, so the in-plane parts resize and the centre shifts by half.
+                sx, sy = CORNER_SIGNS[corner]
+                ax, ay, az = (pl0.Rotation.multVec(FreeCAD.Vector(*v))
+                              for v in ((1, 0, 0), (0, 1, 0), (0, 0, 1)))
+                t = delta.translation
+                length = max(self.MIN_SIZE, l0 + sx * t.dot(ax))
+                width = max(self.MIN_SIZE, w0 + sy * t.dot(ay))
+                pl.Base = (pl0.Base + ax * (sx * (length - l0) / 2.0)
+                           + ay * (sy * (width - w0) / 2.0) + az * t.dot(az))
+                obj.Length, obj.Width = length, width
+            obj.Placement = pl
+        self.tool._plane_changed()
+
+    def gizmo_restore(self, snap):
+        obj = self.tool._plane_obj()
+        obj.Placement = FreeCAD.Placement(snap["placement"])
+        obj.Length, obj.Width = snap["length"], snap["width"]
+        self.tool._plane_changed()
+
+    def gizmo_commit(self):
+        self.tool._plane_changed()
+
+
+class WorkPlaneCreator(SelectionGizmoMixin, FldBase):
     """Tool to create or move a FldWorkPlane object interactively.
 
     Document mutation happens on the drag tick (`_drag_update`), the same as
@@ -40,8 +141,71 @@ class WorkPlaneCreator(FldBase):
     feedback only.
     """
     
+    GIZMO_TARGET = WorkPlaneGizmoTarget
+    MULTI_SELECT = False
+
+    CORNER_COLOR   = (1.0, 0.5, 0.0)    # orange at rest
+    CENTRE_COLOR   = (1.0, 1.0, 0.0)    # yellow
+    SELECTED_COLOR = (1.0, 1.0, 1.0)    # white, as the primitives' HANDLE_COLOR_SELECTED
+    HOVER_COLOR    = (0.3, 1.0, 0.3)    # green
+
     def get_command_id(self):
         return "Fields_WorkPlane"
+
+    # --- selection gizmo hooks & properties -------------------------------------------
+
+    @property
+    def _selected_corner(self):
+        return self._selection[0] if self._selection else None
+
+    @_selected_corner.setter
+    def _selected_corner(self, k):
+        self._selection = [] if k is None else [k]
+
+    def _select_corner(self, k):
+        """Select corner `k` (0-3), or nothing (None): the gizmo moves onto it, or back to
+        the centre."""
+        self._set_selection([] if k is None else [k])
+
+    def _gizmo_editable(self):
+        return self._plane_obj() is not None
+
+    def _pick_point(self, ray_p, ray_d):
+        hit_idx, _ = self._hit_test(ray_p, ray_d)
+        return None if hit_idx == -1 else hit_idx
+
+    def _is_selectable(self, key):
+        return key < 4
+
+    def _point_world(self, key):
+        obj = self._plane_obj()
+        if obj is None:
+            return None
+        pl = obj.Placement
+        return pl.multVec(_corner_local(_mm(obj.Length), _mm(obj.Width), key))
+
+    def _gizmo_unselected_centre(self):
+        obj = self._plane_obj()
+        return FreeCAD.Vector(obj.Placement.Base) if obj is not None else None
+
+    def _show_hover(self, key):
+        self._set_hover(-1 if key is None else key)
+
+    def _point_drag_handle(self, key):
+        return HandleId(Kind.PLANE, ("x", "y")), "local"
+
+    def _selection_changed(self):
+        self._recolor_handles()
+
+    def _rest_color(self, i):
+        if i == self._selected_corner:
+            return self.SELECTED_COLOR
+        return self.CORNER_COLOR if i < 4 else self.CENTRE_COLOR
+
+    def _recolor_handles(self):
+        for i, mat in enumerate(self.handle_mats):
+            c = self.HOVER_COLOR if i == self._hovered_idx else self._rest_color(i)
+            mat.diffuseColor.setValue(*c)
 
     def __init__(self):
         super().__init__()
@@ -53,8 +217,7 @@ class WorkPlaneCreator(FldBase):
         self._preview_obj = None
         self._active_obj = None
         self._editing_obj = None # Existing WP being edited
-        self.state = 0 # 0 = waiting for click, 1 = resizing/idle, 2 = dragging corner, 3 = translating
-        self.active_corner_idx = -1
+        self.state = 0 # 0 = waiting for click, 1 = idle, 3 = moving the centre onto a surface
         self._cursor_active = False
 
         self._is_new = True
@@ -75,13 +238,12 @@ class WorkPlaneCreator(FldBase):
         self.handle_spheres = []
         for i in range(5):
             sep = coin.SoSeparator()
+            light = coin.SoLightModel()
+            light.model.setValue(coin.SoLightModel.BASE_COLOR)
+            sep.addChild(light)
             mat = coin.SoMaterial()
-            if i < 4:
-                mat.diffuseColor.setValue(1, 0.5, 0)   # orange at rest (corners)
-            else:
-                mat.diffuseColor.setValue(1, 1, 0)     # yellow center
-            mat.specularColor.setValue(0.8, 0.8, 0.8)
-            mat.shininess.setValue(0.7)
+            c = self.CORNER_COLOR if i < 4 else self.CENTRE_COLOR
+            mat.diffuseColor.setValue(*c)
             xf = coin.SoTransform()
             sphere = coin.SoSphere()
             sphere.radius = 5.0  # updated in update_handles
@@ -101,7 +263,8 @@ class WorkPlaneCreator(FldBase):
 
         # Show Task Panel to manage lifecycle
         self.task_panel = WorkPlaneTaskPanel(self)
-        FreeCADGui.Control.showDialog(self.task_panel)
+        gui_doc = FreeCADGui.getDocument(self.doc.Name)
+        FreeCADGui.Control.showDialog(self.task_panel, gui_doc)
         self._dialog_open = True
 
         self.update_handles()
@@ -129,6 +292,7 @@ class WorkPlaneCreator(FldBase):
             self._preview_obj = None
 
         self.update_handles()
+        self._init_gizmo()
 
     def is_in_progress(self):
         """Returns True if a workplane has been dropped (state > 0)."""
@@ -136,6 +300,7 @@ class WorkPlaneCreator(FldBase):
 
     def _do_terminate(self):
         self._stop_drag_timer()
+        self._dispose_gizmo()
         try:
             self._restore_cursor()
                 
@@ -151,6 +316,7 @@ class WorkPlaneCreator(FldBase):
 
     def finish(self):
         """Accept the current workplane and reset for another one."""
+        self._dispose_gizmo(commit=True)
         # Stop ticking before committing; reset_state() restarts it if we repeat.
         self._stop_drag_timer()
         self._finished = True
@@ -191,8 +357,9 @@ class WorkPlaneCreator(FldBase):
 
     def reset_state(self):
         """Clear internal state for next workplane."""
+        self._dispose_gizmo()
         super().reset_state()
-        self.active_corner_idx = -1
+        self._recolor_handles()
         # Clear handles visuals if needed (they will be updated on next move)
         self.update_handles()
         # super() put us back in state 0, so the preview tick starts again
@@ -308,6 +475,7 @@ class WorkPlaneCreator(FldBase):
             # Hide spheres by zeroing scale
             for xf in self.handle_transforms:
                 xf.scaleFactor.setValue(0, 0, 0)
+            self._update_gizmo()
             return
 
         l_val = obj.Length.Value if hasattr(obj.Length, "Value") else float(obj.Length)
@@ -330,6 +498,7 @@ class WorkPlaneCreator(FldBase):
             xf.translation.setValue(point.x, point.y, point.z)
             xf.scaleFactor.setValue(1, 1, 1)
             sphere.radius = radius if i < 4 else radius * 1.2 # slightly larger center handle
+        self._update_gizmo()
 
     def _get_ray(self, event_dict):
         """Delegated to FldInputManager."""
@@ -374,20 +543,28 @@ class WorkPlaneCreator(FldBase):
         return best_idx, best_dist
 
     def on_button1_down(self, event_dict):
-        return self.handle_click(event_dict)
+        """No gizmo yet (state 0): the click drops the plane. Otherwise the driver: TYPED
+        commits (D-49), then the spheres, then the gizmo. A click on nothing in state 1
+        deselects and is consumed."""
+        if self.gizmo_controller is None:
+            return self.handle_click(event_dict)
+        return super().on_button1_down(event_dict)
+
+    def _press_missed(self, event_dict):
+        if self.state == 1:
+            self._set_selection([])
+            return True
+        return False
 
     def on_button1_up(self, event_dict):
-        if self.state in [2, 3]:
+        if self._gizmo_release():
+            return True
+        if self.state == 3:
             self.state = 1
             self._sync_drag_timer()
-            self.active_corner_idx = -1
-            # Reset all handle colours; next mouse-move will re-evaluate hover
-            for i, mat in enumerate(self.handle_mats):
-                if i < 4:
-                    mat.diffuseColor.setValue(1, 0.5, 0)
-                else:
-                    mat.diffuseColor.setValue(1, 1, 0)
+            # Next mouse-move will re-evaluate hover
             self._hovered_idx = -1
+            self._recolor_handles()
             return True
         return False
 
@@ -426,30 +603,13 @@ class WorkPlaneCreator(FldBase):
                     self.state = 1
                     self._sync_drag_timer()
                     self.update_handles()
+                    self._init_gizmo()
                 return True
                 
             elif self.state == 1:
-                ray_p, ray_d = self._get_ray(event_dict)
-                if ray_p is None or ray_d is None:
-                    return False
-
-                hit_idx, hit_dist = self._hit_test(ray_p, ray_d)
-                if hit_idx != -1:
-                    self.active_corner_idx = hit_idx
-                    if hit_idx < 4:
-                        self.state = 2 # resizing corner
-                        # Get drag plane normal and origin for resizing
-                        obj = self._active_obj or self._preview_obj or self._editing_obj
-                        plc = obj.Placement
-                        self.drag_plane_n = plc.Rotation.multVec(FreeCAD.Vector(0,0,1))
-                        self.drag_plane_o = plc.Base
-                    else:
-                        self.state = 3 # translating center
-                    self._sync_drag_timer()
-                    return True
-                # Missed all handles — consume the click but do nothing
+                self._tool_press(event_dict)
                 return True
-                    
+
         except Exception:
             fld_logger.exception("WorkPlaneCreator.handle_click error")
             return False
@@ -462,38 +622,63 @@ class WorkPlaneCreator(FldBase):
             return
         # Restore previous handle to its rest colour
         if self._hovered_idx != -1:
-            if self._hovered_idx < 4:
-                self.handle_mats[self._hovered_idx].diffuseColor.setValue(1, 0.5, 0)
-            else:
-                self.handle_mats[self._hovered_idx].diffuseColor.setValue(1, 1, 0)
+            self.handle_mats[self._hovered_idx].diffuseColor.setValue(*self._rest_color(self._hovered_idx))
         self._hovered_idx = idx
         if idx == -1:
             if self._cursor_active:
                 QtWidgets.QApplication.restoreOverrideCursor()
                 self._cursor_active = False
         else:
-            self.handle_mats[idx].diffuseColor.setValue(0.3, 1.0, 0.3)  # green on hover
+            self.handle_mats[idx].diffuseColor.setValue(*self.HOVER_COLOR)
             if not self._cursor_active:
                 QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CrossCursor)
                 self._cursor_active = True
+
+    def _tool_hover(self, event_dict):
+        """State 1: the sphere under the mouse is lit, with the cross cursor."""
+        if self.state != 1:
+            return False
+        return super()._tool_hover(event_dict)
+
+    def _tool_press(self, event_dict):
+        """State 1: a corner is selected (the gizmo edits it); the centre deselects and
+        starts the move onto the surface under the cursor (state 3). With Shift held the
+        centre is left to the gizmo's box under it (uniform scale, D-59); Shift is the
+        gizmo host's, the one the controller reads at the same press. False on a miss."""
+        if self.state != 1:
+            return False
+        ray_p, ray_d = self._get_ray(event_dict)
+        if ray_p is not None and ray_d is not None:
+            hit_idx, _ = self._hit_test(ray_p, ray_d)
+            ctl = self.gizmo_controller
+            if hit_idx == 4 and ctl is not None and ctl.host.shift_held():
+                return False
+            if hit_idx == 4:
+                self._select_corner(None)
+                self.state = 3
+                self._sync_drag_timer()
+                return True
+        return super()._tool_press(event_dict)
 
     # ── Drag ticks ────────────────────────────────────────────────────────────
 
     def _sync_drag_timer(self):
         """Run the tick timer exactly while a document-mutating state is live.
 
-        States 0 (preview follows the cursor), 2 (resize by corner) and 3
-        (translate) all write to the document continuously; state 1 is hover
-        only. Idempotent, so every state transition can just call it.
+        States 0 (preview follows the cursor) and 3 (centre moves onto a
+        surface) write to the document continuously; state 1 is hover only. Idempotent, so every state transition can just call it.
         """
-        want = self.state in (0, 2, 3) and not getattr(self, "_terminated", False)
+        want = self.state in (0, 3) and not getattr(self, "_terminated", False)
         dragging = getattr(self, "_is_dragging", False)
         if want and not dragging:
             self._start_drag_timer()
         elif dragging and not want:
             self._stop_drag_timer()
 
-    def _drag_update(self):
+    def _tool_refresh(self):
+        self.update_handles()
+
+    def _tool_drag_update(self):
         """Apply the latest cursor position. Runs on the timer, never in a callback."""
         if getattr(self, "_terminated", False):
             self._stop_drag_timer()
@@ -511,24 +696,6 @@ class WorkPlaneCreator(FldBase):
                         self.doc.recompute([self._preview_obj])
                     self.update_handles()
 
-            elif self.state == 2:
-                obj = self._active_obj or self._editing_obj
-                if obj:
-                    pt_global = self.resolve_world_point(
-                        event_dict, base_pt=self.drag_plane_o,
-                        plane_normal=self.drag_plane_n, plane_origin=self.drag_plane_o,
-                        allow_snap=False)   # dimensions are quantised below, not the point
-                    if pt_global:
-                        pt_local = obj.Placement.inverse().multVec(pt_global)
-                        from freecad.fields.core.input import fld_snap
-                        from freecad.fields.core.fld_settings import get_snap_grid_step, get_snap_during_direct_drag
-                        step = get_snap_grid_step() if (get_snap_during_direct_drag() and fld_snap.snap_active()) else 0.0
-                        obj.Length = max(1.0, fld_snap.snap_length(abs(pt_local.x) * 2.0, step))
-                        obj.Width  = max(1.0, fld_snap.snap_length(abs(pt_local.y) * 2.0, step))
-                        if self.doc:
-                            self.doc.recompute([obj])
-                        self.update_handles()
-
             elif self.state == 3:
                 obj = self._active_obj or self._editing_obj
                 if obj:
@@ -541,82 +708,22 @@ class WorkPlaneCreator(FldBase):
         except Exception as e:
             fld_logger.debug(f"WorkPlaneCreator._drag_update: {e}")
 
-    def handle_move(self, event_dict):
-        """Hover feedback only; the mutating states are driven by _drag_update."""
-        if getattr(self, "_terminated", False) or self.state != 1:
-            return
-        try:
-            ray_p, ray_d = self._get_ray(event_dict)
-            if ray_p is None or ray_d is None:
-                return
-            hit_idx, _ = self._hit_test(ray_p, ray_d)
-            self._set_hover(hit_idx)
-        except Exception as e:
-            fld_logger.debug(f"WorkPlaneCreator.handle_move: {e}")
-
-    def get_context_menu(self, event_dict=None):
-        return super().get_context_menu(event_dict)
-
-    def _modal_obj(self):
+    def _plane_obj(self):
+        """The placed plane (dropped, or being edited); None in state 0."""
         return getattr(self, "_active_obj", None) or getattr(self, "_editing_obj", None)
 
-    def get_selected_vertex_pos(self):
-        """The plane origin is the grab handle -- state 3 already drags exactly this."""
-        obj = self._modal_obj()
-        return FreeCAD.Vector(obj.Placement.Base) if obj and hasattr(obj, "Placement") else None
+    def _make_gizmo_target(self):
+        return WorkPlaneGizmoTarget(self) if self._plane_obj() is not None else None
 
-    def update_selected_vertex_pos(self, global_pos):
-        obj = self._modal_obj()
-        if obj and hasattr(obj, "Placement"):
-            plc = FreeCAD.Placement(obj.Placement)
-            plc.Base = global_pos
-            obj.Placement = plc
-            if self.doc:
-                self.doc.recompute([obj])
-            self.update_handles()
+    def _gizmo_root(self):
+        return self.handles_root
 
-    def get_modal_pivot(self):
-        return self.get_selected_vertex_pos()
-
-    def snapshot_modal_state(self):
-        obj = self._modal_obj()
-        if not obj or not hasattr(obj, "Placement"):
-            return None
-        return (FreeCAD.Placement(obj.Placement), float(getattr(obj, "Length", 100.0)), float(getattr(obj, "Width", 100.0)))
-
-    def restore_modal_state(self, snap):
-        obj = self._modal_obj()
-        if obj and snap:
-            obj.Placement, obj.Length, obj.Width = snap[0], snap[1], snap[2]
-            if self.doc:
-                self.doc.recompute([obj])
-            self.update_handles()
-
-    def apply_modal_rotate(self, angle_deg):
-        """Spin the plane about its own normal -- the only rotation that keeps it a
-        plane the user can still see. An unlocked rotate on a workplane about the
-        view axis would tilt it out of the drawing surface it was placed on."""
-        obj = self._modal_obj()
-        if not obj or not getattr(self, "_modal_snapshot", None):
-            return
-        base_plc = self._modal_snapshot[0]
-        axis = base_plc.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
-        spin = FreeCAD.Rotation(axis, angle_deg)
-        plc = FreeCAD.Placement(base_plc)
-        plc.Rotation = spin.multiply(base_plc.Rotation)
-        obj.Placement = plc
-        if self.doc:
+    def _plane_changed(self):
+        """After the gizmo changed the plane: recompute it and move the spheres (which
+        refreshes the gizmo)."""
+        obj = self._plane_obj()
+        if obj is not None and self.doc:
             self.doc.recompute([obj])
         self.update_handles()
 
-    def apply_modal_scale(self, factor):
-        """Scale is resize: Length and Width, not a Placement scale."""
-        obj = self._modal_obj()
-        if not obj or not getattr(self, "_modal_snapshot", None):
-            return
-        obj.Length = max(1.0, self._modal_snapshot[1] * factor)
-        obj.Width = max(1.0, self._modal_snapshot[2] * factor)
-        if self.doc:
-            self.doc.recompute([obj])
-        self.update_handles()
 

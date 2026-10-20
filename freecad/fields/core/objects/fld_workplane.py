@@ -5,6 +5,55 @@ import math
 from pivy import coin
 from freecad.fields.core import fld_logger
 
+MAJOR_EVERY = 5          # every fifth line is drawn dark
+MAX_LINES_PER_AXIS = 400  # past this, the light lines coarsen by MAJOR_EVERY
+
+
+def grid_lines(length, width, step):
+    """Line endpoints for a centred grid: a light line every `step`, dark every fifth.
+
+    The lines through the origin are dark, so the dark lines fall on multiples of
+    `MAJOR_EVERY * step` -- the values Ctrl-snapping lands on every fifth step. When a
+    small step would draw more than MAX_LINES_PER_AXIS lines across the plane, the
+    step is multiplied by MAJOR_EVERY until it fits.
+
+    Returns:
+        (light, dark): two lists of ((x, y, 0), (x, y, 0)) segments.
+    """
+    if step <= 0:
+        step = 1.0
+    while max(length, width) / step > MAX_LINES_PER_AXIS:
+        step *= MAJOR_EVERY
+    half_l, half_w = length / 2.0, width / 2.0
+    light, dark = [], []
+    for half_span, half_other, horizontal in ((half_w, half_l, True), (half_l, half_w, False)):
+        n = int(half_span / step + 1e-9)
+        for i in range(-n, n + 1):
+            c = i * step
+            seg = (((-half_other, c, 0), (half_other, c, 0)) if horizontal
+                   else ((c, -half_other, 0), (c, half_other, 0)))
+            (dark if i % MAJOR_EVERY == 0 else light).append(seg)
+    return light, dark
+
+
+class _SnapStepObserver:
+    """Redraws a workplane grid when the snap grid step parameter changes."""
+
+    def __init__(self, vp):
+        import weakref
+        self._vp = weakref.ref(vp)
+
+    def onChange(self, grp, name):
+        if name != "SnapGridStep":
+            return
+        vp = self._vp()
+        if vp is not None:
+            try:
+                vp.refresh_grid()
+            except Exception as e:
+                fld_logger.debug(f"workplane grid refresh failed: {e}")
+
+
 class FldWorkPlane:
     def __init__(self, obj):
         obj.Proxy = self
@@ -25,9 +74,6 @@ class FldWorkPlane:
         if not hasattr(obj, "Width"):
             obj.addProperty("App::PropertyLength", "Width", "Fields", "Width of the grid")
             obj.Width = 100.0
-        if not hasattr(obj, "GridSpacing"):
-            obj.addProperty("App::PropertyLength", "GridSpacing", "Fields", "Spacing between grid lines")
-            obj.GridSpacing = 10.0
             
     def execute(self, obj):
         try:
@@ -102,29 +148,27 @@ class FldWorkPlaneViewProvider:
                 f"this Coin3D/pivy build ({e}); workplane will write depth."
             )
         
-        # Material for grid and plane
+        # Light lines at every snap step, dark lines every fifth.
+        self.light_coords, self.light_lines = self._add_line_set(0.2, 0.6, 0.9, 0.85)
+        self.dark_coords, self.dark_lines = self._add_line_set(0.1, 0.35, 0.6, 0.3)
+
+        # Semi-transparent rectangle
         self.plane_mat = coin.SoMaterial()
         self.plane_mat.diffuseColor.setValue(0.2, 0.6, 0.9)
         self.plane_mat.transparency.setValue(0.7)
         self.grid_sep.addChild(self.plane_mat)
-        
-        # Grid Coord and LineSet
-        self.grid_coords = coin.SoCoordinate3()
-        self.grid_lines = coin.SoLineSet()
-        self.grid_sep.addChild(self.grid_coords)
-        self.grid_sep.addChild(self.grid_lines)
-        
-        # Semi-transparent rectangle
         self.face_coords = coin.SoCoordinate3()
         self.face_set = coin.SoFaceSet()
         self.grid_sep.addChild(self.face_coords)
         self.grid_sep.addChild(self.face_set)
         
-        # Initial grid geometry
-        l = self.Object.Length.Value if hasattr(self.Object.Length, "Value") else float(getattr(self.Object, "Length", 100.0))
-        w = self.Object.Width.Value if hasattr(self.Object.Width, "Value") else float(getattr(self.Object, "Width", 100.0))
-        s = self.Object.GridSpacing.Value if hasattr(self.Object, "GridSpacing") and hasattr(self.Object.GridSpacing, "Value") else float(getattr(self.Object, "GridSpacing", 10.0))
-        self._setup_grid(l, w, s)
+        self.refresh_grid()
+        from freecad.fields.core.fld_prefs import PREFS_PATH
+        # FreeCAD drops an observer when the group handle it was attached to is
+        # garbage-collected, so the handle must live as long as this view provider.
+        self._snap_observer = _SnapStepObserver(self)
+        self._prefs_grp = FreeCAD.ParamGet(PREFS_PATH)
+        self._prefs_grp.Attach(self._snap_observer)
         
         self.transform = coin.SoTransform()
         self.root_node.insertChild(self.transform, 0)
@@ -134,68 +178,46 @@ class FldWorkPlaneViewProvider:
         
         # No dynamic scale event callback needed anymore.
 
-    def _setup_grid(self, length, width, spacing):
-        points = []
-        half_l = length / 2.0
-        half_w = width / 2.0
-        
-        # Avoid zero or negative spacing
-        if spacing <= 0:
-            spacing = 10.0
-            
-        steps_l = int(length / spacing)
-        steps_w = int(width / spacing)
-        
-        # Center the grid lines nicely
-        # Lines parallel to X (along width)
-        y_starts = [0]
-        for i in range(1, int(half_w / spacing) + 1):
-            y_starts.append(i * spacing)
-            y_starts.append(-i * spacing)
-            
-        for y in y_starts:
-            points.append((-half_l, y, 0))
-            points.append((half_l, y, 0))
-            
-        # Lines parallel to Y (along length)
-        x_starts = [0]
-        for i in range(1, int(half_l / spacing) + 1):
-            x_starts.append(i * spacing)
-            x_starts.append(-i * spacing)
-            
-        for x in x_starts:
-            points.append((x, -half_w, 0))
-            points.append((x, half_w, 0))
-            
-        self.grid_coords.point.setNum(len(points))
-        if len(points) > 0:
-            self.grid_coords.point.setValues(0, len(points), points)
-            
-        num_lines = len(points) // 2
-        self.grid_lines.numVertices.setNum(num_lines)
-        if num_lines > 0:
-            self.grid_lines.numVertices.setValues(0, num_lines, [2] * num_lines)
-        
-        f_points = [
-            (-half_l, -half_w, 0),
-            (half_l, -half_w, 0),
-            (half_l, half_w, 0),
-            (-half_l, half_w, 0)
-        ]
-        self.face_coords.point.setValues(0, 4, f_points)
+    def _add_line_set(self, r, g, b, transparency):
+        sep = coin.SoSeparator()
+        mat = coin.SoMaterial()
+        mat.diffuseColor.setValue(r, g, b)
+        mat.transparency.setValue(transparency)
+        coords, lines = coin.SoCoordinate3(), coin.SoLineSet()
+        for node in (mat, coords, lines):
+            sep.addChild(node)
+        self.grid_sep.addChild(sep)
+        return coords, lines
+
+    @staticmethod
+    def _fill(coords, lines, segments):
+        pts = [p for seg in segments for p in seg]
+        coords.point.setNum(len(pts))
+        if pts:
+            coords.point.setValues(0, len(pts), pts)
+        lines.numVertices.setNum(len(segments))
+        if segments:
+            lines.numVertices.setValues(0, len(segments), [2] * len(segments))
+
+    def refresh_grid(self):
+        """Redraw from the object's size and the current snap grid step."""
+        from freecad.fields.core.fld_settings import get_snap_grid_step
+        length = float(getattr(self.Object.Length, "Value", self.Object.Length))
+        width = float(getattr(self.Object.Width, "Value", self.Object.Width))
+        light, dark = grid_lines(length, width, get_snap_grid_step())
+        self._fill(self.light_coords, self.light_lines, light)
+        self._fill(self.dark_coords, self.dark_lines, dark)
+        half_l, half_w = length / 2.0, width / 2.0
+        self.face_coords.point.setValues(0, 4, [(-half_l, -half_w, 0), (half_l, -half_w, 0),
+                                                (half_l, half_w, 0), (-half_l, half_w, 0)])
         self.face_set.numVertices.setValue(4)
-
-
 
     def updateData(self, fp, prop):
         if prop == "Placement":
             # Nothing to do for translation/rotation as Coin3D parent handles it
             pass
-        elif prop in ["Length", "Width", "GridSpacing"]:
-            l = self.Object.Length.Value if hasattr(self.Object.Length, "Value") else float(getattr(self.Object, "Length", 100.0))
-            w = self.Object.Width.Value if hasattr(self.Object.Width, "Value") else float(getattr(self.Object, "Width", 100.0))
-            s = self.Object.GridSpacing.Value if hasattr(self.Object.GridSpacing, "Value") else float(getattr(self.Object, "GridSpacing", 10.0))
-            self._setup_grid(l, w, s)
+        elif prop in ["Length", "Width"]:
+            self.refresh_grid()
 
     def getDisplayModes(self, obj):
         return ["Standard"]
@@ -229,7 +251,9 @@ class FldWorkPlaneViewProvider:
             
         fld_logger.info(f"FldWorkPlaneViewProvider: double-clicked {obj.Label}")
         from freecad.fields.tools.work_plane_tool import WorkPlaneCreator
-        WorkPlaneCreator()
+        tool = WorkPlaneCreator()
+        if not getattr(tool, "_is_editing", False):
+            tool.edit_object(obj)
         
         return True
 

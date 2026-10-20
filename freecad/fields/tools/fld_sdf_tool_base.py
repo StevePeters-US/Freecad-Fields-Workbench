@@ -1,27 +1,74 @@
 # SPDX-License-Identifier: CC-BY-NC-SA-4.0
+import FreeCAD
 import FreeCADGui
 from PySide import QtCore
+from freecad.fields.core.input.gizmo.models import GizmoFrame, Kind, handle_set, world_axes
+from freecad.fields.core.input.gizmo.transform import delta_rotation
 from freecad.fields.tools.fld_base import FldBase
+from freecad.fields.tools.gizmo_driver import GizmoDriverMixin
 from freecad.fields.core import fld_logger
 
 
-class DirectionGizmoMixin:
+class DirectionGizmoTarget:
+    """The universal gizmo's `GizmoTarget` for a DirectionGizmoMixin tool (noise,
+    heightmap, array; `universal_gizmo` reference/models.md). Arrows and plane squares
+    move the tool's centre, rings turn its direction; no scale cubes. Every apply is a
+    total from the snapshot; the tool's `_gizmo_*` hooks say what changes."""
+
+    def __init__(self, tool):
+        self.tool = tool
+        self._snapshot = None       # the latest, for gizmo_commit
+
+    def gizmo_frame(self):
+        t = self.tool
+        if getattr(t, "_target_obj", None) is None:
+            return None
+        o = FreeCAD.Vector(t._gizmo_pivot())
+        return GizmoFrame(o, t._gizmo_axes(), FreeCAD.Vector(o))
+
+    def gizmo_handles(self):
+        return self.tool._gizmo_handles()
+
+    def gizmo_snapshot(self):
+        self._snapshot = self.tool._gizmo_snapshot()
+        return self._snapshot
+
+    def gizmo_apply(self, snap, delta):
+        t = self.tool
+        if delta.handle.kind is Kind.ROTATE:
+            t._gizmo_apply_rotation(snap, delta)
+        else:
+            t._gizmo_apply_translation(snap, delta.translation)
+        t._gizmo_changed()
+
+    def gizmo_restore(self, snap):
+        self.tool._gizmo_restore(snap)
+        self.tool._gizmo_changed()
+
+    def gizmo_commit(self):
+        self.tool._gizmo_committed(self._snapshot)
+
+    def gizmo_snap_points(self):
+        return []
+
+
+class DirectionGizmoMixin(GizmoDriverMixin):
     """
     Mixin for SDF modifier tools that expose DirectionX/Y/Z on their target object
-    and want a 3-ring rotation gizmo + direction arrow visual.
+    and want a 3-ring rotation gizmo + direction arrow visual. The gizmo is the universal
+    gizmo controller (`GizmoDriverMixin` routes the mouse to it).
 
     Host class requirements:
         self._target_obj        — FreeCAD object with Source link and DirectionX/Y/Z
         self.points_root        — coin.SoAnnotation scene node
-        self.projector          — ViewProjector (from FldBase)
-        self._compute_handle_radius()   — from FldBase
-        self._set_cursor() / _restore_cursor()  — from FldBase
-        self._start_drag_timer()        — from DragTimerMixin
-        self._commit_changes()          — defined by the concrete tool
+        self.view               — the 3D view
+        self._commit_changes()  — defined by the concrete tool
+        self.panel              — optional; `update_ui()` is called after each apply
 
-    Hooks to override in subclasses:
-        _on_direction_changed() — called after direction updates during gizmo drag.
-                                  Default redraws the direction arrow only.
+    Hooks to override in subclasses: `_gizmo_handles`, `_gizmo_pivot`, `_gizmo_axes`,
+    `_gizmo_origin_prop_names`, `_gizmo_translate_target`, `_gizmo_snapshot_props`,
+    `_gizmo_apply_rotation`, `_gizmo_committed` and `_on_direction_changed` (called after
+    direction updates; the default redraws the direction arrow only).
     """
 
     ARROW_COLOR = (0.62, 0.28, 0.95)   # purple
@@ -63,35 +110,100 @@ class DirectionGizmoMixin:
         obj = getattr(self, "_target_obj", None)
         return FreeCAD.Vector(obj.DirectionX, obj.DirectionY, obj.DirectionZ)
 
-    def _init_gizmo(self):
-        import FreeCAD
-        from freecad.fields.core.input.fld_gizmo import FldTransformGizmo
-        if getattr(self, "_gizmo", None):
-            self._gizmo.undraw()
-            self._gizmo = None
-        obj = self._target_obj
-        if not obj:
-            return
-        self._gizmo = FldTransformGizmo()
-        source = getattr(obj, "Source", None)
-        pivot = self._gizmo_pivot()
-        axes = {"x": FreeCAD.Vector(1, 0, 0), "y": FreeCAD.Vector(0, 1, 0), "z": FreeCAD.Vector(0, 0, 1)}
-        if source and hasattr(source, "Placement"):
+    def _gizmo_axes(self):
+        """The frame's axes: the Source's rotated X/Y/Z, else global (as the old gizmo)."""
+        axes = world_axes()
+        source = getattr(self._target_obj, "Source", None)
+        if source is not None and hasattr(source, "Placement"):
             rot = source.Placement.Rotation
             axes = {k: rot.multVec(v) for k, v in axes.items()}
-        length = 50.0
-        if source and hasattr(source, "Proxy") and hasattr(source.Proxy, "get_sdf_field"):
+        return axes
+
+    def _make_gizmo_target(self):
+        return DirectionGizmoTarget(self) if getattr(self, "_target_obj", None) else None
+
+    def _gizmo_handles(self):
+        """The handles this tool has; only these are drawn (`handle_set`, INP-088).
+        Default: the old gizmo's arrows, plane squares and rings; no scale. A tool that
+        needs fewer or more overrides it."""
+        return handle_set(move="xyz", planes=("xy", "xz", "yz"), rotate="xyz", free_move=True)
+
+    def _gizmo_snapshot_props(self):
+        """The properties a transform may change, which Esc restores: the origin
+        properties, if any, and DirectionX/Y/Z."""
+        return tuple(self._gizmo_origin_prop_names() or ()) + ("DirectionX", "DirectionY", "DirectionZ")
+
+    def _gizmo_snapshot(self):
+        """Those properties, plus the translate target's Placement when there are no
+        origin properties (`_placement`, else None)."""
+        obj = self._target_obj
+        snap = {n: getattr(obj, n) for n in self._gizmo_snapshot_props()}
+        target = None if self._gizmo_origin_prop_names() else self._gizmo_translate_target()
+        snap["_placement"] = (FreeCAD.Placement(target.Placement)
+                              if target is not None and hasattr(target, "Placement") else None)
+        return snap
+
+    def _gizmo_restore(self, snap):
+        obj = self._target_obj
+        for n in self._gizmo_snapshot_props():
+            setattr(obj, n, snap[n])
+        if snap["_placement"] is not None:
+            self._gizmo_translate_target().Placement = FreeCAD.Placement(snap["_placement"])
+
+    def _gizmo_apply_translation(self, snap, tr):
+        """Arrow or plane square: the centre = the snapshot's + `tr` (world)."""
+        names = self._gizmo_origin_prop_names()
+        if names:
+            obj = self._target_obj
+            for n, c in zip(names, (tr.x, tr.y, tr.z)):
+                setattr(obj, n, snap[n] + c)
+        elif snap["_placement"] is not None:
+            # A whole Placement: `.Placement.Base += tr` would change a copy.
+            moved = FreeCAD.Placement(snap["_placement"])
+            moved.move(tr)
+            self._gizmo_translate_target().Placement = moved
+
+    def _gizmo_apply_rotation(self, snap, delta):
+        """Ring: the direction = the snapshot's, turned by the total. A ring about the
+        direction itself changes nothing here; NoiseTool keeps that spin as its roll."""
+        d = FreeCAD.Vector(snap["DirectionX"], snap["DirectionY"], snap["DirectionZ"])
+        if d.Length < 1e-8:
+            d = FreeCAD.Vector(0, 0, -1)
+        new = delta_rotation(delta).multVec(d)
+        new.normalize()
+        obj = self._target_obj
+        obj.DirectionX, obj.DirectionY, obj.DirectionZ = new.x, new.y, new.z
+
+    def _gizmo_changed(self):
+        """After an apply or a restore: the arrow, the panel, the deferred recompute."""
+        self._on_direction_changed()
+        panel = getattr(self, "panel", None)
+        if panel:
+            panel.update_ui()
+        self._commit_changes()
+
+    def _gizmo_committed(self, snap):
+        """After a transform is kept. Nothing by default: every apply already committed."""
+
+    def _on_before_redraw(self):
+        """After every commit, the gizmo's or the panel's: the gizmo follows the target."""
+        self._update_gizmo()
+        super()._on_before_redraw()
+
+    def _direction_arrow_length(self):
+        """40% of the Source's bounding-box diagonal, else 50 mm (the old gizmo's length)."""
+        source = getattr(self._target_obj, "Source", None)
+        if source is not None and hasattr(source, "Proxy") and hasattr(source.Proxy, "get_sdf_field"):
             try:
                 field = source.Proxy.get_sdf_field(source)
                 if field:
                     bb_min, bb_max = field.bounding_box()
                     diag = (bb_max - bb_min).Length
                     if diag > 1.0:
-                        length = diag * 0.4
+                        return diag * 0.4
             except Exception as e:
-                from freecad.fields.core import fld_logger
-                fld_logger.debug(f"DirectionGizmoMixin._init_gizmo failed: {e}")
-        self._gizmo.draw(self.points_root, pivot, axes=axes, length=length, draw_translation=True)
+                fld_logger.debug(f"DirectionGizmoMixin._direction_arrow_length failed: {e}")
+        return 50.0
 
     def _draw_direction_arrow(self):
         import FreeCAD
@@ -120,7 +232,7 @@ class DirectionGizmoMixin:
         mat.specularColor.setValue(0.5, 0.5, 0.5)
         mat.shininess.setValue(0.5)
         self._arrow_root.addChild(mat)
-        length = self._gizmo._length if getattr(self, "_gizmo", None) else 50.0
+        length = self._direction_arrow_length()
         shaft_r = length * 0.03
         cone_r  = length * 0.07
         shaft_h = length * 0.75
@@ -149,240 +261,6 @@ class DirectionGizmoMixin:
         cone_sep.addChild(cone)
         self._arrow_root.addChild(cone_sep)
 
-    # ── Input helpers ─────────────────────────────────────────────────────────
-
-    def _gizmo_handle_move(self, ray_p, ray_d, tol) -> bool:
-        """Set a pointing cursor if hovering a gizmo handle (ring or arrow). Returns True if consumed."""
-        if not getattr(self, "_gizmo", None):
-            return False
-        axis = self._gizmo.hit_test(ray_p, ray_d, tol)
-        if axis:
-            from PySide.QtCore import Qt
-            self._set_cursor(Qt.PointingHandCursor)
-            return True
-        return False
-
-    def _gizmo_try_start_drag(self, ray_p, ray_d, event_dict, tol) -> bool:
-        """Hit-test the gizmo (rings or translation arrows) and start a drag if hit. Returns True if consumed."""
-        if not getattr(self, "_gizmo", None):
-            return False
-        axis = self._gizmo.hit_test(ray_p, ray_d, tol)
-        if not axis:
-            return False
-        import FreeCAD
-        import math
-        self._dragging_idx = f"gizmo_{axis}"
-        pivot = self._gizmo_pivot()
-        self._edit_pivot = pivot
-        if axis.startswith("rot_"):
-            ax_key = axis[4:]  # "rot_x" → "x"
-            ax_vec = self._gizmo._axes[ax_key]
-            from freecad.fields.core.input.fld_gizmo import _perp_pair
-            ref, tang = _perp_pair(ax_vec)
-            self._rot_ring_ref = ref
-            self._rot_ring_tang = tang
-            pt = self.projector.get_mouse_world_pos(event_dict, ax_vec, pivot, place_on_geometry=False)
-            if pt:
-                v = pt - pivot
-                self._edit_last_angle = math.atan2(v.dot(ref), v.dot(tang))
-            else:
-                self._edit_last_angle = 0.0
-        elif axis.startswith("plane_"):
-            plane_key = axis[6:]  # 'xy', 'xz', or 'yz'
-            norm_axis = {'xy': 'z', 'xz': 'y', 'yz': 'x'}[plane_key]
-            plane_norm = self._gizmo._axes[norm_axis]
-            self._plane_drag_norm = FreeCAD.Vector(plane_norm)
-            pt = self.projector.get_mouse_world_pos(event_dict, plane_norm, pivot, place_on_geometry=False)
-            self._drag_constraint_base = pt if pt else pivot
-        else:
-            ax_vec = self._gizmo._axes[axis]
-            from freecad.fields.core.input.input_manager import FldInputManager
-            click_pt = FldInputManager.get_instance().get_axis_point(self.view, pivot, ax_vec, event_dict)
-            self._drag_constraint_base = click_pt if click_pt else pivot
-        self._start_drag_timer()
-        return True
-
-    def _gizmo_drag_tick(self) -> bool:
-        """
-        Handle one rotation or translation drag frame. Call from _drag_update.
-        Returns True if the tick was for a gizmo drag (caller should return).
-        """
-        dragging = getattr(self, "_dragging_idx", None)
-        if not dragging or not dragging.startswith("gizmo_"):
-            return False
-        import FreeCAD
-        import math
-        axis = dragging[len("gizmo_"):]
-        gizmo = getattr(self, "_gizmo", None)
-        if not gizmo:
-            return True
-        from freecad.fields.core.input.input_manager import FldInputManager
-        mouse_pos = FldInputManager.get_instance()._last_qt_pos
-
-        if axis.startswith("rot_"):
-            axis_key = axis[4:]
-            if axis_key not in gizmo._axes:
-                return True
-            ax_vec = gizmo._axes[axis_key]
-            pivot = getattr(self, "_edit_pivot", None)
-            ref   = getattr(self, "_rot_ring_ref", None)
-            tang  = getattr(self, "_rot_ring_tang", None)
-            if pivot is None or ref is None or tang is None:
-                return True
-            view = getattr(self, "view", None)
-            if view is not None:
-                ray_p, ray_d = FldInputManager.get_instance().get_ray(view, {"Position": mouse_pos})
-                if ray_d is not None and abs(ray_d.dot(ax_vec)) < 0.17:
-                    return True
-            pt = self.projector.get_mouse_world_pos(
-                {"Position": mouse_pos}, ax_vec, pivot, place_on_geometry=False)
-            if not pt:
-                return True
-            v = pt - pivot
-            angle = math.atan2(v.dot(ref), v.dot(tang))
-            da = angle - self._edit_last_angle
-            # atan2 wraps at +/-pi, so a ring drag that crosses the branch cut
-            # yields a delta a full turn out. Where `rot` is applied as a rotation
-            # a full turn is the identity and this never showed; ArrayTool is the
-            # first consumer to accumulate it as a scalar (StepAngle), where an
-            # unwrapped delta is a ~360 deg jump mid-drag.
-            da = (da + math.pi) % (2.0 * math.pi) - math.pi
-            da_deg = math.degrees(da)
-            if abs(da_deg) < 1e-8:
-                return True
-            rot = FreeCAD.Rotation(ax_vec, da_deg)
-            obj = self._target_obj
-            if not obj:
-                return True
-            self._apply_gizmo_rotation(rot)
-            self._edit_last_angle = angle
-            self._on_direction_changed()
-            if hasattr(self, "panel") and self.panel:
-                self.panel.update_ui()
-            self._commit_changes()
-            return True
-        elif axis.startswith("plane_"):
-            plane_key = axis[6:]
-            if plane_key not in ('xy', 'xz', 'yz'):
-                return True
-            norm_axis = {'xy': 'z', 'xz': 'y', 'yz': 'x'}[plane_key]
-            plane_norm = getattr(self, "_plane_drag_norm", None) or gizmo._axes[norm_axis]
-            base_pt = getattr(self, "_drag_constraint_base", None)
-            if not base_pt:
-                return True
-            view = getattr(self, "view", None)
-            if view is not None:
-                ray_p, ray_d = FldInputManager.get_instance().get_ray(view, {"Position": mouse_pos})
-                if ray_d is not None and abs(ray_d.dot(plane_norm)) < 0.08:
-                    return True
-            current_pt = self.projector.get_mouse_world_pos(
-                {"Position": mouse_pos}, plane_norm, base_pt, place_on_geometry=False)
-            if not current_pt:
-                return True
-            delta = current_pt - base_pt
-            delta = delta - plane_norm * delta.dot(plane_norm)
-            ax1_key, ax2_key = {'xy': ('x', 'y'), 'xz': ('x', 'z'), 'yz': ('y', 'z')}[plane_key]
-            u1 = gizmo._axes[ax1_key]
-            u2 = gizmo._axes[ax2_key]
-            from freecad.fields.core.input import fld_snap
-            from freecad.fields.core.fld_settings import (
-                get_snap_grid_step, get_snap_during_direct_drag)
-            if get_snap_during_direct_drag() and fld_snap.snap_active():
-                step = get_snap_grid_step()
-                d1 = fld_snap.snap_length(delta.dot(u1), step)
-                d2 = fld_snap.snap_length(delta.dot(u2), step)
-                delta = u1 * d1 + u2 * d2
-            if delta.Length < 1e-8:
-                return True
-            obj = self._target_obj
-            if not obj:
-                return True
-            prop_names = self._gizmo_origin_prop_names()
-            if prop_names:
-                px, py, pz = prop_names
-                setattr(obj, px, getattr(obj, px, 0.0) + delta.x)
-                setattr(obj, py, getattr(obj, py, 0.0) + delta.y)
-                setattr(obj, pz, getattr(obj, pz, 0.0) + delta.z)
-            else:
-                target = self._gizmo_translate_target()
-                if hasattr(target, "Placement"):
-                    pl = FreeCAD.Placement(target.Placement)
-                    pl.move(delta)
-                    target.Placement = pl
-            self._drag_constraint_base = current_pt
-            pivot = self._gizmo_pivot()
-            self._gizmo.update(pivot, axes=gizmo._axes)
-            self._on_direction_changed()
-            if hasattr(self, "panel") and self.panel:
-                self.panel.update_ui()
-            self._commit_changes()
-            return True
-        else:
-            # Translation axis drag: 'x', 'y', or 'z'
-            if axis not in gizmo._axes:
-                return True
-            ax_vec = gizmo._axes[axis]
-            base_pt = getattr(self, "_drag_constraint_base", None)
-            if not base_pt:
-                return True
-            current_pt = FldInputManager.get_instance().get_axis_point(
-                self.view, base_pt, ax_vec, {"Position": mouse_pos})
-            if not current_pt:
-                return True
-            delta = current_pt - base_pt
-            from freecad.fields.core.input import fld_snap
-            from freecad.fields.core.fld_settings import (
-                get_snap_grid_step, get_snap_during_direct_drag)
-            if get_snap_during_direct_drag() and fld_snap.snap_active():
-                step = get_snap_grid_step()
-                delta_len = delta.dot(ax_vec)
-                delta = ax_vec * fld_snap.snap_length(delta_len, step)
-            if delta.Length < 1e-8:
-                return True
-            obj = self._target_obj
-            if not obj:
-                return True
-            prop_names = self._gizmo_origin_prop_names()
-            if prop_names:
-                px, py, pz = prop_names
-                setattr(obj, px, getattr(obj, px, 0.0) + delta.x)
-                setattr(obj, py, getattr(obj, py, 0.0) + delta.y)
-                setattr(obj, pz, getattr(obj, pz, 0.0) + delta.z)
-            else:
-                target = self._gizmo_translate_target()
-                if hasattr(target, "Placement"):
-                    # `target.Placement.Base += delta` silently does nothing: the
-                    # property getter returns a copy. Assign a whole Placement.
-                    pl = FreeCAD.Placement(target.Placement)
-                    pl.move(delta)
-                    target.Placement = pl
-            self._drag_constraint_base = current_pt
-            pivot = self._gizmo_pivot()
-            self._gizmo.update(pivot, axes=gizmo._axes)
-            self._on_direction_changed()
-            if hasattr(self, "panel") and self.panel:
-                self.panel.update_ui()
-            self._commit_changes()
-            return True
-
-    def _apply_gizmo_rotation(self, rot):
-        """Apply one ring-drag rotation to the target's orientation.
-
-        Base behaviour rotates the direction vector only. A ring whose axis is
-        parallel to the current direction is therefore a no-op here — override in
-        tools that also store a spin about the direction (see Noise2DTool).
-        """
-        import FreeCAD
-        obj = self._target_obj
-        direction = FreeCAD.Vector(obj.DirectionX, obj.DirectionY, obj.DirectionZ)
-        if direction.Length < 1e-8:
-            direction = FreeCAD.Vector(0, 0, -1)
-        new_dir = rot.multVec(direction)
-        new_dir.normalize()
-        obj.DirectionX = new_dir.x
-        obj.DirectionY = new_dir.y
-        obj.DirectionZ = new_dir.z
-
     def _on_direction_changed(self):
         """Called after direction updates during gizmo drag. Override to update extra visuals."""
         self._draw_direction_arrow()
@@ -390,9 +268,7 @@ class DirectionGizmoMixin:
     # ── Cleanup ───────────────────────────────────────────────────────────────
 
     def _gizmo_teardown(self):
-        if getattr(self, "_gizmo", None):
-            self._gizmo.undraw()
-            self._gizmo = None
+        self._dispose_gizmo()
         if getattr(self, "_arrow_root", None):
             try:
                 self.points_root.removeChild(self._arrow_root)
@@ -407,6 +283,10 @@ class FldSdfToolBase(FldBase):
     Common base for all SDF editing tools (primitives, noise, etc.).
     Provides unified Q key group toggle so all tools behave identically.
     """
+
+    #: False for a tool whose own mode already says add or remove (sculpt's Deposit/Carve):
+    #: its menu then has no Additive / Subtractive item beside that mode.
+    OFFERS_GROUP_TOGGLE = True
 
     def _get_sdf_obj(self):
         """Return the active SDF FreeCAD object. Override in subclasses."""
@@ -431,37 +311,26 @@ class FldSdfToolBase(FldBase):
         self._source_obj = source_obj
         self.edit_object(mod_obj)
 
-    def handle_keyboard(self, event_dict):
-        if event_dict.get("Key") == QtCore.Qt.Key_Q:
-            obj = self._get_sdf_obj()
-            if obj and hasattr(obj, "Group"):
-                obj.Group = "Subtractive" if getattr(obj, "Group", "Additive") == "Additive" else "Additive"
-                obj.touch()
-                if obj.Document:
-                    from freecad.fields.core.sdf.sdf_boolean_compose import get_boolean_parents, update_boolean_parents
-                    parents = get_boolean_parents(obj)
-                    for p in parents:
-                        p.touch()
-                    obj.Document.recompute([obj] + parents)
-                    
-                    from freecad.fields.core.render.fld_scene_voxel_renderer import FldSceneVoxelRenderer
-                    renderer = FldSceneVoxelRenderer.get_instance()
-                    renderer.begin_update_batch()
-                    try:
-                        proxy = getattr(obj, "Proxy", None)
-                        if proxy and hasattr(proxy, "SdfField") and proxy.SdfField:
-                            label = f"{obj.Document.Name}.{obj.Name}"
-                            renderer.update_field(label, proxy.SdfField)
-                        update_boolean_parents(obj)
-                    finally:
-                        renderer.end_update_batch()
-                self._after_group_toggle(obj)
-            else:
-                self._set_default_group(
-                    "Subtractive" if self._get_default_group() == "Additive" else "Additive"
-                )
-            return True
-        return super().handle_keyboard(event_dict)
+    def _toggle_group(self):
+        """Toggle Additive/Subtractive for active SDF object or default creation group."""
+        from freecad.fields.core.input.fld_menu import set_render_group
+        obj = self._get_sdf_obj()
+        if obj and hasattr(obj, "Group"):
+            other = "Subtractive" if getattr(obj, "Group", "Additive") == "Additive" else "Additive"
+            set_render_group([obj], other)
+            self._after_group_toggle(obj)
+        else:
+            self._set_default_group(
+                "Subtractive" if self._get_default_group() == "Additive" else "Additive"
+            )
+
+    def get_context_menu(self, event_dict=None):
+        base_items = list(super().get_context_menu(event_dict)) if hasattr(super(), "get_context_menu") else []
+        if not self.OFFERS_GROUP_TOGGLE:
+            return base_items
+        from freecad.fields.core.input.fld_menu_tree import MenuItem
+        return [MenuItem("Additive / Subtractive", action=self._toggle_group)] + base_items
+
 
 
 class FldSdfModifierToolBase(FldSdfToolBase):
@@ -499,7 +368,8 @@ class FldSdfModifierToolBase(FldSdfToolBase):
         super()._post_init()
         if not getattr(self, "_terminated", False) and self._is_editing:
             self.panel = self._make_panel()
-            FreeCADGui.Control.showDialog(self.panel)
+            gui_doc = FreeCADGui.getDocument(self.doc.Name)
+            FreeCADGui.Control.showDialog(self.panel, gui_doc)
             self._dialog_open = True
 
     def _get_sdf_obj(self):
@@ -598,11 +468,17 @@ class FldSdfModifierToolBase(FldSdfToolBase):
             obj.touch()
             if obj.Document:
                 from freecad.fields.core.sdf.sdf_boolean_compose import get_boolean_parents, update_boolean_parents
+                from freecad.fields.core.objects.fld_modifier_stack import get_chain
+                # recompute(objs) runs objs and what they depend on, never what depends
+                # on them, so the modifiers stacked on obj -- the only visible row --
+                # would keep the old shape until a full recompute (PNL-024).
+                _, chain = get_chain(obj)
+                downstream = chain[chain.index(obj) + 1:] if obj in chain else chain
                 parents = get_boolean_parents(obj)
-                for p in parents:
-                    p.touch()
+                for o in downstream + parents:
+                    o.touch()
                 doc = obj.Document
-                targets = [obj] + parents
+                targets = [obj] + downstream + parents
                 QtCore.QTimer.singleShot(0, lambda d=doc, t=targets: d.recompute(t))
                 
                 from freecad.fields.core.render.fld_scene_voxel_renderer import FldSceneVoxelRenderer

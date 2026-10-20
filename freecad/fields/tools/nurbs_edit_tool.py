@@ -11,10 +11,15 @@ import Part
 from PySide import QtCore
 from freecad.fields.tools.fld_base import FldBase, DragTimerMixin
 from freecad.fields.core import fld_logger
+from freecad.fields.core.input.fld_menu_tree import MenuItem, SEPARATOR
 from freecad.fields.core.input.input_manager import FldInputManager
 
 
-class NurbsEditTool(FldBase, DragTimerMixin):
+from freecad.fields.tools.curve_gizmo import CurveGizmoMixin, padded
+from pivy import coin
+
+
+class NurbsEditTool(CurveGizmoMixin, FldBase, DragTimerMixin):
     """
     Interactive tool for editing lattice-driven SDF objects.
     """
@@ -25,27 +30,22 @@ class NurbsEditTool(FldBase, DragTimerMixin):
         super().__init__()
         self._target_obj = None
         self._is_editing = True
-
-        self._selected_element = None # (index, type)
-        self._selected_point_idx = None
-        self._hovered_element = None
-        self._is_dragging = False
         self._wp_drag_start = None
+        self._selection = []
+        self._sel_markers = []
+        self.points_root = None
 
-        # State
-        self.drag_plane_n = None
-        self.drag_plane_o = None
-
-    def activate(self):
-        sel = FreeCADGui.Selection.getSelection()
-        if not sel:
-            fld_logger.error("No object selected to edit.")
-            self.terminate()
-            return
+    def activate(self, obj=None):
+        if obj is None:
+            sel = FreeCADGui.Selection.getSelection()
+            if not sel:
+                fld_logger.error("No object selected to edit.")
+                self.terminate()
+                return
+            obj = sel[0]
 
         from freecad.fields.core.objects.fld_object_proxy import FldObjectProxy
 
-        obj = sel[0]
         proxy = getattr(obj, "Proxy", None)
         if proxy is not None and isinstance(proxy, FldObjectProxy):
             shape_type = getattr(obj, "ShapeType", None)
@@ -63,8 +63,10 @@ class NurbsEditTool(FldBase, DragTimerMixin):
         fld_logger.info(f"NurbsEditTool activated for {self._target_obj.Label}")
 
         shape_type = getattr(self._target_obj, "ShapeType", None)
+        self._created_node_names = []
         if shape_type == "curve":
-            self.linked_nodes = list(getattr(self._target_obj, "ControlNodes", []) or [])
+            nodes = [n for n in (getattr(self._target_obj, "ControlNodes", []) or []) if n is not None]
+            self.linked_nodes = list(nodes)
             # Snapshot original properties for cancel restoration
             self._original_props = {
                 "Points": list(getattr(self._target_obj, "Points", [])),
@@ -74,7 +76,7 @@ class NurbsEditTool(FldBase, DragTimerMixin):
                 "PointTypes": list(getattr(self._target_obj, "PointTypes", [])),
             }
             if self.linked_nodes:
-                self._original_props["ControlNodeCoords"] = [FreeCAD.Vector(node.Coordinates) for node in self.linked_nodes if node is not None]
+                self._original_props["Nodes"] = [(n.Name, FreeCAD.Vector(n.Coordinates)) for n in nodes]
         else:
             self.linked_nodes = []
             self._original_props = {
@@ -93,6 +95,14 @@ class NurbsEditTool(FldBase, DragTimerMixin):
         if self._target_obj.Document:
             doc = self._target_obj.Document
             QtCore.QTimer.singleShot(0, doc.recompute)
+
+        if coin is not None and hasattr(coin, "SoAnnotation"):
+            self.points_root = coin.SoAnnotation()
+            if getattr(self, "view", None) and self.view.getSceneGraph():
+                self.view.getSceneGraph().addChild(self.points_root)
+        else:
+            self.points_root = None
+        self._init_gizmo()
 
     def _get_ray(self, event_dict):
         """Delegate ray acquisition to FldInputManager."""
@@ -113,11 +123,7 @@ class NurbsEditTool(FldBase, DragTimerMixin):
                 return (0, "Point")
             return None
 
-        if hasattr(self._target_obj, "ControlNodes") and self._target_obj.ControlNodes:
-            inv_plac = self._target_obj.Placement.inverse()
-            pts = [inv_plac.multVec(node.Coordinates) for node in self._target_obj.ControlNodes if node is not None]
-        else:
-            pts = getattr(self._target_obj, "Points", [])
+        pts = self._local_points()
         h_in = getattr(self._target_obj, "HandleIn", [])
         h_out = getattr(self._target_obj, "HandleOut", [])
         
@@ -143,179 +149,66 @@ class NurbsEditTool(FldBase, DragTimerMixin):
         return None
 
     def _hit_test_edge(self, event_dict):
-        """Hit test against the curve edge itself."""
+        """The point on the curve nearest the mouse ray, or None when the ray passes the curve
+        farther than the hover tolerance there."""
         ray_p, ray_d = self._get_ray(event_dict)
-        if not self._target_obj or not ray_p or not ray_d: return None
-        
-        shape = self._target_obj.Shape
-        if not shape: return None
-        
-        # Use Part.Shape.distToShape or similar to find distance from ray to edge
-        # We can approximate by checking points on the ray
-        best_t = None
-        best_p = None
-        min_dist = float('inf')
-        
-        # For simplicity, let's use the local plane intersection and check distance to shape
-        vd = self.view.getViewDirection()
-        n = FreeCAD.Vector(-vd.x, -vd.y, -vd.z)
-        o = self._target_obj.Placement.Base
-        
-        pos_global = self.get_mouse_world_pos(event_dict, n, o)
-        if not pos_global: return None
-        
-        dist, detail = shape.distToShape(Part.Point(pos_global).toShape())
-        
-        from freecad.fields.core.fld_settings import get_picking_radius
-        if dist < get_picking_radius():
-            return detail[0][2] # Closest point on shape (Global)
-            
-        return None
+        obj = self._target_obj
+        if obj is None or ray_p is None or ray_d is None:
+            return None
+        shape = getattr(obj, "Shape", None)
+        if shape is None or shape.isNull():
+            return None
+        d = FreeCAD.Vector(ray_d).normalize()
+        far = shape.BoundBox.DiagonalLength + (ray_p - shape.BoundBox.Center).Length + 1.0
+        ray = Part.LineSegment(ray_p - d * far, ray_p + d * far).toShape()
+        dist, pairs, _info = shape.distToShape(ray)
+        if not pairs:
+            return None
+        on_curve = pairs[0][0]
+        if dist > 1.5 * self._compute_handle_radius(on_curve):
+            return None
+        return on_curve
 
-    def on_button1_down(self, event_dict):
-        result = self.handle_click(event_dict)
-        if self.state in [1, 2]:
-            # Do NOT set _is_dragging here. _start_drag_timer() sets it itself
-            # (tool_mixins.py:45), and its first act is _stop_drag_timer(),
-            # which logs a drag summary if the flag is already True -- replaying
-            # the *previous* drag's counters against this session's wall clock
-            # (LE-005: a real 48.1 FPS drag reported as 20.4).
-            self._start_drag_timer()
-        return result
-
-    def on_button1_up(self, _event_dict):
-        was_dragging = self._is_dragging
-        self._stop_drag_timer()
-        self._clear_constraint_visual()
-        self._is_dragging = False
-
-        if (was_dragging or self.state in [1, 2]) and self._target_obj and self._target_obj.Document:
-            doc = self._target_obj.Document
-            QtCore.QTimer.singleShot(0, doc.recompute)
-
-        if self.state in [1, 2]:
-            self.state = 0
-            self._selected_element = None
-            self._wp_drag_start = None
-            fld_logger.debug("Released drag")
-        # Return False (pass-through) to match primitive-tool behaviour and keep
-        # FreeCAD's button-state tracking consistent for viewport navigation.
-        return False
-
-
-    def _drag_update(self):
-        if self._drag_check_lmb_released():
-            self._wp_drag_start = None
-            self._clear_constraint_visual()
-            return
-        if self.state not in [1, 2]:
-            self._stop_drag_timer()
-            return
-        mouse_pos = FldInputManager.get_instance()._last_qt_pos
-        event_dict = {"Position": mouse_pos}
-        pt_global = self.resolve_world_point(
-            event_dict,
-            base_pt=self.drag_plane_o,
-            plane_normal=self.drag_plane_n,
-            plane_origin=self.drag_plane_o,
-            exclude=[self._target_obj] if getattr(self, "_target_obj", None) else [],
-            place_on_geometry=False
-        )
-        if pt_global:
-            if self.state == 1 and (pt_global - self.drag_plane_o).Length < 1e-2:
-                return
-            pt_local = self._target_obj.Placement.inverse().multVec(pt_global)
-            self._update_element(self._selected_element, pt_local)
-
-    def handle_click(self, event_dict):
-        click_count = event_dict.get("ClickCount", 1)
-
-        # DOUBLE-CLICK to ADD point
-        if click_count > 1:
-            hit_p = self._hit_test_edge(event_dict) # Uses current mouse pos internally
-            if hit_p:
-                self._insert_point(hit_p)
-                return True
-
-        # SELECT logic
+    def on_button1_double_click(self, event_dict):
+        """A double-click on the curve inserts a point there, but not when hitting a control point/handle."""
         ray_p, ray_d = self._get_ray(event_dict)
+        if ray_p is not None and ray_d is not None and self._hit_test(ray_p, ray_d) is not None:
+            return True
+        hit = self._hit_test_edge(event_dict)
+        if hit is None:
+            return False
+        self._insert_point(hit)
+        return True
 
-        # Check for WorkPlane origin click (dragging the plane itself)
-        if self.working_plane:
+    def _tool_hover(self, event_dict):
+        ray_p, ray_d = self._get_ray(event_dict)
+        if self.working_plane and ray_p and ray_d:
             wp_o = self.working_plane.Base
-            # 15px radius for WP origin handle
             if self._hit_test_perp(ray_p, ray_d, [wp_o], tolerance=self._compute_handle_radius(wp_o))[0] is not None:
-                self._wp_drag_start = wp_o
-                self.drag_plane_n = FreeCAD.Vector(-self.view.getViewDirection())
-                self.drag_plane_o = wp_o
-                self.state = 2 # WP Dragging
                 self._set_cursor(QtCore.Qt.SizeAllCursor)
                 return True
+        return super()._tool_hover(event_dict)
 
-        hit = self._hit_test(ray_p, ray_d)
-        
-        if hit:
-            self._selected_element = hit
-            self._selected_point_idx = hit[0]
-            
-            # Setup drag plane
-            idx, elem_type = hit
-            pts = getattr(self._target_obj, "Points", [])
-            h_in = getattr(self._target_obj, "HandleIn", [])
-            h_out = getattr(self._target_obj, "HandleOut", [])
-            
-            val = None
-            shape_type = getattr(self._target_obj, "ShapeType", None)
-            if shape_type == "point":
-                p_world = getattr(self._target_obj, "Coordinates", self._target_obj.Position)
-                val = self._target_obj.Placement.inverse().multVec(p_world)
-            else:
-                if elem_type == "Point": val = pts[idx]
-                elif elem_type == "HandleIn": val = h_in[idx]
-                elif elem_type == "HandleOut": val = h_out[idx]
-            
-            # Constraint Plane: Use the world plane if it exists, else camera
-            # (Following user's "curve plane if 2d, camera if 3d")
-            vd = self.view.getViewDirection()
-            self.drag_plane_n = FreeCAD.Vector(-vd[0], -vd[1], -vd[2])
-            self.drag_plane_n.normalize()
-            self.drag_plane_o = self._target_obj.Placement.multVec(val)
-            self._drag_constraint_base = self.drag_plane_o
-            self._dragging_idx = idx
-            
-            self.state = 1 # Dragging (Selecting -> Moving)
-            self._update_constraint_visual()
-            fld_logger.debug(f"Selected {elem_type} at index {idx}")
-            return True
-        elif self.state == 2:
-             # Already dragging WP?
-             return True
-        else:
-            # No hit — deselect the active control point but pass the click through
-            # so FreeCAD's navigation (CAD-mode MMB+LMB rotation) still works.
-            # FldSelectionObserver already prevents FreeCAD from changing the object
-            # selection while a tool is active, so there is no risk of the edit tool
-            # being killed by the deselection.
-            self._selected_element = None
-            return False
+    def _tool_press(self, event_dict):
+        ray_p, ray_d = self._get_ray(event_dict)
+        if self.working_plane and ray_p and ray_d:
+            wp_o = self.working_plane.Base
+            if self._hit_test_perp(ray_p, ray_d, [wp_o], tolerance=self._compute_handle_radius(wp_o))[0] is not None:
+                self._wp_drag_start = wp_o
+                self._dragging_idx = "wp"
+                self._set_cursor(QtCore.Qt.SizeAllCursor)
+                self._start_drag_timer()
+                return True
+        return super()._tool_press(event_dict)
 
-    def handle_move(self, event_dict):
-        if self.state == 1 and self._selected_element:
-            # Point/Handle dragging
-            pt_global = self.resolve_world_point(
-                event_dict,
-                base_pt=self.drag_plane_o,
-                plane_normal=self.drag_plane_n,
-                plane_origin=self.drag_plane_o,
-                exclude=[self._target_obj] if getattr(self, "_target_obj", None) else [],
-                place_on_geometry=False
-            )
-            if not pt_global: return
-            
-            pt_local = self._target_obj.Placement.inverse().multVec(pt_global)
-            self._update_element(self._selected_element, pt_local)
-        elif self.state == 2:
-            # WorkPlane origin dragging — full snap pipeline (workplane → SDF → geometry → camera plane)
+    def _tool_drag_update(self):
+        if getattr(self, "_dragging_idx", None) == "marquee":
+            return super()._tool_drag_update()
+        if self._drag_check_lmb_released():
+            return
+        if getattr(self, "_dragging_idx", None) == "wp":
+            mouse_pos = FldInputManager.get_instance()._last_qt_pos
+            event_dict = {"Position": mouse_pos}
             snap_result = self.projector.get_mouse_plane_pt(
                 event_dict, place_on_geometry=True,
                 working_plane=self.working_plane)
@@ -324,7 +217,6 @@ class NurbsEditTool(FldBase, DragTimerMixin):
                 delta = pt_global - self._wp_drag_start
                 self.working_plane.Base += delta
                 self._wp_drag_start = pt_global
-                # Move the object's placement so all control-point handles follow
                 if self._target_obj:
                     plac = self._target_obj.Placement
                     plac.Base = plac.Base + delta
@@ -335,33 +227,25 @@ class NurbsEditTool(FldBase, DragTimerMixin):
                         vp.Proxy.updateData(self._target_obj, "Points")
                     if self.view:
                         self.view.redraw()
-        else:
-            # Hover check
-            ray_p, ray_d = self._get_ray(event_dict)
+            self._update_gizmo()
+            self._selection_changed()
+            return
+        super()._tool_drag_update()
 
-            # Hover WP origin?
-            if self.working_plane:
-                if self._hit_test_perp(ray_p, ray_d, [self.working_plane.Base])[0] is not None:
-                     self._set_cursor(QtCore.Qt.SizeAllCursor)
-                     return
-
-            hit = self._hit_test(ray_p, ray_d)
-            if hit != self._hovered_element:
-                self._hovered_element = hit
-                if hit:
-                    self._set_cursor(QtCore.Qt.PointingHandCursor)
-                else:
-                    self._restore_cursor()
-
-    # on_button1_down is defined above (line ~154) with drag timer support.
-    # Do NOT redefine it here — Python uses the last definition, which would
-    # shadow the drag timer logic.
+    def on_button1_up(self, _event_dict):
+        if getattr(self, "_dragging_idx", None) == "wp":
+            self._stop_drag_timer()
+            self._dragging_idx = None
+            self._wp_drag_start = None
+            if self._target_obj and self._target_obj.Document:
+                doc = self._target_obj.Document
+                QtCore.QTimer.singleShot(0, doc.recompute)
+        self._gizmo_release()
+        return False
 
     def on_button2_down(self, event_dict):
         # Allow middle mouse for view rotation
         return False
-
-
 
     def _update_element(self, element, new_pos):
         idx, elem_type = element
@@ -374,7 +258,7 @@ class NurbsEditTool(FldBase, DragTimerMixin):
                 if hasattr(self._target_obj, "Position"):
                     self._target_obj.Position = world_pos
                 self._target_obj.touch()
-                if not self._is_dragging:
+                if not getattr(self, "_is_dragging", False):
                     if self._target_obj.Document:
                         doc = self._target_obj.Document
                         QtCore.QTimer.singleShot(0, doc.recompute)
@@ -386,14 +270,8 @@ class NurbsEditTool(FldBase, DragTimerMixin):
         pts = list(getattr(self._target_obj, "Points", []))
         h_in = list(getattr(self._target_obj, "HandleIn", []))
         h_out = list(getattr(self._target_obj, "HandleOut", []))
-        p_types = list(getattr(self._target_obj, "PointTypes", []))
-        
-        h_types = list(getattr(self._target_obj, "HandleTypes", []))
-        
-        while len(p_types) < len(pts): p_types.append(0)
-        while len(h_types) < 2 * len(pts): h_types.append(0)
-        
-        pt_type = p_types[idx]
+        p_types = padded(getattr(self._target_obj, "PointTypes", []), len(pts), 0)
+        h_types = padded(getattr(self._target_obj, "HandleTypes", []), 2 * len(pts), 0)
         
         if elem_type == "Point":
             delta = new_pos - pts[idx]
@@ -405,38 +283,10 @@ class NurbsEditTool(FldBase, DragTimerMixin):
                 if node is not None:
                     node.Coordinates = self._target_obj.Placement.multVec(new_pos)
                     node.touch()
-        elif elem_type == "HandleIn":
-            h_in[idx] = new_pos
-            if pt_type == 0: # Tangent
-                delta = new_pos - pts[idx]
-                h_out[idx] = pts[idx] - delta
-            elif pt_type == 1: # Split
-                delta = new_pos - pts[idx]
-                if delta.Length > 1e-6:
-                    out_len = (h_out[idx] - pts[idx]).Length
-                    delta.normalize()
-                    h_out[idx] = pts[idx] - (delta * out_len)
-            
-            # Dragging a handle updates its type to Aligned (2) or Free (3)
-            new_h_type = 3 if pt_type == 2 else 2
-            h_types[2 * idx] = new_h_type
-            h_types[2 * idx + 1] = new_h_type
-        elif elem_type == "HandleOut":
-            h_out[idx] = new_pos
-            if pt_type == 0: # Tangent
-                delta = new_pos - pts[idx]
-                h_in[idx] = pts[idx] - delta
-            elif pt_type == 1: # Split
-                delta = new_pos - pts[idx]
-                if delta.Length > 1e-6:
-                    in_len = (h_in[idx] - pts[idx]).Length
-                    delta.normalize()
-                    h_in[idx] = pts[idx] - (delta * in_len)
-            
-            # Dragging a handle updates its type to Aligned (2) or Free (3)
-            new_h_type = 3 if pt_type == 2 else 2
-            h_types[2 * idx] = new_h_type
-            h_types[2 * idx + 1] = new_h_type
+        elif elem_type in ("HandleIn", "HandleOut"):
+            from freecad.fields.tools.curve_gizmo import follow_handle
+            (h_in if elem_type == "HandleIn" else h_out)[idx] = new_pos
+            follow_handle(pts, h_in, h_out, p_types, h_types, idx, elem_type)
                     
         self._target_obj.Points = pts
         self._target_obj.HandleIn = h_in
@@ -444,7 +294,7 @@ class NurbsEditTool(FldBase, DragTimerMixin):
         self._target_obj.HandleTypes = h_types
         self._target_obj.touch()
 
-        if not self._is_dragging:
+        if not getattr(self, "_is_dragging", False):
             if self._target_obj.Document:
                 doc = self._target_obj.Document
                 QtCore.QTimer.singleShot(0, doc.recompute)
@@ -458,75 +308,177 @@ class NurbsEditTool(FldBase, DragTimerMixin):
 
     def _insert_point(self, pos_global):
         """Insert a point into the curve at the given global position."""
-        if not self._target_obj: return
-        
-        pos_local = self._target_obj.Placement.inverse().multVec(pos_global)
-        pts = list(getattr(self._target_obj, "Points", []))
-        
+        obj = self._target_obj
+        if obj is None:
+            return
+
+        pos_local = obj.Placement.inverse().multVec(pos_global)
+        pts = list(self._local_points())
+
         if len(pts) < 2:
-            pts.append(pos_local)
+            idx = len(pts)
         else:
-            # Find which segment is closest to the hit point
-            # We can use Part.BSplineCurve.parameter() and check it against knot values if we want to be very precise,
-            # or just find the two closest existing points.
+            closed = bool(getattr(obj, "Closed", False))
+            num_segs = len(pts) if closed else len(pts) - 1
             best_idx = 1
             min_d = float('inf')
-            for i in range(len(pts)-1):
-                p1, p2 = pts[i], pts[i+1]
-                # Distance to segment p1-p2
+            for i in range(num_segs):
+                p1 = pts[i]
+                p2 = pts[(i + 1) % len(pts)]
                 v = p2 - p1
                 w = pos_local - p1
-                t = w.dot(v) / v.dot(v)
-                t = max(0, min(1, t))
+                v_dot_v = v.dot(v)
+                if v_dot_v > 1e-12:
+                    t = w.dot(v) / v_dot_v
+                    t = max(0.0, min(1.0, t))
+                else:
+                    t = 0.0
                 proj = p1 + v * t
                 d = (pos_local - proj).Length
                 if d < min_d:
                     min_d = d
-                    best_idx = i + 1
-            
-            pts.insert(best_idx, pos_local)
-            
-        self._target_obj.Points = pts
-        self._target_obj.touch()
-        if self._target_obj.Document:
-            doc = self._target_obj.Document
+                    best_idx = len(pts) if (closed and i == len(pts) - 1) else i + 1
+            idx = best_idx
+
+        doc = getattr(self, "doc", None) or getattr(obj, "Document", None) or FreeCAD.ActiveDocument
+        if doc and hasattr(doc, "openTransaction"):
+            doc.openTransaction("Insert Point")
+
+        # Node curve:
+        if getattr(obj, "ControlNodes", None):
+            node_name = "Node_0"
+            cnt = 0
+            if doc and hasattr(doc, "getObject"):
+                while doc.getObject(node_name):
+                    cnt += 1
+                    node_name = f"Node_{cnt}"
+            try:
+                from freecad.fields.core.objects.fld_object import create_fld_object
+                node = create_fld_object(node_name, "point", params={"Coordinates": pos_global})
+            except Exception as e:
+                fld_logger.debug(f"create_fld_object fallback in _insert_point: {e}")
+                node = None
+            if node is not None and doc and hasattr(doc, "recompute"):
+                doc.recompute([node])
+            nodes = list(obj.ControlNodes)
+            nodes.insert(idx, node)
+            obj.ControlNodes = nodes
+            self.linked_nodes = list(obj.ControlNodes)
+            if hasattr(self, "_created_node_names") and node is not None and hasattr(node, "Name"):
+                self._created_node_names.append(node.Name)
+
+        # Every list:
+        points = list(getattr(obj, "Points", []))
+        points.insert(idx, pos_local)
+        obj.Points = points
+
+        h_in = list(getattr(obj, "HandleIn", []))
+        h_in.insert(idx, FreeCAD.Vector(pos_local))
+        obj.HandleIn = h_in
+
+        h_out = list(getattr(obj, "HandleOut", []))
+        h_out.insert(idx, FreeCAD.Vector(pos_local))
+        obj.HandleOut = h_out
+
+        p_types = list(getattr(obj, "PointTypes", []))
+        p_types.insert(idx, 0)
+        obj.PointTypes = p_types
+
+        h_types = list(getattr(obj, "HandleTypes", []))
+        h_types.insert(2 * idx, 0)
+        h_types.insert(2 * idx + 1, 0)
+        obj.HandleTypes = h_types
+
+        self._apply_handle_type(idx, 0)
+
+        if doc and hasattr(doc, "commitTransaction"):
+            doc.commitTransaction()
+
+        obj.touch()
+        self._set_selection([(idx, "Point")])
+        self._update_gizmo()
+
+        if doc and hasattr(doc, "recompute"):
             QtCore.QTimer.singleShot(0, doc.recompute)
+
         fld_logger.info("Inserted new point into curve")
 
-    def _delete_selected_point(self):
-        """Delete the selected point or handle's parent point."""
-        if not self._target_obj or not self._selected_element: return
-        
-        idx, elem_type = self._selected_element
-        pts = list(getattr(self._target_obj, "Points", []))
-        if len(pts) <= 2:
+    def _delete_points(self, indices):
+        obj = self._target_obj
+        if obj is None or not indices:
+            return
+        pts = list(getattr(obj, "Points", []))
+        unique_indices = sorted(set(int(i) for i in indices))
+        if len(pts) - len(unique_indices) < 2:
             fld_logger.warn("Cannot delete point: curve must have at least 2 points.")
             return
 
-        pts.pop(idx)
-        self._target_obj.Points = pts
-        
-        # Cleanup other properties
-        for prop in ["HandleIn", "HandleOut", "PointTypes"]:
-            vals = list(getattr(self._target_obj, prop, []))
-            if idx < len(vals):
-                vals.pop(idx)
-                setattr(self._target_obj, prop, vals)
-                
-        self.state = 0
-        self._selected_element = None
-        self._target_obj.touch()
-        if self._target_obj.Document:
-            doc = self._target_obj.Document
+        doc = getattr(self, "doc", None) or getattr(obj, "Document", None) or FreeCAD.ActiveDocument
+        if doc and hasattr(doc, "openTransaction"):
+            doc.openTransaction("Delete Point")
+
+        has_nodes = bool(getattr(obj, "ControlNodes", None))
+        nodes = list(obj.ControlNodes) if has_nodes else []
+        points = list(getattr(obj, "Points", []))
+        h_in = list(getattr(obj, "HandleIn", []))
+        h_out = list(getattr(obj, "HandleOut", []))
+        p_types = list(getattr(obj, "PointTypes", []))
+        h_types = list(getattr(obj, "HandleTypes", []))
+
+        h_types = padded(h_types, 2 * len(points), 0)
+        p_types = padded(p_types, len(points), 0)
+
+        removed_node_objs = []
+        for i in reversed(unique_indices):
+            if i < 0 or i >= len(points):
+                continue
+            if has_nodes and i < len(nodes):
+                removed_node = nodes.pop(i)
+                removed_node_objs.append(removed_node)
+            if i < len(points):
+                points.pop(i)
+            if i < len(h_in):
+                h_in.pop(i)
+            if i < len(h_out):
+                h_out.pop(i)
+            if i < len(p_types):
+                p_types.pop(i)
+            if 2 * i + 1 < len(h_types):
+                h_types.pop(2 * i + 1)
+            if 2 * i < len(h_types):
+                h_types.pop(2 * i)
+
+        if has_nodes:
+            obj.ControlNodes = nodes
+            self.linked_nodes = list(nodes)
+            for node in removed_node_objs:
+                if not getattr(node, "InList", None):
+                    if doc and hasattr(doc, "removeObject") and hasattr(node, "Name"):
+                        doc.removeObject(node.Name)
+
+        obj.Points = points
+        obj.HandleIn = h_in
+        obj.HandleOut = h_out
+        obj.PointTypes = p_types
+        obj.HandleTypes = h_types
+
+        if doc and hasattr(doc, "commitTransaction"):
+            doc.commitTransaction()
+
+        obj.touch()
+        self._set_selection([])
+        self._update_gizmo()
+
+        if doc and hasattr(doc, "recompute"):
             QtCore.QTimer.singleShot(0, doc.recompute)
-        fld_logger.info(f"Deleted point at index {idx}")
+
+        fld_logger.info(f"Deleted points at indices {unique_indices}")
 
     def on_context_menu(self, event_dict):
         ray_p, ray_d = self._get_ray(event_dict)
         hit = self._hit_test(ray_p, ray_d)
         self._context_menu_hit = hit if hit else None
 
-        # Capture world position for "Insert Point Here" when no element is hit
         self._context_menu_pos = None
         if self._target_obj and not hit:
             try:
@@ -537,51 +489,67 @@ class NurbsEditTool(FldBase, DragTimerMixin):
             except Exception as e:
                 fld_logger.debug(f"NurbsEditTool.on_context_menu: could not get cursor pos: {e}")
 
-        items = self.get_context_menu(event_dict)
-        from freecad.fields.core.input.fld_menu import FldMenuManager
-        FldMenuManager.get_instance().trigger_dynamic_menu(items)
-        return True
+        try:
+            return super().on_context_menu(event_dict)
+        finally:
+            self._context_menu_hit = None
+            self._context_menu_pos = None
 
     def get_context_menu(self, event_dict=None):
         hit = getattr(self, "_context_menu_hit", None)
         shape_type = getattr(self._target_obj, "ShapeType", None) if self._target_obj else None
         items = []
 
-        if shape_type == "curve" and hit:
-            idx, _elem_type = hit
+        if shape_type == "curve" and hit is not None:
+            idx, _ = hit
             h_types = list(getattr(self._target_obj, "HandleTypes", []))
             cur = h_types[2 * idx] if len(h_types) > 2 * idx else 0
             items += [
-                ("Handle Type", [
-                    ("Auto",    lambda i=idx: self._set_handle_type(i, 0), cur == 0),
-                    ("Vector",  lambda i=idx: self._set_handle_type(i, 1), cur == 1),
-                    ("Aligned", lambda i=idx: self._set_handle_type(i, 2), cur == 2),
-                    ("Free",    lambda i=idx: self._set_handle_type(i, 3), cur == 3),
+                MenuItem("Handle Type", children=[
+                    MenuItem("Auto",    action=lambda i=idx: self._set_handle_type(i, 0), checked=(cur == 0)),
+                    MenuItem("Vector",  action=lambda i=idx: self._set_handle_type(i, 1), checked=(cur == 1)),
+                    MenuItem("Aligned", action=lambda i=idx: self._set_handle_type(i, 2), checked=(cur == 2)),
+                    MenuItem("Free",    action=lambda i=idx: self._set_handle_type(i, 3), checked=(cur == 3)),
                 ]),
-                None,
-                ("Delete Control Point", self._delete_selected_point),
+                SEPARATOR,
             ]
         elif shape_type == "curve":
             pos = getattr(self, "_context_menu_pos", None)
             if pos is not None:
-                items += [("Insert Point Here", lambda p=pos: self._insert_point(p))]
+                items += [MenuItem("Insert Point Here", action=lambda p=pos: self._insert_point(p))]
+
+        if shape_type == "curve":
+            hit_idx = hit[0] if hit else None
+            sel_keys = getattr(self, "_selection", set())
+            sel_indices = [k[0] if isinstance(k, tuple) else k for k in sel_keys]
+            if hit_idx is not None and hit_idx not in sel_indices:
+                del_targets = [hit_idx]
+            else:
+                del_targets = sel_indices
+            items += [
+                MenuItem(
+                    "Delete",
+                    action=lambda targets=list(del_targets): self._delete_points(targets),
+                    enabled=bool(del_targets),
+                    shortcut="Del",
+                )
+            ]
 
         items += [
-            None,
-            ("Accept", self.finish),
-            ("Cancel", self.cancel),
+            SEPARATOR,
+            MenuItem("Accept", action=self.finish, shortcut="Return"),
+            MenuItem("Cancel", action=self.cancel, shortcut="Esc"),
         ]
-        return items
+        return self._with_transform_space(items)
 
     def _set_handle_type(self, idx, val):
-        h_types = list(getattr(self._target_obj, "HandleTypes", []))
-        while len(h_types) < 2 * len(getattr(self._target_obj, "Points", [])): h_types.append(0)
+        pts_len = len(getattr(self._target_obj, "Points", []))
+        h_types = padded(getattr(self._target_obj, "HandleTypes", []), 2 * pts_len, 0)
         h_types[2 * idx] = val
         h_types[2 * idx + 1] = val
         self._target_obj.HandleTypes = h_types
         
-        p_types = list(getattr(self._target_obj, "PointTypes", []))
-        while len(p_types) < len(getattr(self._target_obj, "Points", [])): p_types.append(0)
+        p_types = padded(getattr(self._target_obj, "PointTypes", []), pts_len, 0)
         if val == 3:
             p_types[idx] = 2
         elif val == 2:
@@ -603,64 +571,6 @@ class NurbsEditTool(FldBase, DragTimerMixin):
             if view:
                 view.redraw()
         QtCore.QTimer.singleShot(0, _deferred_recompute)
-
-    _HANDLE_TYPE_NAMES = {0: "Auto", 1: "Vector", 2: "Aligned", 3: "Free"}
-
-    def _cycle_handle_type(self, point_idx):
-        if not self._target_obj:
-            return
-        pts = list(getattr(self._target_obj, "Points", []))
-        n = len(pts)
-        if point_idx < 0 or point_idx >= n:
-            return
-
-        h_types = list(getattr(self._target_obj, "HandleTypes", []))
-        while len(h_types) < 2 * n:
-            h_types.append(0)
-
-        in_i  = 2 * point_idx
-        out_i = 2 * point_idx + 1
-
-        current = h_types[out_i]
-        next_type = (current + 1) % 4
-
-        h_types[in_i]  = next_type
-        h_types[out_i] = next_type
-        
-        self._target_obj.HandleTypes = h_types
-
-        self._apply_handle_type(point_idx, next_type)
-        
-        # Sync PointTypes: Custom (2) for Free (3), Split (1) for Aligned (2), Tangent (0) otherwise
-        p_types = list(getattr(self._target_obj, "PointTypes", []))
-        while len(p_types) < n:
-            p_types.append(0)
-        if next_type == 3:
-            p_types[point_idx] = 2
-        elif next_type == 2:
-            p_types[point_idx] = 1
-        else:
-            p_types[point_idx] = 0
-        self._target_obj.PointTypes = p_types
-
-        self._target_obj.touch()
-        obj = self._target_obj
-        view = self.view
-        def _deferred_recompute():
-            if obj.Document:
-                obj.Document.recompute()
-            # Rebuild visuals
-            vp = obj.ViewObject
-            if vp and hasattr(vp, "Proxy") and vp.Proxy:
-                vp.Proxy.updateData(obj, "Points")
-            if view:
-                view.redraw()
-        QtCore.QTimer.singleShot(0, _deferred_recompute)
-
-        fld_logger.info(
-            f"NurbsEditTool: Point {point_idx} handle type → {self._HANDLE_TYPE_NAMES.get(next_type, '?')}"
-            " (V to cycle: Auto→Vector→Aligned→Free→Auto)"
-        )
 
     def _apply_handle_type(self, idx, handle_type):
         if not self._target_obj:
@@ -699,65 +609,6 @@ class NurbsEditTool(FldBase, DragTimerMixin):
         self._target_obj.HandleIn = h_in
         self._target_obj.HandleOut = h_out
 
-    def handle_keyboard(self, event_dict):
-        key_code = event_dict.get("Key")
-        key_text = str(event_dict.get("Text", "")).upper()
-        
-        if key_code == QtCore.Qt.Key_Escape:
-            self.cancel()
-            return True
-        if key_code in [QtCore.Qt.Key_Enter, QtCore.Qt.Key_Return]:
-            self.finish()
-            return True
-        
-        if key_text == "V" and getattr(self, "_selected_point_idx", None) is not None:
-            idx = self._selected_point_idx
-            def set_handle_type(val):
-                h_types = list(getattr(self._target_obj, "HandleTypes", []))
-                while len(h_types) < 2 * len(getattr(self._target_obj, "Points", [])): h_types.append(0)
-                h_types[2 * idx] = val
-                h_types[2 * idx + 1] = val
-                self._target_obj.HandleTypes = h_types
-                
-                p_types = list(getattr(self._target_obj, "PointTypes", []))
-                while len(p_types) < len(getattr(self._target_obj, "Points", [])): p_types.append(0)
-                if val == 3:
-                    p_types[idx] = 2
-                elif val == 2:
-                    p_types[idx] = 1
-                else:
-                    p_types[idx] = 0
-                self._target_obj.PointTypes = p_types
-                
-                self._apply_handle_type(idx, val)
-                self._target_obj.touch()
-                obj = self._target_obj
-                view = self.view
-                def _deferred_recompute():
-                    if obj.Document:
-                        obj.Document.recompute()
-                    vp = obj.ViewObject
-                    if vp and hasattr(vp, "Proxy") and vp.Proxy:
-                        vp.Proxy.updateData(obj, "Points")
-                    if view:
-                        view.redraw()
-                QtCore.QTimer.singleShot(0, _deferred_recompute)
-
-            menu_items = [
-                ("Auto (Blue)", lambda: set_handle_type(0)),
-                ("Vector (Green)", lambda: set_handle_type(1)),
-                ("Aligned (Purple)", lambda: set_handle_type(2)),
-                ("Free (Red)", lambda: set_handle_type(3))
-            ]
-            from freecad.fields.core.input.fld_menu import FldMenuManager
-            FldMenuManager.get_instance().trigger_dynamic_menu(menu_items)
-            return True
-            
-        if key_code in [QtCore.Qt.Key_Delete, QtCore.Qt.Key_Backspace]:
-            if self.state == 1 or self._selected_element:
-                self._delete_selected_point()
-                return True
-        return False
 
     def restore_original(self):
         if not self._target_obj or not hasattr(self, "_original_props"):
@@ -771,16 +622,42 @@ class NurbsEditTool(FldBase, DragTimerMixin):
                 self._target_obj.Position = orig
             self._target_obj.touch()
         else:
+            doc = getattr(self, "doc", None) or getattr(self._target_obj, "Document", None) or FreeCAD.ActiveDocument
+            if "Nodes" in self._original_props:
+                from freecad.fields.core.objects.fld_object import create_fld_object
+                restored_nodes = []
+                for name, coord in self._original_props["Nodes"]:
+                    node = doc.getObject(name) if doc and hasattr(doc, "getObject") else None
+                    if node is None:
+                        try:
+                            node = create_fld_object(name, "point", params={"Coordinates": coord})
+                        except Exception as e:
+                            fld_logger.debug(f"restore_original create_fld_object fallback: {e}")
+                            node = None
+                        if node is not None and doc and hasattr(doc, "recompute"):
+                            doc.recompute([node])
+                    if node is not None:
+                        node.Coordinates = coord
+                        node.touch()
+                    restored_nodes.append(node)
+                self._target_obj.ControlNodes = restored_nodes
+                self.linked_nodes = list(restored_nodes)
+            if hasattr(self, "_created_node_names") and self._created_node_names:
+                for name in list(self._created_node_names):
+                    node = doc.getObject(name) if doc and hasattr(doc, "getObject") else None
+                    if node is None:
+                        continue
+                    in_list = getattr(node, "InList", []) or []
+                    linked = [o for o in in_list if hasattr(o, "ControlNodes") and o.ControlNodes and node in o.ControlNodes]
+                    if not linked:
+                        if doc and hasattr(doc, "removeObject") and hasattr(node, "Name"):
+                            doc.removeObject(node.Name)
+                self._created_node_names = []
             self._target_obj.Points = self._original_props["Points"]
             self._target_obj.HandleIn = self._original_props["HandleIn"]
             self._target_obj.HandleOut = self._original_props["HandleOut"]
             self._target_obj.HandleTypes = self._original_props["HandleTypes"]
             self._target_obj.PointTypes = self._original_props["PointTypes"]
-            if "ControlNodeCoords" in self._original_props and hasattr(self, "linked_nodes") and self.linked_nodes:
-                for idx, coord in enumerate(self._original_props["ControlNodeCoords"]):
-                    if idx < len(self.linked_nodes) and self.linked_nodes[idx] is not None:
-                        self.linked_nodes[idx].Coordinates = coord
-                        self.linked_nodes[idx].touch()
         self._target_obj.touch()
         obj = self._target_obj
         view = self.view
@@ -803,6 +680,7 @@ class NurbsEditTool(FldBase, DragTimerMixin):
         super().cancel()
 
     def finish(self):
+        self._dispose_gizmo(commit=True)
         if self._target_obj:
             self._target_obj.EditMode = False
         self._is_editing = False
@@ -811,10 +689,20 @@ class NurbsEditTool(FldBase, DragTimerMixin):
 
     def _do_terminate(self):
         try:
+            self._dispose_gizmo()
+            if hasattr(self, "_sel_markers"):
+                for m in self._sel_markers:
+                    m.undraw()
+                self._sel_markers = []
+            if getattr(self, "points_root", None) is not None:
+                if getattr(self, "view", None) and self.view.getSceneGraph():
+                    self.view.getSceneGraph().removeChild(self.points_root)
+                self.points_root = None
             if self._target_obj:
                 self._target_obj.EditMode = False
         except Exception as e:
             fld_logger.debug(f"NurbsEditTool._do_terminate exception: {e}")
         self._restore_cursor()
         super()._do_terminate()
+
 

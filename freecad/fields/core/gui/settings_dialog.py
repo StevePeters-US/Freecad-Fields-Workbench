@@ -30,6 +30,7 @@ class _SettingsDialog(QtWidgets.QDialog):
                                     get_heightmap_resolution, get_gpu_field_eval,
                                     get_sdf_warp_resolution,
                                     get_voxel_grid_resolution, get_model_tolerance,
+                                    get_normal_tap_voxels,
                                     get_hatch_size, get_hatch_color, get_hatch_strength)
         current_wire = get_show_wireframe()
         current_show_cage_curves = get_show_cage_curves()
@@ -111,14 +112,12 @@ class _SettingsDialog(QtWidgets.QDialog):
         # Define Collapsible Sections
         section_display = CollapsibleSection("Display and Styling", self)
         section_interaction = CollapsibleSection("Interaction and Dragging", self)
-        section_controls = CollapsibleSection("Controls and Keymap", self)
         section_snapping = CollapsibleSection("Snapping", self)
         section_rendering = CollapsibleSection("SDF Rendering and Meshing", self)
         section_system = CollapsibleSection("System and Diagnostics", self)
 
         scroll_layout.addWidget(section_display)
         scroll_layout.addWidget(section_interaction)
-        scroll_layout.addWidget(section_controls)
         scroll_layout.addWidget(section_snapping)
         scroll_layout.addWidget(section_rendering)
         scroll_layout.addWidget(section_system)
@@ -255,157 +254,15 @@ class _SettingsDialog(QtWidgets.QDialog):
         )))
         section_interaction.addRow("Drag Tick Rate:", self._drag_tick_spin)
 
-        # ── Group: Controls and Keymap ──
-        from freecad.fields.core.fld_settings import (
-            CONTROL_SCHEMES, get_control_scheme, set_control_scheme,
-            get_snap_during_direct_drag, set_snap_during_direct_drag,
-            get_snap_invert_modifier, set_snap_invert_modifier,
-            get_modal_requires_selection, set_modal_requires_selection,
-        )
-        from freecad.fields.core.input import fld_keymap
-
-        self._control_scheme_combo = QtWidgets.QComboBox()
-        for s in CONTROL_SCHEMES:
-            self._control_scheme_combo.addItem(s.capitalize(), s)
-        cur_scheme = get_control_scheme()
-        idx = self._control_scheme_combo.findData(cur_scheme)
-        if idx >= 0:
-            self._control_scheme_combo.setCurrentIndex(idx)
-        self._control_scheme_combo.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
-            "Input interaction model.\n"
-            "Hybrid: direct drag and modal G/R/S both transform objects.\n"
-            "Modal: direct drag orbits the view; transforms require G/R/S.\n"
-            "Direct: direct drag transforms objects; modal keys are disabled.\n"
-            "<b>Default:</b> Hybrid."
-        )))
-        section_controls.addRow("Control Scheme:", self._control_scheme_combo)
-
-        self._snap_direct_drag_check = QtWidgets.QCheckBox()
-        self._snap_direct_drag_check.setChecked(get_snap_during_direct_drag())
-        self._snap_direct_drag_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
-            "Snaps geometry during mouse drags as well as during modal G/R/S transforms."
-        )))
-        section_controls.addRow("Snap During Direct Drag:", self._snap_direct_drag_check)
-
-        self._snap_invert_combo = QtWidgets.QComboBox()
-        for mod in ("ctrl", "shift", "alt"):
-            self._snap_invert_combo.addItem(mod.capitalize(), mod)
-        cur_mod = get_snap_invert_modifier()
-        idx = self._snap_invert_combo.findData(cur_mod)
-        if idx >= 0:
-            self._snap_invert_combo.setCurrentIndex(idx)
-        self._snap_invert_combo.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
-            "Key that temporarily inverts snapping while held during a drag.\n"
-            "<b>Default:</b> Ctrl."
-        )))
-        section_controls.addRow("Snap Invert Modifier:", self._snap_invert_combo)
-
-        self._modal_req_sel_check = QtWidgets.QCheckBox()
-        self._modal_req_sel_check.setChecked(get_modal_requires_selection())
-        self._modal_req_sel_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
-            "Requires an active point selection before the Grab command (G) can start."
-        )))
-        section_controls.addRow("Modal Needs a Selection:", self._modal_req_sel_check)
-
-        # Keymap table
-        self._keymap_table = QtWidgets.QTableWidget(len(fld_keymap.ACTIONS), 4)
-        self._keymap_table.setHorizontalHeaderLabels(["Context", "Action", "Binding", ""])
-        header = self._keymap_table.horizontalHeader()
-        if hasattr(header, "setSectionResizeMode"):
-            try:
-                header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-                header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
-                header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
-                header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
-            except Exception as exc:  # safe: best-effort table header resize configuration
-                fld_logger.debug(f"[settings_dialog] table header setSectionResizeMode failed: {exc}")
-                pass
-
-        self._keymap_edits = {}  # action -> QKeySequenceEdit
-
-        def _make_keymap_row(row, action, default_b, ctx, desc):
-            # Context item
-            ctx_item = QtWidgets.QTableWidgetItem(ctx.capitalize())
-            ctx_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-            self._keymap_table.setItem(row, 0, ctx_item)
-
-            # Action description item
-            act_item = QtWidgets.QTableWidgetItem(desc)
-            act_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-            act_item.setToolTip(rich_tooltip("_SettingsDialog", action))
-            self._keymap_table.setItem(row, 1, act_item)
-
-            # Binding widget
-            cur_binding = fld_keymap.binding_for(action)
-            seq_edit = QtWidgets.QKeySequenceEdit(QtGui.QKeySequence(cur_binding))
-            if hasattr(seq_edit, "setMaximumSequenceLength"):
-                seq_edit.setMaximumSequenceLength(1)
-            self._keymap_edits[action] = seq_edit
-
-            is_locked = action in fld_keymap.LOCKED_ACTIONS
-            if is_locked:
-                seq_edit.setEnabled(False)
-                seq_edit.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
-                    "This binding is structural and cannot be rebound."
-                )))
-            else:
-                def _on_seq_changed(*args, a=action, se=seq_edit):
-                    self._validate_keymap_conflicts()
-                if hasattr(seq_edit, "keySequenceChanged"):
-                    seq_edit.keySequenceChanged.connect(_on_seq_changed)
-                if hasattr(seq_edit, "editingFinished"):
-                    seq_edit.editingFinished.connect(_on_seq_changed)
-
-            self._keymap_table.setCellWidget(row, 2, seq_edit)
-
-            # Reset button
-            reset_btn = QtWidgets.QPushButton("Reset")
-            reset_btn.setToolTip(rich_tooltip("_SettingsDialog", f"Resets this binding to its default key ({default_b})."))
-            if is_locked:
-                reset_btn.setEnabled(False)
-            else:
-                def _do_row_reset(a=action, db=default_b, se=seq_edit):
-                    se.setKeySequence(QtGui.QKeySequence(db))
-                    self._validate_keymap_conflicts()
-                reset_btn.clicked.connect(_do_row_reset)
-            self._keymap_table.setCellWidget(row, 3, reset_btn)
-
-        for row, (action, def_b, ctx, desc) in enumerate(fld_keymap.ACTIONS):
-            _make_keymap_row(row, action, def_b, ctx, desc)
-
-        self._keymap_table.setMinimumHeight(240)
-        section_controls.addRow("Key Bindings:", self._keymap_table)
-
-        # Reset All Bindings button
-        reset_all_btn = QtWidgets.QPushButton("Reset All Bindings")
-        reset_all_btn.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
-            "Resets all key bindings to their default workbench values."
-        )))
-        def _do_reset_all():
-            for action, def_b, ctx, desc in fld_keymap.ACTIONS:
-                if action in self._keymap_edits:
-                    self._keymap_edits[action].setKeySequence(QtGui.QKeySequence(def_b))
-            self._validate_keymap_conflicts()
-        reset_all_btn.clicked.connect(_do_reset_all)
-        section_controls.addRow("", reset_all_btn)
-
         # ── Group: Snapping ──
         from freecad.fields.core.fld_settings import (
-            get_snap_enabled, get_snap_grid_step, get_snap_angle_step,
+            get_snap_grid_step, get_snap_angle_step,
             get_snap_vertex_enabled, get_snap_pixel_radius,
             get_snap_guide_enabled, get_snap_guide_line_color, get_snap_guide_line_width,
             get_snap_detent_color, get_snap_detent_size, get_snap_detent_interval,
             get_snap_grid_color, get_snap_grid_line_width,
             get_snap_guide_extent_px, get_snap_grid_extent_steps, get_snap_marker_size_px
         )
-        self._snap_enabled_check = QtWidgets.QCheckBox()
-        self._snap_enabled_check.setChecked(get_snap_enabled())
-        self._snap_enabled_check.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
-            "Turns on snapping by default during transform drags.\n"
-            "Hold the invert modifier to drag smoothly."
-        )))
-        section_snapping.addRow("Enable Snapping:", self._snap_enabled_check)
-
         self._snap_grid_spin = QtWidgets.QDoubleSpinBox()
         self._snap_grid_spin.setRange(0.0, 1000.0)
         self._snap_grid_spin.setSingleStep(0.5)
@@ -586,6 +443,19 @@ class _SettingsDialog(QtWidgets.QDialog):
             "<b>Default:</b> 256³ (67 MB)."
         )))
         section_rendering.addRow("Voxel Grid Resolution:", self._voxel_res_combo)
+
+        self._normal_tap_spin = QtWidgets.QDoubleSpinBox()
+        self._normal_tap_spin.setRange(0.005, 1.0)
+        self._normal_tap_spin.setSingleStep(0.01)
+        self._normal_tap_spin.setDecimals(3)
+        self._normal_tap_spin.setValue(get_normal_tap_voxels())
+        self._normal_tap_spin.setToolTip(rich_tooltip("_SettingsDialog", QT_TRANSLATE_NOOP("_SettingsDialog",
+            "How far apart the baked surface normals are sampled, in scene voxels.\n"
+            "<b>Lower:</b> crisper sharp edges; smooth surfaces show contour banding.\n"
+            "<b>Higher:</b> smoother shading; sharp edges soften slightly.\n"
+            "<b>Default:</b> 0.1. <b>Typical:</b> 0.05–0.3."
+        )))
+        section_rendering.addRow("Normal Sample Spacing:", self._normal_tap_spin)
 
         # Warp Resolution combo box
         self._warp_res_combo = QtWidgets.QComboBox()
@@ -783,37 +653,6 @@ class _SettingsDialog(QtWidgets.QDialog):
             self._grid_color = (picked.redF(), picked.greenF(), picked.blueF())
             self._paint_grid_swatch()
 
-    def _validate_keymap_conflicts(self):
-        """Check for keymap conflicts among pending table values and highlight conflicting cells."""
-        from freecad.fields.core.input import fld_keymap
-        # Build pending map by context: (ctx, seq_int) -> list of (action, edit_widget)
-        by_ctx_seq = {}
-        for action, edit in getattr(self, "_keymap_edits", {}).items():
-            ctx = fld_keymap.context_of(action)
-            seq = edit.keySequence()
-            if seq.isEmpty():
-                continue
-            seq_int = fld_keymap._key_combo_int(seq[0])
-            by_ctx_seq.setdefault((ctx, seq_int), []).append((action, edit))
-
-        conflicts = []
-        conflicting_edits = set()
-        for (ctx, seq_int), entries in by_ctx_seq.items():
-            if len(entries) > 1:
-                actions = [a for a, e in entries]
-                conflicts.append((entries[0][1].keySequence().toString(), actions))
-                for a, e in entries:
-                    conflicting_edits.add(e)
-
-        # Update styling
-        for action, edit in getattr(self, "_keymap_edits", {}).items():
-            if edit in conflicting_edits:
-                edit.setStyleSheet("border: 1px solid red; background: rgba(255, 0, 0, 40);")
-            else:
-                edit.setStyleSheet("")
-
-        return conflicts
-
     def _on_accept(self):
         from freecad.fields.core.objects.fld_object import refresh_all_fld_objects
         from freecad.fields.core.fld_settings import (set_show_wireframe, set_line_width, set_point_size,
@@ -827,7 +666,7 @@ class _SettingsDialog(QtWidgets.QDialog):
                                       set_show_cage_curves, set_cage_xray, set_cage_patch_type, set_simplify_cage_drag,
                                       set_heightmap_resolution, set_gpu_field_eval,
                                       set_sdf_warp_resolution, set_voxel_grid_resolution,
-                                      set_model_tolerance)
+                                      set_model_tolerance, set_normal_tap_voxels)
         from freecad.fields.core.fld_logger import set_enable_crash_log
         wire = self._wire_check.isChecked()
         show_cage_curves = self._cage_curves_check.isChecked()
@@ -879,51 +718,18 @@ class _SettingsDialog(QtWidgets.QDialog):
 
         set_gpu_field_eval(self._gpu_eval_check.isChecked())
         set_voxel_grid_resolution(self._voxel_res_combo.itemData(self._voxel_res_combo.currentIndex()))
+        set_normal_tap_voxels(self._normal_tap_spin.value())
         set_sdf_warp_resolution(self._warp_res_combo.itemData(self._warp_res_combo.currentIndex()))
 
         # Snapping preferences
         from freecad.fields.core.fld_settings import (
-            set_snap_enabled, set_snap_grid_step, set_snap_angle_step,
+            set_snap_grid_step, set_snap_angle_step,
             set_snap_vertex_enabled, set_snap_pixel_radius,
             set_snap_guide_enabled, set_snap_guide_line_color, set_snap_guide_line_width,
             set_snap_detent_color, set_snap_detent_size, set_snap_detent_interval,
             set_snap_grid_color, set_snap_grid_line_width,
             set_snap_guide_extent_px, set_snap_grid_extent_steps, set_snap_marker_size_px,
-            set_control_scheme, set_snap_during_direct_drag, set_snap_invert_modifier,
-            set_modal_requires_selection
         )
-        from freecad.fields.core.input import fld_keymap
-
-        # Check keymap conflicts before saving
-        conflicts = self._validate_keymap_conflicts()
-        if conflicts:
-            msg = "Cannot save keymap because of conflicts in the same context:\n\n"
-            for b, actions in conflicts:
-                msg += f"• Binding '{b}' is assigned to: {', '.join(actions)}\n"
-            msg += "\nPlease resolve these conflicts before saving."
-            QtWidgets.QMessageBox.warning(self, "Keymap Conflicts", msg)
-            return
-
-        # Warn if snap invert modifier is shift or alt
-        invert_mod = self._snap_invert_combo.itemData(self._snap_invert_combo.currentIndex())
-        if invert_mod in ("shift", "alt"):
-            QtWidgets.QMessageBox.information(
-                self, "Snap Modifier Notice",
-                f"Note: Setting the snap invert modifier to {invert_mod.capitalize()} means holding {invert_mod.capitalize()} "
-                f"will also toggle plane locks / multi-handle rotations while toggling snap."
-            )
-
-        set_control_scheme(self._control_scheme_combo.itemData(self._control_scheme_combo.currentIndex()))
-        set_snap_during_direct_drag(self._snap_direct_drag_check.isChecked())
-        set_snap_invert_modifier(invert_mod)
-        set_modal_requires_selection(self._modal_req_sel_check.isChecked())
-
-        # Save keymap bindings
-        for action, edit in getattr(self, "_keymap_edits", {}).items():
-            seq_str = edit.keySequence().toString()
-            fld_keymap.set_binding(action, seq_str)
-
-        set_snap_enabled(self._snap_enabled_check.isChecked())
         set_snap_grid_step(self._snap_grid_spin.value())
         set_snap_angle_step(self._snap_angle_spin.value())
         set_snap_vertex_enabled(self._snap_vertex_check.isChecked())

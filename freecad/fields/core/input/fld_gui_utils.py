@@ -9,9 +9,10 @@ from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 class _DynamicLimitSliderBase(QtWidgets.QWidget):
     """Shared body of `DynamicLimitSlider` (float) and `DynamicLimitIntSlider`
     (int) -- displays a spinbox on the left representing the lower limit, a
-    slider in the middle representing the current value, and a spinbox on the
-    right representing the upper limit. Changing the limit spinboxes updates
-    the slider's range in real time and clamps the value if it falls outside.
+    slider in the middle representing the current value, a spinbox on the
+    right representing the upper limit, and a bold value spinbox at the far
+    left. Changing the limit spinboxes updates the slider's range in real
+    time. The value spinbox is where a value is typed; it ignores the limits.
 
     Subclasses set `_is_int` and declare their own `valueChanged`/
     `limitsChanged` Qt Signal -- a Signal's element type is fixed at class
@@ -59,6 +60,7 @@ class _DynamicLimitSliderBase(QtWidgets.QWidget):
                     "Lowest value the slider reaches. Values below it are clamped.",
                 ),
             ),
+            width=52, buttons=False,
         )
 
         self._slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
@@ -74,14 +76,32 @@ class _DynamicLimitSliderBase(QtWidgets.QWidget):
                     "Highest value the slider reaches. Values above it are clamped.",
                 ),
             ),
+            width=52, buttons=False,
         )
 
+        self._value_spin = self._make_limit_spin(
+            self._value,
+            rich_tooltip(
+                "_DynamicLimitSliderBase",
+                QT_TRANSLATE_NOOP(
+                    "_DynamicLimitSliderBase",
+                    "Current value. Type any number; it may lie outside the limits.",
+                ),
+            ),
+        )
+        self._value_spin.setKeyboardTracking(False)
+        f = self._value_spin.font()
+        f.setBold(True)
+        self._value_spin.setFont(f)
+
+        self._slider.setMinimumWidth(60)
+        lay.addWidget(self._value_spin)
+        lay.addSpacing(6)
         lay.addWidget(self._min_spin)
         lay.addWidget(self._slider, 1)
         lay.addWidget(self._max_spin)
 
         # Initialize value and slider position
-        self._slider.mouseDoubleClickEvent = self._on_slider_double_click
         self._update_slider_position()
 
         self._slider.valueChanged.connect(self._on_slider_moved)
@@ -89,8 +109,9 @@ class _DynamicLimitSliderBase(QtWidgets.QWidget):
         self._slider.sliderReleased.connect(self._on_slider_released)
         self._min_spin.valueChanged.connect(lambda v: self._on_limit_changed(True, v))
         self._max_spin.valueChanged.connect(lambda v: self._on_limit_changed(False, v))
+        self._value_spin.valueChanged.connect(self._on_value_typed)
 
-    def _make_limit_spin(self, initial_value, tooltip):
+    def _make_limit_spin(self, initial_value, tooltip, width=72, buttons=True):
         spin_cls = QtWidgets.QSpinBox if self._is_int else QtWidgets.QDoubleSpinBox
         spin = spin_cls()
         spin.setRange(-999999, 999999)
@@ -98,7 +119,9 @@ class _DynamicLimitSliderBase(QtWidgets.QWidget):
         spin.setSingleStep(int(self._step) if self._is_int else self._step)
         if not self._is_int:
             spin.setDecimals(self._decimals)
-        spin.setFixedWidth(72)
+        spin.setFixedWidth(width)
+        if not buttons:
+            spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
         spin.setToolTip(tooltip)
         return spin
 
@@ -112,7 +135,7 @@ class _DynamicLimitSliderBase(QtWidgets.QWidget):
         self._slider.blockSignals(True)
         if self._is_int:
             self._slider.setRange(min_v, max_v)
-            self._slider.setValue(self._value)
+            self._slider.setValue(max(min_v, min(max_v, self._value)))
         else:
             if max_v <= min_v:
                 pos = 0
@@ -122,6 +145,26 @@ class _DynamicLimitSliderBase(QtWidgets.QWidget):
             self._slider.setValue(pos)
         self._slider.blockSignals(False)
         self._slider.setToolTip(self._format_tooltip())
+        self._sync_value_spin()
+
+    def _sync_value_spin(self):
+        self._value_spin.blockSignals(True)
+        self._value_spin.setValue(self._value)
+        self._value_spin.blockSignals(False)
+
+    def _on_value_typed(self, v):
+        """Callback when a value is typed into the value spin box; ignores the limits."""
+        if self._updating:
+            return
+        self._updating = True
+        try:
+            self._value = int(v) if self._is_int else v
+            self._update_slider_position()
+            self.valueChanged.emit(self._value)
+        except Exception as e:
+            fld_logger.error(f"Error in {type(self).__name__}._on_value_typed: {e}")
+        finally:
+            self._updating = False
 
     def _on_slider_moved(self, pos):
         """Callback when the QSlider is dragged."""
@@ -136,6 +179,7 @@ class _DynamicLimitSliderBase(QtWidgets.QWidget):
                 max_v = self._max_spin.value()
                 self._value = min_v + (max_v - min_v) * pos / self._STEPS
             self._slider.setToolTip(self._format_tooltip())
+            self._sync_value_spin()
             self.valueChanged.emit(self._value)
         except Exception as e:
             fld_logger.error(f"Error in {type(self).__name__}._on_slider_moved: {e}")
@@ -189,28 +233,6 @@ class _DynamicLimitSliderBase(QtWidgets.QWidget):
         finally:
             self._updating = False
 
-    def _on_slider_double_click(self, event):
-        """Allows double-clicking the slider to manually input any value."""
-        try:
-            try:
-                from PySide.QtWidgets import QInputDialog
-            except ImportError:
-                from PySide.QtGui import QInputDialog
-
-            if self._is_int:
-                val, ok = QInputDialog.getInt(
-                    self, "Set Value", "Enter value (ignores limits):",
-                    self._value, -999999, 999999, 1)
-            else:
-                val, ok = QInputDialog.getDouble(
-                    self, "Set Value", "Enter value (ignores limits):",
-                    self._value, -999999.0, 999999.0, 4)
-            if ok:
-                self.setValue(val)
-                self.valueChanged.emit(self._value)
-        except Exception as e:
-            fld_logger.error(f"Error in {type(self).__name__}._on_slider_double_click: {e}")
-
     def value(self):
         """Returns the current value of the slider."""
         return self._value
@@ -248,6 +270,7 @@ class _DynamicLimitSliderBase(QtWidgets.QWidget):
         super().blockSignals(b)
         self._min_spin.blockSignals(b)
         self._max_spin.blockSignals(b)
+        self._value_spin.blockSignals(b)
         self._slider.blockSignals(b)
 
 
@@ -255,9 +278,10 @@ class DynamicLimitSlider(_DynamicLimitSliderBase):
     """A custom float slider with adjustable endpoints.
 
     This widget displays a spinbox on the left representing the lower limit,
-    a slider in the middle representing the current value, and a spinbox on the
-    right representing the upper limit. Changing the limit spinboxes updates
-    the slider's range in real time and clamps the value if it falls outside.
+    a slider in the middle representing the current value, a spinbox on the
+    right representing the upper limit, and a bold value spinbox at the far
+    left where a value can be typed (it ignores the limits). Changing the
+    limit spinboxes updates the slider's range in real time.
     """
 
     valueChanged = QtCore.Signal(float)
@@ -282,9 +306,10 @@ class DynamicLimitIntSlider(_DynamicLimitSliderBase):
     """A custom integer slider with adjustable endpoints.
 
     This widget displays a spinbox on the left representing the lower limit,
-    a slider in the middle representing the current value, and a spinbox on the
-    right representing the upper limit. Changing the limit spinboxes updates
-    the slider's range in real time and clamps the value if it falls outside.
+    a slider in the middle representing the current value, a spinbox on the
+    right representing the upper limit, and a bold value spinbox at the far
+    left where a value can be typed (it ignores the limits). Changing the
+    limit spinboxes updates the slider's range in real time.
     """
 
     valueChanged = QtCore.Signal(int)

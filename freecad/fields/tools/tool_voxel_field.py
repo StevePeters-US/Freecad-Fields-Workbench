@@ -60,7 +60,7 @@ class VoxelFieldTaskPanel:
         layout.addWidget(opt_grp)
 
         self.interp_combo = QtWidgets.QComboBox()
-        self.interp_combo.addItems(["Trilinear", "Nearest"])
+        self.interp_combo.addItems(["Cubic", "Trilinear", "Nearest"])
         self.interp_combo.currentIndexChanged.connect(self._on_changed)
         ol.addRow("Interpolation:", self.interp_combo)
 
@@ -118,7 +118,7 @@ class VoxelFieldTaskPanel:
         self.resy_slider.setValue(getattr(obj, "ResolutionY", 32))
         self.resz_slider.setValue(getattr(obj, "ResolutionZ", 32))
 
-        interp = str(getattr(obj, "Interpolation", "Trilinear"))
+        interp = str(getattr(obj, "Interpolation", "Cubic"))
         idx = self.interp_combo.findText(interp)
         if idx >= 0:
             self.interp_combo.setCurrentIndex(idx)
@@ -178,7 +178,7 @@ class VoxelFieldTool(FldSdfModifierToolBase):
         ("ResolutionX", 32),
         ("ResolutionY", 32),
         ("ResolutionZ", 32),
-        ("Interpolation", "Trilinear"),
+        ("Interpolation", "Cubic"),
         ("Group", "Additive"),
         ("Sculpted", False),
     ]

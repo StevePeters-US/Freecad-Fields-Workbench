@@ -8,7 +8,7 @@ import FreeCAD
 from freecad.fields.core.sdf.sdf.cylinder import SdfCylinderField
 from freecad.fields.tools.fld_base import ToolState
 from freecad.fields.tools.primitive_creator_base import (
-    PrimitiveCreatorBase, MIN_PRIMITIVE_DIM_TYPED_MM
+    PrimitiveCreatorBase, StageEntry, MIN_PRIMITIVE_DIM_TYPED_MM
 )
 import math
 
@@ -74,6 +74,7 @@ class CylinderCreator(PrimitiveCreatorBase):
     def _on_stage_accept(self, state, pos):
         if state == ToolState.PLACE_ANCHOR:
             self.points = [pos, pos]
+            self._anchor_pt = pos
             self._field_placement = self._get_placement()
         elif state == ToolState.DRAG_XY:
             if len(self.points) >= 2:
@@ -95,6 +96,22 @@ class CylinderCreator(PrimitiveCreatorBase):
             if len(self.points) >= 3:
                 self.points[2] = pos
             self.current_point = pos
+
+    def _stage_entry(self, state):
+        if state == ToolState.DRAG_XY and len(self.points) >= 2 and self.points[0] is not None and self.points[1] is not None:
+            r = self._in_plane(self.points[0], self.points[1]).Length
+            return StageEntry("Radius", "mm", [r], [1])
+        if state == ToolState.DRAG_Z and len(self.points) >= 3 and self.points[2] is not None:
+            h = self._normal_offset(self.points[2])
+            return StageEntry("Height", "mm", [abs(h)], [-1 if h < 0 else 1])
+        return None
+
+    def _stage_point_for(self, state, values):
+        if state == ToolState.DRAG_XY:
+            return self._radial_stage_point(self.points[0], self.points[1], values[0])
+        if state == ToolState.DRAG_Z:
+            return self._normal_stage_point(values[0])
+        raise NotImplementedError
 
     def _cylinder_field_from_points(self):
         if len(self.points) < 3:

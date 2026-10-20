@@ -383,6 +383,65 @@ def create_array_modifier(name: str, source_obj) -> object:
     return _create_modifier(FldArrayProxy, name, source_obj)
 
 
+# ── Panel ─────────────────────────────────────────────────────────────────────
+
+class FldPanelProxy(FldModifierProxyBase):
+    """FreeCAD proxy for the Panel modifier: flat extruded slice profiles along an axis."""
+
+    SOURCE_GROUP = "Panel"
+
+    def __init__(self, obj):
+        super().__init__(obj)
+        if not hasattr(obj, "Axis"):
+            obj.addProperty("App::PropertyEnumeration", "Axis", "Panel", "Panel stacking axis")
+            obj.Axis = _AXES
+            obj.Axis = "Z"
+        if not hasattr(obj, "Thickness"):
+            obj.addProperty("App::PropertyFloat", "Thickness", "Panel", "Panel thickness along the axis (mm)")
+            obj.Thickness = 19.0
+        if not hasattr(obj, "Count"):
+            obj.addProperty("App::PropertyInteger", "Count", "Panel", "Number of panels")
+            obj.Count = 6
+        if not hasattr(obj, "Spacing"):
+            obj.addProperty("App::PropertyFloat", "Spacing", "Panel", "Clear gap between panels (mm)")
+            obj.Spacing = 19.0
+        if not hasattr(obj, "LayoutLock"):
+            obj.addProperty("App::PropertyEnumeration", "LayoutLock", "Panel", "Which layout input is locked")
+            obj.LayoutLock = ["Spacing", "Count"]
+            obj.LayoutLock = "Spacing"
+
+    def _build_field(self, fp):
+        from freecad.fields.core.sdf.sdf.panel import SdfPanelField, board_layout
+        base_field = self._resolve_source_field(fp)
+        if base_field:
+            axis = getattr(fp, "Axis", "Z")
+            lo, hi = self._extent(base_field, axis)
+            offset, pitch, count, _gap = board_layout(
+                lo, hi, getattr(fp, "Thickness", 19.0), getattr(fp, "LayoutLock", "Spacing"),
+                getattr(fp, "Count", 6), getattr(fp, "Spacing", 19.0))
+            self.SdfField = SdfPanelField(
+                source=base_field, axis=axis, offset=offset, pitch=pitch, count=count,
+                thickness=getattr(fp, "Thickness", 19.0), clip_lo=lo, clip_hi=hi)
+
+    def _extent(self, base_field, axis):
+        """measured_extent, cached on the source field object and axis: a Count or
+        Spacing edit reuses it, an upstream edit (a new field object) re-measures."""
+        from freecad.fields.core.sdf.sdf.panel import measured_extent
+        cached = getattr(self, "_extent_cache", None)
+        if cached is None or cached[0] is not base_field or cached[1] != axis:
+            cached = (base_field, axis, measured_extent(base_field, axis))
+            self._extent_cache = cached
+        return cached[2]
+
+    def onChanged(self, fp, prop):
+        if prop in ("Axis", "Thickness", "Count", "Spacing", "LayoutLock", "Source", "Enabled"):
+            self.SdfField = None
+
+
+def create_panel_modifier(name: str, source_obj) -> object:
+    return _create_modifier(FldPanelProxy, name, source_obj)
+
+
 # ── Deform Cage ───────────────────────────────────────────────────────────────
 
 class FldDeformCageProxy(FldModifierProxyBase):
@@ -527,20 +586,14 @@ class FldDeformCageProxy(FldModifierProxyBase):
 
         # Reuse the stack WRAPPER, not just the lobes inside it. The lobe cache
         # above already returns the identical `ext` objects when nothing moved,
-        # but wrapping them in a fresh SdfExtrusionStackField each time still
-        # threw away that object's `_octree_cache` -- and the 2.0 mm picking
-        # octree hangs off exactly this object, because
-        # SdfCageDeformField.octree_cache delegates to `self.source` while the
-        # cage is identity (cage_deform.py:729), and a face extrude leaves the
-        # cage identity. So every rebuild silently re-armed a 15-48 ms lazy
-        # rebuild on the next ray_march, twice per commit, growing with lobe
-        # count because evaluating the stack gets dearer with each lobe.
+        # but wrapping them in a fresh SdfExtrusionStackField each time allocated
+        # a new wrapper object and caused unnecessary downstream field updates.
         #
         # Identity comparison is the right test and not a shortcut: the lobes
         # are immutable once built (an edit produces a new object via
-        # `with_top_ring`), so same base + same lobe objects is the same field,
-        # and the octree it holds is still valid. A drag tick moves the top ring,
-        # produces a new lobe, misses here, and correctly rebuilds.
+        # `with_top_ring`), so same base + same lobe objects is the same field.
+        # A drag tick moves the top ring, produces a new lobe, misses here, and
+        # correctly rebuilds.
         prev = getattr(self, "_extrude_stack_cache", None)
         if (prev is not None
                 and prev.base is base_field

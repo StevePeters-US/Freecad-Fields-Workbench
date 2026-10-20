@@ -149,7 +149,6 @@ class SdfCageField(SdfField):
         self.inv_matrix = self._compute_inv_matrix(placement)
         self.recompute_face_aabbs()
         self.geometry_version = 0
-        self.hot_faces = frozenset()
         self.bake_resolution = None
 
     # ── Factory methods ───────────────────────────────────────────────────────
@@ -845,7 +844,6 @@ class SdfCageField(SdfField):
             edge_straight=list(self._edge_straight) if hasattr(self, "_edge_straight") else None)
         clone.sign_mode = getattr(self, "sign_mode", "closest")
         clone.simplify = False
-        clone.hot_faces = frozenset()
         clone.geometry_version = getattr(self, "geometry_version", 0) + 1
         return clone
 

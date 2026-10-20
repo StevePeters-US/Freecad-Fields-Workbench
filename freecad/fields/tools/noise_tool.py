@@ -9,6 +9,7 @@ from pivy import coin
 import FreeCAD
 from freecad.fields.tools.fld_base import DragTimerMixin
 from freecad.fields.tools.fld_sdf_tool_base import FldSdfModifierToolBase, DirectionGizmoMixin
+from freecad.fields.core.input.gizmo.transform import delta_rotation
 from freecad.fields.core import fld_logger
 from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 from freecad.fields.core.input.fld_gui_utils import (
@@ -16,7 +17,6 @@ from freecad.fields.core.input.fld_gui_utils import (
     CompactVector3Widget, CollapsibleSection,
 )
 from freecad.fields.core.sdf.sdf.noise import SdfNoiseField
-from freecad.fields.tools.primitive_creator_base import GIZMO_HIT_TOLERANCE_MULT
 
 
 class NoiseTaskPanel:
@@ -36,7 +36,7 @@ class NoiseTaskPanel:
 
         top_layout.addWidget(QtWidgets.QLabel("Type:"))
         self.type_combo = QtWidgets.QComboBox()
-        self.type_combo.addItems(SdfNoiseField.PRESET_NAMES)
+        self._fill_type_combo()
         self.type_combo.currentIndexChanged.connect(self._on_type_changed)
         top_layout.addWidget(self.type_combo, 1)
 
@@ -69,12 +69,12 @@ class NoiseTaskPanel:
         self.amp_slider._slider.sliderReleased.connect(self._on_slider_released)
         self.p_layout.addRow("Amplitude:", self.amp_slider)
 
-        self.freq_slider = DynamicLimitSlider(value=0.1, min_val=0.001, max_val=1.0, step=0.005, decimals=3)
-        self.freq_slider.valueChanged.connect(self._on_params_changed)
-        self.freq_slider.limitsChanged.connect(self._on_limits_changed)
-        self.freq_slider._slider.sliderPressed.connect(self._on_slider_pressed)
-        self.freq_slider._slider.sliderReleased.connect(self._on_slider_released)
-        self.p_layout.addRow("Frequency:", self.freq_slider)
+        self.wl_slider = DynamicLimitSlider(value=20.0, min_val=1.0, max_val=100.0, step=0.5, decimals=2)
+        self.wl_slider.valueChanged.connect(self._on_params_changed)
+        self.wl_slider.limitsChanged.connect(self._on_limits_changed)
+        self.wl_slider._slider.sliderPressed.connect(self._on_slider_pressed)
+        self.wl_slider._slider.sliderReleased.connect(self._on_slider_released)
+        self.p_layout.addRow("Wavelength (mm):", self.wl_slider)
 
         self.norm_input = NumericLineEdit()
         self.norm_input.step = 0.1
@@ -218,8 +218,6 @@ class NoiseTaskPanel:
         if not obj:
             return
         obj.Placement = FreeCAD.Placement(FreeCAD.Vector(x, y, z), obj.Placement.Rotation)
-        if hasattr(self.tool, "_gizmo") and self.tool._gizmo:
-            self.tool._gizmo.update(self.tool._gizmo_pivot())
         if hasattr(self.tool, "_draw_direction_arrow"):
             self.tool._draw_direction_arrow()
         self.tool._commit_changes()
@@ -241,23 +239,17 @@ class NoiseTaskPanel:
         if not obj:
             return
         self.amp_slider.blockSignals(True)
-        self.freq_slider.blockSignals(True)
+        self.wl_slider.blockSignals(True)
         self.norm_input.blockSignals(True)
         for w in (self.dir_x, self.dir_y, self.dir_z, self.roll_input,
                   self.center_x, self.center_y, self.center_z):
             w.blockSignals(True)
 
-        for prop, default in [("AmplitudeMin", 0.0), ("AmplitudeMax", 10.0),
-                              ("FrequencyMin", 0.001), ("FrequencyMax", 1.0)]:
-            if not hasattr(obj, prop):
-                obj.addProperty("App::PropertyFloat", prop, "Noise", "Persistent slider limit")
-                setattr(obj, prop, default)
-
         self.amp_slider.setLimits(obj.AmplitudeMin, obj.AmplitudeMax)
-        self.freq_slider.setLimits(obj.FrequencyMin, obj.FrequencyMax)
+        self.wl_slider.setLimits(obj.WavelengthMin, obj.WavelengthMax)
 
-        self.amp_slider.setValue(getattr(obj, "Amplitude", 1.0))
-        self.freq_slider.setValue(getattr(obj, "Frequency", 0.1))
+        self.amp_slider.setValue(obj.Amplitude)
+        self.wl_slider.setValue(obj.Wavelength)
         self.norm_input.setText(f"{getattr(obj, 'Normalization', 0.0):.3f}")
 
         rot = obj.Placement.Rotation
@@ -274,7 +266,7 @@ class NoiseTaskPanel:
         self.center_z.setText(f"{b.z:.3f}")
 
         self.amp_slider.blockSignals(False)
-        self.freq_slider.blockSignals(False)
+        self.wl_slider.blockSignals(False)
         self.norm_input.blockSignals(False)
         for w in (self.dir_x, self.dir_y, self.dir_z, self.roll_input,
                   self.center_x, self.center_y, self.center_z):
@@ -304,9 +296,7 @@ class NoiseTaskPanel:
 
         from freecad.fields.core.sdf.sdf.formula_eval import parse_custom_params
         formula = getattr(obj, "Formula", "")
-        params = []
-        if self.type_combo.currentText() not in SdfNoiseField.COMPLEX_PRESETS:
-            params.extend(parse_custom_params(formula))
+        params = parse_custom_params(formula)
 
         if not params:
             self.custom_group.hide()
@@ -325,18 +315,6 @@ class NoiseTaskPanel:
             step_val = param['step']
 
             prop_name = "Custom_" + name
-            if not hasattr(obj, prop_name):
-                if ptype == 'bool':
-                    prop_type = "App::PropertyBool"
-                elif ptype == 'int':
-                    prop_type = "App::PropertyInteger"
-                else:
-                    prop_type = "App::PropertyFloat"
-                try:
-                    obj.addProperty(prop_type, prop_name, "Custom Params", f"Custom parameter {prop_name}")
-                    setattr(obj, prop_name, bool(default) if ptype == 'bool' else default)
-                except Exception as e:
-                    fld_logger.warn(f"Failed to add dynamic property {prop_name}: {e}")
             current_val = getattr(obj, prop_name, default)
 
             if ptype == 'bool':
@@ -379,11 +357,8 @@ class NoiseTaskPanel:
             return
         prop_name = "Custom_" + name
         if not hasattr(obj, prop_name):
-            prop_type = "App::PropertyInteger" if isinstance(val, int) else "App::PropertyFloat"
-            try:
-                obj.addProperty(prop_type, prop_name, "Custom Params", f"Custom parameter {prop_name}")
-            except Exception as e:
-                fld_logger.warn(f"Failed to add dynamic property {prop_name}: {e}")
+            fld_logger.warn(f"NoiseTaskPanel._on_custom_param_changed: property {prop_name} does not exist")
+            return
         setattr(obj, prop_name, val)
         self.tool._commit_changes()
 
@@ -391,21 +366,32 @@ class NoiseTaskPanel:
         obj = self.tool._target_obj
         if not obj:
             return
-        formula = getattr(obj, "Formula", "")
-        from freecad.fields.core.sdf.sdf.formula_eval import update_formula_param_comment
-        new_formula = update_formula_param_comment(
-            formula, name, ptype, getattr(obj, "Custom_" + name, 0.0), min_val, max_val, step_val
-        )
-        if new_formula != formula:
-            obj.Formula = new_formula
-            self.tool._commit_changes()
+        import json
+        from freecad.fields.core.objects.fld_noise_shared import apply_graph, set_graph_param_limits
+        raw_graph = getattr(obj, "NodeGraphJson", "")
+        if not raw_graph:
+            fld_logger.warn("NoiseTaskPanel._on_custom_param_limits_changed: object has no NodeGraphJson")
+            return
+        try:
+            graph = json.loads(raw_graph)
+        except Exception as e:
+            fld_logger.warn(f"NoiseTaskPanel._on_custom_param_limits_changed: invalid NodeGraphJson: {e}")
+            return
+        if set_graph_param_limits(graph, name, min_val, max_val, step_val):
+            err = apply_graph(obj, graph, getattr(obj, "NoiseType", "Custom"))
+            if err:
+                fld_logger.warn(f"NoiseTaskPanel._on_custom_param_limits_changed: apply_graph failed: {err}")
+            else:
+                self.tool._commit_changes()
+        else:
+            fld_logger.warn(f"NoiseTaskPanel._on_custom_param_limits_changed: param {name!r} not found in graph")
 
     def _on_params_changed(self):
         obj = self.tool._target_obj
         if not obj:
             return
         obj.Amplitude = self.amp_slider.value()
-        obj.Frequency = self.freq_slider.value()
+        obj.Wavelength = self.wl_slider.value()
         try:
             obj.Normalization = float(self.norm_input.text())
         except Exception as e:
@@ -416,13 +402,13 @@ class NoiseTaskPanel:
         obj = self.tool._target_obj
         if not obj:
             return
-        for prop in ["AmplitudeMin", "AmplitudeMax", "FrequencyMin", "FrequencyMax"]:
+        for prop in ["AmplitudeMin", "AmplitudeMax", "WavelengthMin", "WavelengthMax"]:
             if not hasattr(obj, prop):
                 obj.addProperty("App::PropertyFloat", prop, "Noise", "Persistent slider limit")
         obj.AmplitudeMin = self.amp_slider._min_spin.value()
         obj.AmplitudeMax = self.amp_slider._max_spin.value()
-        obj.FrequencyMin = self.freq_slider._min_spin.value()
-        obj.FrequencyMax = self.freq_slider._max_spin.value()
+        obj.WavelengthMin = self.wl_slider._min_spin.value()
+        obj.WavelengthMax = self.wl_slider._max_spin.value()
         self.tool._commit_changes()
 
     def _on_group_toggled(self):
@@ -433,37 +419,65 @@ class NoiseTaskPanel:
         self.group_btn.setText(obj.Group)
         self.tool._commit_changes()
 
+    def _fill_type_combo(self):
+        from freecad.fields.core.gui.node_editor.nodes import NOISE_TYPE_NAMES
+        from freecad.fields.core.objects.fld_noise_user_presets import user_preset_names
+        self.type_combo.blockSignals(True)
+        self.type_combo.clear()
+        self.type_combo.addItems(NOISE_TYPE_NAMES)
+        u_names = user_preset_names()
+        if u_names:
+            self.type_combo.insertSeparator(self.type_combo.count())
+            self.type_combo.addItems(u_names)
+        self.type_combo.blockSignals(False)
+
     def _on_type_changed(self, _index):
         obj = self.tool._target_obj
         if not obj:
             return
         name = self.type_combo.currentText()
-        obj.NoiseType = name
-        if name not in SdfNoiseField.COMPLEX_PRESETS:
-            formula = SdfNoiseField.PRESETS.get(name, getattr(obj, "Formula", ""))
+        if not name:
+            return
+
+        import json
+        from freecad.fields.tools.noise_preset_dialogs import confirm_graph_replace
+        current_graph = None
+        current_formula = getattr(obj, "Formula", "")
+        if self._node_editor_dlg and getattr(self._node_editor_dlg, "scene", None):
             try:
-                import json
-                from freecad.fields.core.gui.node_editor.nodes import (
-                    get_template_graph, compile_graph,
-                )
-                tmpl = get_template_graph(name)
-                if tmpl:
-                    # The graph is the source of truth: compile the formula OUT of it
-                    # rather than pasting PRESETS[name] beside it. Two independently
-                    # written copies of the same formula drift, and the drift shows up
-                    # as @params disappearing the first time the node editor is opened.
-                    compiled, _comments, err = compile_graph(tmpl)
-                    if err:
-                        fld_logger.warn(
-                            f"NoiseTaskPanel: template graph for {name!r} does not "
-                            f"compile ({err}); falling back to the preset string")
-                    else:
-                        formula = compiled
-                        obj.NodeGraphJson = json.dumps(tmpl)
-            except Exception as e:
-                fld_logger.debug(f"NoiseTaskPanel._on_type_changed: failed to set template graph: {e}")
-            obj.Formula = formula
+                from freecad.fields.core.gui.node_editor.nodes import compile_graph
+                sc = self._node_editor_dlg.scene
+                current_graph = sc.get_graph_data()
+                res = compile_graph(current_graph)
+                if res and not res.err:
+                    current_formula = res.formula
+            except Exception:
+                current_graph = None
+        if current_graph is None:
+            raw_json = getattr(obj, "NodeGraphJson", "")
+            try:
+                current_graph = json.loads(raw_json) if raw_json else None
+            except Exception:
+                current_graph = None
+
+        if not confirm_graph_replace(self.form, obj, current_graph, current_formula):
+            self.update_ui()
+            return
+
+        if name == "Custom":
+            obj.NoiseType = "Custom"   # a label: the graph stays as it is
+        else:
+            from freecad.fields.core.objects.fld_noise_types import apply_picked
+            err = apply_picked(obj, name)
+            if err:
+                fld_logger.warn(f"NoiseTaskPanel: {name!r} failed to apply ({err})")
+        self._fill_type_combo()
+        if self._node_editor_dlg:
+            # An open editor still holds the previous graph; its next Apply would
+            # write that back over the template just chosen.
+            self._node_editor_dlg.load_from_object()
         self.tool._commit_changes()
+        self.update_ui()
         self._update_custom_widgets()
 
     def _open_node_editor(self):
@@ -510,17 +524,35 @@ class NoiseTaskPanel:
         return True
 
 
-class NoiseTool(FldSdfModifierToolBase, DirectionGizmoMixin, DragTimerMixin):
+class NoiseTool(DirectionGizmoMixin, FldSdfModifierToolBase, DragTimerMixin):
     SNAPSHOT_PROPERTIES = [
         ("Amplitude", 1.0),
-        ("Frequency", 0.1),
+        ("Wavelength", 20.0),
         ("Normalization", 0.0),
         ("NoiseType", "Waves"),
         ("Formula", ""),
+        ("NodeGraphJson", ""),
         ("Group", "Additive"),
         ("Placement", FreeCAD.Placement()),
     ]
     SNAPSHOT_CUSTOM_PREFIX = "Custom_"
+
+    def restore_original(self):
+        """apply_graph may have added or removed Custom_* properties since the
+        snapshot, which the base restore (setattr on names that still exist) cannot
+        undo. Re-apply the snapshot's graph first, then let the base restore the
+        scalars (NV-008)."""
+        obj = self._target_obj
+        snap = getattr(self, "_original_props", None)
+        if obj and snap and snap.get("NodeGraphJson"):
+            import json
+            from freecad.fields.core.objects.fld_noise_shared import apply_graph
+            values = {k[len("Custom_"):]: v for k, v in snap.items() if k.startswith("Custom_")}
+            err = apply_graph(obj, json.loads(snap["NodeGraphJson"]),
+                              snap.get("NoiseType", "Custom"), values=values)
+            if err:
+                fld_logger.warn(f"NoiseTool.restore_original: snapshot graph not applied ({err})")
+        super().restore_original()
 
     def get_command_id(self):
         return "Fields_EditObject"
@@ -538,35 +570,34 @@ class NoiseTool(FldSdfModifierToolBase, DirectionGizmoMixin, DragTimerMixin):
     def _make_panel(self):
         return NoiseTaskPanel(self)
 
-    def _apply_gizmo_rotation(self, rot):
-        """Apply one ring-drag world rotation to the whole Placement.
+    def _gizmo_apply_rotation(self, snap, delta):
+        """Ring: the Placement's rotation = the snapshot's, turned by the total.
 
-        Rebuilt from `_make_basis(new_dir, snapped_roll)` rather than composing
-        `rot` directly onto `obj.Placement.Rotation`, so the result agrees with
-        `roll_from_basis` (`update_ui`) bit-for-bit and snapping lands on the
-        same roll value the panel displays.
+        Rebuilt from `_make_basis(new_dir, roll)` rather than composing the rotation onto
+        the snapshot's, so the result agrees with `roll_from_basis` (`update_ui`)
+        bit-for-bit, and Ctrl snapping lands on the roll the panel shows. A typed value is
+        exact: never snapped.
         """
-        obj = self._target_obj
-        if not obj:
-            return
-        old_rot = obj.Placement.Rotation
-        direction = old_rot.multVec(FreeCAD.Vector(0, 0, 1))
-        u_axis = old_rot.multVec(FreeCAD.Vector(1, 0, 0))
-        new_dir = rot.multVec(direction)
+        pl0 = snap["_placement"]
+        rot = delta_rotation(delta)
+        new_dir = rot.multVec(pl0.Rotation.multVec(FreeCAD.Vector(0, 0, 1)))
         new_dir.normalize()
-        new_u = rot.multVec(u_axis)
+        new_u = rot.multVec(pl0.Rotation.multVec(FreeCAD.Vector(1, 0, 0)))
         roll = SdfNoiseField.roll_from_basis(new_dir, new_u)
         from freecad.fields.core.input import fld_snap
-        from freecad.fields.core.fld_settings import (
-            get_snap_angle_step, get_snap_during_direct_drag)
-        if get_snap_during_direct_drag() and fld_snap.snap_active():
+        from freecad.fields.core.fld_settings import get_snap_angle_step
+        if not delta.typed and fld_snap.snap_active():
             step = get_snap_angle_step()
             if step > 0:
                 roll = fld_snap.snap_angle_deg(roll, step)
         u, _ = SdfNoiseField._make_basis(new_dir, roll)
         w = new_dir.cross(u)   # right-handed companion -- see _apply_direction_roll
-        new_rotation = FreeCAD.Rotation(u, w, new_dir, "ZXY")
-        obj.Placement = FreeCAD.Placement(obj.Placement.Base, new_rotation)
+        self._target_obj.Placement = FreeCAD.Placement(
+            pl0.Base, FreeCAD.Rotation(u, w, new_dir, "ZXY"))
+
+    def _gizmo_snapshot_props(self):
+        # No Direction properties: the whole state is the Placement (`_placement`).
+        return ()
 
     def _gizmo_pivot(self):
         obj = self._target_obj
@@ -596,32 +627,7 @@ class NoiseTool(FldSdfModifierToolBase, DirectionGizmoMixin, DragTimerMixin):
 
     def _on_before_redraw(self):
         self._draw_direction_arrow()
-
-    def handle_move(self, event_dict):
-        if not self._is_editing or getattr(self, "_is_dragging", False):
-            return
-        from freecad.fields.core.input.input_manager import FldInputManager
-        ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
-        if ray_p and ray_d:
-            tol = self._compute_handle_radius(self._gizmo_pivot()) * GIZMO_HIT_TOLERANCE_MULT
-            if self._gizmo_handle_move(ray_p, ray_d, tol):
-                return
-        self._restore_cursor()
-
-    def on_button1_down(self, event_dict):
-        if not self._is_editing or event_dict.get("Button") != QtCore.Qt.LeftButton:
-            return False
-        from freecad.fields.core.input.input_manager import FldInputManager
-        ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
-        if not ray_p or not ray_d:
-            return False
-        tol = self._compute_handle_radius(self._gizmo_pivot()) * GIZMO_HIT_TOLERANCE_MULT
-        return self._gizmo_try_start_drag(ray_p, ray_d, event_dict, tol)
-
-    def _drag_update(self):
-        if self._drag_check_lmb_released():
-            return
-        self._gizmo_drag_tick()
+        super()._on_before_redraw()
 
     def _do_terminate(self):
         try:

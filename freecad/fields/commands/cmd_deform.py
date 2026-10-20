@@ -35,3 +35,10 @@ FreeCADGui.addCommand('Fields_Array', CommandFldModifierBase(
     tool_module="freecad.fields.tools.modifiers.array_tool", tool_class="ArrayTool",
 ))
 
+FreeCADGui.addCommand('Fields_Panel', CommandFldModifierBase(
+    op_name="Panel", name_suffix="_Panel",
+    pixmap='SDF_Panel', menu_text='Add Panel Modifier',
+    tooltip=QT_TRANSLATE_NOOP("Fields", "Cuts the selected SDF object into flat panels along an axis, live.\nSelect one SDF object."),
+    creator_module="freecad.fields.core.objects.fld_deform_objects", creator_func="create_panel_modifier",
+    tool_module="freecad.fields.tools.modifiers.panel_tool", tool_class="PanelTool",
+))

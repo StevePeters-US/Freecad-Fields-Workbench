@@ -5,7 +5,7 @@ import numpy as np
 from freecad.fields.core.sdf.sdf_field import SdfField
 from freecad.fields.core.sdf.sdf_constants import SURFACE_ID_UNSET
 from freecad.fields.core import fld_logger
-from freecad.fields.core.sdf.sdf.formula_eval import EVAL_NS
+from freecad.fields.core.sdf.sdf.formula_eval import EVAL_NS, safe_compile
 from freecad.fields.core.input.fld_gizmo import _perp_pair
 
 AXES = {"X": 0, "Y": 1, "Z": 2}
@@ -298,6 +298,42 @@ class SdfArrayField(SdfField):
         spheres = []
         miscs = []
 
+        ang_code = None
+        if self.angle_formula.strip():
+            try:
+                ang_code = safe_compile(self.angle_formula)
+            except (ValueError, SyntaxError) as e:
+                if not getattr(self, "_warned_formula", False):
+                    fld_logger.warn(f"SdfArrayField: angle_formula compilation failed ({e}), using default")
+                    self._warned_formula = True
+
+        rad_code = None
+        if self.radius_formula.strip():
+            try:
+                rad_code = safe_compile(self.radius_formula)
+            except (ValueError, SyntaxError) as e:
+                if not getattr(self, "_warned_formula", False):
+                    fld_logger.warn(f"SdfArrayField: radius_formula compilation failed ({e}), using default")
+                    self._warned_formula = True
+
+        rise_code = None
+        if self.rise_formula.strip():
+            try:
+                rise_code = safe_compile(self.rise_formula)
+            except (ValueError, SyntaxError) as e:
+                if not getattr(self, "_warned_formula", False):
+                    fld_logger.warn(f"SdfArrayField: rise_formula compilation failed ({e}), using default")
+                    self._warned_formula = True
+
+        scale_code = None
+        if self.scale_formula.strip():
+            try:
+                scale_code = safe_compile(self.scale_formula)
+            except (ValueError, SyntaxError) as e:
+                if not getattr(self, "_warned_formula", False):
+                    fld_logger.warn(f"SdfArrayField: scale_formula compilation failed ({e}), using default")
+                    self._warned_formula = True
+
         for i in range(n):
             t_param = float(i) / max(n - 1, 1)
             scope = dict(EVAL_NS)
@@ -305,9 +341,9 @@ class SdfArrayField(SdfField):
 
             # Angle
             ang_def = i * self.step_angle
-            if self.angle_formula.strip():
+            if ang_code is not None:
                 try:
-                    ang_i = float(eval(self.angle_formula, scope))
+                    ang_i = float(eval(ang_code, scope))
                 except Exception as e:
                     if not getattr(self, "_warned_formula", False):
                         fld_logger.warn(f"SdfArrayField: angle_formula eval failed ({e}), using default")
@@ -318,9 +354,9 @@ class SdfArrayField(SdfField):
 
             # Radius (planar offset along u_hat)
             rad_def = i * planar_len
-            if self.radius_formula.strip():
+            if rad_code is not None:
                 try:
-                    rad_i = float(eval(self.radius_formula, scope))
+                    rad_i = float(eval(rad_code, scope))
                 except Exception as e:
                     if not getattr(self, "_warned_formula", False):
                         fld_logger.warn(f"SdfArrayField: radius_formula eval failed ({e}), using default")
@@ -331,9 +367,9 @@ class SdfArrayField(SdfField):
 
             # Rise (offset along a_hat)
             rise_def = i * rise_comp
-            if self.rise_formula.strip():
+            if rise_code is not None:
                 try:
-                    rise_i = float(eval(self.rise_formula, scope))
+                    rise_i = float(eval(rise_code, scope))
                 except Exception as e:
                     if not getattr(self, "_warned_formula", False):
                         fld_logger.warn(f"SdfArrayField: rise_formula eval failed ({e}), using default")
@@ -344,9 +380,9 @@ class SdfArrayField(SdfField):
 
             # Scale
             scale_def = float(self.step_scale ** i)
-            if self.scale_formula.strip():
+            if scale_code is not None:
                 try:
-                    scale_i = float(eval(self.scale_formula, scope))
+                    scale_i = float(eval(scale_code, scope))
                 except Exception as e:
                     if not getattr(self, "_warned_formula", False):
                         fld_logger.warn(f"SdfArrayField: scale_formula eval failed ({e}), using default")

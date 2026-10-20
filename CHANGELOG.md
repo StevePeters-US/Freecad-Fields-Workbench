@@ -3,15 +3,35 @@
 All notable changes to the FreeCAD Fields workbench will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
-Releases are named by month and year (e.g. 9-26); the manifest version is year.month.patch (e.g. 2026.9.0).
+Releases are named by month and year (e.g. 9-26); the manifest version is YY.M.D, the release date (e.g. 26.10.20).
 Releases before 9-26 used semantic versioning.
 
-## [Unreleased]
+## [10-26] - 2026-10-20
+
+Version 26.10.20.
+
+> **Breaking:** documents saved in 9-26 that depend on removed backward-compatibility shims will not load, and preferences from previous releases are not carried over. Sculpt layer sidecars are renamed from `.dmsculpt` to `.fldsculpt`.
+
+### Security
+- Formulas saved in documents (the Noise `Formula` and Array `*Formula` properties) could execute arbitrary Python code when a document opened. All formula evaluation sites are now strictly AST-validated via `safe_compile` before compilation.
+
+### Added
+- **Universal Transform Gizmo:** interactive axis, plane, rotation, and uniform scale handles for primitive creators, work plane, noise, heightmap, array, slicer, cage, and curve editors.
+- **Context Menu Tree:** tool operations and shortcuts accessible via right-click in the viewport with visible shortcut keys.
+- **Matcap Shading & Material Library:** real-time matcap preview and editable material variants.
+- **Panel Modifier:** parametric wooden board panel modifier (`Fields_Panel`) filling part bounds with automatic or typed count and spacing.
+- **Slice on Panel:** slicing tool integration directly referencing panel plane layout.
+- **Typed Numeric Values:** direct numeric entry for sliders and gizmo drag dimensions with readout display.
+- **Noise Node Editor & Graph:** visual nodal formula editor for procedural noise with world-space node vocabulary (Part, Direction Transform, Origin, Polar, Vector Math, Surface Normal, Front Face) and strict AST-validated sandboxing.
 
 ### Changed
-- **Breaking:** preferences moved to one group named after the package,
-  `User parameter:BaseApp/Preferences/fields` (keymap under `fields/Keymap`). Values in
-  the old `Preferences/Mod/Fields` and `FCFields` groups are not carried over.
+- Preferences moved to one group named after the package: `User parameter:BaseApp/Preferences/fields` (keymap under `fields/Keymap`). Values in the old `Preferences/Mod/Fields` and `FCFields` groups are not carried over.
+- Sculpt layer sidecar directory renamed from `.dmsculpt` to `.fldsculpt`.
+- Shader debug dump files are only written when the `render` debug category is enabled and are placed beside `Fields.log`.
+
+### Fixed
+- Fixed torus primitive reload anchor height so tori reload at their drawn height resting on the workplane.
+- Populated `ControlNodes` property immediately upon curve object creation.
 
 ### Removed
 - Backward-compatibility shims for old documents: the `IsSubtractive` → `Group`
@@ -22,7 +42,7 @@ Releases before 9-26 used semantic versioning.
 
 ## [9-26] - 2026-09-27
 
-Version 2026.9.0.
+Version 26.9.27.
 
 ### Changed
 - Renamed workbench from **Direct Modeling** to **Fields** (`FieldsWorkbench`).

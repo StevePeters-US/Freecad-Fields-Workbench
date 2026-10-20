@@ -68,8 +68,11 @@ class Perlin2DNode(SdfNoiseNode):
     display = ("# Classic Perlin gradient noise on the (u, w) plane\n"
                "# Constant along the direction arrow\n"
                "# Output: approx [-amp, +amp]")
-    lip_factor = 2.0
-    peak_factor = 1.0
+    # NV-055: measured max gradient 2.2726 at amp 1, freq 1 (declared was 2.0);
+    # declared = ceil(1.15 * measured / 0.05) * 0.05.
+    lip_factor = 2.65
+    # NV-055: measured max |value| 0.6942 at amp 1 (declared was 1.0); same rule.
+    peak_factor = 0.8
     dep_helpers = (("fld_pcg2d", _PCG2D_GLSL), ("fld_ghash2", _GHASH2_GLSL))
     main_fn_name = "fld_perlin2d"
     main_fn_code = _PERLIN2D_GLSL

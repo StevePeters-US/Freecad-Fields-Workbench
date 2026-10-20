@@ -106,3 +106,14 @@ class BaseNode:
     def get_param_comments(self, params):
         """Returns list of // @param comment strings."""
         return []
+
+    def bound(self, ins, input_exprs, params, w):
+        """{output socket: (peak_expr, slope_expr) or Bound} -- see bounds.py.
+
+        ins: {input socket: Bound}, the defaults filled in for unwired sockets.
+        input_exprs: what generate_code got (with "__wired__").
+        w: the compile's BoundWriter, for nodes that recurse into a subgraph.
+        The default is unbounded: a node must state its rule to be charged
+        less than everything."""
+        outs = self.get_outputs(params) if hasattr(self, "get_outputs") else self.outputs
+        return {s.name: ("inf", "inf") for s in outs}

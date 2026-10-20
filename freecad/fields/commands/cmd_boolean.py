@@ -143,7 +143,8 @@ class CommandFldBoolean:
 
             panel = BooleanTaskPanel(self.operation, orange_fields, blue_fields,
                                      result, is_creation=True, sel_objects=list(sel))
-            FreeCADGui.Control.showDialog(panel)
+            gui_doc = FreeCADGui.getDocument(result.Document.Name)
+            FreeCADGui.Control.showDialog(panel, gui_doc)
 
         except Exception as e:
             fld_logger.error(f"Fld_{self.operation} failed: {e}")
@@ -174,7 +175,8 @@ class CommandFldBoolean:
 
             panel = BooleanTaskPanel(self.operation, orange_fields, blue_fields,
                                      result, is_creation=False)
-            FreeCADGui.Control.showDialog(panel)
+            gui_doc = FreeCADGui.getDocument(result.Document.Name)
+            FreeCADGui.Control.showDialog(panel, gui_doc)
 
         except Exception as e:
             fld_logger.error(f"Fld_{self.operation} edit failed: {e}")

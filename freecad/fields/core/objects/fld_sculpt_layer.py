@@ -103,10 +103,11 @@ class FldSculptLayerProxy(FldModifierProxyBase):
         if loaded is not None:
             data, size, res = loaded
             self._grid = SdfVoxelField(size=size, resolution=res, data=data,
-                                       placement=fp.Placement)
+                                       interpolation="cubic", placement=fp.Placement)
         else:
             seed = np.full(res, VOXEL_FAR, dtype=np.float32)
-            self._grid = SdfVoxelField(size=size, resolution=res, data=seed, placement=fp.Placement)
+            self._grid = SdfVoxelField(size=size, resolution=res, data=seed,
+                                       interpolation="cubic", placement=fp.Placement)
         return self._grid
 
     def touch_grid(self, fp):

@@ -12,7 +12,7 @@ from freecad.fields.core.objects.fld_line import FldLineSet
 from freecad.fields.core.sdf.sdf.box import SdfBoxField
 from freecad.fields.tools.fld_base import ToolState
 from freecad.fields.tools.primitive_creator_base import (
-    PrimitiveCreatorBase, MIN_PRIMITIVE_DIM_MM, MIN_PRIMITIVE_DIM_TYPED_MM
+    PrimitiveCreatorBase, StageEntry, MIN_PRIMITIVE_DIM_MM, MIN_PRIMITIVE_DIM_TYPED_MM
 )
 
 # Opposite corner index for box corners 1..8 (index 0 is the center handle)
@@ -85,11 +85,15 @@ class BoxCreator(PrimitiveCreatorBase):
         if self._origin_mode in ("Current Point", "First Point") and self.points:
             origin = FreeCAD.Vector(obj.Placement.Base)
             tol = self._compute_handle_radius(origin)
+            nearest = None   # distance of the best handle so far; ties keep the first
             for i in range(1, len(self.points)):
                 pt = self.points[i]
-                if pt is not None and (FreeCAD.Vector(pt) - origin).Length <= tol:
+                if pt is None:
+                    continue
+                dist = (FreeCAD.Vector(pt) - origin).Length
+                if dist <= tol and (nearest is None or dist < nearest):
+                    nearest = dist
                     self._current_point_idx = i
-                    break
         # Move the gizmo (created by super()) to the correct center position.
         # Use update() rather than _init_gizmo() to avoid recreating Coin3D nodes.
         self._update_gizmo()
@@ -121,6 +125,26 @@ class BoxCreator(PrimitiveCreatorBase):
         elif state == ToolState.DRAG_Z:
             self.current_point = pos
             self._rebuild_box_points()
+
+    def _stage_entry(self, state):
+        """Size (plane x, plane y) while dragging the footprint; Height after (INP-055)."""
+        wp = self.working_plane or FreeCAD.Placement()
+        if state == ToolState.DRAG_XY and self._anchor_pt is not None and self._profile_end is not None:
+            d = wp.Rotation.inverted().multVec(self._profile_end - self._anchor_pt)
+            return StageEntry("Size", "mm", [abs(d.x), abs(d.y)],
+                              [-1 if d.x < 0 else 1, -1 if d.y < 0 else 1])
+        if state == ToolState.DRAG_Z and self._height_drag_base is not None and self.current_point is not None:
+            h = self._normal_offset(self.current_point)
+            return StageEntry("Height", "mm", [abs(h)], [-1 if h < 0 else 1])
+        return None
+
+    def _stage_point_for(self, state, values):
+        wp = self.working_plane or FreeCAD.Placement()
+        if state == ToolState.DRAG_XY:
+            u = wp.Rotation.multVec(FreeCAD.Vector(1, 0, 0))
+            v = wp.Rotation.multVec(FreeCAD.Vector(0, 1, 0))
+            return self._anchor_pt + u * values[0] + v * values[1]
+        return self._normal_stage_point(values[0])
 
     def _rebuild_box_points(self):
         """Build self.points (8 world corners) from anchor, profile_end, and current_point."""
@@ -204,33 +228,14 @@ class BoxCreator(PrimitiveCreatorBase):
                 line_pts.extend([self.points[i], self.points[j]])
             self.fld_line_set.update_lines(line_pts, segments=[2] * 12)
 
+    def _gizmo_points_changed(self):
+        super()._gizmo_points_changed()
+        self._update_box_lines()
+
     # Per-axis min/max corner-index sets, matching the ordering _apply_selection_delta
     # (and _rebuild_box_points/edit_object before it) builds corners 1-8 in.
     _AXIS_MIN_CORNERS = {'x': {1, 4, 5, 8}, 'y': {1, 2, 5, 6}, 'z': {1, 2, 3, 4}}
     _AXIS_MAX_CORNERS = {'x': {2, 3, 6, 7}, 'y': {3, 4, 7, 8}, 'z': {5, 6, 7, 8}}
-
-    def _drag_update(self):
-        # Marquee-select has nothing to do with box corners/edges -- the base
-        # class owns the whole click-vs-marquee resolution (including calling
-        # _end_marquee() on release), so hand it off wholesale rather than
-        # running it through this method's own release-check first, which
-        # would clear _dragging_idx before the base ever sees 'marquee'.
-        if self._dragging_idx == 'marquee':
-            super()._drag_update()
-            return
-        if self._drag_check_lmb_released():
-            self._clear_constraint_visual()
-            if getattr(self, "_snap_guide", None):
-                try:
-                    self._snap_guide.undraw()
-                except Exception as exc:  # safe: best-effort cleanup of snap guide visual
-                    fld_logger.debug(f"[box_creator] _snap_guide.undraw failed: {exc}")
-                    pass
-            return
-        if self._dragging_idx is None:
-            return
-        super()._drag_update()
-        self._update_box_lines()
 
     def _apply_selection_delta(self, delta):
         """Move the selected corners by `delta`, keeping the box a valid box.
@@ -261,25 +266,6 @@ class BoxCreator(PrimitiveCreatorBase):
         z_max = max(p.z for p in local_corners)
 
         local_delta = inv.Rotation.multVec(delta) if inv else FreeCAD.Vector(delta)
-
-        # A corner is free to move on all 3 axes at once unless the user
-        # explicitly constrained the drag with the X/Y/Z hotkey -- that
-        # toggle is global (see on_key_press in fld_base.py) and persists
-        # across drags on purpose, same as every other tool.
-        constraint_plane = getattr(self, "_constraint_plane", None)
-        if getattr(self, "_constraint_axis", None):
-            axis = self._constraint_axis
-            do_x, do_y, do_z = axis == 'x', axis == 'y', axis == 'z'
-        elif constraint_plane:
-            do_x, do_y, do_z = 'x' in constraint_plane, 'y' in constraint_plane, 'z' in constraint_plane
-        else:
-            do_x = do_y = do_z = True
-        if not do_x:
-            local_delta.x = 0.0
-        if not do_y:
-            local_delta.y = 0.0
-        if not do_z:
-            local_delta.z = 0.0
 
         min_dim = MIN_PRIMITIVE_DIM_MM
         if sel & self._AXIS_MIN_CORNERS['x']:

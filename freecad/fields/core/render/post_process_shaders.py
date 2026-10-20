@@ -127,6 +127,7 @@ struct FieldMeta {
     vec4 diffuse;
     vec4 specular;
     vec4 flags;         // .x = selected (0/1), .yzw = selection outline colour
+    vec4 matcap;        // .x = layer, .y = data layer (no hatch), .z = uv_source, .w = ao_bypass
 };
 layout(std430, binding = 3) readonly buffer FieldMetaBlock { FieldMeta u_fields[]; };
 
@@ -197,6 +198,12 @@ void main() {
     if (color.a < 0.2) discard;
 
     float ao    = texture(u_occlusion, uv).r;
+    // A data readout modulated by ambient occlusion is a lit image, not data. Same
+    // id decode and bounds check as outline_color_at: a stale id reads nothing.
+    float sid = texelFetch(u_norm, center_pos, 0).w;
+    int   fid = int(sid + 0.5);
+    if (sid >= 0.0 && fid < u_field_count && u_fields[fid].matcap.w > 0.5)
+        ao = 1.0;
     vec3 result = color.rgb * ao;
     result      = pow(result, vec3(1.0 / 2.2));
 

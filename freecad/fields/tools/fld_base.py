@@ -5,7 +5,7 @@ Event Ownership Contract (Single-Owner Qt-Native)
 ================================================
 - Qt filter (FldInputManager): owns all events — state tracking, global hotkeys,
   viewport detection, and dispatch to the active tool via on_mouse_press/move/etc.
-- Tool methods (on_button1_down, handle_move, handle_keyboard, …): ALL tool logic.
+- Tool methods (on_button1_down, handle_move, on_key_press, …): ALL tool logic.
 - Modifiers: always read from FldInputManager (is_shift_down, is_ctrl_down, etc.).
 - Drag: QTimer polls FldInputManager._last_qt_pos.
 """
@@ -19,13 +19,14 @@ from freecad.fields.core import fld_logger
 from freecad.fields.core.input.work_plane import WorkPlaneManager
 from freecad.fields.core.input.view_projector import ViewProjector
 from freecad.fields.core.input.input_manager import FldInputManager
+from freecad.fields.core.input.fld_menu_tree import MenuItem, SEPARATOR
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DragTimerMixin (re-exported from freecad.fields.tools.tool_mixins)
 # ─────────────────────────────────────────────────────────────────────────────
 
 from freecad.fields.tools.tool_mixins import (  # noqa: F401
-    DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPreferencesMixin,
+    DragTimerMixin, ControlCageDrawMixin, SnapPreferencesMixin,
 )
 
 
@@ -34,16 +35,6 @@ from freecad.fields.tools.tool_mixins import (  # noqa: F401
 # ─────────────────────────────────────────────────────────────────────────────
 
 from enum import IntEnum
-
-# Shown in the status bar for the whole of edit mode. These keys exist nowhere in
-# the UI -- there is no menu item or toolbar button for a modal transform -- so
-# this line is their only discoverable surface. Keep it in step with
-# `.claude/skills/fld_input_map/SKILL.md`.
-EDIT_MODE_HINT = ("Edit mode  |  G move \u00b7 R rotate \u00b7 S scale  \u00b7  "
-                  "X/Y/Z axis (Shift = plane)  \u00b7  type a number  \u00b7  "
-                  "Enter/LMB apply \u00b7 Esc/RMB cancel \u00b7 Tab exit")
-
-PRIMITIVE_SCALE_PROPS = ("Radius", "Radius1", "Radius2", "Length", "Width", "Height", "Thickness")
 
 
 class ToolState(IntEnum):
@@ -62,11 +53,7 @@ class ToolState(IntEnum):
     CUSTOM_3     = 12
 
 
-class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPreferencesMixin):
-    # Whether G/R/S do anything in this tool. A tool that sets this False must say
-    # so in its status message -- a modal that silently does nothing is worse than
-    # no modal at all.
-    SUPPORTS_MODAL = True
+class FldBase(DragTimerMixin, ControlCageDrawMixin, SnapPreferencesMixin):
     place_on_geometry = True
     _last_btn3_time = 0.0 # Instance variable per tool
     autorepeat = False
@@ -114,16 +101,9 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
 
         # Shared UX state
         self.height = 0.0
-        self.is_cutter = False
         self.panel = None
         self._dialog_open = False
         self._finish_scheduled = False
-
-        # Shared constraint state
-        self.active_axis = None
-        self.locked_length = None
-        self.locked_width = None
-        self.locked_height = None
 
         self._cursor_active = False
         self._last_btn3_time = 0.0
@@ -132,28 +112,7 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
 
         self._is_editing = False
 
-        self._modal_transform = None  # None, "GRAB", "ROTATE", "SCALE"
-        self._axis_lock = None         # None, ("X",), ("Y",), ("Z",), or plane e.g. ("X","Y")
-        #: Space the *current* single-axis lock resolves in -- 'global' | 'local' | None.
-        #: Blender-style 3-press cycle on X/Y/Z (see on_key_press): 1st press locks at
-        #: _default_axis_lock_space, 2nd press flips this to the other space without
-        #: touching the default, 3rd press clears both back to no lock.
-        self._axis_lock_space = None
-        self._default_axis_lock_space = 'global'
-        self._input_buffer = ""        # Character buffer for numeric entry
-        self._transform_origin = None  # Vector starting coordinate
-        self._modal_snapshot = None    # Snapshot of object state for modal cancel
-        self._modal_start_mouse = None # Mouse position when modal started
-        self._snap_guide = None        # FldSnapGuide visual for modal transforms
-        self._snap_guide_root = None   # Coin3D root node if not using points_root
-
-        # Edit mode axis/plane constraints
-        self._constraint_axis = None
-        self._constraint_plane = None
-        self._constraint_space = 'global'
-        self._constraint_last_key = None
-        self._constraint_line = None
-        self._drag_constraint_base = None
+        self._snap_guide = None        # FldSnapGuide; primitives draw one, _do_terminate removes it
 
         # Unified object selection detection for edit mode
         # Defer calling to ensure subclass __init__ is finished
@@ -266,7 +225,7 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
     def _active_working_plane(self):
         """The workplane to project empty-space clicks onto, or None.
 
-        Enforces the Workplane Fallback Rule (AGENTS.md): a plane the tool merely
+        Enforces the Workplane Fallback Rule: a plane the tool merely
         pre-loaded because it was visible (`_working_plane_is_fallback`) is not a
         plane the user chose, so while we are still deciding where the object
         goes -- IDLE or PLACE_ANCHOR -- empty space must fall through to the
@@ -407,7 +366,6 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
                     fld_logger.debug(f"{self.__class__.__name__}: Detected compatible ShapeType '{st}'. Entering edit mode.")
                     self._is_editing = True
                     self.edit_object(obj)
-                    self._update_modal_hud()
                     FreeCADGui.updateGui()
                     return
 
@@ -419,14 +377,15 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
                         continue
                     self._is_editing = True
                     self.edit_object(obj)
-                    self._update_modal_hud()
                     FreeCADGui.updateGui()
                     return
-            
+
             FreeCADGui.updateGui()
                     
         except Exception as e:
-            fld_logger.debug(f"Error detecting selected object: {e}")
+            fld_logger.exception(f"{type(self).__name__}: entering edit mode failed")
+            self._is_editing = False
+            self.terminate()
             FreeCADGui.updateGui()
 
     def get_handled_types(self):
@@ -476,7 +435,7 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
                     fld_logger.info(f"Using selected workplane: {obj.Label}")
                     break
         except Exception as e:
-            fld_logger.debug(f"Error detecting selected workplane: {e}")
+            fld_logger.exception(f"{type(self).__name__}: selecting the workplane failed")
 
     def terminate(self):
         """Standard entry point for termination. Sets guard and schedules async cleanup."""
@@ -516,14 +475,10 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
         try:
             # Close task panel if open
             if getattr(self, "_dialog_open", False):
-                FreeCADGui.Control.closeDialog()
+                gui_doc = FreeCADGui.getDocument(self.doc.Name)
+                FreeCADGui.Control.closeDialog(gui_doc)
                 self._dialog_open = False
 
-            try:
-                self._clear_constraint_visual()
-            except Exception as e:
-                fld_logger.debug(f"FldBase._do_terminate: Failed to clear constraint visual: {e}")
-            
             # Clean up active/preview objects if not finished
             if not getattr(self, "_finished", False):
                 # Robustly collect objects to remove.
@@ -598,59 +553,26 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
                 except Exception as e:
                     fld_logger.debug(f"FldBase._do_terminate: Failed to undraw snap guide: {e}")
                 self._snap_guide = None
-            if getattr(self, "_snap_guide_root", None):
-                try:
-                    if self.view and hasattr(self.view, "getSceneGraph") and self.view.getSceneGraph():
-                        self.view.getSceneGraph().removeChild(self._snap_guide_root)
-                except Exception as e:
-                    fld_logger.debug(f"FldBase._do_terminate: Failed to remove snap guide root: {e}")
-                self._snap_guide_root = None
 
             FreeCADGui.updateGui()
 
         except Exception as e:
             fld_logger.debug(f"FldBase._do_terminate: Cleanup failed: {e}")
 
-    def get_constrained_drag_point(self, event_dict):
-        base_pt = getattr(self, "_drag_constraint_base", None)
-        axis_vec, plane_normal = self._get_constraint_vectors()
-        if base_pt is not None and axis_vec:
-            return FldInputManager.get_instance().get_axis_point(
-                self.view, base_pt, axis_vec, event_dict)
-        elif base_pt is not None and plane_normal:
-            pt = self.projector.get_mouse_world_pos(
-                event_dict, plane_normal, base_pt, place_on_geometry=False)
-            if pt is not None:
-                return pt
-            
-            # Fallback for edge-on views: project camera-plane intersection onto constraint plane
-            if self.view:
-                vd = self.view.getViewDirection()
-                cam_normal = FreeCAD.Vector(-vd[0], -vd[1], -vd[2]).normalize()
-                pt_cam = self.projector.get_mouse_world_pos(
-                    event_dict, cam_normal, base_pt, place_on_geometry=False)
-                if pt_cam is not None:
-                    diff = pt_cam - base_pt
-                    proj = plane_normal * diff.dot(plane_normal)
-                    return pt_cam - proj
-        return None
-
     def _apply_snap(self, pt, event_dict, *, origin=None, axis_unit_vec=None,
-                    extra_points=(), exclude=(), is_modal=False):
+                    frame_axes=None, extra_points=(), exclude=()):
         """Quantize `pt`. Vertex/origin/surface candidates win over the grid.
 
         `origin` + `axis_unit_vec` make this snap the DELTA along a locked axis
         rather than the absolute point -- which is what a lock means: the result
         must stay on the axis, and quantizing x/y/z independently would leave it.
+        `origin` + `frame_axes` (three orthonormal vectors, e.g. a working plane's)
+        quantize the delta in that frame instead of in world X/Y/Z, so a grid on a
+        rotated plane lands on the plane's own grid lines.
         """
         from freecad.fields.core.input import fld_snap
-        from freecad.fields.core.fld_settings import (
-            get_snap_grid_step, get_snap_during_direct_drag)
+        from freecad.fields.core.fld_settings import get_snap_grid_step
 
-        if not is_modal and not get_snap_during_direct_drag():
-            if getattr(self, "_snap_indicator", None):
-                self._snap_indicator.hide()
-            return pt
         if not fld_snap.snap_active():
             if getattr(self, "_snap_indicator", None):
                 self._snap_indicator.hide()
@@ -671,6 +593,10 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
             delta = pt - origin
             if axis_unit_vec is not None:
                 snapped = origin + axis_unit_vec * fld_snap.snap_length(delta.dot(axis_unit_vec), step)
+            elif frame_axes is not None:
+                snapped = FreeCAD.Vector(origin)
+                for ax in frame_axes:
+                    snapped = snapped + ax * fld_snap.snap_length(delta.dot(ax), step)
             else:
                 snapped = origin + fld_snap.snap_vector_to_grid(delta, step)
 
@@ -686,18 +612,15 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
                             exclude=None, show_guide=True, place_on_geometry=False):
         """Turn a mouse position into a world point -- the ONE place that does this.
 
-        Order: constraint override -> axis/plane lock -> projection (explicit plane,
-        else workplane, else camera plane) -> snap -> guide. Every tool's drag path
-        goes through here; nothing else in the workbench may call fld_snap directly.
+        Order: axis override -> projection (explicit plane, else workplane, else camera plane)
+        -> snap -> guide. Every tool's drag path goes through here; nothing else in the
+        workbench may call fld_snap directly.
 
-        base_pt defaults to self._drag_constraint_base. allow_snap=False is for paths
-        that are already quantised by something else, not for opting a tool out --
-        the SnapDuringDirectDrag preference does that, in _apply_snap().
+        allow_snap=False is for paths that are already quantised by something else,
+        not for opting a tool out -- Ctrl gates snapping, in _apply_snap().
         """
         from freecad.fields.core.input.input_manager import FldInputManager
         new_pt = None
-        if base_pt is None:
-            base_pt = getattr(self, '_drag_constraint_base', None)
 
         axis_override = getattr(self, '_drag_axis_override', None)
         if axis_override is not None:
@@ -706,21 +629,6 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
                     self.view, base_pt, axis_override, event_dict)
                 if show_guide and getattr(self, "_snap_guide", None) and self.view:
                     self._snap_guide.show_axis(base_pt, axis_override, self.view)
-        else:
-            new_pt = self.get_constrained_drag_point(event_dict)
-            if new_pt is not None and show_guide and getattr(self, "_snap_guide", None) and self.view:
-                axis_vec, p_norm = self._get_constraint_vectors()
-                if base_pt is not None:
-                    if axis_vec:
-                        self._snap_guide.show_axis(base_pt, axis_vec, self.view)
-                    elif p_norm:
-                        u_hint = None
-                        cp = getattr(self, "_constraint_plane", None)
-                        if cp:
-                            u_hint = {'xy': FreeCAD.Vector(1, 0, 0),
-                                      'yz': FreeCAD.Vector(0, 1, 0),
-                                      'xz': FreeCAD.Vector(1, 0, 0)}.get(cp)
-                        self._snap_guide.show_plane(base_pt, p_norm, self.view, u_hint=u_hint)
 
         if new_pt is None:
             if plane_normal is not None and plane_origin is not None:
@@ -752,9 +660,8 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
                     place_on_geometry=place_on_geometry or getattr(self, 'place_on_geometry', False))
 
         if new_pt is not None and allow_snap:
-            axis_vec, p_norm = self._get_constraint_vectors()
-            snap_origin = base_pt if (axis_vec or p_norm or axis_override is not None) else None
-            snap_axis = axis_override if axis_override is not None else axis_vec
+            snap_origin = base_pt if axis_override is not None else None
+            snap_axis = axis_override
             ex_pts = extra_points if extra_points is not None else getattr(self, "points", [])
             excl = exclude if exclude is not None else ([self._preview_obj] if getattr(self, "_preview_obj", None) else [])
             new_pt = self._apply_snap(
@@ -763,7 +670,6 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
                 axis_unit_vec=snap_axis,
                 extra_points=ex_pts,
                 exclude=excl,
-                is_modal=False,
             )
         elif new_pt is not None and not allow_snap:
             if getattr(self, "_snap_indicator", None):
@@ -816,15 +722,6 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
         """Returns True if the tool has active state/points OR is in edit mode."""
         return getattr(self, "state", 0) > 0 or getattr(self, "_is_editing", False)
 
-    def toggle_cutter_mode(self):
-         self.is_cutter = not self.is_cutter
-         self.manual_mode_override = True
-         self.update_material()
-         self.view.redraw()
-
-    def update_material(self):
-        pass
-
     def update_ui(self):
         pass
 
@@ -873,674 +770,12 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
             return pt
         return result
 
-    def get_selected_vertex_pos(self):
-        if hasattr(self, "_target_obj") and self._target_obj and getattr(self, "_selected_element", None):
-            idx, elem_type = self._selected_element
-            pts = getattr(self._target_obj, "Points", [])
-            h_in = getattr(self._target_obj, "HandleIn", [])
-            h_out = getattr(self._target_obj, "HandleOut", [])
-
-            val = None
-            if elem_type == "Point" and idx < len(pts):
-                val = pts[idx]
-            elif elem_type == "HandleIn" and idx < len(h_in):
-                val = h_in[idx]
-            elif elem_type == "HandleOut" and idx < len(h_out):
-                val = h_out[idx]
-
-            if val is not None:
-                return self._target_obj.Placement.multVec(val)
-            return None
-        if getattr(self, "_selected_indices", None):
-            # Primitive creator (BoxCreator etc.): a control-point selection
-            # with no _target_obj. _gizmo_center() is already exactly
-            # "centroid of the selection", which is what G should pivot on.
-            return self._gizmo_center()
-        return None
-
-    def update_selected_vertex_pos(self, global_pos):
-        if hasattr(self, "_target_obj") and self._target_obj and getattr(self, "_selected_element", None):
-            local_pos = self._target_obj.Placement.inverse().multVec(global_pos)
-            self._update_element(self._selected_element, local_pos)
-        elif getattr(self, "_selected_indices", None) and getattr(self, "_transform_origin", None) is not None:
-            # global_pos arrives already resolved onto the locked axis/plane --
-            # _update_modal_preview's single-axis branch projects onto
-            # _modal_axis_vector (global OR local per _axis_lock_space) and its
-            # free/plane branch already calls constrain_vector itself;
-            # apply_numeric_transform's offset is built the same way. Re-masking
-            # here by world-axis-LETTER membership (constrain_vector's only
-            # notion of "locked") is a no-op for a global lock but corrupts a
-            # local one, whose vector legitimately has components on axes whose
-            # letter isn't in _axis_lock. Matches the _target_obj branch above,
-            # which also takes global_pos as already-resolved.
-            delta = global_pos - self._transform_origin
-            self._apply_selection_delta(delta)
-
-    def start_modal_transform(self, mode):
-        from freecad.fields.core.fld_settings import (
-            get_control_scheme, get_modal_requires_selection)
-        if get_control_scheme() == "direct":
-            fld_logger.info("Modal transforms are off in the Direct control scheme")
-            return
-        if not self.SUPPORTS_MODAL:
-            fld_logger.warn(f"{type(self).__name__} has no modal transform - drag instead")
-            return
-        origin = self.get_selected_vertex_pos()
-        if origin is None:
-            if mode == "GRAB" and get_modal_requires_selection():
-                fld_logger.warn("Grab needs a selected point - click a control point first")
-                return
-            origin = self.get_modal_pivot()
-        if origin is None:
-            fld_logger.warn(f"{mode.title()} has nothing to act on here")
-            return
-        self._modal_transform = mode
-        self._input_buffer = ""
-        self._transform_origin = origin
-        self._modal_snapshot = self.snapshot_modal_state()
-        self._modal_start_mouse = FldInputManager.get_instance()._last_qt_pos
-        self._update_modal_hud()
-        fld_logger.info(f"Modal {mode} active")
-
-    def snapshot_modal_state(self):
-        if hasattr(self, "_target_obj") and self._target_obj:
-            pts = [p.copy() if hasattr(p, "copy") else FreeCAD.Vector(p) for p in getattr(self._target_obj, "Points", [])]
-            hin = [p.copy() if hasattr(p, "copy") else FreeCAD.Vector(p) for p in getattr(self._target_obj, "HandleIn", [])]
-            hout = [p.copy() if hasattr(p, "copy") else FreeCAD.Vector(p) for p in getattr(self._target_obj, "HandleOut", [])]
-            pl = getattr(self._target_obj, "Placement", None)
-            pl_copy = pl.copy() if (pl and hasattr(pl, "copy")) else pl
-            snap = {
-                "Points": pts,
-                "HandleIn": hin,
-                "HandleOut": hout,
-                "Placement": pl_copy,
-            }
-            for prop in PRIMITIVE_SCALE_PROPS:
-                if hasattr(self._target_obj, prop):
-                    val = getattr(self._target_obj, prop)
-                    if isinstance(val, (int, float)):
-                        snap[prop] = float(val)
-                    elif hasattr(val, "Value"):
-                        snap[prop] = float(val.Value)
-            return snap
-        elif getattr(self, "_selected_element", None):
-            pos = self.get_selected_vertex_pos()
-            return {"vertex_pos": pos.copy() if (pos and hasattr(pos, "copy")) else pos}
-        elif hasattr(self, "points"):
-            # Primitive creator (BoxCreator etc.). Snapshot every point
-            # regardless of selection -- GRAB (guarded earlier in
-            # start_modal_transform to require a selection) reads the
-            # selected subset out of this via _apply_selection_delta, but
-            # ROTATE has no selection guard: it always turns the whole
-            # primitive about its origin, so it needs all points snapshotted
-            # even when nothing is selected. Shared with the gizmo-arrow drag
-            # path via _drag_start_points.
-            pts = [(p.copy() if hasattr(p, "copy") else FreeCAD.Vector(p)) if p is not None else None
-                   for p in getattr(self, "points", [])]
-            self._drag_start_points = pts
-            snap = {"points": pts}
-            wp = getattr(self, "working_plane", None)
-            if wp is not None:
-                snap["wp_base"] = FreeCAD.Vector(wp.Base)
-                snap["wp_rot"] = FreeCAD.Rotation(wp.Rotation)
-            return snap
-        return None
-
-    def restore_modal_state(self, snap):
-        if not snap:
-            return
-        if hasattr(self, "_target_obj") and self._target_obj:
-            if "Points" in snap and hasattr(self._target_obj, "Points"):
-                self._target_obj.Points = [p.copy() if hasattr(p, "copy") else FreeCAD.Vector(p) for p in snap["Points"]]
-            if "HandleIn" in snap and hasattr(self._target_obj, "HandleIn"):
-                self._target_obj.HandleIn = [p.copy() if hasattr(p, "copy") else FreeCAD.Vector(p) for p in snap["HandleIn"]]
-            if "HandleOut" in snap and hasattr(self._target_obj, "HandleOut"):
-                self._target_obj.HandleOut = [p.copy() if hasattr(p, "copy") else FreeCAD.Vector(p) for p in snap["HandleOut"]]
-            if "Placement" in snap and snap["Placement"] is not None:
-                self._target_obj.Placement = snap["Placement"].copy() if hasattr(snap["Placement"], "copy") else snap["Placement"]
-            for prop in PRIMITIVE_SCALE_PROPS:
-                if prop in snap and hasattr(self._target_obj, prop):
-                    setattr(self._target_obj, prop, snap[prop])
-            obj = self._target_obj
-            def _deferred():
-                if obj and getattr(obj, "Document", None):
-                    obj.Document.recompute()
-            QtCore.QTimer.singleShot(0, _deferred)
-        elif "vertex_pos" in snap and snap["vertex_pos"] is not None:
-            self.update_selected_vertex_pos(snap["vertex_pos"])
-        elif "points" in snap:
-            self.points = [(p.copy() if hasattr(p, "copy") else FreeCAD.Vector(p)) if p is not None else None
-                           for p in snap["points"]]
-            self._drag_start_points = None
-            wp = getattr(self, "working_plane", None)
-            if wp is not None and "wp_base" in snap and "wp_rot" in snap:
-                wp.Base = FreeCAD.Vector(snap["wp_base"])
-                wp.Rotation = FreeCAD.Rotation(snap["wp_rot"])
-            if hasattr(self, "_update_handle_positions"):
-                self._update_handle_positions(self.points)
-            if hasattr(self, "_refresh_origin"):
-                self._refresh_origin()
-            if hasattr(self, "update_preview"):
-                self.update_preview()
-            if hasattr(self, "view") and self.view:
-                self.view.redraw()
-
-    def _ensure_modal_snap_guide(self):
-        if getattr(self, "_snap_guide", None) is None:
-            from freecad.fields.core.input.fld_snap import FldSnapGuide
-            from pivy import coin
-            self._snap_guide = FldSnapGuide()
-            root = getattr(self, "points_root", None)
-            if not root and hasattr(self, "view") and self.view and hasattr(self.view, "getSceneGraph") and self.view.getSceneGraph():
-                self._snap_guide_root = coin.SoAnnotation() if (coin and hasattr(coin, "SoAnnotation")) else None
-                if self._snap_guide_root:
-                    self.view.getSceneGraph().addChild(self._snap_guide_root)
-                    root = self._snap_guide_root
-            if root:
-                self._snap_guide.draw(root)
-        return self._snap_guide
-
-    def cancel_modal_transform(self):
-        if self._modal_snapshot is not None:
-            self.restore_modal_state(self._modal_snapshot)
-        self._modal_transform = None
-        self._axis_lock = None
-        self._axis_lock_space = None
-        self._input_buffer = ""
-        self._transform_origin = None
-        self._modal_snapshot = None
-        self._modal_start_mouse = None
-        if getattr(self, "_snap_guide", None):
-            self._snap_guide.hide()
-        self._update_modal_hud()
-        if hasattr(self, "view") and self.view:
-            self.view.redraw()
-
-    def commit_modal_transform(self):
-        self._modal_transform = None
-        self._axis_lock = None
-        self._axis_lock_space = None
-        self._input_buffer = ""
-        self._transform_origin = None
-        self._modal_snapshot = None
-        self._modal_start_mouse = None
-        if getattr(self, "_snap_guide", None):
-            self._snap_guide.hide()
-        self._update_modal_hud()
-        obj = getattr(self, "_target_obj", None)
-        view = getattr(self, "view", None)
-        def _deferred_recompute():
-            if obj and getattr(obj, "Document", None):
-                obj.Document.recompute()
-            if view:
-                view.redraw()
-        QtCore.QTimer.singleShot(0, _deferred_recompute)
-
-    def numeric_value(self):
-        """Parsed value of the numeric buffer, or None when empty/incomplete."""
-        buf = self._input_buffer
-        if buf in ("", "-", ".", "-."):
-            return None
-        try:
-            return float(buf)
-        except ValueError:
-            fld_logger.warn(f"Bad numeric buffer '{buf}'")
-            return None
-
-    def _modal_axis_vector(self, axis_letter):
-        """World-space unit vector for a locked GRAB axis ('X'/'Y'/'Z').
-
-        Global unless `_axis_lock_space == 'local'`, in which case it is rotated
-        by the working plane (or the curve tool's `_target_obj.Placement`) --
-        the same rotation source `AxisConstraintMixin._get_constraint_vectors`
-        uses for the ordinary (non-modal) drag constraint, kept separate here
-        because the modal axis-lock cycle (on_key_press) has its own space
-        state (`_axis_lock_space`), independent of `_constraint_space`.
-        """
-        import FreeCAD
-        rot = None
-        if getattr(self, "_axis_lock_space", None) == 'local':
-            if getattr(self, "working_plane", None):
-                rot = self.working_plane.Rotation
-            elif getattr(self, "_target_obj", None) and hasattr(self._target_obj, "Placement"):
-                rot = self._target_obj.Placement.Rotation
-        base = {
-            'X': FreeCAD.Vector(1, 0, 0),
-            'Y': FreeCAD.Vector(0, 1, 0),
-            'Z': FreeCAD.Vector(0, 0, 1),
-        }[axis_letter]
-        return rot.multVec(base) if rot is not None else base
-
-    def apply_numeric_transform(self):
-        val = self.numeric_value()
-        if val is None:
-            return
-
-        import FreeCAD
-        if self._modal_transform == "GRAB" and self._transform_origin:
-            if not self._axis_lock:
-                return
-            lock = self._axis_lock
-            if len(lock) == 1:
-                offset = self._modal_axis_vector(lock[0]) * val
-            else:
-                offset = FreeCAD.Vector(
-                    val if "X" in lock else 0.0,
-                    val if "Y" in lock else 0.0,
-                    val if "Z" in lock else 0.0
-                )
-            self.update_selected_vertex_pos(self._transform_origin + offset)
-        elif self._modal_transform == "ROTATE":
-            self.apply_modal_rotate(val)
-        elif self._modal_transform == "SCALE":
-            self.apply_modal_scale(val)
-
-    def _update_modal_hud(self):
-        try:
-            import FreeCADGui
-            sb = FreeCADGui.getMainWindow().statusBar()
-            if not self._modal_transform:
-                # No modal running. In edit mode the status bar is the only place
-                # the modal hotkeys are advertised, so leave the hint up rather
-                # than blanking it -- the keys are invisible otherwise.
-                if getattr(self, "_is_editing", False):
-                    sb.showMessage(EDIT_MODE_HINT)
-                else:
-                    sb.clearMessage()
-                return
-            names = {"GRAB": "Grab", "ROTATE": "Rotate", "SCALE": "Scale", "GIZMO": "Gizmo"}
-            axis = "+".join(self._axis_lock) if self._axis_lock else "free"
-            # The default space stays silent, matching the HUD before the
-            # axis-lock cycle existed; only a lock that deviates from it (the
-            # 2nd press in the 3-press cycle) is worth calling out.
-            lock_space = getattr(self, "_axis_lock_space", None)
-            if (self._axis_lock and lock_space
-                    and lock_space != self._default_axis_lock_space):
-                axis = f"{axis} ({lock_space})"
-            buf = self._input_buffer or "…"
-            unit = {"GRAB": "mm", "ROTATE": "°", "SCALE": "×", "GIZMO": ""}[self._modal_transform]
-            if self._modal_transform == "GRAB" and not self._axis_lock:
-                from freecad.fields.core.input import fld_keymap
-                kx = fld_keymap.binding_for("modal.lock_x")
-                ky = fld_keymap.binding_for("modal.lock_y")
-                kz = fld_keymap.binding_for("modal.lock_z")
-                sb.showMessage(f"{names[self._modal_transform]}  |  axis: {axis}  |  {buf} {unit}  (type {kx}/{ky}/{kz} to constrain)")
-            else:
-                sb.showMessage(f"{names[self._modal_transform]}  |  axis: {axis}  |  {buf} {unit}")
-        except Exception as e:
-            fld_logger.debug(f"modal HUD update failed: {e}")
-
-    def _update_modal_preview(self, event_dict):
-        if self.numeric_value() is not None:
-            self.apply_numeric_transform()
-            if getattr(self, "_snap_guide", None):
-                self._snap_guide.hide()
-            return
-
-        if self._modal_transform == "GRAB":
-            if not self._transform_origin:
-                return
-
-            projector = getattr(self, "projector", None)
-            if not projector and hasattr(self, "view") and self.view:
-                projector = ViewProjector(self.view)
-            if not projector:
-                return
-
-            new_world_pos = None
-            axis_unit_vec = None
-            if self._axis_lock and len(self._axis_lock) == 1:
-                axis_name = self._axis_lock[0].upper()
-                axis_unit_vec = self._modal_axis_vector(axis_name)
-                drag_evt = dict(event_dict)
-                if getattr(self, "_modal_start_mouse", None) is not None:
-                    drag_evt["DragStart2D"] = self._modal_start_mouse
-                new_world_pos = projector.get_projected_point(self._transform_origin, axis_unit_vec, drag_evt)
-            elif self._axis_lock and len(self._axis_lock) == 2:
-                # Shift+axis plane-lock: intersect with the TRUE locked plane
-                # (normal = the excluded axis), not a screen-facing plane --
-                # otherwise a front-on view (whose screen plane already has ~0
-                # extent along the excluded axis) masks out real motion too and
-                # the object barely moves, which read as "not working".
-                missing_axis = ({"X", "Y", "Z"} - set(self._axis_lock)).pop()
-                plane_normal = self._modal_axis_vector(missing_axis)
-                pt = projector.get_mouse_world_pos(
-                    event_dict,
-                    plane_normal=plane_normal,
-                    plane_point=self._transform_origin,
-                    place_on_geometry=False,
-                )
-                if pt:
-                    delta = pt - self._transform_origin
-                    new_world_pos = self._transform_origin + self.constrain_vector(delta)
-            else:
-                new_world_pos = self.resolve_world_point(
-                    event_dict,
-                    base_pt=self._transform_origin,
-                    allow_snap=False,
-                    extra_points=getattr(self, "points", []),
-                    show_guide=False,
-                )
-                if new_world_pos is not None:
-                    delta = new_world_pos - self._transform_origin
-                    new_world_pos = self._transform_origin + self.constrain_vector(delta)
-
-            from freecad.fields.core.input import fld_snap
-            snapping = fld_snap.snap_active()
-            if new_world_pos is not None:
-                new_world_pos = self._apply_snap(
-                    new_world_pos, event_dict,
-                    origin=self._transform_origin,
-                    axis_unit_vec=axis_unit_vec,
-                    extra_points=getattr(self, "points", []),
-                    is_modal=True,
-                )
-
-                # The axis/plane-lock guide is a constraint affordance, not a
-                # snap-increment indicator -- it must show as soon as X/Shift+X
-                # locks the drag, same as the non-modal `resolve_world_point`
-                # guide, independent of whether grid-snap quantization (Ctrl)
-                # is active. Only the free-move plane guide below stays gated
-                # on `snapping`: with no lock at all there's nothing to show
-                # unless snap is actively suggesting a plane to land on.
-                guide = self._ensure_modal_snap_guide()
-                if guide:
-                    if self._axis_lock and len(self._axis_lock) == 1:
-                        guide.show_axis(self._transform_origin, axis_unit_vec, self.view)
-                        lock_space = getattr(self, "_axis_lock_space", None) or getattr(self, "_default_axis_lock_space", 'global')
-                        guide.show_space_label(self._transform_origin, lock_space, self.view)
-                    elif self._axis_lock and len(self._axis_lock) == 2:
-                        missing_axis = ({"X", "Y", "Z"} - set(self._axis_lock)).pop()
-                        norm = self._modal_axis_vector(missing_axis)
-                        first_axis = sorted(list(self._axis_lock))[0]
-                        u_hint = self._modal_axis_vector(first_axis)
-                        guide.show_plane(self._transform_origin, norm, self.view, u_hint=u_hint)
-                        lock_space = getattr(self, "_axis_lock_space", None) or getattr(self, "_default_axis_lock_space", 'global')
-                        guide.show_space_label(self._transform_origin, lock_space, self.view)
-                    elif snapping:
-                        guide.hide_space_label()
-                        norm = None
-                        u_hint = None
-                        if hasattr(self, "working_plane") and self.working_plane and hasattr(self.working_plane, "Rotation"):
-                            norm = self.working_plane.Rotation.multVec(FreeCAD.Vector(0, 0, 1))
-                            u_hint = self.working_plane.Rotation.multVec(FreeCAD.Vector(1, 0, 0))
-                        elif hasattr(self, "view") and self.view and hasattr(self.view, "getViewDirection"):
-                            norm = self.view.getViewDirection()
-                        if norm:
-                            guide.show_plane(self._transform_origin, norm, self.view, u_hint=u_hint)
-                        else:
-                            guide.hide()
-                    else:
-                        guide.hide()
-
-                self.update_selected_vertex_pos(new_world_pos)
-                self.update_preview()
-        elif self._modal_transform == "ROTATE":
-            if getattr(self, "_snap_guide", None):
-                self._snap_guide.hide()
-            self._update_modal_rotate_preview(event_dict)
-        elif self._modal_transform == "SCALE":
-            if getattr(self, "_snap_guide", None):
-                self._snap_guide.hide()
-            self._update_modal_scale_preview(event_dict)
-
-    def _project_modal_pivot_to_screen(self, pivot):
-        """Qt-widget-space screen position of a world point, for the
-        ROTATE/SCALE angle/distance-around-pivot math below.
-
-        Deliberately NOT view.getPointOnScreen(): confirmed live (comparing
-        both against the same world points) that it returns a different pixel
-        space from the Qt mouse coordinates FldInputManager hands every other
-        tool -- roughly a 1.6x scale with the Y axis flipped -- so it silently
-        produced a wrong angle instead of raising, rather than the exception
-        the old try/except here was guarding against.
-        ViewProjector.project_to_screen() is the algebraic inverse of
-        get_ray(), the same math the rest of the input layer's mouse handling
-        already goes through, so it's guaranteed to agree with
-        FldInputManager's mouse coordinates.
-        """
-        projector = getattr(self, "projector", None)
-        if not projector and hasattr(self, "view") and self.view:
-            projector = ViewProjector(self.view)
-        if not projector:
-            return None
-        try:
-            return projector.project_to_screen(pivot)
-        except Exception as e:
-            fld_logger.debug(f"_project_modal_pivot_to_screen: {e}")
-            return None
-
-    def _update_modal_rotate_preview(self, event_dict):
-        pivot = self.get_modal_pivot()
-        if pivot is None:
-            return
-        im = FldInputManager.get_instance()
-        cur = im.get_mouse_pos(event_dict)
-        start = self._modal_start_mouse or cur
-        pivot_px = self._project_modal_pivot_to_screen(pivot) or start
-        angle = math.degrees(
-            math.atan2(cur[1] - pivot_px[1], cur[0] - pivot_px[0])
-            - math.atan2(start[1] - pivot_px[1], start[0] - pivot_px[0])
-        )
-        self.apply_modal_rotate(angle)
-
-    def _update_modal_scale_preview(self, event_dict):
-        pivot = self.get_modal_pivot()
-        if pivot is None:
-            return
-        im = FldInputManager.get_instance()
-        cur = im.get_mouse_pos(event_dict)
-        start = self._modal_start_mouse or cur
-        pivot_px = self._project_modal_pivot_to_screen(pivot) or start
-        cur_dist = math.hypot(cur[0] - pivot_px[0], cur[1] - pivot_px[1])
-        start_dist = math.hypot(start[0] - pivot_px[0], start[1] - pivot_px[1])
-        factor = cur_dist / max(start_dist, 1.0)
-        self.apply_modal_scale(factor)
-
-    def get_modal_pivot(self):
-        """Returns the world-space pivot for ROTATE/SCALE transforms."""
-        if hasattr(self, "_target_obj") and self._target_obj and hasattr(self._target_obj, "Placement") and self._target_obj.Placement:
-            return self._target_obj.Placement.Base
-        if hasattr(self, "_origin_point"):
-            # Primitive creator (BoxCreator etc.): rotation/scale always pivot
-            # on the primitive's own origin, never the control-point selection
-            # -- rotating just a selected corner isn't a coherent primitive
-            # operation, and the origin is already "a guide for rotations and
-            # placement" (see fld_edit_gizmo), matching the gizmo rotation
-            # ring's own pivot.
-            return self._origin_point()
-        return self.get_selected_vertex_pos()
-
-    def apply_modal_rotate(self, angle_deg):
-        """Rotate all control points of _target_obj around the pivot from initial snapshot."""
-        if not self._modal_snapshot:
-            fld_logger.debug("apply_modal_rotate: no snapshot")
-            return
-        if not hasattr(self, "_target_obj") or not self._target_obj:
-            if "points" in self._modal_snapshot:
-                self._apply_primitive_modal_rotate(angle_deg)
-            else:
-                fld_logger.debug("apply_modal_rotate: no target object or snapshot")
-            return
-
-        pivot = self.get_modal_pivot()
-        if pivot is None:
-            return
-
-        import FreeCAD
-        # Determine rotation axis
-        if self._axis_lock and len(self._axis_lock) == 1:
-            axis_name = self._axis_lock[0].upper()
-            axis_vec = FreeCAD.Vector(
-                1.0 if axis_name == "X" else 0.0,
-                1.0 if axis_name == "Y" else 0.0,
-                1.0 if axis_name == "Z" else 0.0,
-            )
-        else:
-            if hasattr(self, "view") and self.view and hasattr(self.view, "getViewDirection"):
-                axis_vec = self.view.getViewDirection().negative()
-            else:
-                axis_vec = FreeCAD.Vector(0, 0, 1)
-
-        rot = FreeCAD.Rotation(axis_vec, angle_deg)
-        pl = self._modal_snapshot.get("Placement")
-        if pl is None:
-            pl = getattr(self._target_obj, "Placement", FreeCAD.Placement())
-        inv_pl = pl.inverse()
-
-        for attr in ("Points", "HandleIn", "HandleOut"):
-            if attr in self._modal_snapshot and hasattr(self._target_obj, attr):
-                orig_pts = self._modal_snapshot[attr]
-                new_pts = []
-                for p_local in orig_pts:
-                    p_world = pl.multVec(p_local)
-                    p_new_world = pivot + rot.multVec(p_world - pivot)
-                    p_new_local = inv_pl.multVec(p_new_world)
-                    new_pts.append(p_new_local)
-                setattr(self._target_obj, attr, new_pts)
-
-        touched = any(attr in self._modal_snapshot and hasattr(self._target_obj, attr)
-                      and self._modal_snapshot[attr]
-                      for attr in ("Points", "HandleIn", "HandleOut"))
-        if not touched and pl is not None:
-            # No control points: the object's orientation lives in its Placement.
-            new_pl = FreeCAD.Placement(pl)
-            new_pl.Base = pivot + rot.multVec(pl.Base - pivot)
-            new_pl.Rotation = rot.multiply(pl.Rotation)
-            self._target_obj.Placement = new_pl
-
-        self.update_preview()
-
-    def _apply_primitive_modal_rotate(self, angle_deg):
-        """Rotate every point (and the working plane) of a primitive creator
-        about its origin, from the frozen pre-modal snapshot.
-
-        Primitives have no meaningful "rotate just the selection" -- the
-        origin is a guide for rotation/placement (see fld_edit_gizmo), so R
-        always rotates the whole shape about it regardless of what's
-        selected. Mirrors the gizmo rotation ring's own math
-        (_gizmo_rot_drag_update) exactly, so a point's LOCAL position
-        relative to the working plane -- and hence e.g. BoxCreator's
-        x_min/x_max bounds -- comes out unchanged.
-        """
-        pivot = self.get_modal_pivot()
-        if pivot is None:
-            return
-
-        if self._axis_lock and len(self._axis_lock) == 1:
-            axis_name = self._axis_lock[0].upper()
-            base_vec = {
-                "X": FreeCAD.Vector(1, 0, 0),
-                "Y": FreeCAD.Vector(0, 1, 0),
-                "Z": FreeCAD.Vector(0, 0, 1),
-            }[axis_name]
-            if getattr(self, "_axis_lock_space", None) == 'local':
-                # Frozen at snapshot time, NOT read live from
-                # self.working_plane.Rotation -- this method mutates that
-                # rotation every call, so reading it live would chase the
-                # object and make the drag run away (the exact trap
-                # documented on _gizmo_rot_drag_update for the same reason).
-                wp_rot = self._modal_snapshot.get("wp_rot")
-                axis_vec = wp_rot.multVec(base_vec) if wp_rot is not None else base_vec
-            else:
-                axis_vec = base_vec
-        else:
-            if hasattr(self, "view") and self.view and hasattr(self.view, "getViewDirection"):
-                axis_vec = self.view.getViewDirection().negative()
-            else:
-                axis_vec = FreeCAD.Vector(0, 0, 1)
-
-        rot = FreeCAD.Rotation(axis_vec, angle_deg)
-        orig_pts = self._modal_snapshot.get("points", [])
-        self.points = [None if p is None else pivot + rot.multVec(p - pivot) for p in orig_pts]
-
-        wp = getattr(self, "working_plane", None)
-        if wp is not None and "wp_base" in self._modal_snapshot and "wp_rot" in self._modal_snapshot:
-            wp.Base = pivot + rot.multVec(self._modal_snapshot["wp_base"] - pivot)
-            wp.Rotation = rot.multiply(self._modal_snapshot["wp_rot"])
-
-        if hasattr(self, "_update_gizmo"):
-            self._update_gizmo()
-        if hasattr(self, "_update_handle_positions"):
-            self._update_handle_positions(self.points)
-        if hasattr(self, "update_ui"):
-            self.update_ui()
-        self.update_preview()
-        if hasattr(self, "view") and self.view:
-            self.view.redraw()
-
-    def apply_modal_scale(self, factor):
-        """Scale all control points of _target_obj around the pivot from initial snapshot."""
-        if not hasattr(self, "_target_obj") or not self._target_obj or not self._modal_snapshot:
-            fld_logger.debug("apply_modal_scale: no target object or snapshot")
-            return
-
-        pivot = self.get_modal_pivot()
-        if pivot is None:
-            return
-
-        import FreeCAD
-        pl = self._modal_snapshot.get("Placement")
-        if pl is None:
-            pl = getattr(self._target_obj, "Placement", FreeCAD.Placement())
-        inv_pl = pl.inverse()
-
-        sx = factor if (not self._axis_lock or "X" in self._axis_lock) else 1.0
-        sy = factor if (not self._axis_lock or "Y" in self._axis_lock) else 1.0
-        sz = factor if (not self._axis_lock or "Z" in self._axis_lock) else 1.0
-
-        for attr in ("Points", "HandleIn", "HandleOut"):
-            if attr in self._modal_snapshot and hasattr(self._target_obj, attr):
-                orig_pts = self._modal_snapshot[attr]
-                new_pts = []
-                for p_local in orig_pts:
-                    p_world = pl.multVec(p_local)
-                    diff = p_world - pivot
-                    scaled_diff = FreeCAD.Vector(diff.x * sx, diff.y * sy, diff.z * sz)
-                    p_new_world = pivot + scaled_diff
-                    p_new_local = inv_pl.multVec(p_new_world)
-                    new_pts.append(p_new_local)
-                setattr(self._target_obj, attr, new_pts)
-
-        touched = any(attr in self._modal_snapshot and hasattr(self._target_obj, attr)
-                      and self._modal_snapshot[attr]
-                      for attr in ("Points", "HandleIn", "HandleOut"))
-        if not touched:
-            scaled_any = False
-            for prop in PRIMITIVE_SCALE_PROPS:
-                if prop in self._modal_snapshot and hasattr(self._target_obj, prop):
-                    setattr(self._target_obj, prop, self._modal_snapshot[prop] * factor)
-                    scaled_any = True
-
-            if pl is not None:
-                diff = pl.Base - pivot
-                if diff.Length > 1e-6:
-                    new_pl = FreeCAD.Placement(pl)
-                    new_pl.Base = pivot + diff * factor
-                    self._target_obj.Placement = new_pl
-                    scaled_any = True
-
-            if not scaled_any:
-                fld_logger.warn(f"Cannot scale {getattr(self._target_obj, 'Name', 'object')}: no control points or scale properties found.")
-            elif self._axis_lock:
-                fld_logger.warn("Non-uniform scale of SDF primitive is not expressible in dimensions; scaling uniformly.")
-
-        self.update_preview()
-
     # ------------------------------------------------------------------
     # Event loop & Overridable Input Hooks
     # ------------------------------------------------------------------
 
     def on_mouse_press(self, event_dict):
         btn = event_dict.get("Button")
-        if getattr(self, "_modal_transform", None):
-            if btn == QtCore.Qt.LeftButton:
-                self.commit_modal_transform()
-                return True
-            if btn == QtCore.Qt.RightButton:
-                self.cancel_modal_transform()
-                return True
-            return False  # MMB always passes through (input-map rule)
         if btn == QtCore.Qt.LeftButton:
             return self.on_button1_down(event_dict)
         elif btn == QtCore.Qt.MiddleButton:
@@ -1569,176 +804,31 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
         return False
 
     def on_mouse_move(self, event_dict):
-        # Modal previews are dispatched here rather than in handle_move: every
-        # editor overrides handle_move (or on_mouse_move itself) for its own
-        # drag, so a modal branch further down the chain never runs and the
-        # axis lock has nothing to act on.
-        if getattr(self, "_modal_transform", None):
-            self._update_modal_preview(event_dict)
-            return False
         self.handle_move(event_dict)
 
     def on_key_press(self, event_dict):
-        key = event_dict.get("Key")
-        text = event_dict.get("Text", "").lower()
-
-        from freecad.fields.core.input import fld_keymap
-        contexts = [fld_keymap.CTX_TOOL]
-        if getattr(self, "_is_editing", False):
-            contexts.insert(0, fld_keymap.CTX_EDIT)
-        if getattr(self, "_modal_transform", None):
-            contexts.insert(0, fld_keymap.CTX_MODAL)
-        action = fld_keymap.action_for(event_dict, contexts)
-        
-        if action == "tool.toggle_edit":
-            if getattr(self, "_modal_transform", None):
-                return True
-            self.finish()
-            return True
-
-        # Axis constraints in edit mode (toggled via X/Y/Z) -- but not while a
-        # modal transform owns the keyboard; there X/Y/Z mean the modal axis lock.
-        if (getattr(self, "_is_editing", False)
-                and not getattr(self, "_modal_transform", None)
-                and action in ("edit.constrain_x", "edit.constrain_y", "edit.constrain_z",
-                               "edit.constrain_yz", "edit.constrain_xz", "edit.constrain_xy")):
-            axis_map = {
-                "edit.constrain_x": ("x", False),
-                "edit.constrain_y": ("y", False),
-                "edit.constrain_z": ("z", False),
-                "edit.constrain_yz": ("x", True),
-                "edit.constrain_xz": ("y", True),
-                "edit.constrain_xy": ("z", True),
-            }
-            axis, is_shift = axis_map[action]
-            if is_shift:
-                plane = {'x': 'yz', 'y': 'xz', 'z': 'xy'}[axis]
-                if getattr(self, "_constraint_plane", None) == plane and getattr(self, "_constraint_space", 'global') == 'global':
-                    self._constraint_space = 'local'
-                elif getattr(self, "_constraint_plane", None) == plane:
-                    self._constraint_axis = None
-                    self._constraint_plane = None
-                else:
-                    self._constraint_plane = plane
-                    self._constraint_axis = None
-                    self._constraint_space = 'global'
-                    self._constraint_last_key = f'shift_{axis}'
-            else:
-                if getattr(self, "_constraint_axis", None) == axis and getattr(self, "_constraint_space", 'global') == 'global':
-                    self._constraint_space = 'local'
-                elif getattr(self, "_constraint_axis", None) == axis:
-                    self._constraint_axis = None
-                    self._constraint_plane = None
-                else:
-                    self._constraint_axis = axis
-                    self._constraint_plane = None
-                    self._constraint_space = 'global'
-                    self._constraint_last_key = axis
-            self._update_constraint_visual()
-            return True
-            
-        # If already in a modal state, check axis/numeric inputs
-        if self._modal_transform:
-            if action == "modal.cancel":
-                self.cancel_modal_transform()
-                return True
-            elif action == "modal.commit":
-                self.commit_modal_transform()
-                return True
-            
-            # Check axis lock
-            if action in ("modal.lock_x", "modal.lock_y", "modal.lock_z",
-                          "modal.lock_yz", "modal.lock_xz", "modal.lock_xy"):
-                plane_map = {
-                    "modal.lock_yz": ("X", True),
-                    "modal.lock_xz": ("Y", True),
-                    "modal.lock_xy": ("Z", True),
-                    "modal.lock_x": ("X", False),
-                    "modal.lock_y": ("Y", False),
-                    "modal.lock_z": ("Z", False),
-                }
-                axis_letter, is_plane = plane_map[action]
-                if is_plane:
-                    # Shift+Axis locks to the perpendicular plane. Same
-                    # Blender-style 3-press cycle as the single-axis case
-                    # below: 1st press locks the plane at the default space;
-                    # 2nd press (same plane) flips global<->local for THIS
-                    # lock only; 3rd press clears it back to free movement.
-                    axes = ["X", "Y", "Z"]
-                    axes.remove(axis_letter)
-                    plane = tuple(axes)
-                    default_space = self._default_axis_lock_space
-                    other_space = 'local' if default_space == 'global' else 'global'
-                    if self._axis_lock == plane and self._axis_lock_space == default_space:
-                        self._axis_lock_space = other_space
-                    elif self._axis_lock == plane and self._axis_lock_space == other_space:
-                        self._axis_lock = None
-                        self._axis_lock_space = None
-                    else:
-                        self._axis_lock = plane
-                        self._axis_lock_space = default_space
-                else:
-                    # Blender-style 3-press cycle: 1st press locks the axis at the
-                    # default space; 2nd press (same axis) flips global<->local for
-                    # THIS lock only, without touching the default; 3rd press clears
-                    # the lock entirely, back to free movement.
-                    default_space = self._default_axis_lock_space
-                    other_space = 'local' if default_space == 'global' else 'global'
-                    if self._axis_lock == (axis_letter,) and self._axis_lock_space == default_space:
-                        self._axis_lock_space = other_space
-                    elif self._axis_lock == (axis_letter,) and self._axis_lock_space == other_space:
-                        self._axis_lock = None
-                        self._axis_lock_space = None
-                    else:
-                        self._axis_lock = (axis_letter,)
-                        self._axis_lock_space = default_space
-                self._update_modal_hud()
-                fld_logger.info(f"Locked to axis: {self._axis_lock} (space: {self._axis_lock_space})")
-                # Re-project immediately against the last known mouse position:
-                self._update_modal_preview({})
-                return True
-                
-            # Numeric entry
-            if key == QtCore.Qt.Key_Backspace:
-                self._input_buffer = self._input_buffer[:-1]
-                self.apply_numeric_transform()
-                self._update_modal_hud()
-                return True
-            if text == '-':
-                if self._input_buffer.startswith('-'):
-                    self._input_buffer = self._input_buffer[1:]
-                else:
-                    self._input_buffer = '-' + self._input_buffer
-                self.apply_numeric_transform()
-                self._update_modal_hud()
-                return True
-            if text in "0123456789" or (text == '.' and '.' not in self._input_buffer):
-                self._input_buffer += text
-                self.apply_numeric_transform()
-                self._update_modal_hud()
-                return True
-                
-            return False
-
-        # Start modal transform
-        if action == "edit.grab":
-            self.start_modal_transform("GRAB")
-            return True
-        elif action == "edit.rotate":
-            self.start_modal_transform("ROTATE")
-            return True
-        elif action == "edit.scale":
-            self.start_modal_transform("SCALE")
-            return True
-        return self.handle_keyboard(event_dict)
+        """A key runs the tool menu's leaf whose shortcut it is (INP-B07). True = consumed."""
+        from freecad.fields.core.input import fld_shortcuts
+        item, matched = fld_shortcuts.find(self.get_context_menu(event_dict) or [], event_dict)
+        if item is not None and item.enabled:
+            item.action()
+        return matched
 
     def on_key_release(self, event_dict):
         return False
 
+    def on_ctrl_wheel(self, notches):
+        """Ctrl + wheel: step the grid snap. A tool driving a GizmoController overrides
+        this to step the increment of its active handle instead (universal_gizmo)."""
+        from freecad.fields.core.input import fld_snap
+        new = fld_snap.step_snap("grid", notches)
+        try:
+            FreeCADGui.getMainWindow().statusBar().showMessage(
+                fld_snap.snap_step_label("grid", new), 2000)
+        except Exception as e:
+            fld_logger.debug(f"on_ctrl_wheel: status message failed: {e}")
+
     def on_context_menu(self, event_dict):
-        if getattr(self, "_modal_transform", None):
-            self.cancel_modal_transform()
-            return True
         from freecad.fields.core.input.fld_menu import FldMenuManager
         mgr = FldMenuManager.get_instance()
         if not mgr.is_menu_active():
@@ -1767,84 +857,6 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
     def on_button3_up(self, event_dict):
         return True # Consume release to suppress FreeCAD context menu
 
-
-    def handle_keyboard(self, event_dict):
-        key_code = event_dict.get("Key")
-        key_text = str(event_dict.get("Text", "None")).upper()
-        
-        # ESC to cancel
-        if key_code == QtCore.Qt.Key_Escape:
-            if hasattr(self, "cancel"):
-                self.cancel()
-            else:
-                self.terminate()
-            return True
-            
-        # ENTER/RETURN to finish
-        if key_code in [QtCore.Qt.Key_Enter, QtCore.Qt.Key_Return]:
-            self.finish()
-            return True
-            
-        # Toggle Cutter Mode (C)
-        if key_text == "C":
-             self.toggle_cutter_mode()
-             return True
-
-        # Axis Toggles (X, Y, Z) -> Focus Panel
-        target_axis = None
-        if key_text == "X": target_axis = "x"
-        elif key_text == "Y": target_axis = "y"
-        elif key_text == "Z": target_axis = "z"
-        
-        if target_axis:
-            self.toggle_axis(target_axis)
-            return True
-            
-        # Reset Tool (R)
-        if key_text == "R":
-            self.reset_state()
-            return True
-            
-        # Tool Option 0 (Shift)
-        if "SHIFT" in key_text:
-            self.on_tool_option_0()
-            return False
-            
-        # Tool Option 1 (Ctrl)
-        if "CONTROL" in key_text or "CTRL" in key_text:
-            self.on_tool_option_1()
-            return False
-            
-        # Snapping Menu (S)
-        if key_text == "S":
-            if hasattr(self, 'get_snapping_menu'):
-                from freecad.fields.core.input.fld_menu import FldMenuManager
-                FldMenuManager.get_instance().trigger_dynamic_menu(self.get_snapping_menu())
-                return True
-
-        # Tool Menu (D)
-        if key_text == "D":
-            items = None
-            if hasattr(self, 'get_context_menu'):
-                items = self.get_context_menu()
-            if items:
-                from freecad.fields.core.input.fld_menu import FldMenuManager
-                FldMenuManager.get_instance().trigger_dynamic_menu(items)
-                return True
-            self.on_tool_menu()
-            return True
-            
-        return False
-
-    def on_tool_option_0(self):
-        pass
-        
-    def on_tool_option_1(self):
-        pass
-        
-    def on_tool_menu(self):
-        pass
-
     def toggle_autorepeat(self, checked=None):
         if checked is not None:
             self.__class__.autorepeat = checked
@@ -1856,13 +868,17 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
     def get_context_menu(self, event_dict=None):
         items = []
         if hasattr(self, 'get_snapping_menu'):
-            items += [("Snapping", self.get_snapping_menu()), None]
+            items += [MenuItem("Snapping", children=self.get_snapping_menu()), SEPARATOR]
         # Same parent-class entry points as the task panel (accept()/reject())
         items += [
-            ("Accept", self.finish),
-            ("Cancel", self.cancel),
-            None,
-            ("Auto Repeat", self.toggle_autorepeat, self.autorepeat),
+            MenuItem("Accept", action=self.finish, shortcut="Return"),
+            MenuItem("Cancel", action=self.cancel, shortcut="Esc"),
+        ]
+        if not getattr(self, "_is_editing", False):
+            items.append(MenuItem("Reset", action=self.reset_state))
+        items += [
+            SEPARATOR,
+            MenuItem("Auto Repeat", action=self.toggle_autorepeat, checked=self.autorepeat),
         ]
         return items
 
@@ -1875,9 +891,6 @@ class FldBase(DragTimerMixin, AxisConstraintMixin, ControlCageDrawMixin, SnapPre
         self._finish_scheduled = False
         self.on_state_change(self.state)
         self.view.redraw()
-
-    def update_from_locks(self):
-        pass
 
     def handle_click(self, event_dict):
         try:

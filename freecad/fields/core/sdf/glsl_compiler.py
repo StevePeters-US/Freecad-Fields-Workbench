@@ -422,7 +422,7 @@ void main() {{
             // count and compile time. `u_grad_taps` is a uniform (always 4) for the
             // same reason the stack machine's bound is: a literal 4 lets the driver
             // unroll the loop straight back into four inlined copies.
-            vec3 eps = u_voxel_step * 0.01;
+            vec3 eps = u_voxel_step * u_normal_tap;
             vec3 orig_p = p;
             vec3 n = vec3(0.0);
             for (int k = 0; k < u_grad_taps; ++k) {{
@@ -471,6 +471,7 @@ uniform uint  u_root_surface_id; // this field's ROOT surface id -- the same num
 uniform int   u_cage_quad_iters;
 uniform int   u_cage_tri_iters;
 uniform int   u_grad_taps;      // always 4; a uniform so the tap loop cannot unroll
+uniform float u_normal_tap;     // normal tap spacing, in voxels (get_normal_tap_voxels)
 
 {uniform_decls}
 

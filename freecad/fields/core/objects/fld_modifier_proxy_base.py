@@ -88,7 +88,8 @@ class FldModifierProxyBase:
     ALWAYS_REBUILD = False
 
     def execute(self, fp):
-        """Rebuild only if the field is missing or its upstream input changed.
+        """Rebuild only if the field is missing or its upstream input changed; publish
+        whenever the renderer hasn't been handed the current field.
 
         The deform subclasses clear `SdfField` from `onChanged` for each property
         they read, so a parameter edit still rebuilds; what this skips is the
@@ -122,6 +123,12 @@ class FldModifierProxyBase:
                 # then, on the recompute that makes it visible again.
                 self.SdfField = None
             self._built_from = base_field
+
+        # Publish whatever the renderer has not been handed yet. A get_sdf_field read
+        # between a property change and this recompute builds the new field lazily and
+        # does not publish it; keying the publish on "built here" left the viewport on
+        # the old shape while the object reported up to date (PNL-023).
+        if self.get_sdf_field(fp) is not getattr(self, "_published_field", None):
             self._publish(fp)
 
     def _publish(self, fp):
@@ -139,6 +146,7 @@ class FldModifierProxyBase:
         hid the source object and put nothing in its place.
         """
         field = self.get_sdf_field(fp)
+        self._published_field = field
         vp = getattr(fp, "ViewObject", None)
         vp_proxy = getattr(vp, "Proxy", None) if vp else None
         strategy = getattr(vp_proxy, "_strategy", None) if vp_proxy else None

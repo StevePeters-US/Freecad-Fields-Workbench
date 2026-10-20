@@ -17,7 +17,7 @@ class CommandFldSculptBrush:
         return {
             'Pixmap': 'SDF_SculptBrush',
             'MenuText': 'Sculpt Brush',
-            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Sculpts the selected SDF object with a 3D brush.\nSelect one SDF object.\nHold Ctrl to carve; [ and ] resize the brush.")),
+            'ToolTip': rich_tooltip("Fields", QT_TRANSLATE_NOOP("Fields", "Sculpts the selected SDF object with a 3D brush.\nSelect one SDF object.\nDeposit or Carve from the panel or the right-click menu; [ and ] resize the brush.")),
             'Accel': '',
         }
 

@@ -10,8 +10,7 @@ class Sdf2dField:
     never a `ComposerField` operand. It becomes visible only when a 3D
     `SdfField` wraps it as a profile and folds `evaluate_2d`/`to_glsl_2d` into
     its own `evaluate`/`to_glsl` -- see `SdfExtrusionField`
-    (freecad/fields/core/sdf/sdf_extrusion.py) for the reference pattern, and
-    AGENTS.md's "Two SDF Systems" section for the full picture.
+    (freecad/fields/core/sdf/sdf_extrusion.py) for the reference pattern.
     """
 
     def evaluate_2d(self, x: float, y: float) -> float:

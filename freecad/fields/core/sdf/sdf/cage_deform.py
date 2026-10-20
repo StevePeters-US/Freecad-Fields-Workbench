@@ -142,7 +142,6 @@ class SdfCageDeformField(SdfField):
         self._is_subtractive = getattr(self.source, "_is_subtractive", False)
         self.inv_matrix = self._compute_inv_matrix(placement)
         self.geometry_version = 0
-        self.hot_faces = frozenset()
         self.recompute_face_aabbs()
 
     # ── Tessellated MVC cage (verts + handles → dense Bézier-face mesh) ────────
@@ -797,18 +796,3 @@ vec3 {func_name}(vec3 p) {{
         bmax = np.maximum(sb_max, net_max) + margin
         return (FreeCAD.Vector(bmin[0], bmin[1], bmin[2]),
                 FreeCAD.Vector(bmax[0], bmax[1], bmax[2]))
-
-    @property
-    def octree_cache(self):
-        # The octree accelerates ray_march by skipping empty space, but it caches
-        # the SOURCE (rest) SDF. Once the cage deforms, the source octree no longer
-        # matches the world-space surface: a point inside an extruded bulge reads
-        # as empty in the source octree (its rest preimage is far outside the
-        # source sphere), so ray_march skips it and never detects the deformed
-        # surface — CageEditTool's face picking then fails with "No face selected"
-        # on the SECOND extrude. Only hand back the source octree while identity;
-        # once deformed, return None so ray_march sphere-traces via evaluate_grid
-        # (the true MVC-warped distance, matching the GPU).
-        if self._is_identity:
-            return self.source.octree_cache
-        return None

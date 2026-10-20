@@ -174,12 +174,10 @@ def _project_to_isosurface(field, points: np.ndarray, iters: int = 8, tol: float
 
 
 class SdfField:
-    _octree_cache = None
     _is_subtractive = False
     surface_id = SURFACE_ID_UNSET
 
     def __init__(self):
-        self._octree_cache = None
         self._is_subtractive = False
         self.surface_id = SURFACE_ID_UNSET
     """
@@ -188,8 +186,7 @@ class SdfField:
 
     For 2D planar profiles (used as building blocks by SdfExtrusionField,
     SdfRevolutionField, and similar wrappers), see the separate `Sdf2dField`
-    hierarchy in `core/sdf/sdf2d/` -- it is not a subclass of this class. See
-    AGENTS.md's "Two SDF Systems" section.
+    hierarchy in `core/sdf/sdf2d/` -- it is not a subclass of this class.
     """
     def evaluate(self, point: FreeCAD.Vector) -> float:
         """Returns the signed distance at the given point."""
@@ -420,26 +417,6 @@ class SdfField:
         # Stack into (N,3) array and ensure float64 output
         return np.column_stack([gx, gy, gz]).astype(np.float64)
 
-    @property
-    def octree_cache(self):
-        """On-demand SdfOctreeCache for this field. Automatically builds at 2.0mm res."""
-        if self._octree_cache is None:
-            import time
-            from freecad.fields.core.sdf.sdf_octree import SdfOctreeCache
-            # Default leaf size 2.0mm for snapping is enough
-            t0 = time.perf_counter()
-            self._octree_cache = SdfOctreeCache(self, leaf_size=2.0)
-            self._octree_cache.build()
-            # This build is lazy and invisible: it fires from ray_march, which
-            # runs on a mouse move or a click, with nothing in the log tying the
-            # stall to it. Any field edit drops the cache, so a picking ray after
-            # an edit pays the whole build again.
-            fld_logger.debug(
-                f"{type(self).__name__}: picking octree rebuilt in "
-                f"{(time.perf_counter() - t0)*1000:.1f}ms "
-                f"(lazy, triggered by a ray_march)", category="sdf")
-        return self._octree_cache
-
     def to_patch_cage(self):
         """Convert this field to an SdfCageField. Returns None if not supported."""
         return None
@@ -480,20 +457,14 @@ class SdfField:
 
         return net
 
-    def invalidate_cache(self):
-        """Must be called when field parameters change."""
-        self._octree_cache = None
-
-    def ray_march(self, ray_origin, ray_direction, max_steps=256, surface_eps=0.001, octree_cache=None):
-        """
-        Sphere-trace a ray against this SDF field.
-        Returns (hit_point, hit_normal) as FreeCAD.Vector pair, or None if no hit.
-
-        ray_origin:    world-space ray origin (FreeCAD.Vector)
-        ray_direction: world-space direction (will be normalized internally)
-        max_steps:     maximum sphere-trace iterations (default 256)
-        surface_eps:   surface hit threshold in mm (default 0.001)
-        octree_cache:  optional SdfOctreeCache — if provided, use to skip empty space.
+    def ray_march(self, ray_origin, ray_direction, max_steps=256, surface_eps=0.001):
+        """Hit-test one ray: (hit_point, hit_normal) or None.
+ 
+        Samples the in-box segment in one evaluate_grid call, merges near-surface
+        candidates into batched windows, samples each window finely in one call, and
+        bisects to the isosurface. The fine pass resolves features down to s / 32;
+        anything thinner can be missed. The evaluation count per ray is strictly bounded:
+        1 + (number of windows) + 20 calls (PNL-040).
         """
         # Normalize direction
         d = FreeCAD.Vector(ray_direction)
@@ -532,53 +503,65 @@ class SdfField:
 
         # Don't reject negative t_far: in orthographic mode the focal-plane origin
         # is often past the object, so valid intersections have negative t values.
-        t = t_near  # start at AABB entry (may be negative)
-
-        # Use AABB diagonal as march budget
         aabb_diag = (bb_max - bb_min).Length
         max_dist = t_near + max(aabb_diag, 1.0)
 
-        # Sphere trace from AABB entry point
-        L = self.lipschitz()
-        for _i in range(max_steps):
-            if t > max_dist:
-                break
-            pos = ray_origin + d * t
-            
-            # ── Spatial Acceleration (Octree) ──
-            if octree_cache is None:
-                octree_cache = self.octree_cache # Use internal cache if available
-            
-            if octree_cache is not None:
-                dist = octree_cache.query(pos)
-                if dist == float('inf'):
-                    # Skip empty space by advancing by the leaf size
-                    t += octree_cache.leaf_size
-                    continue
+        L = max(float(self.lipschitz()), 1e-6)
+        n = 256
+        ts = np.linspace(t_near, max_dist, n)
+        s = float(ts[1] - ts[0])
+        o = np.array([ray_origin.x, ray_origin.y, ray_origin.z])
+        dv = np.array([d.x, d.y, d.z])
+        vals = self.evaluate_grid((o + ts[:, None] * dv).astype(np.float32))
+        cand = np.nonzero(vals <= L * 0.5 * s + surface_eps)[0]
+        if len(cand) == 0:
+            return None
+
+        # Split into runs of consecutive indices
+        breaks = np.where(np.diff(cand) > 1)[0]
+        run_starts = np.insert(breaks + 1, 0, 0)
+        run_ends = np.append(breaks, len(cand) - 1)
+
+        fine_step = s / 32.0
+        for r_start, r_end in zip(run_starts, run_ends):
+            i0 = cand[r_start]
+            i1 = cand[r_end]
+            t_a = max(t_near, float(ts[i0]) - s)
+            t_b = min(max_dist, float(ts[i1]) + s)
+
+            m = min(1024, int(np.ceil((t_b - t_a) / fine_step)) + 1)
+            fine_ts = np.linspace(t_a, t_b, m)
+            fine_pts = (o + fine_ts[:, None] * dv).astype(np.float32)
+            fine_vals = self.evaluate_grid(fine_pts)
+
+            hit_indices = np.nonzero(fine_vals <= surface_eps)[0]
+            if len(hit_indices) == 0:
+                continue
+
+            j = int(hit_indices[0])
+            if j == 0:
+                t_hit = float(fine_ts[0])
             else:
-                # CP-008: Batch step through evaluate_grid
-                pos_np = np.array([[pos.x, pos.y, pos.z]], dtype=np.float32)
-                dist = self.evaluate_grid(pos_np)[0]
-                
-            if dist < surface_eps:
-                # Hit — final refinement to snap exactly to theoretical surface
-                if dist > 0:
-                    # Final analytical check if we were using cache
-                    pos_np = np.array([[pos.x, pos.y, pos.z]], dtype=np.float32)
-                    dist = self.evaluate_grid(pos_np)[0]
-                    pos = pos + d * (dist / L)
-                
-                # Compute outward normal via gradient
-                normal = self.gradient(pos)
-                nl = normal.Length
-                if nl > 1e-10:
-                    normal = normal * (1.0 / nl)
-                else:
-                    normal = FreeCAD.Vector(0, 0, 1)
-                return pos, normal
-                
-            # Advance by the SDF value scaled by Lipschitz bound
-            t += max(dist / L, surface_eps * 0.1)
+                t_lo = float(fine_ts[j - 1])
+                t_hi = float(fine_ts[j])
+                for _ in range(20):
+                    t_mid = 0.5 * (t_lo + t_hi)
+                    pos_mid = o + dv * t_mid
+                    val_mid = float(self.evaluate_grid(np.array([pos_mid], dtype=np.float32))[0])
+                    if val_mid <= surface_eps:
+                        t_hi = t_mid
+                    else:
+                        t_lo = t_mid
+                t_hit = t_hi
+
+            pos = ray_origin + d * t_hit
+            normal = self.gradient(pos)
+            nl = normal.Length
+            if nl > 1e-10:
+                normal = normal * (1.0 / nl)
+            else:
+                normal = FreeCAD.Vector(0, 0, 1)
+            return pos, normal
 
         return None
 

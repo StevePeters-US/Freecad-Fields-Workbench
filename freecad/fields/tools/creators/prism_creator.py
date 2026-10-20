@@ -9,7 +9,7 @@ from freecad.fields.core.sdf.sdf2d.polygon import Sdf2dPolygon
 from freecad.fields.core.sdf.sdf_extrusion import SdfExtrusionField
 from freecad.fields.tools.fld_base import ToolState
 from freecad.fields.tools.primitive_creator_base import (
-    PrimitiveCreatorBase, MIN_PRIMITIVE_DIM_TYPED_MM
+    PrimitiveCreatorBase, StageEntry, MIN_PRIMITIVE_DIM_TYPED_MM
 )
 import math
 
@@ -73,6 +73,23 @@ class PrismCreator(PrimitiveCreatorBase):
             self.points[1] = pos
         elif state == ToolState.DRAG_Z and len(self.points) >= 3:
             self.points[2] = pos
+
+    def _stage_entry(self, state):
+        if state == ToolState.DRAG_XY and len(self.points) >= 2 and self.points[0] is not None and self.points[1] is not None:
+            r = self._in_plane(self.points[0], self.points[1]).Length
+            return StageEntry("Radius", "mm", [r], [1])
+        if state == ToolState.DRAG_Z and len(self.points) >= 3 and self.points[2] is not None:
+            offset = self._normal_offset(self.points[2])
+            half = abs(offset)
+            return StageEntry("Height", "mm", [2.0 * half], [-1 if offset < 0 else 1])
+        return None
+
+    def _stage_point_for(self, state, values):
+        if state == ToolState.DRAG_XY:
+            return self._radial_stage_point(self.points[0], self.points[1], values[0])
+        if state == ToolState.DRAG_Z:
+            return self._normal_stage_point(values[0] / 2.0)
+        raise NotImplementedError
 
     # ── Field builders ────────────────────────────────────────────────────────
 

@@ -2,8 +2,8 @@
 <package format="1" xmlns="https://wiki.freecad.org/Package_Metadata">
   <name>Fields</name>
   <description>Implicit modeling for FreeCAD: sculpt solids as GPU-accelerated signed distance fields (SDF) built from NURBS, cages and B-Rep, with topology-free booleans, deformation and CAM-ready slicing.</description>
-  <version>2026.9.0</version>
-  <date>2026-09-27</date>
+  <version>26.10.20</version>
+  <date>2026-10-20</date>
   <maintainer email="petersfinewoodcraft@gmail.com">Steve Peters</maintainer>
   <license file="LICENSE">CC-BY-NC-SA-4.0</license>
   <url type="repository" branch="main">https://github.com/StevePeters-US/Freecad-Fields-Workbench</url>
@@ -16,10 +16,10 @@
       <name>Fields</name>
       <classname>FieldsWorkbench</classname>
       <description>Implicit/SDF modeling: real-time GPU ray-marched signed distance fields from NURBS, cage and B-Rep geometry.</description>
-      <version>2026.9.0</version>
+      <version>26.10.20</version>
       <subdirectory>./</subdirectory>
       <icon>Resources/icons/Fields.svg</icon>
-      <freecadmin>1.1.0</freecadmin>
+      <freecadmin>26.3.0</freecadmin>
       <pythonmin>3.11</pythonmin>
       <depend type="python">numpy</depend>
       <depend type="python">scipy</depend>

@@ -118,18 +118,26 @@ class SdfFieldRegistry:
                 self.unregister(label)
         return to_remove
 
-    def compile_visible(self, appearance, bbox_checker=None):
+    def compile_visible(self, appearance, bbox_checker=None, doc_name=None):
         """Compile visible & dirty fields to GLSL.
+
+        `doc_name` limits the scene to that document's labels; `None` filters
+        nothing. Only labels actually compiled here lose their dirty flag, so an
+        edit to a hidden or other-document field is still pending when it is
+        next drawn.
 
         Returns (visible_compiled, analytical_data, compile_total_seconds).
         `visible_compiled` is `[(label, field), ...]`.
         """
         from freecad.fields.core.sdf.glsl_compiler import compile_field_to_glsl
 
-        visible = [(label, f) for label, (f, vis) in self._fields.items() if vis and f is not None]
+        prefix = f"{doc_name}." if doc_name is not None else None
+        visible = [(label, f) for label, (f, vis) in self._fields.items()
+                   if vis and f is not None and (prefix is None or label.startswith(prefix))]
         if not visible:
-            self._dirty_fields.clear()
             return [], [], 0.0
+
+        compiled = set()
 
         analytical_data = []
         visible_compiled = []
@@ -181,6 +189,7 @@ class SdfFieldRegistry:
                     fld_logger.error(f"SceneVoxel: GLSL compile failed for '{label}': {e}")
                     continue
 
+            compiled.add(label)
             analytical_data.append({
                 "expr": expr,
                 "ctx": ctx,
@@ -191,10 +200,11 @@ class SdfFieldRegistry:
                 "shape_color": appearance.shape_color(label),
                 "selection_color": appearance.selection_color(label),
                 "specular": appearance.specular_shininess(label),
+                "matcap": appearance.matcap(label),
                 "field": f,
                 "label": label,
             })
             visible_compiled.append((label, f))
 
-        self._dirty_fields.clear()
+        self._dirty_fields.difference_update(compiled)
         return visible_compiled, analytical_data, t_compile_total

@@ -12,25 +12,27 @@ the outline colour is per object and there is no palette uniform or lookup
 texture beside this buffer: a runtime-indexed uniform ARRAY is the one thing
 that must not come back (CP-014, NVIDIA register spill).
 
-Row layout, 20 floats:
+Row layout, 24 floats:
 
     [ 0: 3]  bmin.xyz, pad
     [ 4: 7]  bmax.xyz, vis_alpha
     [ 8:11]  diffuse.rgb, is_subtractive
     [12:15]  specular.rgba
     [16:19]  selected, selection_colour.rgb
+    [20:23]  matcap_layer, is_data_layer, uv_source, ao_bypass
 """
 import ctypes
 
 import numpy as np
 
 from freecad.fields.core import fld_logger
+from freecad.fields.core.render.matcap_texture_cache import MATCAP_NAMES, DATA_LAYERS
 
 GL_SHADER_STORAGE_BUFFER = 0x90D2
 GL_DYNAMIC_DRAW          = 0x88E8
 
 #: Floats per row. Must match the FieldMeta struct in both shaders.
-ROW_FLOATS = 20
+ROW_FLOATS = 24
 
 #: The sentinel a field's root carries when it has no surface id of its own.
 NO_SURFACE_ID = 65535
@@ -108,6 +110,12 @@ class FieldMetaBuffer:
         """
         meta_arr = np.zeros((table_size, ROW_FLOATS), dtype=np.float32)
         for cf in fields:
+            layer = float(cf.matcap_layer)
+            idx = int(layer)
+            is_data = 0 <= idx < len(MATCAP_NAMES) and MATCAP_NAMES[idx] in DATA_LAYERS
+            uv_src = float(cf.matcap_uv_source)
+            data = 1.0 if is_data else 0.0          # .y: data layer -> no hatch
+            ao_byp = 1.0 if is_data else float(cf.matcap_ao_bypass)
             row = [
                 cf.bbox_min.x, cf.bbox_min.y, cf.bbox_min.z, 0.0,
                 cf.bbox_max.x, cf.bbox_max.y, cf.bbox_max.z, float(cf.vis_alpha),
@@ -117,6 +125,13 @@ class FieldMetaBuffer:
                 # read by the composite pass.
                 1.0 if cf.label in selected_labels else 0.0,
                 cf.selection_color[0], cf.selection_color[1], cf.selection_color[2],
+                # matcap: layer < 0 means off (directional light). A data readout
+                # (the normals, zebra and curvature LAYERS) modulated by SSAO is a
+                # lit image rather than data, and overpainted by the subtractive
+                # hatch is not a readout either, so the layer flags itself here --
+                # the one home for the rule -- and no UI path can produce an
+                # unreadable mode.
+                layer, data, uv_src, ao_byp,
             ]
             for s_i in collect_surface_ids(cf.field_obj):
                 if 0 <= s_i < table_size:
