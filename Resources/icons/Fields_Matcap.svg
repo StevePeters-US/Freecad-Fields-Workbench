@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <defs>
+        <radialGradient id="mcBody" cx="36%" cy="30%" r="75%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="55%" stop-color="#cbd5e1"/>
+            <stop offset="100%" stop-color="#64748b"/>
+        </radialGradient>
+        <clipPath id="mcClip"><circle cx="32" cy="32" r="22"/></clipPath>
+    </defs>
+    <!-- Sphere body, lit by a captured environment -->
+    <circle cx="32" cy="32" r="22" style="fill:url(#mcBody)"/>
+    <!-- Horizon line of the captured environment: sky above, darker ground below -->
+    <rect x="10" y="36" width="44" height="22" clip-path="url(#mcClip)" style="fill:#1e293b;fill-opacity:0.35"/>
+    <!-- Soft key-light reflection -->
+    <ellipse cx="25" cy="23" rx="6" ry="4" style="fill:#ffffff;fill-opacity:0.9"/>
+    <circle cx="32" cy="32" r="22" style="fill:none;stroke:#ffaa00;stroke-width:2"/>
+</svg>

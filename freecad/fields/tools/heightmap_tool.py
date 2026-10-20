@@ -308,7 +308,7 @@ class HeightmapTaskPanel:
 
 # ── Tool ──────────────────────────────────────────────────────────────────────
 
-class HeightmapTool(FldSdfModifierToolBase, DirectionGizmoMixin, DragTimerMixin):
+class HeightmapTool(DirectionGizmoMixin, FldSdfModifierToolBase, DragTimerMixin):
     SNAPSHOT_PROPERTIES = [
         ("ImagePath", ""),
         ("Amplitude", 5.0),
@@ -342,9 +342,9 @@ class HeightmapTool(FldSdfModifierToolBase, DirectionGizmoMixin, DragTimerMixin)
 
     def __init__(self):
         super().__init__()
-        self._gizmo = None
         self._arrow_root = None
         self._amp_sphere_root = None
+        self._amp_sphere_node = None
 
         self.points_root = coin.SoAnnotation()
         if self.view and self.view.getSceneGraph():
@@ -361,6 +361,10 @@ class HeightmapTool(FldSdfModifierToolBase, DirectionGizmoMixin, DragTimerMixin)
         super().edit_object(obj)
         self._init_gizmo()
         self._draw_visuals()
+
+    def _tool_refresh(self):
+        if getattr(self, "_amp_sphere_node", None) is not None:
+            self._amp_sphere_node.radius = self._compute_handle_radius() * 1.8
 
     # ── Visuals: direction arrow (from mixin) + amplitude sphere ─────────────
 
@@ -408,6 +412,7 @@ class HeightmapTool(FldSdfModifierToolBase, DirectionGizmoMixin, DragTimerMixin)
         xf.translation.setValue(sphere_pos.x, sphere_pos.y, sphere_pos.z)
         sphere = coin.SoSphere()
         sphere.radius = radius * 1.8
+        self._amp_sphere_node = sphere
         self._amp_sphere_root.addChild(xf)
         self._amp_sphere_root.addChild(sphere)
 
@@ -439,64 +444,44 @@ class HeightmapTool(FldSdfModifierToolBase, DirectionGizmoMixin, DragTimerMixin)
 
     # ── Input handling ────────────────────────────────────────────────────────
 
-    def handle_move(self, event_dict):
-        if not self._is_editing or getattr(self, "_is_dragging", False):
-            return
+    def _amp_sphere_hit(self, event_dict):
+        """True if the ray under the mouse passes within pick tolerance of the sphere."""
         from freecad.fields.core.input.input_manager import FldInputManager
         ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
-        if not ray_p or not ray_d:
-            self._restore_cursor()
-            return
-        tol = self._compute_handle_radius(self._gizmo_pivot()) * GIZMO_HIT_TOLERANCE_MULT
         sph = self._get_amp_sphere_pos()
-        if sph:
-            perp = (sph - ray_p).cross(ray_d).Length / max(ray_d.Length, 1e-10)
-            if perp < tol:
-                from PySide.QtCore import Qt
-                self._set_cursor(Qt.SizeVerCursor)
-                return
-        if self._gizmo_handle_move(ray_p, ray_d, tol):
-            return
-        self._restore_cursor()
-
-    def on_button1_down(self, event_dict):
-        if not self._is_editing:
-            return False
-        if event_dict.get("Button") != QtCore.Qt.LeftButton:
-            return False
-        from freecad.fields.core.input.input_manager import FldInputManager
-        ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
-        if not ray_p or not ray_d:
+        if not ray_p or not ray_d or not sph:
             return False
         tol = self._compute_handle_radius(self._gizmo_pivot()) * GIZMO_HIT_TOLERANCE_MULT
-        sph = self._get_amp_sphere_pos()
-        if sph:
-            perp = (sph - ray_p).cross(ray_d).Length / max(ray_d.Length, 1e-10)
-            if perp < tol:
-                self._dragging_idx = "amp_sphere"
-                origin, dir_vec = self._get_origin_and_dir()
-                self._drag_origin = origin
-                self._drag_dir = dir_vec
-                ref = FreeCAD.Vector(1, 0, 0) if abs(dir_vec.x) < 0.9 else FreeCAD.Vector(0, 1, 0)
-                u = dir_vec.cross(ref)
-                if u.Length > 1e-8:
-                    u.normalize()
-                self._drag_plane_normal = u
-                self._start_drag_timer()
-                return True
-        return self._gizmo_try_start_drag(ray_p, ray_d, event_dict, tol)
+        return (sph - ray_p).cross(ray_d).Length / max(ray_d.Length, 1e-10) < tol
 
-    def _drag_update(self):
+    def _tool_hover(self, event_dict):
+        if not self._amp_sphere_hit(event_dict):
+            return False
+        self._set_cursor(QtCore.Qt.SizeVerCursor)
+        return True
+
+    def _tool_press(self, event_dict):
+        """The amplitude sphere: drag Amplitude along the direction."""
+        if not self._amp_sphere_hit(event_dict):
+            return False
+        self._dragging_idx = "amp_sphere"
+        origin, dir_vec = self._get_origin_and_dir()
+        self._drag_origin = origin
+        self._drag_dir = dir_vec
+        ref = FreeCAD.Vector(1, 0, 0) if abs(dir_vec.x) < 0.9 else FreeCAD.Vector(0, 1, 0)
+        u = dir_vec.cross(ref)
+        if u.Length > 1e-8:
+            u.normalize()
+        self._drag_plane_normal = u
+        self._start_drag_timer()
+        return True
+
+    def _tool_drag_update(self):
         if self._drag_check_lmb_released():
             return
-        dragging = getattr(self, "_dragging_idx", None)
-        if not dragging:
-            return
-        if dragging == "amp_sphere":
+        if getattr(self, "_dragging_idx", None) == "amp_sphere":
             from freecad.fields.core.input.input_manager import FldInputManager
             self._update_amp_drag(FldInputManager.get_instance()._last_qt_pos)
-            return
-        self._gizmo_drag_tick()
 
     def _update_amp_drag(self, mouse_pos):
         origin = getattr(self, "_drag_origin", None)
@@ -510,8 +495,8 @@ class HeightmapTool(FldSdfModifierToolBase, DirectionGizmoMixin, DragTimerMixin)
             return
         t = (pt - origin).dot(dir_vec)
         from freecad.fields.core.input import fld_snap
-        from freecad.fields.core.fld_settings import get_snap_grid_step, get_snap_during_direct_drag
-        step = get_snap_grid_step() if (get_snap_during_direct_drag() and fld_snap.snap_active()) else 0.0
+        from freecad.fields.core.fld_settings import get_snap_grid_step
+        step = get_snap_grid_step() if fld_snap.snap_active() else 0.0
         t = fld_snap.snap_length(t, step)
         obj = self._target_obj
         if not obj:

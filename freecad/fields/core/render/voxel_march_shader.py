@@ -17,13 +17,15 @@ layout(r32f,    binding = 3) writeonly uniform image2D img_depth;
 uniform sampler3D u_volume;
 uniform usampler3D u_id_volume;
 uniform sampler3D u_norm_volume;
+uniform sampler2DArray u_matcaps;
 
 struct FieldMeta {
     vec4 bmin;          // .w = reserved
     vec4 bmax;          // .w = vis_alpha
     vec4 diffuse;       // .w = subtractive flag (0/1)
     vec4 specular;      // .w = shininess
-    vec4 flags;         // .x = selected (0/1), .yzw reserved
+    vec4 flags;         // .x = selected (0/1), .yzw = selection outline colour
+    vec4 matcap;        // .x = layer (<0 = off), .y = data layer (no hatch), .z = uv_source, .w = ao_bypass
 };
 layout(std430, binding = 3) readonly buffer FieldMetaBlock { FieldMeta u_fields[]; };
 
@@ -44,6 +46,7 @@ uniform mat4  u_proj;
 uniform vec3  u_hatch_color;    // crosshatch line colour
 uniform float u_hatch_period;   // stripe period in MARCH pixels; <= 0 disables
 uniform float u_hatch_strength; // 0..1 mix of hatch colour over body colour
+uniform float u_curv_scale;     // curvature (1/mm) that saturates the curvature ramp
 
 float sample_sdf(vec3 p) {
     vec3 uvw = (p - u_vol_min) / (u_vol_max - u_vol_min);
@@ -55,6 +58,20 @@ vec3 sample_normal(vec3 p) {
     vec3 n = texture(u_norm_volume, uvw).xyz;
     float len2 = dot(n, n);
     return (len2 > 1e-6) ? n * inversesqrt(len2) : vec3(0.0, 0.0, 1.0);
+}
+
+// Mean curvature = 0.5 * div(n), by central differences of the baked normal volume.
+// The normals are already unit length and smoother than the Laplacian of the raw
+// distance volume, which is markedly noisier. Six taps per HIT pixel, not per step.
+float mean_curvature(vec3 p) {
+    vec3 e = u_voxel_step;
+    float dnx = sample_normal(p + vec3(e.x, 0.0, 0.0)).x
+              - sample_normal(p - vec3(e.x, 0.0, 0.0)).x;
+    float dny = sample_normal(p + vec3(0.0, e.y, 0.0)).y
+              - sample_normal(p - vec3(0.0, e.y, 0.0)).y;
+    float dnz = sample_normal(p + vec3(0.0, 0.0, e.z)).z
+              - sample_normal(p - vec3(0.0, 0.0, e.z)).z;
+    return 0.5 * (dnx / (2.0 * e.x) + dny / (2.0 * e.y) + dnz / (2.0 * e.z));
 }
 
 vec2 intersect_aabb(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax) {
@@ -169,10 +186,62 @@ void main() {
     vec4 vs   = u_mv * vec4(hp, 1.0);
     vec3 vs_n = normalize(mat3(u_mv) * n);
 
-    float diff = max(dot(n, u_light_dir), 0.0);
-    vec3  h    = normalize(u_light_dir + vd);
-    float spec = pow(max(dot(n, h), 0.0), shininess);
-    vec3  color = base_color * (0.25 + 0.70 * diff) + spec_col * 0.3 * spec;
+    vec4  mc_row   = (fid == 65535u) ? vec4(-1.0, 0.0, 0.0, 0.0) : u_fields[fid].matcap;
+    float mc_layer = mc_row.x;
+
+    vec3 color;
+    if (mc_layer < 0.0) {
+        // No matcap: the fixed-direction Lambert + Blinn path.
+        float diff = max(dot(n, u_light_dir), 0.0);
+        vec3  h    = normalize(u_light_dir + vd);
+        float spec = pow(max(dot(n, h), 0.0), shininess);
+        color = base_color * (0.35 + 0.60 * diff) + spec_col * 0.3 * spec;
+    } else {
+        vec2 mc_uv;
+        if (mc_row.z < 0.5) {
+            // Spherical environment map UV. NOT vs_n.xy * 0.5 + 0.5: that form
+            // ignores the per-fragment view vector, so off-axis objects shade as
+            // though centre-frame, and it lands exactly on the texture border at
+            // the silhouette. Holds under both camera types.
+            //
+            // The view ray in view space. NOT normalize(vs.xyz): that is the
+            // eye-to-point direction, the ray only under perspective, and FreeCAD
+            // opens with an orthographic camera. rd is the march ray itself,
+            // unprojected from the near/far planes, so it is right in both.
+            vec3  vs_rd = normalize(mat3(u_mv) * rd);
+            // Voxel normals at the silhouette can tip just past grazing, facing
+            // away from the camera. The SEM lookup is discontinuous there: a
+            // back-facing normal reflects to the OPPOSITE side of the disc, so the
+            // bottom limb samples the sky and the top limb the ground -- a one-pixel
+            // inverted rim. Clamp to just in front of grazing, for the lookup only;
+            // vs_n itself is what the g-buffer stores for SSAO and the outline id.
+            vec3  ln = vs_n;
+            float nv = dot(ln, vs_rd);
+            if (nv > 0.0) {
+                vec3  t  = ln - vs_rd * nv;      // the part across the view ray
+                float tl = length(t);
+                ln = (tl > 1e-4) ? normalize(t / tl - vs_rd * 1e-3) : -vs_rd;
+            }
+            vec3  r = reflect(vs_rd, ln);
+            float m = 2.0 * sqrt(r.x * r.x + r.y * r.y + (r.z + 1.0) * (r.z + 1.0));
+            vec2  q = r.xy / max(m, 1e-4);
+            // |q| <= 0.5 in exact arithmetic, and 0.5 is the disc border. Pull it in
+            // by one texel so bilinear filtering never reaches the transparent
+            // black outside the disc (MATCAP_SIZE = 256).
+            float ql = length(q);
+            if (ql > 0.496) q *= 0.496 / ql;
+            mc_uv = q + 0.5;
+        } else {
+            // The same layer read as a 1D ramp along its centre row: 0.5 is flat,
+            // below is concave, above is convex.
+            float k = mean_curvature(hp);
+            mc_uv = vec2(clamp(0.5 + 0.5 * k / max(u_curv_scale, 1e-6), 0.0, 1.0), 0.5);
+        }
+        // The matcap owns the colour: ShapeColor shades only the Matcap = None path
+        // above. Colour comes from the material or a baked variant, whose
+        // highlights stay white where a multiply would tint them.
+        color = texture(u_matcaps, vec3(mc_uv, mc_layer)).rgb;
+    }
 
     // Subtractive shapes are marked by screen-space diagonal lines rather than by
     // hue (the body colour is the user's, set on the object) and rather than by
@@ -189,7 +258,12 @@ void main() {
     // Antialiased without fwidth, which compute shaders do not portably provide:
     // in screen space the phase gradient of a stripe of period P pixels is exactly
     // 1/P, so the smoothstep width is known analytically.
+    //
+    // Skipped for data layers (matcap.y): on a zebra readout the hatch is a second
+    // stripe family beating against the first, and on a curvature ramp it injects
+    // colours the ramp does not define. It DOES draw on a subtractive lighting matcap.
     if (fid != 65535u && u_fields[fid].diffuse.w != 0.0
+        && u_fields[fid].matcap.y < 0.5
         && u_hatch_period > 0.0 && u_hatch_strength > 0.0) {
         vec2  pf   = vec2(pixel);
         float invp = 1.0 / u_hatch_period;

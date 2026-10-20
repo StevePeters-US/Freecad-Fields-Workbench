@@ -82,8 +82,11 @@ class Perlin3DNode(SdfNoiseNode):
     planar = False
     display = ("# Classic Perlin gradient noise evaluated in the projection frame\n"
                "# Output: approx [-amp, +amp]")
-    lip_factor = 2.0
-    peak_factor = 1.0
+    # NV-055: measured max gradient 2.6211 at amp 1, freq 1 (declared was 2.0);
+    # declared = ceil(1.15 * measured / 0.05) * 0.05.
+    lip_factor = 3.05
+    # NV-055: measured max |value| 0.7424 at amp 1 (declared was 1.0); same rule.
+    peak_factor = 0.9
     dep_helpers = (("fld_pcg3d", _PCG3D_GLSL), ("fld_ghash3", _GHASH3_GLSL))
     main_fn_name = "fld_perlin3d"
     main_fn_code = _PERLIN3D_GLSL

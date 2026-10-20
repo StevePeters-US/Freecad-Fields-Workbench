@@ -80,6 +80,10 @@ class SubgraphOutputsNode(BaseNode):
                 res[s.name] = str(s.default_value)
         return res
 
+    def bound(self, ins, input_exprs, params, w):
+        # A group output is its input, unchanged.
+        return {s.name: ins[s.name] for s in self.get_inputs(params) if s.name in ins}
+
 
 def _socket_defs_from_params(params, key, fallback):
     """Builds a SocketDef list from a params[key] socket-spec list, if present."""
@@ -139,9 +143,13 @@ def topological_sort(start_node_id, incoming):
     return order, has_cycle
 
 
-def compile_subgraph(subgraph_data, outer_input_exprs):
+def compile_subgraph(subgraph_data, outer_input_exprs, outer_bounds=None, w=None):
     """
     Compiles an inner subgraph using outer input expressions.
+
+    When `w` (a bounds.BoundWriter) is given, the subgraph also carries bounds,
+    seeded from `outer_bounds` ({socket: Bound}), and the result dict gains
+    "__bounds__": {output socket: Bound} (NV-043). Without it, nothing changes.
     Returns:
         (dict of {output_socket_name: expr_str}, list_of_param_comments)
     """
@@ -157,23 +165,27 @@ def compile_subgraph(subgraph_data, outer_input_exprs):
             break
 
     if not output_node_id:
-        return {"Out": "0.0"}, []
+        return _trivial_subgraph(w), []
 
     incoming = {nid: [] for nid in nodes}
-    for w in wires:
-        fn = w.get("from_node")
-        tn = w.get("to_node")
-        fs = w.get("from_socket")
-        ts = w.get("to_socket")
+    for wire in wires:
+        fn = wire.get("from_node")
+        tn = wire.get("to_node")
+        fs = wire.get("from_socket")
+        ts = wire.get("to_socket")
         if fn in nodes and tn in nodes:
             incoming[tn].append((fn, fs, ts))
 
     order, has_cycle = topological_sort(output_node_id, incoming)
     if has_cycle:
-        return {"Out": "0.0"}, []
+        return _trivial_subgraph(w), []
+
+    from .bounds import Bound, default_bound, node_bounds
 
     eval_cache = {}
+    bound_cache = {}
     param_comments = []
+    node_err = None
 
     for nid in order:
         node_data = nodes[nid]
@@ -195,6 +207,14 @@ def compile_subgraph(subgraph_data, outer_input_exprs):
                 if k not in out_dict and not k.startswith("__"):
                     out_dict[k] = v
             eval_cache[nid] = out_dict
+            if w is not None:
+                ob = outer_bounds or {}
+                bound_cache[nid] = {
+                    s.name: ob.get(s.name) or default_bound(s.default_value)
+                    for s in instance.get_outputs(params)}
+                for k in out_dict:
+                    if k not in bound_cache[nid] and k in ob:
+                        bound_cache[nid][k] = ob[k]
             continue
 
         node_inputs = instance.get_inputs(params) if hasattr(instance, "get_inputs") else instance.inputs
@@ -213,6 +233,19 @@ def compile_subgraph(subgraph_data, outer_input_exprs):
         input_exprs["__wired__"] = wired
 
         outputs = instance.generate_code(input_exprs, params)
+        err_here = outputs.pop("__error__", None)
+        if err_here and node_err is None:
+            node_err = err_here
+        if w is not None:
+            ins = {s.name: default_bound(s.default_value) for s in node_inputs}
+            for (fn, fs, ts) in incoming.get(nid, []):
+                if fn in bound_cache and fs in bound_cache[fn]:
+                    ins[ts] = bound_cache[fn][fs]
+            nb = node_bounds(instance, ins, input_exprs, params, outputs, w)
+            for k, b in ins.items():      # mirror the code passthrough below
+                if k not in nb and k not in outputs:
+                    nb[k] = b
+            bound_cache[nid] = nb
         for k, v in input_exprs.items():
             if k not in outputs and not k.startswith("__"):
                 outputs[k] = v
@@ -231,7 +264,19 @@ def compile_subgraph(subgraph_data, outer_input_exprs):
                     _add_comment_dedup(param_comments, c)
 
     out_node_outputs = eval_cache.get(output_node_id, {})
-    if out_node_outputs:
-        return dict(out_node_outputs), param_comments
-    return {"Out": "0.0"}, param_comments
+    res = dict(out_node_outputs) if out_node_outputs else {"Out": "0.0"}
+    if node_err:
+        res["__error__"] = node_err
+    if w is not None:
+        res["__bounds__"] = dict(bound_cache.get(output_node_id, {}))
+    return res, param_comments
+
+
+def _trivial_subgraph(w):
+    """The early-return result: Out is 0.0 (with its zero bound when `w` is given)."""
+    res = {"Out": "0.0"}
+    if w is not None:
+        from .bounds import Bound
+        res["__bounds__"] = {"Out": Bound("0.0", "0.0", "0.0")}
+    return res
 

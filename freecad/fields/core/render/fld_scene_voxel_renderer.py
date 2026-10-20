@@ -86,6 +86,13 @@ class FldSceneVoxelRenderer:
                 except Exception as e:
                     fld_logger.render_debug(f"FldSceneVoxelRenderer: document observer removal failed: {e}")
                 cls._instance._doc_observer = None
+            view_obs = getattr(cls._instance, "_view_observer", None)
+            if view_obs is not None:
+                try:
+                    view_obs.disconnect()
+                except Exception as e:
+                    fld_logger.render_debug(f"FldSceneVoxelRenderer: view observer disconnect failed: {e}")
+                cls._instance._view_observer = None
             try:
                 cls._instance._detach()
             finally:
@@ -119,6 +126,12 @@ class FldSceneVoxelRenderer:
     def __init__(self):
         self._attached_graphs = []   # scene graphs this renderer's switch was added to
         self._doc_observer = None
+        self._view_observer = None
+        self._active_graph = None     # the active 3D view's scene graph: the only view that draws
+        self._scene_doc = None        # name of the document whose fields the scene holds; None = unfiltered
+        self._graph_docs = []         # [(graph, doc_name)] for every graph the switch was added to
+        self._gl_share_ctx = None     # the viewer's QOpenGLContext, recorded by _init_gl_programs
+        self._gl_share_warned = False
         self._bbox_coords  = None
         self._batch_update_count = 0
         self._batch_needs_rebuild = False
@@ -153,12 +166,14 @@ class FldSceneVoxelRenderer:
         from freecad.fields.core.render.compute_program_cache import ComputeProgramCache
         from freecad.fields.core.render.field_appearance import FieldAppearance
         from freecad.fields.core.render.heightmap_texture_cache import HeightmapTextureCache
+        from freecad.fields.core.render.matcap_texture_cache import MatcapTextureCache
         from freecad.fields.core.render.sdf_field_registry import SdfFieldRegistry
         from freecad.fields.core.render.scene_shader_builder import CompiledScene
         from freecad.fields.core.render.field_meta_ssbo import FieldMetaBuffer
         from freecad.fields.core.render import ssao_resources
         self._prog_cache               = ComputeProgramCache()
-        self._appearance               = FieldAppearance()
+        self._matcap_cache             = MatcapTextureCache()
+        self._appearance               = FieldAppearance(layer_of=self._matcap_cache.layer_of)
         self._hmap_cache               = HeightmapTextureCache()
         self._registry                 = SdfFieldRegistry()
         self._scene                    = CompiledScene()
@@ -348,10 +363,13 @@ class FldSceneVoxelRenderer:
         from freecad.fields.core.gl.gl_compute import check_compute_support
         from freecad.fields.core.render import ssao_resources
 
+        from PySide import QtGui
+        self._gl_share_ctx = QtGui.QOpenGLContext.currentContext()
         self._gl_buf = ssao_resources.load_buffer_entrypoints()
         self._max_compute_texture_units = ssao_resources.max_compute_texture_units()
         # A fresh context means the old buffer id names nothing here any more.
         self._field_meta.forget_gl()
+        self._matcap_cache.forget_gl()
 
         self._compute_supported = check_compute_support()
         if not self._compute_supported:

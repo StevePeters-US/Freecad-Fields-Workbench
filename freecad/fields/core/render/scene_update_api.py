@@ -99,6 +99,13 @@ def update_field(r, label, field):
     if hasattr(field, "heightmap_path") and field.heightmap_path:
         r.register_heightmap_texture(label, field.heightmap_path)
     r._registry.update_field(label, field)
+    if r._scene_doc is None:
+        try:
+            r._scene_doc = FreeCADGui.ActiveDocument.Document.Name
+            view = FreeCADGui.ActiveDocument.ActiveView
+            r._active_graph = view.getSceneGraph() if view else None
+        except Exception as e:
+            fld_logger.render_debug(f"FldSceneVoxelRenderer: no active document to scope the scene to: {e}")
     # Unconditional: _attach is idempotent per scene graph, and this is the hook
     # that re-attaches the renderer in a document opened after an earlier one was
     # closed (RA-013).
@@ -144,6 +151,8 @@ def refresh_appearance(r):
         f.shape_color = r._appearance.shape_color(f.label)
         f.selection_color = r._appearance.selection_color(f.label)
         f.specular = r._appearance.specular_shininess(f.label)
+        (f.matcap_layer, f.matcap_uv_source,
+         f.matcap_ao_bypass) = r._appearance.matcap(f.label)
     # The loop above only changed CPU-side state. The FieldMeta SSBO the
     # shader actually samples is only repacked when it is marked dirty, so
     # without this flag the upload is skipped and the GPU keeps the old

@@ -15,10 +15,13 @@ from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 from pivy import coin
 from freecad.fields.tools.fld_sdf_tool_base import FldSdfToolBase
 from freecad.fields.tools.fld_base import DragTimerMixin
-from freecad.fields.tools.primitive_creator_base import GIZMO_HIT_TOLERANCE_MULT
+from freecad.fields.core.input.gizmo.models import GizmoFrame, Kind, handle_set
+from freecad.fields.core.input.gizmo.transform import delta_rotation
+from freecad.fields.tools.gizmo_driver import GizmoDriverMixin
 import math
 
 from freecad.fields.core.sdf.sdf_slicer import _compute_bezier_handles as _compute_catmull_rom_handles
+from collections import namedtuple
 
 # Ceiling on one array. Slicing a 50 mm part at a 0.05 mm machining pitch is a
 # thousand planes and that is a legitimate ask, so the limit is high; it exists
@@ -167,6 +170,46 @@ def build_slice_group_members(
     return members
 
 
+# The Panel's slicing: trace `source` at origin + normal*i*pitch, i in range(count).
+PanelSlicePlan = namedtuple("PanelSlicePlan", "panel source origin normal count pitch")
+
+
+def panel_slice_plan(obj):
+    """The Panel's planes when obj's chain ends in an enabled Panel, else None.
+
+    Panel is the real-time preview of a slicing and Slice the way it is taken further,
+    so the planes are the built SdfPanelField's own lattice -- offset + i*pitch along
+    its axis, `count` of them -- never laid out a second time. The field traced is the
+    Panel's Source: thickness and the end-board trim are preview-only.
+
+    None for a bare object, a chain whose tail is not a Panel (a modifier above the
+    Panel bends its planes, so there is no flat lattice to hand over -- warned), or a
+    bypassed Panel, whose get_sdf_field is the Source rather than an SdfPanelField.
+    Those slice freely. Any row of the chain may be passed.
+    """
+    from freecad.fields.core.objects.fld_modifier_stack import get_chain
+    from freecad.fields.core.objects.fld_deform_objects import FldPanelProxy
+    from freecad.fields.core.sdf.sdf.panel import SdfPanelField
+
+    _base, chain = get_chain(obj)
+    panels = [m for m in chain if isinstance(getattr(m, "Proxy", None), FldPanelProxy)]
+    if not panels:
+        return None
+    tail = chain[-1]
+    if panels[-1] is not tail:
+        fld_logger.warn(f"SDFSlice: {panels[-1].Label} is not the last modifier on "
+                        f"{tail.Label}, so its planes are not flat; slicing freely")
+        return None
+    field = tail.Proxy.get_sdf_field(tail)
+    if not isinstance(field, SdfPanelField):
+        return None
+    axis = [0.0, 0.0, 0.0]
+    axis[field.axis_index] = 1.0
+    normal = FreeCAD.Vector(*axis)
+    return PanelSlicePlan(tail, field.source, normal * field.offset, normal,
+                          field.count, field.pitch)
+
+
 def _create_debug_slab_bool(doc, group, src_obj, field, origin, normal, extent, c_idx):
     """Create a 1mm SDF slab intersection for visual debug comparison.
 
@@ -267,7 +310,7 @@ class SdfSlicePreview:
         self.face_set.numVertices.setValue(4)
         fld_logger.debug("SDFSlice: Grid geometry initialized.")
 
-    def update(self, origin, normal, count=1, spacing=10.0):
+    def update(self, origin, normal, count=1, spacing=10.0, max_planes=20):
         if not self.root:
             return
 
@@ -281,8 +324,7 @@ class SdfSlicePreview:
             rot = FreeCAD.Rotation(z_axis, normal)
         q = rot.Q
 
-        # Limit count for preview performance
-        display_count = min(count, 20)
+        display_count = min(count, max(1, int(max_planes)))
 
         for i in range(display_count):
             current_origin = origin + normal * (i * spacing)
@@ -330,8 +372,21 @@ class SdfSliceTaskPanel:
 
         self.form = QtWidgets.QWidget()
         self.setup_ui()
+        if tool.panel_plan is not None:
+            self._lock_to_panel()
         # Removed premature preview update to avoid None panel reference
         # self.update_preview()
+
+    def _lock_to_panel(self):
+        """The Panel owns the planes: show them, don't let them be edited here.
+        Tolerance, Max Points, Angle Tol, Preview, nesting and debug stay live."""
+        self.array_group.setChecked(True)
+        for w in (self.offset_spin, self.btn_x, self.btn_y, self.btn_z, self.array_group):
+            w.setEnabled(False)
+        note = QtWidgets.QLabel(
+            f"Slicing {self.tool.panel_plan.panel.Label}'s planes. Edit the Panel to change them.")
+        note.setWordWrap(True)
+        self.form.layout().insertWidget(0, note)
 
     def setup_ui(self):
         layout = QtWidgets.QVBoxLayout(self.form)
@@ -398,6 +453,23 @@ class SdfSliceTaskPanel:
         self.angle_tol_spin.setDecimals(1)
         self.angle_tol_spin.setSuffix("°")
         form_layout.addRow("Angle Tol:", self.angle_tol_spin)
+
+        from freecad.fields.core.fld_settings import get_slice_preview_planes
+        self.preview_spin = QtWidgets.QSpinBox()
+        self.preview_spin.setRange(1, _MAX_ARRAY_SLICES)
+        self.preview_spin.setValue(get_slice_preview_planes())
+        self.preview_spin.setSuffix(" planes")
+        self.preview_spin.setToolTip(
+            rich_tooltip(
+                "SdfSliceTaskPanel",
+                QT_TRANSLATE_NOOP(
+                    "SdfSliceTaskPanel",
+                    "Most slice planes the preview draws. Slice Now traces every plane whatever this is set to.\n<b>Default:</b> 20 planes.",
+                ),
+            )
+        )
+        form_layout.addRow("Preview:", self.preview_spin)
+        self.preview_spin.valueChanged.connect(self._preview_cap_changed)
 
         self.offset_spin.valueChanged.connect(self.update_preview)
 
@@ -555,6 +627,12 @@ class SdfSliceTaskPanel:
         self.spacing_spin.setEnabled(not by_count)
         self.length_spin.setEnabled(not self.span_part_chk.isChecked())
 
+    def _preview_cap_changed(self, value):
+        """Remember the cap for the next Slice, then redraw with it."""
+        from freecad.fields.core.fld_settings import set_slice_preview_planes
+        set_slice_preview_planes(value)
+        self.update_preview()
+
     def _span_to_far_side(self, origin):
         """Distance from `origin` to the far face of the shape's bounding box.
 
@@ -607,8 +685,27 @@ class SdfSliceTaskPanel:
         self.array_summary.setText(summary + (("  " + note) if note else ""))
         return count, spacing, note
 
+    def slice_frame(self):
+        """(field, origin, normal, count, spacing, note) for the next slice, or None.
+
+        The single place the preview and Slice Now get their planes. On a Panel they
+        are the Panel's (re-read each call); otherwise the plane controls'. None when
+        the tool opened on a Panel that no longer gives planes.
+        """
+        if self.tool.panel_plan is not None:
+            plan = self.tool.current_panel_plan()
+            if plan is None:
+                return None
+            self.array_summary.setText(
+                f"{plan.count} slices, {plan.pitch:.3f} mm apart, from {plan.panel.Label}.")
+            return plan.source, plan.origin, plan.normal, plan.count, plan.pitch, ""
+        origin = self.tool.base_origin + self.tool.base_normal * self.offset_spin.value()
+        count, spacing, note = self.array_layout(origin)
+        return self.field, origin, self.tool.base_normal, count, spacing, note
+
     def set_axis(self, normal):
         self.tool.base_normal = normal
+        self.tool._reset_local_axes()
         self.offset_spin.blockSignals(True)
         self.offset_spin.setValue(0.0)
         self.offset_spin.blockSignals(False)
@@ -639,13 +736,14 @@ class SdfSliceTaskPanel:
             from freecad.fields.core.objects.fld_object import (
                 create_fld_object, apply_display_tolerance)
 
-            offset_val = self.offset_spin.value()
-            tolerance = self.tolerance_spin.value()
-            origin = self.tool.base_origin + self.tool.base_normal * offset_val
-            count, spacing, array_note = self.array_layout(origin)
+            frame = self.slice_frame()
+            if frame is None:
+                return
+            field, origin, normal, count, spacing, array_note = frame
             if array_note:
                 fld_logger.warn(f"SDFSlice: {array_note}")
 
+            tolerance = self.tolerance_spin.value()
             doc = FreeCAD.activeDocument()
             total_created = 0
             debug_bool = self.debug_group.isChecked() and self.debug_bool_chk.isChecked()
@@ -655,7 +753,7 @@ class SdfSliceTaskPanel:
             pending_group_members = []
 
             try:
-                bb_min, bb_max = self.field.bounding_box()
+                bb_min, bb_max = field.bounding_box()
                 slab_extent = (bb_max - bb_min).Length
             except Exception:
                 slab_extent = 200.0
@@ -664,7 +762,7 @@ class SdfSliceTaskPanel:
             max_pts = self.max_pts_spin.value()
 
             slice_members = build_slice_group_members(
-                self.field, origin, self.tool.base_normal,
+                field, origin, normal,
                 count=count, spacing=spacing, tolerance=tolerance,
                 max_control_points=max_pts, angle_tolerance_deg=angle_tol
             )
@@ -672,7 +770,7 @@ class SdfSliceTaskPanel:
             if self.nesting_chk.isChecked():
                 from freecad.fields.core.sdf.nesting_layout import flatten_slice_members_for_nesting
                 flatten_slice_members_for_nesting(
-                    slice_members, origin, self.tool.base_normal, spacing=spacing,
+                    slice_members, origin, normal, spacing=spacing,
                     placement=self.obj.Placement
                 )
 
@@ -683,7 +781,12 @@ class SdfSliceTaskPanel:
                 group.Label = group_name
 
                 for c_idx, plane_curves in slice_members:
-                    current_origin = origin + self.tool.base_normal * (c_idx * spacing)
+                    current_origin = origin + normal * (c_idx * spacing)
+
+                    # PSL-005: A Panel plane that traces nothing is reported
+                    if not plane_curves and self.tool.panel_plan is not None:
+                        a = current_origin.dot(normal)
+                        fld_logger.warn(f"SDFSlice: Panel plane {c_idx} at {a:.3f} mm traced no contour")
 
                     # A plane the tracer found nothing on is exactly the plane worth
                     # building a debug body for, so this is not gated on `plane_curves`.
@@ -695,8 +798,8 @@ class SdfSliceTaskPanel:
                             from freecad.fields.core.sdf.sdf_slice_body import (
                                 create_slice_body)
                             body = create_slice_body(
-                                doc, f"{self.obj.Label}_RawSlice_{c_idx}", self.field,
-                                current_origin, self.tool.base_normal,
+                                doc, f"{self.obj.Label}_RawSlice_{c_idx}", field,
+                                current_origin, normal,
                                 tolerance=tolerance, thickness=body_thickness)
                             if body is not None:
                                 pending_group_members.append((group, body))
@@ -715,8 +818,8 @@ class SdfSliceTaskPanel:
                         curve_summaries.append((name, len(params["Points"]), n_vector, achieved_dev, tol_met))
 
                     if debug_bool:
-                        QtCore.QTimer.singleShot(0, lambda d=doc, g=group, o=self.obj, f=self.field,
-                                                  org=current_origin, nrm=self.tool.base_normal,
+                        QtCore.QTimer.singleShot(0, lambda d=doc, g=group, o=self.obj, f=field,
+                                                  org=current_origin, nrm=normal,
                                                   ext=slab_extent, idx=c_idx:
                                                   _create_debug_slab_bool(d, g, o, f, org, nrm, ext, idx))
 
@@ -751,7 +854,77 @@ class SdfSliceTaskPanel:
             fld_logger.exception(f"SDFSlice: Error: {e}")
 
 
-class SdfSliceTool(FldSdfToolBase, DragTimerMixin):
+class SliceGizmoTarget:
+    """The universal gizmo's `GizmoTarget` for the slicer: the slice plane. Arrows and
+    plane squares move it, the part along the normal going to the Offset spin box; rings
+    turn it about the gizmo's centre. Every apply is a total from the snapshot. It changes
+    no document object, so its transaction records nothing (FldGizmoHost closes it)."""
+
+    HANDLES = handle_set(move="xyz", planes=("xy", "xz", "yz"), rotate="xyz", free_move=True)   # no scale
+
+    def __init__(self, tool):
+        self.tool = tool
+
+    def gizmo_frame(self):
+        t = self.tool
+        o = t.base_origin + t.base_normal * t.panel.offset_spin.value()
+        axes = {"x": FreeCAD.Vector(t.local_x), "y": FreeCAD.Vector(t.local_y),
+                "z": FreeCAD.Vector(t.base_normal)}
+        return GizmoFrame(FreeCAD.Vector(o), axes, FreeCAD.Vector(o))
+
+    def gizmo_handles(self):
+        return self.HANDLES
+
+    def gizmo_snapshot(self):
+        t = self.tool
+        return {"origin": FreeCAD.Vector(t.base_origin), "normal": FreeCAD.Vector(t.base_normal),
+                "x": FreeCAD.Vector(t.local_x), "y": FreeCAD.Vector(t.local_y),
+                "offset": t.panel.offset_spin.value()}
+
+    def gizmo_apply(self, snap, delta):
+        t = self.tool
+        n0, off0 = snap["normal"], snap["offset"]
+        if delta.handle.kind is Kind.ROTATE:
+            rot = delta_rotation(delta)
+            pivot = snap["origin"] + n0 * off0
+            t.base_normal, t.local_x, t.local_y = (
+                self._unit(rot.multVec(snap[k])) for k in ("normal", "x", "y"))
+            t.base_origin = pivot - t.base_normal * off0
+            self._set_offset(off0)
+        else:
+            tr = delta.translation
+            dz = tr.dot(n0)
+            t.base_origin = snap["origin"] + (tr - n0 * dz)
+            self._set_offset(off0 + dz)
+        t.update_preview()
+
+    def gizmo_restore(self, snap):
+        t = self.tool
+        t.base_origin = FreeCAD.Vector(snap["origin"])
+        t.base_normal = FreeCAD.Vector(snap["normal"])
+        t.local_x, t.local_y = FreeCAD.Vector(snap["x"]), FreeCAD.Vector(snap["y"])
+        self._set_offset(snap["offset"])
+        t.update_preview()
+
+    def gizmo_commit(self):
+        self.tool.update_preview()
+
+    def gizmo_snap_points(self):
+        return []
+
+    @staticmethod
+    def _unit(v):
+        v.normalize()
+        return v
+
+    def _set_offset(self, value):
+        spin = self.tool.panel.offset_spin
+        spin.blockSignals(True)
+        spin.setValue(value)
+        spin.blockSignals(False)
+
+
+class SdfSliceTool(GizmoDriverMixin, FldSdfToolBase, DragTimerMixin):
     """Interactive tool for slicing an SDF field with a transform gizmo."""
 
     def get_command_id(self):
@@ -761,10 +934,10 @@ class SdfSliceTool(FldSdfToolBase, DragTimerMixin):
         super().__init__()
         self.obj = None
         self.field = None
+        self.panel_plan = None
         self.base_origin = None
         self.base_normal = None
         self.resolution = 0.1
-        self._gizmo = None
 
         self.points_root = coin.SoSeparator()
         if self.view and self.view.getSceneGraph():
@@ -773,14 +946,9 @@ class SdfSliceTool(FldSdfToolBase, DragTimerMixin):
     def _get_sdf_obj(self):
         return self.obj
 
-    def start_slicing(self, obj, field, origin, normal):
-        self.obj = obj
-        self.field = field
-        self.base_origin = origin
-        self.base_normal = normal
-        self._is_editing = True
-
-        # Setup initial coordinate axes
+    def _reset_local_axes(self):
+        """local_x/local_y: global X/Y turned by the rotation taking +Z to base_normal, so
+        (local_x, local_y, base_normal) is orthonormal and right-handed."""
         z_axis = FreeCAD.Vector(0, 0, 1)
         if (self.base_normal + z_axis).Length < 1e-6:
             rot = FreeCAD.Rotation(FreeCAD.Vector(1, 0, 0), 180)
@@ -789,47 +957,43 @@ class SdfSliceTool(FldSdfToolBase, DragTimerMixin):
         self.local_x = rot.multVec(FreeCAD.Vector(1, 0, 0))
         self.local_y = rot.multVec(FreeCAD.Vector(0, 1, 0))
 
+    def _make_gizmo_target(self):
+        return SliceGizmoTarget(self) if self.base_normal is not None and self.panel_plan is None else None
+
+    def current_panel_plan(self):
+        """The Panel's plan, re-read so an edit to the Panel since opening is followed.
+        None when the tool did not open on a Panel, or when the Panel no longer gives
+        one (deleted, bypassed, buried under another modifier) -- warned, since the
+        locked controls would otherwise slice something the panel does not show."""
+        if self.panel_plan is None:
+            return None
+        plan = panel_slice_plan(self.panel_plan.panel)
+        if plan is None:
+            fld_logger.warn("SDFSlice: the Panel no longer gives planes; close and reopen Slice")
+        return plan
+
+    def start_slicing(self, obj, field, origin, normal, panel_plan=None):
+        self.obj = obj
+        self.field = field
+        self.panel_plan = panel_plan
+        self.base_origin = origin
+        self.base_normal = normal
+        self._is_editing = True
+
+        self._reset_local_axes()
+
         from freecad.fields.core.fld_settings import get_ray_march_cell_size
         self.resolution = get_ray_march_cell_size()
 
         self.preview = SdfSlicePreview()
 
         self.panel = SdfSliceTaskPanel(self)
-        FreeCADGui.Control.showDialog(self.panel)
+        gui_doc = FreeCADGui.getDocument(self.doc.Name)
+        FreeCADGui.Control.showDialog(self.panel, gui_doc)
         self._dialog_open = True
 
         self._init_gizmo()
         self.update_preview()
-
-    def _init_gizmo(self):
-        if self._gizmo:
-            self._gizmo.undraw()
-            self._gizmo = None
-
-        from freecad.fields.core.input.fld_gizmo import FldTransformGizmo
-        self._gizmo = FldTransformGizmo()
-
-        offset_val = self.panel.offset_spin.value()
-        origin = self.base_origin + self.base_normal * offset_val
-
-        # Setup coordinate axes for the local gizmo based on stored local frame
-        axes = {
-            'x': self.local_x,
-            'y': self.local_y,
-            'z': self.base_normal,
-        }
-
-        length = 50.0
-        if self.field:
-            try:
-                bb_min, bb_max = self.field.bounding_box()
-                diag = (bb_max - bb_min).Length
-                if diag > 1.0:
-                    length = diag * 0.4
-            except Exception as e:
-                fld_logger.debug(f"_gizmo length calc from bounding_box failed: {e}")
-
-        self._gizmo.draw(self.points_root, origin, axes=axes, length=length, draw_translation=True)
 
     def update_preview(self):
         if getattr(self, "_terminated", False):
@@ -838,202 +1002,25 @@ class SdfSliceTool(FldSdfToolBase, DragTimerMixin):
         if not hasattr(self, "panel") or self.panel is None:
             return
         try:
-            offset_val = self.panel.offset_spin.value()
-            origin = self.base_origin + self.base_normal * offset_val
-            count, spacing, _note = self.panel.array_layout(origin)
+            frame = self.panel.slice_frame()
+            if frame is None:
+                return
+            _f, origin, normal, count, spacing, _n = frame
 
-            self.preview.update(origin, self.base_normal, count, spacing)
+            self.preview.update(origin, normal, count, spacing, max_planes=self.panel.preview_spin.value())
 
-            if self._gizmo:
-                axes = {
-                    'x': self.local_x,
-                    'y': self.local_y,
-                    'z': self.base_normal,
-                }
-                self._gizmo.update(origin, axes=axes)
+            self._update_gizmo()
         except Exception as e:
             fld_logger.debug(f"SDFSlice: Preview/Gizmo update failed: {e}")
 
-    def handle_move(self, event_dict):
-        if self._is_editing and hasattr(self, "_gizmo") and self._gizmo:
-            if getattr(self, "_is_dragging", False):
-                return
-            from freecad.fields.core.input.input_manager import FldInputManager
-            ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
-            if ray_p and ray_d:
-                gizmo_center = self.base_origin + self.base_normal * self.panel.offset_spin.value()
-                tol = self._compute_handle_radius(gizmo_center) * GIZMO_HIT_TOLERANCE_MULT
-                axis = self._gizmo.hit_test(ray_p, ray_d, tol)
-                if axis:
-                    from PySide.QtCore import Qt
-                    self._set_cursor(Qt.PointingHandCursor)
-                    return
-            self._restore_cursor()
-
-    def on_button1_down(self, event_dict):
-        if not self._is_editing or not hasattr(self, "_gizmo") or not self._gizmo:
-            return False
-
-        btn = event_dict.get("Button")
-        if btn != QtCore.Qt.LeftButton:
-            return False
-
-        from freecad.fields.core.input.input_manager import FldInputManager
-        ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
-        if not ray_p or not ray_d:
-            return False
-
-        gizmo_center = self.base_origin + self.base_normal * self.panel.offset_spin.value()
-        tol = self._compute_handle_radius(gizmo_center) * GIZMO_HIT_TOLERANCE_MULT
-        axis = self._gizmo.hit_test(ray_p, ray_d, tol)
-        if axis:
-            self._dragging_idx = f'gizmo_{axis}'
-            self._start_base_origin = FreeCAD.Vector(self.base_origin)
-            self._start_base_normal = FreeCAD.Vector(self.base_normal)
-            self._start_offset = self.panel.offset_spin.value()
-            self._edit_pivot = self.base_origin + self.base_normal * self._start_offset
-
-            if axis.startswith('rot_'):
-                ax_key = axis[4:]
-                ax_vec = self._gizmo._axes[ax_key]
-                from freecad.fields.core.input.fld_gizmo import _perp_pair
-                ref, tang = _perp_pair(ax_vec)
-                self._rot_ring_ref = ref
-                self._rot_ring_tang = tang
-
-                pt = self.projector.get_mouse_world_pos(
-                    event_dict, ax_vec, self._edit_pivot, place_on_geometry=False)
-                if pt:
-                    v = pt - self._edit_pivot
-                    self._edit_last_angle = math.atan2(v.dot(ref), v.dot(tang))
-                else:
-                    self._edit_last_angle = 0.0
-            elif axis.startswith('plane_'):
-                plane_key = axis[6:]
-                norm_axis = {'xy': 'z', 'xz': 'y', 'yz': 'x'}[plane_key]
-                plane_norm = self._gizmo._axes[norm_axis]
-                pt = self.projector.get_mouse_world_pos(
-                    event_dict, plane_norm, self._edit_pivot, place_on_geometry=False)
-                self._drag_constraint_base = pt if pt else self._edit_pivot
-            else:
-                ax_vec = self._gizmo._axes[axis]
-                click_pt = FldInputManager.get_instance().get_axis_point(
-                    self.view, self._edit_pivot, ax_vec, event_dict)
-                self._drag_constraint_base = click_pt if click_pt else self._edit_pivot
-
-            self._start_drag_timer()
-            return True
-        return False
-
-    def _drag_update(self):
-        if self._drag_check_lmb_released():
-            self.update_preview()
-            return
-
-        if not getattr(self, "_dragging_idx", None) or not self._dragging_idx.startswith('gizmo_'):
-            return
-
-        from freecad.fields.core.input.input_manager import FldInputManager
-        mouse_pos = FldInputManager.get_instance()._last_qt_pos
-        event_dict = {"Position": mouse_pos}
-
-        axis = self._dragging_idx[len('gizmo_'):]
-
-        if axis.startswith('rot_'):
-            ax_key = axis[4:]
-            ax_vec = self._gizmo._axes[ax_key]
-            pivot = self._edit_pivot
-            ref = self._rot_ring_ref
-            tang = self._rot_ring_tang
-
-            if pivot is None or ref is None or tang is None:
-                return
-
-            pt = self.projector.get_mouse_world_pos(
-                event_dict, ax_vec, pivot, place_on_geometry=False)
-            if not pt:
-                return
-
-            v = pt - pivot
-            angle = math.atan2(v.dot(ref), v.dot(tang))
-            da = angle - self._edit_last_angle
-            if abs(da) < 1e-8:
-                return
-
-            rot = FreeCAD.Rotation(ax_vec, math.degrees(da))
-            new_normal = rot.multVec(self.base_normal)
-            new_normal.normalize()
-            self.base_normal = new_normal
-
-            self.local_x = rot.multVec(self.local_x)
-            self.local_x.normalize()
-            self.local_y = rot.multVec(self.local_y)
-            self.local_y.normalize()
-
-            # Recalculate base_origin so the plane rotates around the pivot point
-            self.base_origin = pivot - self.base_normal * self.panel.offset_spin.value()
-
-            self._edit_last_angle = angle
-            self.update_preview()
-
-        elif axis.startswith('plane_'):
-            plane_key = axis[6:]
-            norm_axis = {'xy': 'z', 'xz': 'y', 'yz': 'x'}[plane_key]
-            plane_norm = self._gizmo._axes[norm_axis]
-            current_pt = self.projector.get_mouse_world_pos(
-                event_dict, plane_norm, self._drag_constraint_base, place_on_geometry=False)
-            if not current_pt:
-                return
-            delta = current_pt - self._drag_constraint_base
-            delta = delta - plane_norm * delta.dot(plane_norm)
-            if delta.Length < 1e-8:
-                return
-            dz = delta.dot(self.base_normal)
-            new_offset = self._start_offset + dz
-            self.panel.offset_spin.blockSignals(True)
-            self.panel.offset_spin.setValue(new_offset)
-            self.panel.offset_spin.blockSignals(False)
-            d_planar = delta - self.base_normal * dz
-            self.base_origin = self._start_base_origin + d_planar
-            self.update_preview()
-
-        else:
-            if axis not in self._gizmo._axes:
-                return
-            ax_vec = self._gizmo._axes[axis]
-
-            current_pt = FldInputManager.get_instance().get_axis_point(
-                self.view, self._drag_constraint_base, ax_vec, event_dict)
-            if not current_pt:
-                return
-
-            delta = current_pt - self._drag_constraint_base
-            if delta.Length < 1e-8:
-                return
-
-            if axis == 'z':
-                dz = delta.dot(self.base_normal)
-                new_offset = self._start_offset + dz
-                self.panel.offset_spin.blockSignals(True)
-                self.panel.offset_spin.setValue(new_offset)
-                self.panel.offset_spin.blockSignals(False)
-            else:
-                self.base_origin = self._start_base_origin + delta
-
-            self.update_preview()
-
     def finish(self):
+        self._dispose_gizmo(commit=True)
         self._is_editing = False
         self.terminate()
 
     def _do_terminate(self):
         try:
-            if self._gizmo:
-                try:
-                    self._gizmo.undraw()
-                except Exception as e:
-                    fld_logger.debug(f"_do_terminate: gizmo.undraw failed: {e}")
-                self._gizmo = None
+            self._dispose_gizmo()
             if self.points_root and self.view and self.view.getSceneGraph():
                 self.view.getSceneGraph().removeChild(self.points_root)
             if hasattr(self, "preview") and self.preview:

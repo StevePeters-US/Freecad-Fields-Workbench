@@ -12,7 +12,7 @@ except ImportError:
 <p><b>Instructions:</b></p>
 <ol>
 <li>Open a terminal (Command Prompt on Windows).</li>
-<li>Navigate to the 'bin' directory of your FreeCAD installation (C:\\Program Files\\FreeCAD 1.0\\bin).</li>
+<li>Navigate to the 'bin' directory of your FreeCAD installation (C:\\Program Files\\FreeCAD 26.3\\bin).</li>
 <li>If 'pip' is not available, first run: <code>python -m ensurepip</code></li>
 <li>Install shapely by running: <code>python -m pip install shapely</code></li>
 </ol>
@@ -36,6 +36,7 @@ from freecad.fields import ADDON_DIR, ICONS_DIR
 TOOLBARS = (
     ("Fields - Settings", (
         'Fields_Settings',
+        'Fields_Matcap',
     )),
     ("Fields - Constructive", (
         'Fields_WorkPlane',
@@ -76,6 +77,7 @@ TOOLBARS = (
         'Fields_Bend',
         'Fields_Lattice',
         'Fields_Array',
+        'Fields_Panel',
         'Fields_SDFSlice',
         'Fields_SDFCamProfile',
         'Fields_SDFToShape',
@@ -107,6 +109,7 @@ class FieldsWorkbench(FreeCADGui.Workbench):
             import freecad.fields.commands.cmd_workplane
             import freecad.fields.commands.cmd_boolean
             import freecad.fields.commands.cmd_settings
+            import freecad.fields.commands.cmd_matcap
             import freecad.fields.commands.cmd_sketcher
             import freecad.fields.commands.cmd_fill_curve
             import freecad.fields.commands.cmd_edit

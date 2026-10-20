@@ -3,7 +3,7 @@
 
 The drag profiler in ``tools/fld_base.py`` covers what happens between the mouse
 going down and coming up. It says nothing about the work either side of that:
-committing an extrusion, growing a cage, the picking octree a click rebuilds.
+committing an extrusion, growing a cage, or an interactive rebuild.
 Those show up in a log only as a gap between two timestamps.
 
 ``phase()`` closes that gap. It reports wall time and, separately, how much of

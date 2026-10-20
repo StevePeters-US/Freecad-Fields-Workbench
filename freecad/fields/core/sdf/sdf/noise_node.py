@@ -4,9 +4,7 @@
 One noise kernel, declared once and executed three ways.
 
 A node is a passive declaration: it does not dispatch, does not fall back, and does not
-parse parameters. `SdfNoiseField` owns all three of those -- see D-4 in the noise
-unification task list (`todo_noise_unification.md`; see also the `fld_noise_nodes`
-skill, which is where that decision lives permanently). Subclasses are never
+parse parameters. `SdfNoiseField` owns all three of those. Subclasses are never
 instantiated -- the registry maps a display name to the class object itself.
 """
 

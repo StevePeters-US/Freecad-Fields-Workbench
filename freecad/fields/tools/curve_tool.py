@@ -5,6 +5,7 @@ from PySide import QtCore
 from pivy import coin
 from .fld_base import NURBSPrimitiveCreator, DragTimerMixin, ToolState
 from freecad.fields.core import fld_logger
+from freecad.fields.core.input.fld_menu_tree import MenuItem, SEPARATOR
 from freecad.fields.core.objects.fld_point import FldPoint
 from freecad.fields.core.input.input_manager import FldInputManager
 
@@ -263,16 +264,19 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
 
     def on_context_menu(self, event_dict):
         if self._is_editing:
-            ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
-            if ray_p and ray_d:
-                b_type, b_idx, b_dist = self._hit_test_all(ray_p, ray_d)
-                self._context_menu_hit = (b_idx, b_type) if b_idx is not None else None
-            else:
+            try:
+                ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
+                if ray_p and ray_d:
+                    b_type, b_idx, b_dist = self._hit_test_all(ray_p, ray_d)
+                    self._context_menu_hit = (b_idx, b_type) if b_idx is not None else None
+                else:
+                    self._context_menu_hit = None
+                items = self.get_context_menu(event_dict)
+                from freecad.fields.core.input.fld_menu import FldMenuManager
+                FldMenuManager.get_instance().trigger_dynamic_menu(items)
+                return True
+            finally:
                 self._context_menu_hit = None
-            items = self.get_context_menu(event_dict)
-            from freecad.fields.core.input.fld_menu import FldMenuManager
-            FldMenuManager.get_instance().trigger_dynamic_menu(items)
-            return True
         return super().on_context_menu(event_dict)
 
     # ------------------------------------------------------------------
@@ -548,45 +552,6 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
             self.update_preview()
             self.update_ui()
 
-    def handle_keyboard(self, event_dict):
-        if self._is_editing:
-            key_text = str(event_dict.get("Text", "")).upper()
-            if key_text == "V" and self._selected_point_idx is not None:
-                self._cycle_handle_type(self._selected_point_idx)
-                return True
-        return super().handle_keyboard(event_dict)
-
-    # ------------------------------------------------------------------
-    # Handle type cycling (V key in edit mode)
-    # ------------------------------------------------------------------
-
-    _HANDLE_TYPE_NAMES = {0: "Auto", 1: "Vector", 2: "Aligned", 3: "Free"}
-
-    def _cycle_handle_type(self, point_idx):
-        """Cycle Auto→Vector→Aligned→Free→Auto for the given control point."""
-        n = len(self.points)
-        if point_idx < 0 or point_idx >= n:
-            return
-
-        in_i  = 2 * point_idx
-        out_i = 2 * point_idx + 1
-
-        # Extend handle_types list if it was shorter
-        while len(self.handle_types) < 2 * n:
-            self.handle_types.append(0)
-
-        current = self.handle_types[out_i]
-        next_type = (current + 1) % 4
-
-        self.handle_types[in_i]  = next_type
-        self.handle_types[out_i] = next_type
-
-        self._apply_handle_type(point_idx, next_type)
-        self._update_edit_object()
-        fld_logger.info(
-            f"CurveCreator: Point {point_idx} handle type → {self._HANDLE_TYPE_NAMES.get(next_type, '?')}"
-            " (V to cycle: Auto→Vector→Aligned→Free→Auto)"
-        )
 
     def _apply_handle_type(self, idx, handle_type):
         """Recompute handle positions at idx based on the new handle_type.
@@ -763,11 +728,6 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         self.is_closed = False
         self.view.redraw()
 
-    def on_tool_option_0(self):
-        fld_logger.info("snapping curve tool")
-
-    def on_tool_option_1(self):
-        fld_logger.info("snapping curve tool")
 
     def get_context_menu(self, event_dict=None):
         hit = getattr(self, "_context_menu_hit", None)
@@ -775,13 +735,13 @@ class CurveCreator(NURBSPrimitiveCreator, DragTimerMixin):
         if self._is_editing and hit:
             idx, _elem_type = hit
             items += [
-                ("Handle Type", [
-                    ("Auto",    lambda i=idx: self._set_handle_type(i, 0)),
-                    ("Vector",  lambda i=idx: self._set_handle_type(i, 1)),
-                    ("Aligned", lambda i=idx: self._set_handle_type(i, 2)),
-                    ("Free",    lambda i=idx: self._set_handle_type(i, 3)),
+                MenuItem("Handle Type", children=[
+                    MenuItem("Auto",    action=lambda i=idx: self._set_handle_type(i, 0)),
+                    MenuItem("Vector",  action=lambda i=idx: self._set_handle_type(i, 1)),
+                    MenuItem("Aligned", action=lambda i=idx: self._set_handle_type(i, 2)),
+                    MenuItem("Free",    action=lambda i=idx: self._set_handle_type(i, 3)),
                 ]),
-                None,
+                SEPARATOR,
             ]
         items += super().get_context_menu(event_dict)
         return items

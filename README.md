@@ -2,126 +2,146 @@
 
 [![Patreon](https://img.shields.io/badge/Support-Patreon-F96854?style=flat&logo=patreon)](https://www.patreon.com/cw/AttackPotato)
 
-The **Fields Workbench** brings implicit modeling, procedural textures, and volumetric deformation to FreeCAD using Signed Distance Fields (SDF). While traditional CAD relies on stitched boundary surfaces and brittle B-Rep booleans that can fail on complex intersections, Fields represents shapes as continuous volumetric fields. This makes it possible to blend intersecting solids with smooth transitions, carve and sculpt with 3D brushes, displace surfaces with procedural noise and heightmaps, and deform geometry with lattices and cages—all evaluated cleanly without topological errors, and convertible back to standard meshes or sliced into 2D curves for downstream FreeCAD operations.
+> [!WARNING]
+> **Active Development:** This workbench is an experimental work in progress. Tools, underlying data structures, and file storage formats are subject to change. **Backwards compatibility is not guaranteed** across updates.
 
-![FreeCAD Fields Workbench viewport with sculpted, blended SDF primitives and noise textures](docs/images/hero.png)
+The **Fields Workbench** is an implicit modeling workbench for FreeCAD, built on Signed Distance Fields (SDF). Traditional CAD tools work on boundary representations (B-Rep) and polygon meshes. Fields evaluates shapes as continuous 3D volumetric fields instead. This allows real-time volumetric booleans, procedural surface displacement with noise, and spatial deformations directly in FreeCAD, with tools to extract native 2D curves or polygon meshes for downstream workflows.
+
+![A vase built from a sphere, cylinders and a torus joined with a smooth blend, with a carved opening](docs/images/hero.png)
 
 ## Tools
 
+### Point
+
+Places a point in the view. Shortcut: `P`.
+
+![Six points placed at different positions in 3D space](docs/images/tools_point.png)
+
+### Curve
+
+Creates a curve through the points you click in the view. Supports 2D and 3D curves.
+
+![A 3D curve passing through five control points in space](docs/images/tools_curve.png)
+
+### Work Plane
+
+Places a permanent work plane object. New geometry is created on a visible work plane. Shortcut: `W`.
+
+![A work plane placed on the surface of a sphere](docs/images/tools_work_plane.png)
+
+### Fill Curve
+
+Creates an SDF face that fills a closed curve. Select the closed curve first. Shortcut: `Ctrl+F`.
+
+![A closed curve filled with a flat SDF face on a work plane](docs/images/tools_fill_curve.png)
+
+### Extrude
+
+Extrudes an SDF face into a solid. Select the face, then drag in the view to set the depth.
+
+![The filled face extruded upward into a solid](docs/images/tools_extrude.png)
+
 ### Primitives
 
-Creates exact mathematical solids—box, sphere, cylinder, and torus—with live-editable parameters. Use them as the building blocks for boolean operations, blends, and deformers.
+Creates box, sphere, cylinder, and torus SDF objects with interactive dimensions and positioning. Objects can be combined with Add, Subtract, and Intersection booleans. These are evaluated on the distance field, so they don't rely on edge-intersection solvers, and a join can be given a smooth blend radius.
 
 ![Analytical SDF primitives: box, sphere, cylinder, and torus](docs/images/tools_primitives.png)
 
-### Procedural Noise
+### Noise
 
-Adds procedural 3D noise directly to the surface of any SDF solid. Use it to create organic textures, knurling, or rough surface finishes.
+Pushes the surface of an SDF object in and out along a direction you set with the gizmo. Choose from Waves, Square, Sawtooth, Perlin and Voronoi patterns, in 2D or 3D. The 2D patterns affect the side of the object facing the direction arrow. The 3D patterns wrap around every face. Amplitude and wavelength update in real time, and custom patterns can be built in the node graph editor.
 
-![SDF primitive with procedural 3D surface noise displacement](docs/images/tools_noise.png)
+![The vase with wave noise adding horizontal ribs around its body](docs/images/tools_noise.png)
 
-### Heightmap Displacement
+### Twist
 
-Displaces the surface of an SDF object using imported grayscale images or elevation data. Use it to emboss logos, textures, and terrain with adjustable depth and smoothing.
+Twists an SDF object about an axis. 
 
-![3D relief surface generated from an imported grayscale heightmap](docs/images/tools_heightmap.png)
+![A square-bodied vase twisted about its vertical axis so its faces spiral](docs/images/tools_twist.png)
 
-### Spatial Deformers
+### Bend
 
-Non-destructively bends, twists, or repeats any SDF solid in a linear or polar array. Reach for these when shaping flowing, curved, or repetitive organic geometry.
+Bends an SDF object about an axis. Choose the axis (X, Y, or Z), the bend angle, and where along the axis the bend is centred.
 
-![SDF solid deformed with twist, bend, and array modifiers](docs/images/tools_deformers.png)
+![The vase bent 40 degrees, seen in profile, so its neck leans well to one side](docs/images/tools_bend.png)
 
-### Lattice and Cage Deform
+### Lattice
 
-Encloses any SDF solid within an interactive 3D control cage or lattice. Moving cage vertices deforms the underlying volume, making it easy to sculpt ergonomic contours and complex silhouettes.
+Encloses a solid in a lattice of control points. Moving the points deforms the solid smoothly, which suits tapering, flaring, and shearing a form without changing the original.
 
-![Freeform deformation of an SDF solid using an interactive control cage](docs/images/tools_cage.png)
+![A sphere inside its lattice of control points, with one corner point pulled out so the sphere stretches toward it](docs/images/tools_lattice.png)
+
+### Cage Deform
+
+Encloses any SDF solid within an interactive 3D control cage. Extrude faces, insert edge loops, and move cage vertices to deform the underlying volume.
+
+![A sphere with one top face of its deform cage extruded outward, and a cage vertex selected on the right with the transform gizmo on it](docs/images/tools_cage.png)
+
+### Panel
+
+Cuts a solid into flat boards stacked along an axis. 
+
+![A sphere divided into seven stacked flat boards with gaps between them](docs/images/tools_panel.png)
 
 ### Voxel Sculpt
 
 Converts an SDF solid into an editable voxel volume that you can add and carve using 3D brushes. Use it for freeform digital clay sculpting with adjustable brush radius, strength, and falloff.
 
-![Volumetric digital sculpting on an SDF field with a 3D brush](docs/images/tools_sculpt.png)
+![The vase sculpted with the voxel brush: a raised ridge built up on one side and a scoop carved out of the other](docs/images/tools_sculpt.png)
+
+### Matcap Shading
+
+Sets how a Fields object is shaded in the viewport. A matcap is a captured material that is looked up by surface angle, so an object keeps the same look from any viewing direction. The built-in set includes clay, studio, metal, and gold, plus diagnostic views such as zebra stripes and curvature.
+
+![The same vase shaded four ways, from left to right: standard shading, clay, metal, and zebra stripes](docs/images/tools_matcap.png)
 
 ### SDF to Shape
 
 Creates a Part solid from implicit fields using Surface Nets, Marching Cubes, or Dual Contouring. Use FreeCAD's standard export to save STL/OBJ files for 3D printing or downstream solid modeling.
 
-![Extracted polygon mesh from an implicit SDF field](docs/images/tools_sdf_to_mesh.png)
+![The vase after SDF to Shape: a Part solid made of triangles, with the triangle edges drawn](docs/images/tools_sdf_to_mesh.png)
 
 ### Slice SDF
 
-Cuts an SDF solid with a cutting plane to extract 2D cross-section contour curves as native FreeCAD BSplineCurves. Use it for CNC toolpath generation, laser cutting, or sketching profiles.
+Cuts an SDF object with a plane and creates the cross-section as native FreeCAD BSplineCurves. A single plane or an array of parallel planes can be sliced at once, set by count or by spacing. The curves are suited to profile extraction, laser cutting, and CNC toolpaths, and can be used in Sketcher and Part workflows.
 
-![2D cross-section contour curves extracted from an SDF solid](docs/images/tools_sdf_slice.png)
+![Fourteen horizontal slices through the vase, shown as stacked cross-section curves with the inner ring of the opening included](docs/images/tools_sdf_slice.png)
 
 ## Requirements
 
-- FreeCAD 1.1 or newer
-- Fields requires no external dependencies beyond what FreeCAD bundles.
+- FreeCAD 26.3 or newer
 
 ## Installation
 
-**Addon Manager (recommended):** Tools → Addon manager → search for "Fields" → Install, then restart FreeCAD.
+**Manual:** Clone or download https://github.com/StevePeters-US/Freecad-Fields-Workbench into the `Mod` folder of your FreeCAD user data directory (the Python console prints it: `App.getUserAppDataDir()`). Name the folder `Fields`, then restart FreeCAD.
 
-**Manual:** Clone or download https://github.com/StevePeters-US/Freecad-Fields-Workbench into the `Mod` folder of your FreeCAD user data directory (the Python console prints it: `App.getUserAppDataDir()`), then restart FreeCAD.
 
-## Quick start
+### Mouse and keyboard
 
-Geometry creation snaps to a dynamic workplane: hover over a face to align normal to the surface, or hover in empty space to use the camera-facing viewport plane. The first click locks the plane in place.
-
-1. Switch to the **Fields** workbench from the workbench selector.
-2. Click **Create Box** on the constructive toolbar, then click in the 3D viewport to place an SDF box.
-3. With the box selected, click **Add Noise Modifier** to add procedural surface texture, and adjust the noise scale in the task panel.
-4. Click **SDF to Shape** to convert the procedural solid into a Part solid ready for export.
-
-Alternatively, open `Resources/examples/Fields.FCStd` to explore pre-built examples of blends, deformers, and sculpted volumes.
-
-![SDF box with procedural surface noise converted to a polygon mesh](docs/images/quickstart_result.png)
-
-### Keyboard
-
-**Object Selection / Navigation**
-
-| Key | Action |
-|---|---|
-| `Tab` / `E` | Enter edit mode for the selected object |
-| `Q` | Toggle Group 1 (Additive) ↔ Group 2 (Subtractive) |
-| `D` | Open Fields context menu (or right-click) |
-| `Ctrl + Space` | Toggle viewport maximize |
-
-**While a Tool is Active**
-
-| Key | Action |
-|---|---|
-| `Esc` | Cancel tool and restore original state |
-| `Enter` | Commit and finish tool |
-| `Tab` | Exit edit mode / close tool |
-| `X` / `Y` / `Z` | Constrain movement to world X, Y, or Z axis |
-| `Shift + X/Y/Z` | Constrain movement to perpendicular plane (`Shift+Z` → XY plane) |
-| `D` | Tool options menu |
-
-**Modal Transforms (Blender-style)**
-
-Press `G`, `R`, or `S` in edit mode. Middle-mouse view navigation remains live throughout:
-
-| Key | Action |
-|---|---|
-| `G` | Grab (translate / move) |
-| `R` | Rotate |
-| `S` | Scale |
-| `X` / `Y` / `Z` | Lock to axis |
-| `Shift + X/Y/Z` | Lock to perpendicular plane |
-| `0`–`9`, `.`, `-` | Type exact numeric value (mm, degrees, factor) |
-| `Backspace` | Delete last typed digit |
-| `Enter` or Left-Click | Apply transform |
-| `Esc` or Right-Click | Cancel transform and restore original position |
+1. **Editing:** double-click an object in the 3D viewport to edit it; `Enter` accepts and commits changes, `Esc` cancels.
+2. **Right-click:** opens the active tool's context menu. Every tool shortcut is listed on its menu item, with its key shown.
+3. **Gizmo:**
+   - Drag a handle to move, rotate, or scale.
+   - Hold `Ctrl` while dragging to snap to increments.
+   - `Ctrl + Wheel` changes the snap step increment.
+   - Type digits (`0`–`9`, `.`, `-`) to enter an exact value, `Tab` for the next value component, `Enter` to accept, and `Esc` to step back.
+4. **Creating:** the same numeric keys type an exact size while dragging out a primitive shape.
+5. **Command keys:**
+   - `P`: Point
+   - `W`: Work Plane
+   - `Ctrl+F`: Fill Curve
+   - `S, K`: Sketcher
+6. **Tool-specific shortcuts:**
+   - **Cage Editor:** `E` (Extrude Face), `Ctrl+R` (Insert Edge Loop), `Ctrl+D` (Subdivide), `M` (Weld), `Alt+Z` (Toggle X-ray), `Return` (Commit Extrusion), `Esc` (Cancel Extrusion)
+   - **Sculpt Brush:** `[` (Smaller Brush), `]` (Larger Brush)
+   - **Curve Editor:** `Del` (Delete selected points)
+   - **Selection:** `Shift+A` (Select All)
 
 ## Known issues
 
 - Active development: tools, underlying data structures, and file formats may change between releases. Backwards compatibility is not guaranteed across updates.
-- Visual node graph editor for procedural noise is currently in progress.
+- Lattice and Cage Deform, Voxel Sculpt, and SDF to Shape are experimental.
+- To report a bug, open an issue at https://github.com/StevePeters-US/Freecad-Fields-Workbench/issues and include your FreeCAD version (Help → About FreeCAD → Copy to clipboard), the steps to reproduce it, the relevant lines from `Fields.log` (in your FreeCAD user data directory), and a small `.FCStd` file that shows it.
 
 ## Support
 

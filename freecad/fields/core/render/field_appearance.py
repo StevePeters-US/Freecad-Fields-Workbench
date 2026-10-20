@@ -20,6 +20,8 @@ DEFAULT_HATCH_COLOR       = (0.3, 0.5, 1.0)
 # it is the ONLY place the default lives -- nothing re-derives it at render time.
 DEFAULT_SELECTION_COLOR   = (1.0, 0.0, 1.0)
 DEFAULT_SPECULAR          = (1.0, 1.0, 1.0, 32.0)
+#: layer < 0 disables the matcap and falls back to the directional light.
+DEFAULT_MATCAP            = (-1.0, 0.0, 0.0)   # layer, uv_source, ao_bypass
 
 
 def apply_default_view_settings(view_object, shape_color):
@@ -36,6 +38,12 @@ def apply_default_view_settings(view_object, shape_color):
 
 
 class FieldAppearance:
+    def __init__(self, layer_of=None):
+        """`layer_of(doc_name, matcap_name) -> int` resolves a matcap name to its array
+        layer (-1 if unknown). The renderer injects its cache's, which also knows each
+        document's material variants; headless callers get the built-in vocabulary."""
+        self._layer_of = layer_of
+
     @staticmethod
     def _object_for(label):
         """The document object a label names, or None. Never raises."""
@@ -112,3 +120,34 @@ class FieldAppearance:
         except Exception as e:
             fld_logger.render_debug(f"FieldAppearance.specular_shininess failed: {e}")
         return DEFAULT_SPECULAR
+
+    def matcap(self, label):
+        """Return (layer, uv_source, ao_bypass) from the ViewObject.
+
+        Every value degrades to DEFAULT_MATCAP -- this is read on the render path,
+        and an object saved before the properties existed has none of them.
+        """
+        try:
+            obj = self._object_for(label)
+            vo = getattr(obj, "ViewObject", None) if obj else None
+            if vo is None:
+                return DEFAULT_MATCAP
+            from freecad.fields.core.render.matcap_texture_cache import (
+                MATCAP_NAMES, RAMP_LAYERS)
+            name = getattr(vo, "Matcap", "None")
+            if name == "None":
+                return DEFAULT_MATCAP
+            if self._layer_of is not None:
+                layer = self._layer_of(label.split(".", 1)[0], name)
+                if layer < 0:
+                    return DEFAULT_MATCAP
+            else:
+                layer = MATCAP_NAMES.index(name)
+            return (
+                float(layer),
+                1.0 if name in RAMP_LAYERS else 0.0,
+                1.0 if getattr(vo, "MatcapNoAO", False) else 0.0,
+            )
+        except Exception as e:
+            fld_logger.render_debug(f"FieldAppearance.matcap failed for {label!r}: {e}")
+        return DEFAULT_MATCAP

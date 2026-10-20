@@ -178,7 +178,8 @@ class SdfFaceEditTool(FldBase):
             "ShowExtension": getattr(obj, "ShowExtension", False),
         }
         self.panel = SdfFaceTaskPanel(self)
-        FreeCADGui.Control.showDialog(self.panel)
+        gui_doc = FreeCADGui.getDocument(self.doc.Name)
+        FreeCADGui.Control.showDialog(self.panel, gui_doc)
         self._dialog_open = True
         fld_logger.info(f"SdfFaceEditTool: editing surface '{obj.Label}'")
 

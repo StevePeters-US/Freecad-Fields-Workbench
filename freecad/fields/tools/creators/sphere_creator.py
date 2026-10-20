@@ -8,7 +8,7 @@ import FreeCAD
 from freecad.fields.core.sdf.sdf.sphere import SdfSphereField
 from freecad.fields.tools.fld_base import ToolState
 from freecad.fields.tools.primitive_creator_base import (
-    PrimitiveCreatorBase, MIN_PRIMITIVE_DIM_TYPED_MM
+    PrimitiveCreatorBase, StageEntry, MIN_PRIMITIVE_DIM_TYPED_MM
 )
 
 
@@ -79,6 +79,17 @@ class SphereCreator(PrimitiveCreatorBase):
         if state == ToolState.DRAG_XY:
             if len(self.points) >= 2:
                 self.points[1] = pos
+
+    def _stage_entry(self, state):
+        if state == ToolState.DRAG_XY and len(self.points) >= 2 and self.points[0] is not None and self.points[1] is not None:
+            r = self._in_plane(self.points[0], self.points[1]).Length
+            return StageEntry("Radius", "mm", [r], [1])
+        return None
+
+    def _stage_point_for(self, state, values):
+        if state == ToolState.DRAG_XY:
+            return self._radial_stage_point(self.points[0], self.points[1], values[0])
+        raise NotImplementedError
 
     def _sphere_field_from_points(self):
         if len(self.points) < 2:

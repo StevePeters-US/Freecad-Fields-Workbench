@@ -28,6 +28,13 @@ class CommandFldSdfSlice:
                 return
             from freecad.fields.core.objects.fld_modifier_stack import stack_target
             obj = stack_target(sel[0]) or sel[0]
+            from freecad.fields.tools.sdf_slice_tool import SdfSliceTool, panel_slice_plan
+            plan = panel_slice_plan(obj)
+            if plan is not None:
+                SdfSliceTool().start_slicing(obj, plan.source, plan.origin, plan.normal,
+                                             panel_plan=plan)
+                return
+
             proxy = getattr(obj, "Proxy", None)
             field = (proxy.get_sdf_field(obj) if (proxy and hasattr(proxy, "get_sdf_field"))
                      else getattr(proxy, "SdfField", None)) if proxy else None
@@ -44,7 +51,6 @@ class CommandFldSdfSlice:
                 origin = FreeCAD.Vector(0, 0, 0)
                 normal = FreeCAD.Vector(0, 0, 1)
 
-            from freecad.fields.tools.sdf_slice_tool import SdfSliceTool
             tool = SdfSliceTool()
             tool.start_slicing(obj, field, origin, normal)
 

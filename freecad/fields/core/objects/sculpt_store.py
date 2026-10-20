@@ -3,7 +3,7 @@
 core/objects/sculpt_store.py
 
 Sidecar persistence for sculpt-layer voxel grids. Grids are far too large for
-document properties, so they live in `<doc>.dmsculpt/<ObjectName>.npz` and are
+document properties, so they live in `<doc>.fldsculpt/<ObjectName>.npz` and are
 flushed on document save.
 """
 import os
@@ -12,7 +12,7 @@ import FreeCAD
 import numpy as np
 from freecad.fields.core import fld_logger
 
-SIDECAR_SUFFIX = ".dmsculpt"
+SIDECAR_SUFFIX = ".fldsculpt"
 
 # Proxies whose grid changed since the last flush: {(doc_name, obj_name): proxy}
 _dirty = {}

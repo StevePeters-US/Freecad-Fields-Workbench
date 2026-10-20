@@ -4,6 +4,7 @@
 Vector node definitions: combine, separate, and 2D rotation.
 """
 from .base import BaseNode, SocketDef, SocketType
+from .bounds import INF, badd, bmul
 
 
 class Combine2DNode(BaseNode):
@@ -23,6 +24,10 @@ class Combine2DNode(BaseNode):
         x = input_exprs.get("X", "0.0")
         y = input_exprs.get("Y", "0.0")
         return {"Out": f"vec2({x}, {y})"}
+
+    def bound(self, ins, input_exprs, params, w):
+        # Sum of components (>= the norm).
+        return {"Out": (badd(*(ins[k].peak for k in "XY")), badd(*(ins[k].slope for k in "XY")))}
 
 
 class Separate2DNode(BaseNode):
@@ -45,6 +50,10 @@ class Separate2DNode(BaseNode):
             "Y": f"({v}).y",
         }
 
+    def bound(self, ins, input_exprs, params, w):
+        v = ins["In"]       # each component is bounded by the vector
+        return {k: (v.peak, v.slope) for k in "XY"}
+
 
 class Combine3DNode(BaseNode):
     node_type = "combine_3d"
@@ -65,6 +74,9 @@ class Combine3DNode(BaseNode):
         y = input_exprs.get("Y", "0.0")
         z = input_exprs.get("Z", "0.0")
         return {"Out": f"vec3({x}, {y}, {z})"}
+
+    def bound(self, ins, input_exprs, params, w):
+        return {"Out": (badd(*(ins[k].peak for k in "XYZ")), badd(*(ins[k].slope for k in "XYZ")))}
 
 
 class Separate3DNode(BaseNode):
@@ -88,6 +100,10 @@ class Separate3DNode(BaseNode):
             "Y": f"({v}).y",
             "Z": f"({v}).z",
         }
+
+    def bound(self, ins, input_exprs, params, w):
+        v = ins["In"]
+        return {k: (v.peak, v.slope) for k in "XYZ"}
 
 
 def get_default_rotate_2d_subgraph():
@@ -186,6 +202,17 @@ class Rotate2DNode(BaseNode):
         res.setdefault("V'", f"({u} * sin(radians({a})) + {v} * cos(radians({a})))")
         return res
 
+    def bound(self, ins, input_exprs, params, w):
+        from .subgraph import compile_subgraph
+        sg = params.get("subgraph_data")
+        if not sg or not sg.get("nodes"):
+            sg = get_default_rotate_2d_subgraph()
+        res, _ = compile_subgraph(sg, input_exprs, ins, w)
+        u, v = ins["U"], ins["V"]
+        fallback = (badd(u.peak, v.peak), badd(u.slope, v.slope))
+        b = res.get("__bounds__", {})
+        return {"U'": b.get("U'", fallback), "V'": b.get("V'", fallback)}
+
     def get_param_comments(self, params):
         from .subgraph import compile_subgraph
         sg = params.get("subgraph_data") or get_default_rotate_2d_subgraph()
@@ -235,43 +262,121 @@ class Distance2DNode(BaseNode):
             "Offset": f"vec2({dx}, {dy})",
         }
 
+    def bound(self, ins, input_exprs, params, w):
+        x, y, cx, cy = ins["X"], ins["Y"], ins["CenterX"], ins["CenterY"]
+        dx = (badd(x.peak, cx.peak), badd(x.slope, cx.slope))
+        dy = (badd(y.peak, cy.peak), badd(y.slope, cy.slope))
+        both = (badd(dx[0], dy[0]), badd(dx[1], dy[1]))
+        return {"Dist": both, "DX": dx, "DY": dy, "Offset": both}
 
-class DomainWarp2DNode(BaseNode):
-    node_type = "domain_warp_2d"
-    title = "Domain Warp 2D"
+
+class VectorMathNode(BaseNode):
+    """Vector mathematics operations on vec3 vectors: Dot, Cross, Add, Subtract, Scale, Length, Normalize."""
+    node_type = "vector_math"
+    title = "Vector Math"
+    category = "Vector"
+
+    OPS = {
+        "Dot": "Dot",
+        "Cross": "Cross",
+        "Add": "Add",
+        "Subtract": "Subtract",
+        "Scale": "Scale",
+        "Length": "Length",
+        "Normalize": "Normalize",
+    }
+
+    def __init__(self):
+        super().__init__()
+        self.inputs = [
+            SocketDef("A", SocketType.VEC3, (0.0, 0.0, 0.0), doc="First vector"),
+            SocketDef("B", SocketType.VEC3, (0.0, 0.0, 0.0), doc="Second vector"),
+            SocketDef("S", SocketType.FLOAT, 1.0, doc="Scalar multiplier"),
+        ]
+        self.outputs = [SocketDef("Out", SocketType.FLOAT)]
+        self.default_params = {"op": "Dot"}
+
+    def get_outputs(self, params):
+        op = params.get("op", "Dot")
+        if op in ("Dot", "Length"):
+            return [SocketDef("Out", SocketType.FLOAT, doc=f"Scalar result of {op}")]
+        return [SocketDef("Out", SocketType.VEC3, doc=f"Vector result of {op}")]
+
+    def generate_code(self, input_exprs, params):
+        a = input_exprs.get("A", "vec3(0.0)")
+        b = input_exprs.get("B", "vec3(0.0)")
+        s = input_exprs.get("S", "1.0")
+        op = params.get("op", "Dot")
+        if op == "Dot":
+            return {"Out": f"dot({a}, {b})"}
+        elif op == "Cross":
+            return {"Out": f"cross({a}, {b})"}
+        elif op == "Add":
+            return {"Out": f"({a} + {b})"}
+        elif op == "Subtract":
+            return {"Out": f"({a} - {b})"}
+        elif op == "Scale":
+            return {"Out": f"({a} * {s})"}
+        elif op == "Length":
+            return {"Out": f"length({a})"}
+        elif op == "Normalize":
+            return {"Out": f"mix(vec3(0.0), normalize(({a}) + vec3(1e-9, 0.0, 0.0)), step(1e-6, length({a})))"}
+        return {"Out": f"dot({a}, {b})"}
+
+    def bound(self, ins, input_exprs, params, w):
+        a, b, s = ins["A"], ins["B"], ins["S"]
+        op = params.get("op", "Dot")
+        if op in ("Dot", "Cross"):
+            r = (bmul(a.peak, b.peak), badd(bmul(a.slope, b.peak), bmul(b.slope, a.peak)))
+        elif op in ("Add", "Subtract"):
+            r = (badd(a.peak, b.peak), badd(a.slope, b.slope))
+        elif op == "Scale":
+            r = (bmul(a.peak, s.peak), badd(bmul(a.slope, s.peak), bmul(s.slope, a.peak)))
+        elif op == "Length":
+            r = (a.peak, a.slope)
+        elif op == "Normalize":
+            r = ("1.0", INF)                         # unbounded near the zero vector
+        else:
+            r = (INF, INF)
+        return {"Out": r}
+
+
+class PolarNode(BaseNode):
+    """Converts a 3D vector to cylindrical/polar coordinates: radius R, angle Theta, and depth Z."""
+    node_type = "polar"
+    title = "Polar"
     category = "Vector"
     doc = (
-        "Perturbs 2D coordinates using a scalar noise factor.\n\n"
-        "X' = X * (1.0 + Noise * Strength)\n"
-        "Y' = Y * (1.0 + Noise * Strength)\n\n"
-        "Breaks geometric symmetry to turn concentric waves into natural organic patterns."
+        "Converts a 3D vector V into in-plane radius R, polar angle Theta, and depth Z.\n\n"
+        "R = length(vec2(V.x, V.y))\n"
+        "Theta = atan(V.y, V.x) in radians (-pi..pi)\n"
+        "Z = V.z\n\n"
+        "The angle is measured about whatever axis V's z is, so the normal wiring is "
+        "Direction Transform's Local into V.\n"
+        "Theta jumps at +-pi, so a pattern built on Theta must repeat a whole number of times "
+        "around, or it leaves a seam."
     )
 
     def __init__(self):
         super().__init__()
         self.inputs = [
-            SocketDef("X", SocketType.FLOAT, 0.0, doc="Input X coordinate"),
-            SocketDef("Y", SocketType.FLOAT, 0.0, doc="Input Y coordinate"),
-            SocketDef("Noise", SocketType.FLOAT, 0.0, doc="Noise factor (e.g. from Perlin 2D)"),
-            SocketDef("Strength", SocketType.FLOAT, 0.1, doc="Warp distortion strength"),
+            SocketDef("V", SocketType.VEC3, (0.0, 0.0, 0.0), doc="Input vector"),
         ]
         self.outputs = [
-            SocketDef("X'", SocketType.FLOAT, doc="Warped X: X * (1 + Noise * Strength)"),
-            SocketDef("Y'", SocketType.FLOAT, doc="Warped Y: Y * (1 + Noise * Strength)"),
-            SocketDef("UV'", SocketType.VEC2, doc="Warped 2D vector vec2(X', Y')"),
+            SocketDef("R", SocketType.FLOAT, doc="In-plane radius length(vec2(V.x, V.y))"),
+            SocketDef("Theta", SocketType.FLOAT, doc="Polar angle atan(V.y, V.x) in radians (-pi..pi)"),
+            SocketDef("Z", SocketType.FLOAT, doc="Height / depth V.z"),
         ]
 
     def generate_code(self, input_exprs, params):
-        x = input_exprs.get("X", "0.0")
-        y = input_exprs.get("Y", "0.0")
-        noise = input_exprs.get("Noise", "0.0")
-        strength = input_exprs.get("Strength", "0.1")
-        factor = f"(1.0 + ({noise}) * ({strength}))"
-        wx = f"(({x}) * {factor})"
-        wy = f"(({y}) * {factor})"
+        v = input_exprs.get("V", "vec3(0.0)")
         return {
-            "X'": wx,
-            "Y'": wy,
-            "UV'": f"vec2({wx}, {wy})",
+            "R": f"length(vec2(({v}).x, ({v}).y))",
+            "Theta": f"atan(({v}).y, ({v}).x)",
+            "Z": f"({v}).z",
         }
 
+    def bound(self, ins, input_exprs, params, w):
+        v = ins["V"]
+        # Theta jumps at +-pi, so its slope is unbounded.
+        return {"R": (v.peak, v.slope), "Theta": ("3.1415927", INF), "Z": (v.peak, v.slope)}

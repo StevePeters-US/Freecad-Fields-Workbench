@@ -21,9 +21,7 @@ def is_sdf_object(obj):
     One spelling, reused by cmd_modifier_base.require_sdf_selection. Primitives are
     FldObjectProxy and modifiers are FldModifierProxyBase -- two unrelated classes with
     no common ancestor -- but every row of a stack carries ShapeType "sdf", so the
-    property is the test and the proxy class is not. See
-    memory/bug_modifier_edit_gate_four_spellings.md, where this gate was found spelled
-    four different ways at four sites.
+    property is the test and the proxy class is not.
     """
     return getattr(obj, "ShapeType", None) == "sdf"
 

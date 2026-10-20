@@ -13,14 +13,16 @@ The four GPU passes of one render callback, each as a function over a
 
 Passes 1-3 are throttled (30 fps at rest, every frame while navigating); Pass 4
 runs on every Coin3D frame from whatever those last left in the FBOs, which is
-what keeps the SDF overlay on screen between expensive frames.
+what keeps the SDF overlay on screen between expensive frames. A frame the
+throttle skips books one catch-up redraw on the nav filter, so the last change
+of a burst is always drawn (RF-001).
 
 The functions take the renderer explicitly as `r` rather than being methods,
 because they are the frame, not the object: everything they need that survives
 a frame lives on the renderer, and everything that does not lives on the
 context. The orchestration -- state save/restore, the FBO resize and its
-rollback, the throttle decision -- stays in
-`FldSceneVoxelRenderer._render_gl_callback_inner`.
+rollback, the throttle decision and its catch-up -- is `render_frame`, at the
+bottom of this module.
 
 Must be called inside an active GL context (i.e. from a SoCallback).
 """
@@ -44,6 +46,7 @@ GL_DEPTH_BUFFER_BIT = 0x0100
 GL_FRAMEBUFFER      = 0x8D40
 GL_TEXTURE_2D       = 0x0DE1
 GL_TEXTURE_3D       = 0x806F
+GL_TEXTURE_2D_ARRAY = 0x8C1A
 GL_TEXTURE0         = 0x84C0
 
 GL_WRITE_ONLY = 0x88B9
@@ -68,6 +71,10 @@ MAX_VOXEL_RES = 384
 UNIT_VOLUME      = 10
 UNIT_ID_VOLUME   = 11
 UNIT_NORM_VOLUME = 12
+UNIT_MATCAP      = 13   # GL_TEXTURE_2D_ARRAY, not a 3D volume
+
+#: Minimum interval between full (Pass 1-3) frames in QUALITY state.
+_QUALITY_FRAME_S = 1.0 / 30.0
 
 
 def load_frame_entrypoints():
@@ -218,10 +225,14 @@ def bake_scene_volume(r, ctx):
     from freecad.fields.core.gl.gl_program import memory_barrier
 
     analytical_data = r._last_analytical_data or []
-    if not analytical_data or not r._volume_dirty:
-        return
-
     sv = r._scene_volume
+    # A drag bakes coarse and slack-padded, then clears _volume_dirty; nothing re-dirties
+    # it when the drag ends, so the first quality frame must notice the drag's volume
+    # itself or the view stays coarse until the next edit (PNL-026).
+    baked_for_drag = (not ctx.interactive and sv._fit_res
+                      and sv._fit_slack_frac != 0.0)
+    if not analytical_data or not (r._volume_dirty or baked_for_drag):
+        return
     mn, mx = _scene_bounds(analytical_data)
     t_bake = time.perf_counter()
 
@@ -279,7 +290,7 @@ def _set_march_uniforms(prog, ctx, sv):
     # profile, cache it on the renderer and invalidate from on_prefs_changed --
     # do not guess.
     from freecad.fields.core.fld_settings import (
-        get_hatch_size, get_hatch_color, get_hatch_strength)
+        get_hatch_size, get_hatch_color, get_hatch_strength, get_curvature_scale)
     hc = get_hatch_color()
     prog.set_3f("u_hatch_color", float(hc[0]), float(hc[1]), float(hc[2]))
     # The preference is in SCREEN pixels. During navigation the march runs at
@@ -288,10 +299,11 @@ def _set_march_uniforms(prog, ctx, sv):
     # hatch period doubles on mouse-down at scale 0.5 and snaps back on release.
     prog.set_1f("u_hatch_period", float(get_hatch_size()) * ctx.res_scale)
     prog.set_1f("u_hatch_strength", float(get_hatch_strength()))
+    prog.set_1f("u_curv_scale", float(get_curvature_scale()))
 
 
-def _bind_volumes(gl, prog, sv):
-    """Bind the distance, id and normal volumes and name their units."""
+def _bind_volumes(gl, prog, sv, matcaps):
+    """Bind the distance, id and normal volumes and the matcap array, and name their units."""
     for unit, tex_id, uniform in (
             (UNIT_VOLUME,      sv.tex_id,                        "u_volume"),
             (UNIT_ID_VOLUME,   sv.id_tex_id,                     "u_id_volume"),
@@ -299,12 +311,17 @@ def _bind_volumes(gl, prog, sv):
         gl.glActiveTexture(GL_TEXTURE0 + unit)
         gl.glBindTexture(GL_TEXTURE_3D, tex_id)
         prog.set_1i(uniform, unit)
+    gl.glActiveTexture(GL_TEXTURE0 + UNIT_MATCAP)
+    gl.glBindTexture(GL_TEXTURE_2D_ARRAY, matcaps.tex_id)
+    prog.set_1i("u_matcaps", UNIT_MATCAP)
 
 
 def _unbind_volumes(gl):
     for unit in (UNIT_VOLUME, UNIT_ID_VOLUME, UNIT_NORM_VOLUME):
         gl.glActiveTexture(GL_TEXTURE0 + unit)
         gl.glBindTexture(GL_TEXTURE_3D, 0)
+    gl.glActiveTexture(GL_TEXTURE0 + UNIT_MATCAP)
+    gl.glBindTexture(GL_TEXTURE_2D_ARRAY, 0)
     gl.glActiveTexture(GL_TEXTURE0)
 
 
@@ -369,7 +386,7 @@ def pass1_gbuffer(r, ctx):
         if snapshot is not None:
             r._selected_labels_last_march = snapshot
 
-    _bind_volumes(gl, prog, sv)
+    _bind_volumes(gl, prog, sv, r._matcap_cache)
     prog.dispatch_compute((ctx.target_w + 7) // 8, (ctx.target_h + 7) // 8)
     memory_barrier(BARRIER_IMAGE_AND_TEXTURE)
 
@@ -601,6 +618,91 @@ def resolve_target_size(r, w, h):
     return target_w, target_h, res_scale, interactive, just_went_quality
 
 
+def _view_is_inactive(r, action):
+    """True when this action renders a view other than the active one.
+
+    Only the active view draws the scene: two views of one document would
+    otherwise both draw, and their different sizes would rebuild the FBOs on
+    alternating frames. A graph the switch was never attached to is drawn.
+
+    The path's head is the viewer's render-manager root, not the view's
+    getSceneGraph() -- that sits further down (measured live 2026-10-05) -- so
+    the recorded graph is looked for along the whole path.
+    """
+    if r._active_graph is None or not r._graph_docs:
+        return False
+    try:
+        path = action.getCurPath()
+        nodes = [path.getNode(i) for i in range(path.getLength())]
+    except Exception as e:
+        fld_logger.render_debug(f"SceneVoxel: render path unavailable: {e}")
+        return False
+    for graph, _doc_name in r._graph_docs:
+        if any(graph == n for n in nodes):
+            return graph != r._active_graph
+    return False
+
+
+def _switch_child(r):
+    """The switch's whichChild as an int (a Coin SoSFInt32 field, not a number)."""
+    wc = r._switch.whichChild
+    return wc.getValue() if hasattr(wc, "getValue") else wc
+
+
+def _is_viewer_context(ctx):
+    """True when `ctx` shares GL objects with the viewers.
+
+    FreeCAD sets `AA_ShareOpenGLContexts`, so every viewer's context is in the
+    global share group and a `saveImage` context is not (both measured live
+    2026-10-05). The surface class can't tell: the viewer's own context also sits
+    on an offscreen surface. Nor can a widget lookup: `findChildren(QOpenGLWidget)`
+    found no viewer in a fresh session, because PySide had wrapped it as a plain
+    QWidget, so no frame got past this check and nothing ever drew.
+    On any failure, answer True: drawing is the pre-RA-018 behaviour.
+    """
+    try:
+        from PySide import QtGui
+        share = QtGui.QOpenGLContext.globalShareContext()
+        if share is None:
+            return True
+        return QtGui.QOpenGLContext.areSharing(ctx, share)
+    except Exception as e:
+        fld_logger.render_debug(f"SceneVoxel: can't tell whose GL context this is ({e}); drawing.")
+        return True
+
+
+def _context_is_offscreen(r):
+    """True when this frame runs in a GL context the viewer's resources can't be used in.
+
+    `saveImage` and *Save picture* render in a context that shares no objects with
+    the viewer's, so every program, texture and FBO here would name nothing and the
+    picture would silently lack the Fields geometry. Warn once and skip the frame.
+    Before the viewer has drawn, `_gl_share_ctx` is unset: an off-screen surface must
+    not become the share context, so that frame is skipped without initialising.
+    """
+    from PySide import QtGui
+    current = QtGui.QOpenGLContext.currentContext()
+    if current is None:
+        return False
+    if r._gl_share_ctx is None:
+        return not _is_viewer_context(current)
+    try:
+        if QtGui.QOpenGLContext.areSharing(current, r._gl_share_ctx):
+            return False
+    except RuntimeError:
+        # The view that recorded the share context was closed and took it along.
+        # Its GL objects live on in the share group, so a viewer's context becomes
+        # the new reference; anything else is still an off-screen render.
+        if _is_viewer_context(current):
+            r._gl_share_ctx = current
+            return False
+    if not r._gl_share_warned:
+        r._gl_share_warned = True
+        fld_logger.warn("Fields objects can't be drawn in an off-screen render (Save picture); "
+                        "capture the view instead.")
+    return True
+
+
 def render_frame(r, userdata, action):
     """Set up the frame, run whichever passes are due, put GL back.
 
@@ -611,8 +713,13 @@ def render_frame(r, userdata, action):
     """
     if not action.isOfType(coin.SoGLRenderAction.getClassTypeId()):
         return
+    if _view_is_inactive(r, action):
+        return
     r._last_action = action
     if not r._active_uniforms or r._active_uniforms.get("n_fields", 0) == 0:
+        return
+
+    if _context_is_offscreen(r):
         return
 
     r._perf.note_frame()
@@ -628,6 +735,7 @@ def render_frame(r, userdata, action):
 
     # Upload pending heightmap images as GL textures (must be inside GL context)
     r._upload_pending_heightmap_textures()
+    r._matcap_cache.upload_pending()
 
     gl = load_frame_entrypoints()
 
@@ -690,13 +798,17 @@ def render_frame(r, userdata, action):
         fld_logger.render_debug(f"SceneVoxel: native FBO resize attempted this frame -> {w}x{h}")
 
     # In INTERACTIVE state always re-render (the downscaled march keeps cost
-    # low). In QUALITY state cap at 30 fps to reduce idle GPU load.
+    # low). In QUALITY state cap at 30 fps to reduce idle GPU load. A frame the
+    # cap skips composites the previous G-buffer, so it books one catch-up
+    # redraw for when the window closes; without it the last change of a burst
+    # stays undrawn until some unrelated event (RF-001).
     now = time.perf_counter()
     run_expensive = (force_full or ctx.interactive or just_went_quality
-                     or (now - r._last_render_t) >= (1.0 / 30.0))
+                     or (now - r._last_render_t) >= _QUALITY_FRAME_S)
     if run_expensive:
+        if r._nav_filter is not None:
+            r._nav_filter.cancel_catch_up()
         r._last_render_t = now
-        r._run_expensive_last = True
         try:
             ctx.read_camera_matrices()
             pass1_gbuffer(r, ctx)
@@ -715,6 +827,8 @@ def render_frame(r, userdata, action):
                 r._destroy_fbo_set(*old_fbo_set)
                 r._vp_size = (w, h)
                 pending_fbo_set = None
+    elif r._nav_filter is not None:
+        r._nav_filter.request_catch_up(_QUALITY_FRAME_S - (now - r._last_render_t))
 
     # Pass 4 runs on every callback, from whatever Passes 1-3 last left in
     # the FBOs. Guard everything it dereferences, not just the G-buffer.
@@ -728,9 +842,6 @@ def render_frame(r, userdata, action):
     gl.glUseProgram(0)
     restore_gl_state(gl, saved_state)
 
-    if getattr(r, "_run_expensive_last", False):
-        r._run_expensive_last = False
-
     r._perf.maybe_flush()
 
 
@@ -740,6 +851,8 @@ def pick_surface_at(r, x: int, y: int):
     Returns int surface_id (or None if no hit / 65535).
     """
     if not r._gbuf_fbo or not getattr(r._gbuf_fbo, "id", 0):
+        return None
+    if _switch_child(r) == -1:
         return None
     w, h = r._vp_size
     if w <= 0 or h <= 0 or x < 0 or x >= w or y < 0 or y >= h:

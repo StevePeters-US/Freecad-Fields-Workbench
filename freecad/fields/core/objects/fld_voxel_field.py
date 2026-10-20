@@ -47,8 +47,8 @@ class FldVoxelFieldProxy(FldModifierProxyBase):
 
         if not hasattr(obj, "Interpolation"):
             obj.addProperty("App::PropertyEnumeration", "Interpolation", "VoxelField", "Sampling interpolation mode")
-            obj.Interpolation = ["Trilinear", "Nearest"]
-            obj.Interpolation = "Trilinear"
+            obj.Interpolation = ["Cubic", "Trilinear", "Nearest"]
+            obj.Interpolation = "Cubic"
 
         if not hasattr(obj, "Sculpted"):
             obj.addProperty("App::PropertyBool", "Sculpted", "VoxelField", "Whether field contains sculpted/standalone data")
@@ -60,7 +60,7 @@ class FldVoxelFieldProxy(FldModifierProxyBase):
 
     def _grid_field(self, fp):
         """The voxel grid, loaded lazily from the sidecar on first use after restore."""
-        interp = str(getattr(fp, "Interpolation", "Trilinear")).lower()
+        interp = str(getattr(fp, "Interpolation", "Cubic")).lower()
         if getattr(self, "_grid", None) is not None:
             self._grid.interpolation = interp
             return self._grid
@@ -89,14 +89,14 @@ class FldVoxelFieldProxy(FldModifierProxyBase):
                 w = np.linspace(0, nz_old - 1, nz_new)
                 gu, gv, gw = np.meshgrid(u, v, w, indexing="ij")
                 coords = np.column_stack((gu.ravel(), gv.ravel(), gw.ravel())).T
-                interp = str(getattr(fp, "Interpolation", "Trilinear")).lower()
+                interp = str(getattr(fp, "Interpolation", "Cubic")).lower()
                 order = 0 if interp == "nearest" else 1
                 new_data = map_coordinates(grid.data, coords, order=order, mode="nearest").reshape(res).astype(np.float32)
                 self._grid = SdfVoxelField(size=grid.size, resolution=res, data=new_data, interpolation=grid.interpolation, placement=grid.placement)
                 if getattr(fp, "Document", None) is not None:
                     save_grid(fp.Document, fp.Name, self._grid)
         if prop == "Interpolation":
-            interp = str(getattr(fp, "Interpolation", "Trilinear")).lower()
+            interp = str(getattr(fp, "Interpolation", "Cubic")).lower()
             grid = getattr(self, "_grid", None)
             if grid is not None:
                 grid.interpolation = interp
@@ -109,7 +109,7 @@ class FldVoxelFieldProxy(FldModifierProxyBase):
         if base_field is not None and not is_sculpted:
             size = (getattr(fp, "SizeX", 100.0), getattr(fp, "SizeY", 100.0), getattr(fp, "SizeZ", 100.0))
             res = (getattr(fp, "ResolutionX", 32), getattr(fp, "ResolutionY", 32), getattr(fp, "ResolutionZ", 32))
-            interp = str(getattr(fp, "Interpolation", "Trilinear")).lower()
+            interp = str(getattr(fp, "Interpolation", "Cubic")).lower()
             placement = getattr(fp, "Placement", None)
             fld = SdfVoxelField.from_field(
                 base_field, size=size, resolution=res,
@@ -136,7 +136,7 @@ def write_back_voxel_data(obj, fld):
 
 def create_voxel_field_object(name="VoxelField", source_obj=None,
                               size=None, resolution=(32, 32, 32),
-                              interpolation="Trilinear", placement=None):
+                              interpolation="Cubic", placement=None):
     """Creates a new FldVoxelField document object."""
     doc = FreeCAD.activeDocument()
     if not doc:

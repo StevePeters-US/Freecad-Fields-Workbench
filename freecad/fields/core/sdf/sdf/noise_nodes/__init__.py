@@ -20,6 +20,6 @@ _ALL = (Perlin2DNode, Voronoi2DNode, Perlin3DNode, Voronoi3DNode)
 for _node in _ALL:
     _node.validate()
 
-#: Display name -> node CLASS (never an instance). `SdfNoiseField.COMPLEX_PRESETS`.
+#: Display name -> node CLASS (never an instance).
 NOISE_NODES = {node.name: node for node in _ALL}
 

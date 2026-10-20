@@ -90,6 +90,7 @@ def bake_scene(volume, analytical_data, renderer=None, region=None):
     """
     from freecad.fields.core.sdf.glsl_compiler import build_compute_shader
     from freecad.fields.core.sdf.gpu_field_eval import GpuFieldEvaluator
+    from freecad.fields.core.fld_settings import get_normal_tap_voxels
 
     if len(analytical_data) >= 65535:
         fld_logger.error(f"SceneVolume: field count ({len(analytical_data)}) exceeds r16ui max capacity of 65535")
@@ -318,6 +319,7 @@ def bake_scene(volume, analytical_data, renderer=None, region=None):
             prog.set_1i("u_cage_quad_iters", 10)
             prog.set_1i("u_cage_tri_iters", 10)
             prog.set_1i("u_grad_taps", 4)
+            prog.set_1f("u_normal_tap", float(get_normal_tap_voxels()))
 
             prog.dispatch_compute((cx + 7) // 8, (cy + 7) // 8, (cz + 7) // 8)
             memory_barrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT)

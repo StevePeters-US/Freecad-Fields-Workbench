@@ -15,16 +15,10 @@ from freecad.fields.core import fld_logger
 SnapResult = namedtuple("SnapResult", "point kind target")
 
 def snap_active():
-    """Whether snapping applies right now. The configured modifier inverts the default."""
+    """Whether snapping applies right now: while, and only while, Ctrl is held."""
     from PySide import QtWidgets, QtCore
-    from freecad.fields.core.fld_settings import (
-        get_snap_enabled, get_snap_invert_modifier)
-    _MODS = {"ctrl": QtCore.Qt.ControlModifier,
-             "shift": QtCore.Qt.ShiftModifier,
-             "alt": QtCore.Qt.AltModifier}
     mods = QtWidgets.QApplication.keyboardModifiers()
-    inverted = bool(mods & _MODS[get_snap_invert_modifier()])
-    return get_snap_enabled() != inverted
+    return bool(mods & QtCore.Qt.ControlModifier)
 
 
 def quantize(value, step):
@@ -48,6 +42,42 @@ def snap_angle_deg(angle_deg, step_deg):
     elif a <= -180.0:
         a += 360.0
     return a
+
+
+SNAP_STEP_PRESETS = {
+    "grid":  (0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 25.0),
+    "angle": (1.0, 5.0, 10.0, 15.0, 22.5, 30.0, 45.0, 90.0),
+    "scale": (0.01, 0.05, 0.1, 0.25, 0.5, 1.0),
+}
+SNAP_STEP_FORMATS = {"grid": "{0:g} mm", "angle": "{0:g}\u00b0", "scale": "\u00d7{0:g}"}
+
+
+def snap_step_label(kind, value):
+    """Status-bar text for a step, e.g. "Snap grid: 2 mm"."""
+    return f"Snap {kind}: " + SNAP_STEP_FORMATS[kind].format(value)
+
+
+def step_snap(kind, notches):
+    """Move the `kind` step `notches` presets up (positive) or down, clamped at both ends.
+
+    A custom value joins the presets where it falls. With the step at 0 (that snap
+    off), the step is set to its last non-zero value and nothing else happens: one
+    notch turns the snap back on where it was.
+
+    Returns:
+        The new step.
+    """
+    from freecad.fields.core.fld_settings import (
+        get_snap_step, set_snap_step, get_last_snap_step)
+    cur = get_snap_step(kind)
+    if cur <= 0:
+        new = get_last_snap_step(kind)
+    else:
+        values = sorted(set(SNAP_STEP_PRESETS[kind]) | {cur})
+        i = min(range(len(values)), key=lambda k: abs(values[k] - cur))
+        new = values[max(0, min(len(values) - 1, i + notches))]
+    set_snap_step(kind, new)
+    return new
 
 
 def snap_vector_to_grid(vec, step):

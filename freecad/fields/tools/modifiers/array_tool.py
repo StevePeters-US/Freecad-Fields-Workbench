@@ -14,7 +14,7 @@ except ImportError:
 from freecad.fields.tools.fld_sdf_tool_base import FldSdfModifierToolBase, DirectionGizmoMixin
 from freecad.fields.core.input.fld_gui_utils import DynamicLimitSlider
 from freecad.fields.tools.modifiers import axis_combo, BaseModifierTaskPanel, block_signals
-from freecad.fields.tools.primitive_creator_base import GIZMO_HIT_TOLERANCE_MULT
+from freecad.fields.core.input.gizmo.models import world_axes
 from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 _AXIS_VECTORS = {"X": FreeCAD.Vector(1, 0, 0), "Y": FreeCAD.Vector(0, 1, 0), "Z": FreeCAD.Vector(0, 0, 1)}
@@ -368,9 +368,7 @@ class ArrayTool(DirectionGizmoMixin, FldSdfModifierToolBase):
 
     def __init__(self):
         super().__init__()
-        self._gizmo = None
         self._arrow_root = None
-        self._drag_orig_overlap_mode = None
         if coin is not None:
             self.points_root = coin.SoAnnotation()
             if getattr(self, "view", None) and self.view.getSceneGraph():
@@ -449,71 +447,42 @@ class ArrayTool(DirectionGizmoMixin, FldSdfModifierToolBase):
             return ("StepX", "StepY", "StepZ")
         return ("SpacingX", "SpacingY", "SpacingZ")
 
-    def _apply_gizmo_rotation(self, rot):
-        """Update StepAxis and StepAngle from rotation ring drag."""
-        import math
+    def _gizmo_axes(self):
+        """Global X/Y/Z: SpacingX/Y/Z, StepX/Y/Z and StepAxis are world components and
+        the array has no local frame yet, so Local and World give the same axes."""
+        return world_axes()
+
+    def _gizmo_snapshot_props(self):
+        return ("SpacingX", "SpacingY", "SpacingZ", "StepX", "StepY", "StepZ",
+                "StepAxis", "StepAngle", "OverlapMode")
+
+    def _gizmo_apply_translation(self, snap, tr):
+        super()._gizmo_apply_translation(snap, tr)
+        self._gizmo_hold_overlap(snap)
+
+    def _gizmo_apply_rotation(self, snap, delta):
+        """Ring: StepAxis = the ring's axis; StepAngle = the snapshot's + the total, which
+        is unwrapped (it may pass +-180 deg), so StepAngle never jumps a turn."""
         obj = self._target_obj
-        if not obj:
-            return
-        dragging = getattr(self, "_dragging_idx", "")
-        if dragging.startswith("gizmo_rot_"):
-            ax_key = dragging[len("gizmo_rot_"):].upper()
-            if ax_key in ("X", "Y", "Z"):
-                obj.StepAxis = ax_key
-        sign = 1.0
-        ax_name = getattr(obj, "StepAxis", "Z")
-        ax_vec = _axis_vec(ax_name)
-        if hasattr(rot, "Axis"):
-            sign = 1.0 if rot.Axis.dot(ax_vec) >= 0 else -1.0
-        delta_deg = math.degrees(rot.Angle) * sign
-        obj.StepAngle = getattr(obj, "StepAngle", 60.0) + delta_deg
+        obj.StepAxis = delta.handle.axes[0].upper()
+        obj.StepAngle = snap["StepAngle"] + delta.rotation_deg
+        self._gizmo_hold_overlap(snap)
+
+    def _gizmo_hold_overlap(self, snap):
+        """While a transform is open an "Auto" OverlapMode is held at "Always", as the old
+        drag did; `_gizmo_committed` and the restore put it back."""
+        obj = self._target_obj
+        if snap["OverlapMode"] == "Auto" and obj.OverlapMode != "Always":
+            obj.OverlapMode = "Always"
+
+    def _gizmo_committed(self, snap):
+        obj = self._target_obj
+        if obj is not None and snap is not None and obj.OverlapMode != snap["OverlapMode"]:
+            obj.OverlapMode = snap["OverlapMode"]
+            self._commit_changes()
 
     def _on_direction_changed(self):
         pass
-
-    def handle_move(self, event_dict):
-        if not self._is_editing or getattr(self, "_is_dragging", False):
-            return
-        from freecad.fields.core.input.input_manager import FldInputManager
-        ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
-        if not ray_p or not ray_d:
-            self._restore_cursor()
-            return
-        tol = self._compute_handle_radius(self._gizmo_pivot()) * GIZMO_HIT_TOLERANCE_MULT
-        if self._gizmo_handle_move(ray_p, ray_d, tol):
-            return
-        self._restore_cursor()
-
-    def on_button1_down(self, event_dict):
-        if not self._is_editing:
-            return False
-        if event_dict.get("Button") != QtCore.Qt.LeftButton:
-            return False
-        from freecad.fields.core.input.input_manager import FldInputManager
-        ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
-        if not ray_p or not ray_d:
-            return False
-        tol = self._compute_handle_radius(self._gizmo_pivot()) * GIZMO_HIT_TOLERANCE_MULT
-        started = self._gizmo_try_start_drag(ray_p, ray_d, event_dict, tol)
-        if started:
-            obj = self._target_obj
-            if obj and getattr(obj, "OverlapMode", "Auto") == "Auto":
-                self._drag_orig_overlap_mode = "Auto"
-                obj.OverlapMode = "Always"
-        return started
-
-    def _drag_update(self):
-        if self._drag_check_lmb_released():
-            if getattr(self, "_drag_orig_overlap_mode", None):
-                if self._target_obj:
-                    self._target_obj.OverlapMode = self._drag_orig_overlap_mode
-                self._drag_orig_overlap_mode = None
-                self._commit_changes()
-            return
-        if self._gizmo_drag_tick():
-            if self._gizmo:
-                self._gizmo.update(self._gizmo_pivot(), axes=self._gizmo._axes)
-            return
 
     def _do_terminate(self):
         self._gizmo_teardown()

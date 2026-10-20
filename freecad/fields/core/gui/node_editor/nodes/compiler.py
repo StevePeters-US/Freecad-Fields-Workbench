@@ -8,14 +8,15 @@ from .subgraph import _add_comment_dedup, topological_sort
 
 
 class CompileResult(tuple):
-    def __new__(cls, formula, comments, err, result_type=SocketType.VEC3, disp_axis=None):
+    def __new__(cls, formula, comments, err, result_type=SocketType.VEC3, gates=None):
         obj = super().__new__(cls, (formula, comments, err))
         obj.formula = formula
         obj.comments = comments
         obj.err = err
         obj.result_type = result_type
-        obj.disp_axis = disp_axis   # (x, y, z) unit tuple, or None if varying
+        obj.gates = dict(gates) if gates else {}  # {"surf_n": param, "front": param}
         return obj
+
 
 
 def compile_graph(graph_data):
@@ -25,11 +26,11 @@ def compile_graph(graph_data):
     graph_data:
         {
             "nodes": [
-                {"id": "n1", "type": "position", "params": {...}},
+                {"id": "n1", "type": "part", "params": {...}},
                 ...
             ],
             "wires": [
-                {"from_node": "n1", "from_socket": "p.x", "to_node": "n2", "to_socket": "A"},
+                {"from_node": "n1", "from_socket": "p", "to_node": "n2", "to_socket": "A"},
                 ...
             ]
         }
@@ -67,10 +68,15 @@ def compile_graph(graph_data):
     if has_cycle:
         return CompileResult("", [], "Graph contains a cyclic dependency.")
 
+    from .bounds import BoundWriter, const_param_names, default_bound, node_bounds
+    w = BoundWriter(const_param_names(graph_data))
+    bound_cache = {}
+
     # Node evaluation cache: nid -> {socket_name: expr_str}
     eval_cache = {}
     eval_types = {}
     param_comments = []
+    node_err = None
 
     for nid in order:
         node_data = nodes[nid]
@@ -107,7 +113,16 @@ def compile_graph(graph_data):
 
         # Generate output expressions
         outputs = instance.generate_code(input_exprs, params)
+        err_here = outputs.pop("__error__", None)
+        if err_here and node_err is None:
+            node_err = err_here
         eval_cache[nid] = outputs
+
+        ins = {s.name: default_bound(s.default_value) for s in instance.inputs}
+        for (fn, fs, ts) in incoming.get(nid, []):
+            if fn in bound_cache and fs in bound_cache[fn]:
+                ins[ts] = bound_cache[fn][fs]
+        bound_cache[nid] = node_bounds(instance, ins, input_exprs, params, outputs, w)
 
         # Store output socket types
         out_types = {}
@@ -133,37 +148,36 @@ def compile_graph(graph_data):
     output_res = eval_cache.get(output_node_id, {})
     final_expr = output_res.get("result", "vec3(0.0)")
     result_type = output_res.get("result_type", SocketType.VEC3)
-    err = output_res.get("error")
+    err = output_res.get("error") or node_err
     formula_body = final_expr.strip()
 
-    full_formula = ""
-    if param_comments:
-        full_formula = "\n".join(param_comments) + "\n"
-    full_formula += formula_body
+    bound_lines = list(w.lines)
+    final = bound_cache.get(output_node_id, {}).get("result")
+    if final is not None:
+        bound_lines += [f"// @bound peak = {final.peak}", f"// @bound slope = {final.slope}"]
+    head = param_comments + bound_lines
+    full_formula = ("\n".join(head) + "\n" if head else "") + formula_body
 
-    # A literal (unwired) Direction on the Displace node feeding Output means
-    # the displacement is pinned to one fixed axis -- _lip() (noise.py) uses
-    # that to skip the sqrt(3) three-component Lipschitz bound it must
-    # otherwise charge a varying direction.
-    disp_axis = None
-    for (fn, fs, ts) in incoming.get(output_node_id, []):
-        if ts != "Displacement" or fn not in nodes:
-            continue
-        src_node = nodes[fn]
-        if src_node.get("type") != "displace":
-            continue
-        dir_incoming = [(dfn, dfs) for (dfn, dfs, dts) in incoming.get(fn, []) if dts == "Direction"]
-        if not dir_incoming:
-            v = src_node.get("params", {}).get("dir", [0.0, 0.0, 1.0])
-            n = max((float(v[0]) ** 2 + float(v[1]) ** 2 + float(v[2]) ** 2) ** 0.5, 1e-6)
-            disp_axis = (float(v[0]) / n, float(v[1]) / n, float(v[2]) / n)
-        else:
-            dfn, dfs = dir_incoming[-1]
-            if dfn in nodes and nodes[dfn].get("type") == "projection_control":
-                proj_dir_wired = any(ts2 == "Direction" for (_, _, ts2) in incoming.get(dfn, []))
-                if not proj_dir_wired:
-                    v = nodes[dfn].get("params", {}).get("direction", [0.0, 0.0, 1.0])
-                    n = max((float(v[0]) ** 2 + float(v[1]) ** 2 + float(v[2]) ** 2) ** 0.5, 1e-6)
-                    disp_axis = (float(v[0]) / n, float(v[1]) / n, float(v[2]) / n)
+    # If SurfaceNormalNode or FrontFaceNode's Enabled socket is wired from a
+    # custom_param node, record that param's identifier in gates (NV-037).
+    gates = {}
+    for nid, node_data in nodes.items():
+        ntype = node_data.get("type")
+        target_builtin = None
+        if ntype == "surface_normal":
+            target_builtin = "surf_n"
+        elif ntype == "front_face":
+            target_builtin = "front"
+        if target_builtin:
+            for (fn, fs, ts) in incoming.get(nid, []):
+                if ts == "Enabled" and fn in nodes:
+                    src_node = nodes[fn]
+                    if src_node.get("type") == "custom_param":
+                        raw_name = src_node.get("params", {}).get("name", "")
+                        from .base import glsl_param_identifier
+                        ident = glsl_param_identifier(raw_name)
+                        if ident:
+                            gates[target_builtin] = ident
 
-    return CompileResult(full_formula, param_comments, err, result_type, disp_axis)
+    return CompileResult(full_formula, param_comments, err, result_type, gates)
+

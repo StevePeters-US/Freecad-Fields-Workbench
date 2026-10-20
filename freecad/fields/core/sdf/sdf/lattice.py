@@ -75,7 +75,6 @@ class SdfLatticeField(SdfField):
     def displacements(self, value):
         self._displacements = np.asarray(value, dtype=np.float32)
         self.deformed_grid = self.grid_local + self._displacements
-        self.invalidate_cache()
 
     # ------------------------------------------------------------------
     # SdfField interface

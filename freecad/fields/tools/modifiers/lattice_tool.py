@@ -11,11 +11,9 @@ import FreeCADGui
 from freecad.fields.core import fld_logger
 from freecad.fields.core.objects.fld_point import FldPoint
 from freecad.fields.core.objects.fld_line import FldLineSet
-from freecad.fields.core.input.input_manager import FldInputManager
-from freecad.fields.core.render.field_appearance import DEFAULT_ADDITIVE_COLOR
 from freecad.fields.tools.fld_sdf_tool_base import FldSdfModifierToolBase
-from freecad.fields.tools.fld_base import ToolState
 from freecad.fields.tools.modifiers import BaseModifierTaskPanel
+from freecad.fields.tools.modifiers.lattice_gizmo import LatticeGizmoMixin
 from freecad.fields.ui_helpers import QT_TRANSLATE_NOOP, rich_tooltip
 
 try:
@@ -76,7 +74,7 @@ class LatticeTaskPanel(BaseModifierTaskPanel):
         self.tool._reconstruct_handles()
 
 
-class LatticeTool(FldSdfModifierToolBase):
+class LatticeTool(LatticeGizmoMixin, FldSdfModifierToolBase):
     SNAPSHOT_PROPERTIES = [
         ("Resolution", 2),
         ("Group", "Additive"),
@@ -123,6 +121,7 @@ class LatticeTool(FldSdfModifierToolBase):
         
         self._resolution = obj.Resolution
         self._reconstruct_handles()
+        self._init_gizmo()
 
     def restore_original(self):
         obj = self._target_obj
@@ -162,6 +161,7 @@ class LatticeTool(FldSdfModifierToolBase):
             self._edge_lines = None
 
     def _do_terminate(self):
+        self._dispose_gizmo()
         try:
             self._clear_visuals()
             if self.points_root and self.view and self.view.getSceneGraph():
@@ -180,6 +180,8 @@ class LatticeTool(FldSdfModifierToolBase):
         # tick after a Displacements write -- which is every tick of a drag.
         field = obj.Proxy.get_sdf_field(obj) if (obj and obj.Proxy) else None
         if field is None:
+            self._set_selection([])
+            self._update_gizmo()
             return
 
         self._update_points_from_field(field)
@@ -194,6 +196,9 @@ class LatticeTool(FldSdfModifierToolBase):
             
             self._edge_lines = FldLineSet(self.points_root, color=(0.0, 0.8, 1.0), width=1.5)
             self._update_lines()
+
+        self._set_selection([])
+        self._update_gizmo()
 
     def _update_lines(self):
         if not self._edge_lines:
@@ -219,94 +224,3 @@ class LatticeTool(FldSdfModifierToolBase):
             flat_pts.append(p0)
             flat_pts.append(p1)
         self._edge_lines.update_lines(flat_pts)
-
-    def on_button1_down(self, event_dict):
-        btn = event_dict.get("Button")
-        if btn != QtCore.Qt.LeftButton:
-            return False
-            
-        ray_p, ray_d = FldInputManager.get_instance().get_ray(self.view, event_dict)
-        if not ray_p or not ray_d:
-            return True
-            
-        r = self._compute_handle_radius()
-        best_idx = None
-        best_dist = float('inf')
-        for i, pt in enumerate(self.points):
-            idx, dist = self._hit_test_perp(ray_p, ray_d, [pt], tolerance=r * 1.0)
-            if idx is not None and dist < best_dist:
-                best_dist = dist
-                best_idx = i
-                
-        if best_idx is not None:
-            self._dragging_idx = best_idx
-            self._drag_constraint_base = self.points[best_idx]
-            
-            vd = self.view.getViewDirection()
-            self._drag_plane_n = FreeCAD.Vector(-vd.x, -vd.y, -vd.z).normalize()
-            self._drag_plane_o = self.points[best_idx]
-            
-            self.fld_points[best_idx].set_color(DEFAULT_ADDITIVE_COLOR)
-            self._update_constraint_visual()
-            self._start_drag_timer()
-            return True
-            
-        return False
-
-    def on_button1_up(self, event_dict):
-        self._stop_drag_timer()
-        self._clear_constraint_visual()
-        if self._dragging_idx is not None:
-            self.fld_points[self._dragging_idx].set_color((1.0, 1.0, 1.0))
-            self._dragging_idx = None
-            self._commit_changes(force=True)
-        return True
-
-    def _drag_update(self):
-        if self._drag_check_lmb_released():
-            return
-        if self._dragging_idx is None:
-            return
-            
-        mouse_pos = FldInputManager.get_instance()._last_qt_pos
-        event_dict = {"Position": mouse_pos}
-        
-        pt_global = self.resolve_world_point(
-            event_dict,
-            base_pt=self._drag_plane_o,
-            plane_normal=self._drag_plane_n,
-            plane_origin=self._drag_plane_o,
-            exclude=[self._target_obj] if getattr(self, "_target_obj", None) else [],
-            place_on_geometry=False,
-        )
-            
-        if pt_global:
-            obj = self._target_obj
-            field = obj.Proxy.get_sdf_field(obj) if (obj and obj.Proxy) else None
-            if field is None:
-                return
-
-            if field.placement is not None:
-                pt_local = field.placement.inverse().multVec(pt_global)
-            else:
-                pt_local = pt_global
-                
-            new_disp = np.array([pt_local.x, pt_local.y, pt_local.z], dtype=np.float32) - field.grid_local[self._dragging_idx]
-            
-            current_disps = field.displacements.copy()
-            proposed_disps = current_disps.copy()
-            proposed_disps[self._dragging_idx] = new_disp
-            
-            clamped_disps = field.clamp_displacements(proposed_disps, current_disps)
-            field.displacements = clamped_disps
-            
-            self._update_points_from_field(field)
-            for i, p_world in enumerate(self.points):
-                self.fld_points[i].position = p_world
-                self.fld_points[i].update_draw()
-                
-            vec_list = [FreeCAD.Vector(float(d[0]), float(d[1]), float(d[2])) for d in clamped_disps]
-            obj.Displacements = vec_list
-            
-            self._update_lines()
-            self._commit_changes()

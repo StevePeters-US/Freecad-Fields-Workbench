@@ -38,6 +38,19 @@ class PatternNode(BaseNode):
         freq = input_exprs["Freq"] if "Freq" in wired else "freq"
         return {"Out": f"{self.kernel.main_fn_name}({q}, {amp}, {freq})"}
 
+    def bound(self, ins, input_exprs, params, w):
+        from .bounds import Bound, badd, bmul
+        wired = input_exprs.get("__wired__", set())
+        q = ins["Position"] if "Position" in wired else Bound("inf", "1.0", None)
+        a = ins["Amp"] if "Amp" in wired else Bound("abs(amp)", "0.0", "amp")
+        f = ins["Freq"] if "Freq" in wired else Bound("abs(freq)", "0.0", "freq")
+        k = self.kernel
+        peak = bmul(a.peak, repr(float(k.peak_factor)))
+        slope = badd(bmul(bmul(a.peak, f.peak), bmul(repr(float(k.lip_factor)), q.slope)),
+                     bmul(a.slope, repr(float(k.peak_factor))),
+                     bmul(f.slope, "inf"))       # a varying freq: unbounded
+        return {"Out": (peak, slope)}
+
     @classmethod
     def glsl_helpers(cls):
         """(name, code) pairs this node's kernel needs registered. Consumed by

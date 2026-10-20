@@ -125,6 +125,7 @@ class FldObjectProxy:
             # closed came out open -- the slice tool had worked around it by passing
             # both spellings.
             obj.Closed = bool(params.get("Closed", False))
+            obj.ControlNodes = list(params.get("ControlNodes", []))
 
         if shape_type == "point":
             if not hasattr(obj, "Position"):
@@ -135,8 +136,7 @@ class FldObjectProxy:
             obj.Coordinates = params.get("Coordinates", params.get("Position", FreeCAD.Vector(0, 0, 0)))
             # Placement.Base is the authoritative position -- onChanged keeps it synced
             # with Coordinates/Position both ways, so FreeCAD's own Transform tool can
-            # drag a point exactly like it drags a primitive (see memory/
-            # feedback_no_whole_object_transform_tool.md for why this exists).
+            # drag a point exactly like it drags a primitive.
             obj.Placement = FreeCAD.Placement(FreeCAD.Vector(obj.Coordinates), FreeCAD.Rotation())
             if not hasattr(obj, "EditMode"):
                 obj.addProperty("App::PropertyBool", "EditMode", "Point", "Whether the point is in interactive edit mode")
@@ -658,11 +658,14 @@ class FldObjectProxy:
 
             elif sdf_type == "torus" and len(pts) >= 3:
                 from freecad.fields.core.sdf.sdf.torus import SdfTorusField
+                from freecad.fields.tools.primitive_creator_base import MIN_PRIMITIVE_DIM_MM
                 loc_c, loc_r, loc_t = pts[0], pts[1], pts[2]
                 major_r = math.sqrt((loc_r.x - loc_c.x)**2 + (loc_r.y - loc_c.y)**2)
                 dist_t = math.sqrt((loc_t.x - loc_c.x)**2 + (loc_t.y - loc_c.y)**2)
-                tube_r = max(abs(dist_t - major_r), 0.5)
-                return SdfTorusField(loc_c, major_r, tube_r, placement=placement)
+                tube_r = max(abs(dist_t - major_r), MIN_PRIMITIVE_DIM_MM)
+                # pts[0] is the bottom anchor; the creator raises the centre by tube_r.
+                centre = FreeCAD.Vector(loc_c.x, loc_c.y, loc_c.z + tube_r)
+                return SdfTorusField(centre, major_r, tube_r, placement=placement)
 
             elif sdf_type == "prism" and len(pts) >= 4:
                 from freecad.fields.core.sdf.sdf_extrusion import SdfExtrusionField

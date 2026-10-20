@@ -5,16 +5,17 @@ Extracted from FldSceneVoxelRenderer (RS-007). Every method must be
 called from inside a GL context: `get` may compile, and eviction destroys a
 program.
 """
+import os
 import time
 from freecad.fields.core import fld_logger
 
 
 class ComputeProgramCache:
-    def __init__(self, max_entries=8, dump_path="/tmp/cage_shader_debug.glsl"):
+    def __init__(self, max_entries=8, dump_name="cage_shader_debug.glsl"):
         self._progs = {}        # glsl source -> GLProgram
         self._lru = []          # sources, least-recently-used first
         self._max = max_entries
-        self._dump_path = dump_path
+        self._dump_name = dump_name
         self._failed = {}       # cache_key -> error message string
 
     def get(self, src, key=None, protected=None):
@@ -39,12 +40,15 @@ class ComputeProgramCache:
             return hit
 
         t_gpu_start = time.perf_counter()
-        # Dump source to /tmp for post-hang inspection
-        try:
-            with open(self._dump_path, "w") as _f:
-                _f.write(src)
-        except Exception as e:
-            fld_logger.render_debug(f"ComputeProgramCache: Failed to dump shader source: {e}")
+        # Dump source beside log file for post-hang inspection when render debug is on
+        if fld_logger._debug_active("render"):
+            try:
+                dump_dir = os.path.dirname(fld_logger.get_log_path())
+                dump_path = os.path.join(dump_dir, self._dump_name)
+                with open(dump_path, "w") as _f:
+                    _f.write(src)
+            except Exception as e:
+                fld_logger.render_debug(f"ComputeProgramCache: Failed to dump shader source: {e}")
         prog = GLProgram()
         try:
             prog.compile_compute(src)

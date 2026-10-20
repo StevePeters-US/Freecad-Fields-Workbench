@@ -48,11 +48,43 @@ def rich_tooltip(context, text, image=None):
     if match is None:
         fld_logger.warn(f"[ui_helpers] Tooltip image has no width attribute: {path}")
         return "".join(parts)
-    # Qt sizes a rich tooltip from its text, not its image, so a diagram sits in a wide
-    # popup. A fixed-width table makes the popup the diagram's width.
     return "<table width='%s' cellspacing='0' cellpadding='0'><tr><td>%s</td></tr></table>" % (
         match.group(1), "".join(parts))
 
+
+def make_double_spinbox(value, minimum, maximum, step=None, decimals=None, suffix="", tooltip=None):
+    """A configured QDoubleSpinBox (qt_ui_conventions).
+
+    Decimals are set before the range, and the range before the value, so neither the
+    range nor the value is rounded or clamped by Qt's defaults (2 decimals, 0-99.99).
+    """
+    spin = QtWidgets.QDoubleSpinBox()
+    if decimals is not None:
+        spin.setDecimals(decimals)
+    spin.setRange(minimum, maximum)
+    if step is not None:
+        spin.setSingleStep(step)
+    if suffix:
+        spin.setSuffix(suffix)
+    spin.setValue(value)
+    if tooltip:
+        spin.setToolTip(tooltip)
+    return spin
+def make_int_spinbox(value, minimum, maximum, step=None, suffix="", tooltip=None):
+    """A configured QSpinBox (qt_ui_conventions).
+
+    The range is set before the value, so the value is not clamped by Qt's defaults (0-99).
+    """
+    spin = QtWidgets.QSpinBox()
+    spin.setRange(minimum, maximum)
+    if step is not None:
+        spin.setSingleStep(step)
+    if suffix:
+        spin.setSuffix(suffix)
+    spin.setValue(value)
+    if tooltip:
+        spin.setToolTip(tooltip)
+    return spin
 
 def set_status_tips(command_ids):
     """Give each command with a rich ToolTip a plain status-bar tip: its first line.

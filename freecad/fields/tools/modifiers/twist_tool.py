@@ -61,7 +61,6 @@ class TwistTaskPanel(BaseModifierTaskPanel):
 
 
 class TwistTool(FldSdfModifierToolBase):
-    SUPPORTS_MODAL = False
     SNAPSHOT_PROPERTIES = [
         ("Axis", "Z"),
         ("AnglePerUnit", 1.0),

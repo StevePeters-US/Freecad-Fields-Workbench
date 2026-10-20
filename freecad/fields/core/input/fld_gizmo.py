@@ -53,6 +53,7 @@ class FldTransformGizmo:
 
     def __init__(self):
         self._center = FreeCAD.Vector()
+        self._rot_center = FreeCAD.Vector()
         self._axes = {
             'x': FreeCAD.Vector(1, 0, 0),
             'y': FreeCAD.Vector(0, 1, 0),
@@ -72,7 +73,13 @@ class FldTransformGizmo:
         self._plane_line_coords = {}  # plane → SoCoordinate3 (border)
         self._plane_mats   = {}  # plane → SoMaterial (face)
         self._plane_line_mats = {}  # plane → SoMaterial (border)
+        self._scale_seps  = {}   # 'scale_x'.. → SoSeparator (cube + its line)
+        self._scale_xforms = {}  # name → SoTransform (cube position and frame rotation)
+        self._scale_mats  = {}   # name → SoMaterial (cube)
+        self._scale_line_coords = {}  # axis cube name → SoCoordinate3 (line from 1.00L)
+        self._drawn_rings = None  # axes `draw` drew rings for; None until a draw, meaning all three
         self._highlight   = None
+        self._box_name    = None
 
     # ------------------------------------------------------------------
     # Coin3D helpers
@@ -111,6 +118,66 @@ class FldTransformGizmo:
     def _plane_size(self):
         return self._length * 0.22
 
+    def _scale_cube_side(self, name):
+        """Side of a scale cube: 0.08L for an axis cube, 0.12L for the uniform/free-move one."""
+        return self._length * (0.12 if name in ('scale_xyz', 'xyz') else 0.08)
+
+    def _scale_cube_center(self, name, center):
+        """Axis cubes sit at 1.35L along their axis from `center`; the uniform/free-move cube sits on
+        the pivot, like the rings, since that is what it scales about (owner, 2026-10-08)."""
+        if name in ('scale_xyz', 'xyz'):
+            return FreeCAD.Vector(self._rot_center)
+        return center + self._axes[name[-1]] * (self._length * 1.35)
+
+    def _frame_sb_rot(self):
+        """SbRotation taking Coin's axes onto the frame's X/Y/Z, for an axis-aligned cube."""
+        from pivy import coin
+        rot = FreeCAD.Rotation(self._axes['x'], self._axes['y'], self._axes['z'], "ZXY")
+        q = rot.Q
+        return coin.SbRotation(q[0], q[1], q[2], q[3])
+
+    def _draw_scale(self, name, center):
+        from pivy import coin
+        uniform = name in ('scale_xyz', 'xyz')
+        color = (0.85, 0.85, 0.85) if uniform else self.AXIS_COLORS[name[-1]]
+        side = self._scale_cube_side(name)
+        pos = self._scale_cube_center(name, center)
+
+        mat = coin.SoMaterial()
+        mat.diffuseColor.setValue(*color)
+        xf = coin.SoTransform()
+        xf.translation.setValue(pos.x, pos.y, pos.z)
+        xf.rotation.setValue(self._frame_sb_rot())
+        cube = coin.SoCube()
+        cube.width = side
+        cube.height = side
+        cube.depth = side
+
+        sep = coin.SoSeparator()
+        sep.addChild(mat)
+        cube_sep = coin.SoSeparator()
+        cube_sep.addChild(xf)
+        cube_sep.addChild(cube)
+        sep.addChild(cube_sep)
+
+        if not uniform:
+            start = center + self._axes[name[-1]] * self._length
+            coords = coin.SoCoordinate3()
+            coords.point.setValues(0, 2, [(start.x, start.y, start.z), (pos.x, pos.y, pos.z)])
+            ds = coin.SoDrawStyle()
+            ds.lineWidth.setValue(1.5)
+            ls = coin.SoLineSet()
+            ls.numVertices.setValue(2)
+            sep.addChild(ds)
+            sep.addChild(coords)
+            sep.addChild(ls)
+            self._scale_line_coords[name] = coords
+
+        self._root.addChild(sep)
+        self._scale_seps[name] = sep
+        self._scale_xforms[name] = xf
+        self._scale_mats[name] = mat
+
     def _draw_ring(self, axis, center):
         from pivy import coin
         ax_vec       = self._axes[axis]
@@ -136,7 +203,6 @@ class FldTransformGizmo:
 
         mat = coin.SoMaterial()
         mat.diffuseColor.setValue(*color)
-        mat.emissiveColor.setValue(*color)
 
         ring_sep = coin.SoSeparator()
         ring_sep.addChild(mat)
@@ -204,7 +270,6 @@ class FldTransformGizmo:
         line_sep = coin.SoSeparator()
         mat_line = coin.SoMaterial()
         mat_line.diffuseColor.setValue(*color)
-        mat_line.emissiveColor.setValue(*color)
         ds = coin.SoDrawStyle()
         ds.lineWidth.setValue(1.5)
         coords_line = coin.SoCoordinate3()
@@ -229,12 +294,21 @@ class FldTransformGizmo:
     # Public interface
     # ------------------------------------------------------------------
 
-    def draw(self, parent_sep, center, axes=None, length=None, draw_translation=True, rot_center=None, draw_planes=True):
+    def draw(self, parent_sep, center, axes=None, length=None, rot_center=None, handles=()):
+        """Draw the gizmo under `parent_sep`.
+
+        Draws exactly the handles named in `handles` (`'x'`, `'plane_xy'`, `'rot_z'`,
+        `'scale_x'`, `'scale_xyz'`...): the target's `gizmo_handles()`. An empty set draws
+        nothing pickable.
+        """
         from pivy import coin
         if self._root:
             self.undraw()
         self._parent = parent_sep
         self._root = coin.SoSeparator()
+        light = coin.SoLightModel()
+        light.model.setValue(coin.SoLightModel.BASE_COLOR)     # D-56: every part unlit, in exactly its colour
+        self._root.addChild(light)
         parent_sep.addChild(self._root)
 
         if axes is not None:
@@ -244,14 +318,22 @@ class FldTransformGizmo:
         self._center = FreeCAD.Vector(center)
         self._rot_center = FreeCAD.Vector(rot_center) if rot_center is not None else FreeCAD.Vector(center)
 
-        if draw_translation:
+        names = set(handles)
+        arrow_axes = tuple(a for a in ('x', 'y', 'z') if a in names)
+        plane_names = tuple(p for p in ('xy', 'xz', 'yz') if f'plane_{p}' in names)
+        ring_axes = tuple(a for a in ('x', 'y', 'z') if f'rot_{a}' in names)
+        self._box_name = 'xyz' if 'xyz' in names else 'scale_xyz'
+        box_names = (self._box_name,) if ('xyz' in names or 'scale_xyz' in names) else ()
+        cube_names = tuple(n for n in ('scale_x', 'scale_y', 'scale_z') if n in names) + box_names
+
+        if arrow_axes:
             shaft_r = self._length * 0.022
             cone_r  = self._length * 0.055
             shaft_offset = self._shaft_offset()
             shaft_h = self._shaft_h()
             cone_h  = self._cone_h()
 
-            for axis in ('x', 'y', 'z'):
+            for axis in arrow_axes:
                 color  = self.AXIS_COLORS[axis]
                 ax_vec = self._axes[axis]
                 sb_rot = self._axis_sb_rot(ax_vec)
@@ -259,8 +341,6 @@ class FldTransformGizmo:
                 ax_sep = coin.SoSeparator()
                 mat = coin.SoMaterial()
                 mat.diffuseColor.setValue(*color)
-                mat.specularColor.setValue(0.5, 0.5, 0.5)
-                mat.shininess.setValue(0.5)
                 ax_sep.addChild(mat)
                 self._axis_mats[axis] = mat
 
@@ -294,12 +374,15 @@ class FldTransformGizmo:
                 self._shaft_xforms[axis] = xf_shaft
                 self._cone_xforms[axis]  = xf_cone
 
-            if draw_planes:
-                for plane in ('xy', 'xz', 'yz'):
-                    self._draw_plane(plane, self._center)
+        for plane in plane_names:
+            self._draw_plane(plane, self._center)
 
-        for axis in ('x', 'y', 'z'):
+        self._drawn_rings = ring_axes
+        for axis in ring_axes:
             self._draw_ring(axis, self._rot_center)
+
+        for name in cube_names:
+            self._draw_scale(name, self._center)
 
     def update(self, center, axes=None, length=None, rot_center=None):
         if not self._root:
@@ -362,6 +445,17 @@ class FldTransformGizmo:
             coords_f.point.setValues(0, len(quad_pts), quad_pts)
             coords_l.point.setValues(0, len(line_pts), line_pts)
 
+        if self._scale_xforms:
+            sb_rot = self._frame_sb_rot()
+            for name, xf in self._scale_xforms.items():
+                pos = self._scale_cube_center(name, center)
+                xf.translation.setValue(pos.x, pos.y, pos.z)
+                xf.rotation.setValue(sb_rot)
+                coords = self._scale_line_coords.get(name)
+                if coords is not None:
+                    start = center + self._axes[name[-1]] * self._length
+                    coords.point.setValues(0, 2, [(start.x, start.y, start.z), (pos.x, pos.y, pos.z)])
+
         for axis in ('x', 'y', 'z'):
             coords = self._ring_coords.get(axis)
             if coords is None:
@@ -396,13 +490,19 @@ class FldTransformGizmo:
         self._plane_line_coords.clear()
         self._plane_mats.clear()
         self._plane_line_mats.clear()
+        self._scale_seps.clear()
+        self._scale_xforms.clear()
+        self._scale_mats.clear()
+        self._scale_line_coords.clear()
+        self._drawn_rings = None
         self._highlight = None
+        self._box_name = None
         self._parent = None
 
     HIGHLIGHT_COLOR = (1.0, 0.85, 0.1)   # amber
 
     def set_highlight(self, handle):
-        """Tint one handle ('x'/'y'/'z'/'plane_xy'/…/'rot_x'/…) and restore the others.
+        """Tint one handle ('x'/'y'/'z'/'plane_xy'/…/'rot_x'/…/'scale_x'/…/'scale_xyz'/'xyz') and restore the others.
 
         Pass None to clear. Cheap enough to call on every mouse-move: it writes at
         most twelve SoMaterial fields and Coin3D no-ops an unchanged value.
@@ -421,7 +521,12 @@ class FldTransformGizmo:
             m = self._ring_mats.get(axis)
             if m is not None:
                 m.diffuseColor.setValue(*ring_c)
-                m.emissiveColor.setValue(*ring_c)
+        for name, m in self._scale_mats.items():
+            is_box = name in ('scale_xyz', 'xyz')
+            is_hl = (handle == name) or (is_box and handle in ('scale_xyz', 'xyz'))
+            c = self.HIGHLIGHT_COLOR if is_hl else (
+                (0.85, 0.85, 0.85) if is_box else self.AXIS_COLORS[name[-1]])
+            m.diffuseColor.setValue(*c)
         for plane in ('xy', 'xz', 'yz'):
             base = self.PLANE_COLORS[plane]
             is_hl = (handle == f'plane_{plane}')
@@ -433,7 +538,6 @@ class FldTransformGizmo:
             m_line = self._plane_line_mats.get(plane)
             if m_line is not None:
                 m_line.diffuseColor.setValue(*c)
-                m_line.emissiveColor.setValue(*c)
         return True
 
     def hit_test(self, ray_p, ray_d, tolerance):
@@ -452,15 +556,24 @@ class FldTransformGizmo:
         # (normalized_score, depth_along_ray, handle_name) — lower score wins, depth breaks ties
         candidates = []
 
-        if self._shaft_xforms:
-            shaft_offset = self._shaft_offset()
-            for axis in ('x', 'y', 'z'):
+        shaft_offset = self._shaft_offset()
+        for axis in ('x', 'y', 'z'):
+            if axis in self._shaft_xforms:
                 seg_start = self._center + self._axes[axis] * shaft_offset
                 seg_end   = self._center + self._axes[axis] * self._length
                 dist = _ray_segment_dist(ray_p, ray_d, seg_start, seg_end)
                 if dist < tolerance:
                     proj = ((seg_start + seg_end) * 0.5 - ray_p).dot(ray_d)
                     candidates.append((dist / tolerance, proj, axis))
+
+        for name in self._scale_xforms:
+            pos = self._scale_cube_center(name, self._center)
+            to_c = pos - ray_p
+            dist = (to_c - ray_d * to_c.dot(ray_d)).Length
+            score = dist / max(tolerance, self._scale_cube_side(name) * 0.5)
+            if score < 1.0:
+                ret_name = self._box_name if (name in ('scale_xyz', 'xyz') and self._box_name) else name
+                candidates.append((score, to_c.dot(ray_d), ret_name))
 
         plane_hits = []
         if self._plane_seps:
@@ -487,7 +600,10 @@ class FldTransformGizmo:
         # (depth_along_ray, normalized_score, axis_name) — nearest to the eye wins
         ring_hits = []
         rot_ctr = getattr(self, "_rot_center", self._center)
-        for axis in ('x', 'y', 'z'):
+        # A drawn gizmo tests only the rings it drew. A gizmo never drawn (geometry set
+        # by hand, as the pick tests do) tests all three.
+        ring_axes = self._drawn_rings if self._drawn_rings is not None else ('x', 'y', 'z')
+        for axis in ring_axes:
             dist, depth = _ray_ring_dist(ray_p, ray_d, rot_ctr, self._axes[axis], ring_r)
             if dist < ring_tolerance:
                 ring_hits.append((depth, dist / ring_tolerance, f'rot_{axis}'))

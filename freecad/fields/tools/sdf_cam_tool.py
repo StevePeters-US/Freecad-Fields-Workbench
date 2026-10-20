@@ -288,8 +288,6 @@ class SdfCamTaskPanel:
 class SdfCamTool(FldSdfToolBase):
     """Tool class coordinating the task panel dialog lifecycle."""
 
-    SUPPORTS_MODAL = False
-
     def get_command_id(self):
         return "Fields_SDFCamProfile"
 
@@ -307,7 +305,8 @@ class SdfCamTool(FldSdfToolBase):
         self._is_editing = True
 
         self.panel = SdfCamTaskPanel(self)
-        FreeCADGui.Control.showDialog(self.panel)
+        gui_doc = FreeCADGui.getDocument(self.doc.Name)
+        FreeCADGui.Control.showDialog(self.panel, gui_doc)
         self._dialog_open = True
 
     def finish(self):

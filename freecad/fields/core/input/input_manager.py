@@ -55,16 +55,8 @@ def _resolve_edit_tool_for(obj):
     """Return a zero-arg callable that opens the right edit tool for `obj`, or
     None if nothing edits this object type.
 
-    The one dispatch shared by the double-click, Tab and 'E' handlers (CR-033).
-    Read all three before merging: they had independently drifted to cover
-    different subsets --  only the Tab handler had a `"surface"` branch
-    (`SdfFaceEditTool`), so double-click and 'E' silently did nothing for a
-    selected surface patch; only the double-click and 'E' handlers checked
-    `is_fld_workplane` before falling into the SDF-proxy branches, so Tab could
-    never reopen a workplane. This is the union of what the three already had
-    between them, not a new policy -- picking any one trigger's narrower
-    behavior as "the" definition would have silently taken a working case away
-    from the other two.
+    Used by double-click. It is the union of what the old double-click, Tab and
+    'E' handlers each covered (CR-033); Tab and 'E' were deleted by INP-022.
     """
     from freecad.fields.core.objects.fld_object_proxy import FldObjectProxy
     from freecad.fields.core.objects.fld_modifier_proxy_base import FldModifierProxyBase
@@ -102,6 +94,33 @@ def _resolve_edit_tool_for(obj):
     return None
 
 
+_NAVICUBE_PARAMS = "User parameter:BaseApp/Preferences/NaviCube"
+_VIEW_PARAMS = "User parameter:BaseApp/Preferences/View"
+
+
+def _navicube_rect(view_w, view_h):
+    """The nav cube's square in viewport logical pixels, or None when it is hidden.
+
+    Read from FreeCAD's own preferences every call, so moving or resizing the
+    cube in Preferences takes effect without a restart.
+
+    Returns:
+        (x0, y0, x1, y1) with Qt's top-left origin, or None.
+    """
+    if not FreeCAD.ParamGet(_VIEW_PARAMS).GetBool("ShowNaviCube", True):
+        return None
+    p = FreeCAD.ParamGet(_NAVICUBE_PARAMS)
+    size = p.GetInt("CubeSize", 132)
+    corner = p.GetInt("CornerNaviCube", 1)
+    ox = p.GetInt("OffsetX", 0)
+    oy = p.GetInt("OffsetY", 0)
+    right = corner in (1, 3)
+    bottom = corner in (2, 3)
+    x0 = view_w - size - ox if right else ox
+    y0 = view_h - size - oy if bottom else oy
+    return (x0, y0, x0 + size, y0 + size)
+
+
 class FldInputManager(QtCore.QObject):
     _instance = None
 
@@ -130,6 +149,45 @@ class FldInputManager(QtCore.QObject):
         from freecad.fields.core.input.fld_menu import FldMenuManager
         return FldMenuManager.get_instance().is_menu_active()
 
+    @staticmethod
+    def _tool_takes_numeric_entry(tool):
+        """True while `tool` reads typed digits: a creation stage
+        taking typed sizes (`takes_typed_entry`, INP-054)."""
+        takes = getattr(tool, "takes_typed_entry", None)
+        return bool(takes()) if callable(takes) else False
+
+    @staticmethod
+    def _gizmo_key_name(event):
+        """The universal gizmo's name for a key event (GizmoController.key), or None.
+
+        Any key with Ctrl or Alt held is None: those are shortcuts, never typed values.
+        """
+        from freecad.fields.core.input.gizmo.typed import TYPED_CHARS
+        if event.modifiers() & (QtCore.Qt.ControlModifier | QtCore.Qt.AltModifier):
+            return None
+        k = event.key()
+        if k == QtCore.Qt.Key_Backspace:
+            return "backspace"
+        if k == QtCore.Qt.Key_Tab:
+            return "tab"
+        if k in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+            return "enter"
+        if k == QtCore.Qt.Key_Escape:
+            return "esc"
+        text = event.text() if hasattr(event, "text") else ""
+        return text if len(text) == 1 and text in TYPED_CHARS else None
+
+    def _wheel_notches(self, dy):
+        """Whole wheel notches (120 units each) in `dy`, carrying the remainder.
+
+        Smooth-scrolling mice and touchpads send fractions of a notch; summing them
+        keeps one step per notch instead of one per event.
+        """
+        self._wheel_accum = getattr(self, "_wheel_accum", 0) + dy
+        notches = int(self._wheel_accum / 120)
+        self._wheel_accum -= notches * 120
+        return notches
+
     def eventFilter(self, obj, event):
         from freecad.fields.core.input.fld_tool_manager import FldToolManager
         try:
@@ -146,8 +204,9 @@ class FldInputManager(QtCore.QObject):
             is_key_event = event.type() in [QtCore.QEvent.KeyPress, QtCore.QEvent.KeyRelease, QtCore.QEvent.ShortcutOverride]
             is_mouse_event = event.type() in [QtCore.QEvent.MouseMove, QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease, QtCore.QEvent.MouseButtonDblClick]
             is_context_event = event.type() == QtCore.QEvent.ContextMenu
+            is_wheel_event = event.type() == QtCore.QEvent.Wheel
 
-            if not is_key_event and not is_mouse_event and not is_context_event:
+            if not (is_key_event or is_mouse_event or is_context_event or is_wheel_event):
                 return False
 
             # [Event Owner: Qt Event Filter] Modifier & Button state tracking (GLOBAL)
@@ -242,6 +301,43 @@ class FldInputManager(QtCore.QObject):
                     except Exception as e:
                         fld_logger.debug(f"InputManager.eventFilter: isAncestorOf check failed: {e}")
 
+            # FCU-012: Check if event comes from another document's view
+            foreign_view = False
+            _active_tool = FldToolManager.get_instance().get_active_tool()
+            if _active_tool is not None:
+                _tv = getattr(_active_tool, "view", None)
+                if _tv is not None and hasattr(_tv, "graphicsView"):
+                    _gv = _tv.graphicsView()
+                    if _gv is not None:
+                        # Check target widget (obj) and cached viewport
+                        target_widget = self._cached_viewport if self._cached_viewport is not None else obj
+                        if target_widget is not None and hasattr(_gv, "isAncestorOf"):
+                            if isinstance(target_widget, QtGui.QWindow):
+                                # A Qt6 GL surface: own iff it is the view's own window (PNL-027).
+                                wh = _gv.windowHandle() if hasattr(_gv, "windowHandle") else None
+                                _is_own = target_widget is wh
+                            elif isinstance(target_widget, QtWidgets.QGraphicsScene):
+                                # The view's scene delivers events too; isAncestorOf takes
+                                # QWidgets only, and raising here drops the event (PNL-038).
+                                _is_own = target_widget is _gv.scene()
+                            elif isinstance(target_widget, QtWidgets.QWidget):
+                                _is_own = (target_widget == _gv or _gv.isAncestorOf(target_widget))
+                                if (not _is_own and hasattr(target_widget, "isAncestorOf")
+                                        and target_widget.isAncestorOf(_gv)):
+                                    # Main window / MDI area: Qt bubbles key events through
+                                    # them, so they say nothing about the document. The
+                                    # active view decides.
+                                    _av = FreeCADGui.activeView()
+                                    _is_own = _av is None or _av.graphicsView() == _gv
+                            else:
+                                # Any other QObject says nothing about the document: the
+                                # active view decides, as for the main window (PNL-038).
+                                _av = FreeCADGui.activeView()
+                                _is_own = _av is None or _av.graphicsView() == _gv
+                            if not _is_own:
+                                foreign_view = True
+
+
             # Standardize coordinates relative to viewport & Track DPI
             if is_mouse_event:
                 try:
@@ -288,11 +384,10 @@ class FldInputManager(QtCore.QObject):
                     return False
 
             # [Event Owner: Qt Event Filter] Right-click → Fields context menu.
-            # QEvent.ContextMenu is not reliably delivered for the 3D viewport
-            # (see todo_input.md), so the menu is driven directly from the RMB
-            # release intercepted here. The QEvent.ContextMenu branches below
-            # are swallow-guards only, so platforms that DO deliver it don't
-            # pop the menu a second time.
+            # QEvent.ContextMenu is not reliably delivered for the 3D viewport,
+            # so the menu is driven directly from the RMB release intercepted here.
+            # The QEvent.ContextMenu branches below are swallow-guards only, so
+            # platforms that DO deliver it don't pop the menu a second time.
             if (event.type() == QtCore.QEvent.MouseButtonRelease
                     and event.button() == QtCore.Qt.RightButton
                     # Qt delivers mouse events twice: first to the QWidgetWindow
@@ -302,6 +397,8 @@ class FldInputManager(QtCore.QObject):
                     # untouched — consuming it here would stop Qt from ever
                     # re-delivering the release to the viewport widget.
                     and not (isinstance(obj, QtGui.QWindow) and not is_viewport_event)):
+                if foreign_view:
+                    return False
                 active_tool = FldToolManager.get_instance().get_active_tool()
                 _obj_cls = obj.metaObject().className() if hasattr(obj, "metaObject") else type(obj).__name__
                 fld_logger.debug(
@@ -324,38 +421,36 @@ class FldInputManager(QtCore.QObject):
                         FldMenuManager.get_instance().show_context_menu()
                     return True  # Consume so FreeCAD's viewport popup doesn't also open
 
-            global_action = None
-            if event.type() in (QtCore.QEvent.KeyPress, QtCore.QEvent.ShortcutOverride):
-                from freecad.fields.core.input import fld_keymap
-                evt_dict = {
-                    "Key": event.key(),
-                    "Modifiers": event.modifiers(),
-                    "Text": event.text() if hasattr(event, "text") else ""
-                }
-                global_action = fld_keymap.action_for(evt_dict, [fld_keymap.CTX_GLOBAL])
-
-            # --- Viewport Toggle (Ctrl+Space) ---
-            if event.type() == QtCore.QEvent.KeyPress and is_viewport_event:
-                if global_action == "global.maximize_view":
-                    try:
-                        mw = FreeCADGui.getMainWindow()
-                        mdi = mw.findChild(QtWidgets.QMdiArea)
-                        if mdi:
-                            sub = mdi.activeSubWindow()
-                            if sub:
-                                if sub.isMaximized():
-                                    sub.showNormal()
-                                else:
-                                    sub.showMaximized()
-                                return True
-                    except Exception as e:
-                        fld_logger.debug(f"Viewport toggle failed: {e}")
+            # The press half of that same right-click. FreeCAD's navigation must see
+            # both halves or neither: it used to get every press and no release, then
+            # believed the right button was held and ignored middle-drag in that view
+            # (INP-004). With a tool active, the tool already consumes the press.
+            if (event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonDblClick)
+                    and event.button() == QtCore.Qt.RightButton
+                    and is_viewport_event
+                    and FldToolManager.get_instance().get_active_tool() is None):
+                return True
 
             # Filter mouse events: only allow those in the viewport to reach the tools
-            if (is_mouse_event or is_context_event) and not is_viewport_event:
+            if (is_mouse_event or is_context_event or is_wheel_event) and not is_viewport_event:
+                return False
+
+            if foreign_view:
                 return False
 
             tool = FldToolManager.get_instance().get_active_tool()
+
+            # Ctrl+wheel in a tool steps a snap increment; the tool decides which
+            # (`on_ctrl_wheel`). A plain wheel, or any wheel with no tool, stays
+            # FreeCAD's zoom.
+            if is_wheel_event:
+                handler = getattr(tool, "on_ctrl_wheel", None)
+                if handler is None or not (event.modifiers() & QtCore.Qt.ControlModifier):
+                    return False
+                notches = self._wheel_notches(event.angleDelta().y())
+                if notches:
+                    handler(notches)
+                return True
 
             # --- Dispatch to Active Tool ---
             if tool:
@@ -368,11 +463,12 @@ class FldInputManager(QtCore.QObject):
 
                 # Middle mouse already returned above, for every event type.
                 if event.type() in (QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease, QtCore.QEvent.MouseButtonDblClick):
-                    # Pass through view cube clicks (top-right corner of viewport)
+                    # Presses on FreeCAD's nav cube are FreeCAD's.
                     if self._cached_viewport:
-                        w = self._cached_viewport.width()
-                        pos = event.pos()
-                        if pos.x() > w - 130 and pos.y() < 130:
+                        rect = _navicube_rect(self._cached_viewport.width(),
+                                              self._cached_viewport.height())
+                        x, y = self._last_qt_pos
+                        if rect and rect[0] <= x < rect[2] and rect[1] <= y < rect[3]:
                             return False
 
                 if event.type() == QtCore.QEvent.MouseMove:
@@ -397,6 +493,10 @@ class FldInputManager(QtCore.QObject):
                 elif event.type() == QtCore.QEvent.KeyPress:
                     event_dict["Key"] = event.key()
                     event_dict["Text"] = event.text()
+                    event_dict["TypedKey"] = self._gizmo_key_name(event)   # INP-054: the tool's typed entry reads this
+                    ctl = getattr(tool, "gizmo_controller", None)
+                    if ctl is not None and ctl.key(self._gizmo_key_name(event)):
+                        return True
                     if tool.on_key_press(event_dict):
                         return True
                     # Let through if tool didn't consume it
@@ -413,11 +513,32 @@ class FldInputManager(QtCore.QObject):
                     return True
 
                 elif event.type() == QtCore.QEvent.ShortcutOverride:
+                    # Claim keys so FreeCAD's workbench/view shortcuts do not preempt them.
+                    # Three reasons to claim:
+                    # 1. Gizmo controller claims the key (INP-040).
+                    # 2. Tool menu tree has a leaf with this shortcut (INP-B07).
+                    # 3. Typed numeric entry is active (INP-054).
+                    ctl = getattr(tool, "gizmo_controller", None)
+                    if ctl is not None and ctl.claims_key(self._gizmo_key_name(event)):
+                        event.accept()
+                        return False
+
+                    event_dict["Key"] = event.key() if hasattr(event, "key") else 0
+                    event_dict["Text"] = event.text() if hasattr(event, "text") else ""
+                    from freecad.fields.core.input import fld_shortcuts
+                    menu_items = tool.get_context_menu(event_dict) if hasattr(tool, "get_context_menu") else []
+                    if fld_shortcuts.find(menu_items or [], event_dict)[1]:
+                        event.accept()
+                        return False
+
                     text = event.text().lower() if hasattr(event, "text") else ""
-                    # Claim hotkeys for active tool.
-                    # 'v' = cycle handle type (CurveCreator)
-                    # 't' = toggle gizmo space (PrimitiveCreatorBase)
-                    if text in ['s', 'd', 'e', 'x', 'y', 'z', 'g', 'r', 'c', 'v', 't']:
+                    # Ctrl/Alt/Meta + a digit is a shortcut (26.3's Ctrl+0), never a typed value.
+                    shortcut_mods = (QtCore.Qt.ControlModifier | QtCore.Qt.AltModifier
+                                     | QtCore.Qt.MetaModifier)
+                    if self._tool_takes_numeric_entry(tool) and (
+                            (len(text) == 1 and text in "0123456789.-"
+                             and not (event.modifiers() & shortcut_mods))
+                            or (hasattr(event, "key") and event.key() == QtCore.Qt.Key_Backspace)):
                         event.accept()
                         return False
 
@@ -448,91 +569,6 @@ class FldInputManager(QtCore.QObject):
                         if tool_opener is not None:
                             tool_opener()
                             return True
-
-                # Global hotkeys
-                elif event.type() == QtCore.QEvent.KeyPress:
-                    key = event.key()
-                    text = event.text().lower() if hasattr(event, "text") else ""
-                    
-                    if global_action == "global.context_menu" and not self._is_menu_active():
-                        from freecad.fields.core.input.fld_menu import FldMenuManager
-                        if not FldMenuManager.get_instance()._ignore_hotkeys:
-                            FldMenuManager.get_instance().show_context_menu()
-                            return True
-
-                    if global_action == "global.toggle_group" and not self._is_menu_active():
-                        sel = FreeCADGui.Selection.getSelection()
-                        toggled_any = False
-                        for obj in sel:
-                            if hasattr(obj, "Group"):
-                                cur = getattr(obj, "Group", "Additive")
-                                new_grp = "Subtractive" if cur == "Additive" else "Additive"
-                                from freecad.fields.core.objects.fld_modifier_stack import get_chain
-                                base, modifiers = get_chain(obj)
-                                all_chain = ([base] + modifiers) if base is not None else [obj]
-                                for o in all_chain:
-                                    if hasattr(o, "Group"):
-                                        o.Group = new_grp
-                                tail = modifiers[-1] if modifiers else obj
-                                if tail.Document:
-                                    def _deferred_q_recompute(o=tail):
-                                        try:
-                                            if o.Document:
-                                                o.Document.recompute([o])
-                                                if hasattr(o, "Proxy") and hasattr(o.Proxy, "SdfField"):
-                                                    from freecad.fields.core.render.fld_scene_voxel_renderer import FldSceneVoxelRenderer
-                                                    label = f"{o.Document.Name}.{o.Name}"
-                                                    FldSceneVoxelRenderer.get_instance().update_field(label, o.Proxy.SdfField)
-                                        except Exception as ex:
-                                            fld_logger.debug(f"InputManager: deferred Q-key recompute error: {ex}")
-                                    QtCore.QTimer.singleShot(0, _deferred_q_recompute)
-                                toggled_any = True
-                        if toggled_any:
-                            return True
-
-                    if global_action == "global.edit_mode":
-                        # Toggle edit tool
-                        active_tool = FldToolManager.get_instance().get_active_tool()
-                        if active_tool:
-                            active_tool.finish()
-                            return True
-                        
-                        sel = FreeCADGui.Selection.getSelection()
-                        if sel:
-                            obj = sel[0]
-                            proxy_name = getattr(getattr(obj, "Proxy", None), "__class__", type(None)).__name__
-                            shape_type = getattr(obj, "ShapeType", None)
-                            fld_logger.debug(f"InputManager: Tab pressed. Selection={obj.Name}, proxy={proxy_name}, shape_type={shape_type}")
-
-                            tool_opener = _resolve_edit_tool_for(obj)
-                            if tool_opener is not None:
-                                tool_opener()
-                                return True
- 
-                    if global_action == "global.edit_mode_alt" and not self._is_menu_active():
-                        sel = FreeCADGui.Selection.getSelection()
-                        if sel:
-                            obj = sel[0]
-                            proxy_name = getattr(getattr(obj, "Proxy", None), "__class__", type(None)).__name__
-                            st = getattr(obj, "ShapeType", "")
-                            fld_logger.debug(f"InputManager: E pressed. Selection={obj.Name}, proxy_name={proxy_name}, ShapeType={st}")
-
-                            tool_opener = _resolve_edit_tool_for(obj)
-                            if tool_opener is not None:
-                                tool_opener()
-                                return True
-
-                # ShortcutOverride for 'E'/'Q' when no tool
-                elif event.type() == QtCore.QEvent.ShortcutOverride:
-                    if global_action == "global.edit_mode_alt":
-                        sel = FreeCADGui.Selection.getSelection()
-                        if any(hasattr(o, "Proxy") and getattr(o.Proxy, "is_fld_workplane", False) for o in sel):
-                            event.accept(); return False
-                    elif global_action == "global.toggle_group":
-                        sel = FreeCADGui.Selection.getSelection()
-                        # Must match what the Q handler above actually toggles.
-                        if any(hasattr(o, "Group") for o in sel):
-                            event.accept(); return False
 
                 elif event.type() == QtCore.QEvent.ContextMenu:
                     # Menu already shown from the RMB release handler above;

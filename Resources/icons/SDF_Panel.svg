@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" version="1.1">
+    <defs>
+        <linearGradient id="panelGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#ffffff"/>
+            <stop offset="100%" stop-color="#e0e0e0"/>
+        </linearGradient>
+    </defs>
+    <!-- Five flat sheets, each a thin slab with a wavy outer edge -->
+    <path d="M 8 8 Q 14 4 20 8 T 32 8 T 44 8 L 44 12 L 8 12 Z" style="fill:url(#panelGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    <path d="M 12 18 Q 18 14 24 18 T 36 18 T 48 18 L 48 22 L 12 22 Z" style="fill:url(#panelGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    <path d="M 16 28 Q 22 24 28 28 T 40 28 T 52 28 L 52 32 L 16 32 Z" style="fill:url(#panelGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    <path d="M 20 38 Q 26 34 32 38 T 44 38 T 56 38 L 56 42 L 20 42 Z" style="fill:url(#panelGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+    <path d="M 24 48 Q 30 44 36 48 T 48 48 T 60 48 L 60 52 L 24 52 Z" style="fill:url(#panelGrad);stroke:#ffaa00;stroke-width:2;stroke-linejoin:round"/>
+</svg>

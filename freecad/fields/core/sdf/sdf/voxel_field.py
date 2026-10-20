@@ -27,6 +27,12 @@ VOXEL_FAR = 1.0e4
 # grow into without immediately hitting the outside-blend at the grid boundary.
 DEFAULT_FILL_FRACTION = 0.7
 
+#: Cubic sampling reads 2 nodes either side; a far node must not outweigh the surface.
+#: 8 cells equals the scene band default (fld_settings.get_voxel_band_voxels) when a
+#: scene voxel is one grid cell. A coarser bake (the interactive scale) can reach past
+#: it; a clamped value only under-reports distance, so the march just steps shorter.
+SAMPLE_CLAMP_VOXELS = 8
+
 
 def default_voxel_grid(size, resolution) -> np.ndarray:
     """The seed grid for a voxel field with no data: an exact box SDF.
@@ -129,6 +135,14 @@ class SdfVoxelField(SdfField):
             iy = np.clip(np.round(uvw[:, 1] * (ny - 1)).astype(int), 0, ny - 1)
             iz = np.clip(np.round(uvw[:, 2] * (nz - 1)).astype(int), 0, nz - 1)
             val = self.data[ix, iy, iz]
+        elif self.interpolation == "cubic":
+            # Uniform cubic B-spline, NOT interpolating (prefilter=False): the same
+            # function the GLSL 8-fetch path computes (VSS-004). Clamped data -- VSS-002.
+            coords = np.column_stack((uvw[:, 0] * (nx - 1),
+                                      uvw[:, 1] * (ny - 1),
+                                      uvw[:, 2] * (nz - 1))).T
+            val = map_coordinates(self._sampling_data(), coords, order=3,
+                                  prefilter=False, mode="nearest")
         else:
             # Trilinear interpolation
             coords = np.column_stack((
@@ -143,6 +157,21 @@ class SdfVoxelField(SdfField):
         res = val.copy()
         res[outside] = np.maximum(val[outside], 0.0) + box_dist[outside]
         return res.astype(np.float32)
+
+    def _sampling_data(self):
+        """`data` clipped to +/- SAMPLE_CLAMP_VOXELS cells, cached on geometry_version.
+
+        `self.data` stays unclamped: `redistance` and `ensure_covers` rely on VOXEL_FAR
+        meaning "never written". Callers that mutate `data` in place must bump
+        `geometry_version`, or this serves the old copy.
+        """
+        key = (self.geometry_version, id(self.data))
+        if getattr(self, "_clamped_key", None) != key:
+            spacing = float(np.max(self.size / np.maximum(np.array(self.resolution) - 1, 1)))
+            lim = SAMPLE_CLAMP_VOXELS * spacing
+            self._clamped = np.clip(self.data, -lim, lim)
+            self._clamped_key = key
+        return self._clamped
 
     def bounding_box(self):
         h = self.size * 0.5
@@ -214,11 +243,11 @@ class SdfVoxelField(SdfField):
         return f"vox_{self.field_uid}_{self.geometry_version}"
 
     def texture3d_data(self):
-        """The grid itself, as an R16F volume."""
+        """The grid as an R16F volume, clipped by `_sampling_data` (VSS-004)."""
         nx, ny, nz = self.resolution
         # GL expects x fastest; self.data is indexed [ix, iy, iz] (C order = iz
         # fastest), so transpose before flattening.
-        vol = np.ascontiguousarray(self.data.transpose(2, 1, 0), dtype=np.float16)
+        vol = np.ascontiguousarray(self._sampling_data().transpose(2, 1, 0), dtype=np.float16)
         return {
             "nx": nx, "ny": ny, "nz": nz,
             "fmt": "r16f",
@@ -229,7 +258,8 @@ class SdfVoxelField(SdfField):
     def to_glsl(self, ctx, point_var="p"):
         tex_name = ctx.sampler3d("vox_field", provider=self)
         u_size = ctx.uniform("vec3", tuple(float(s) for s in self.size), name="vsize")
-        u_mode = ctx.uniform("int", 1 if self.interpolation == "nearest" else 0, name="vmode")
+        mode = {"cubic": 2, "nearest": 1}.get(self.interpolation, 0)
+        u_mode = ctx.uniform("int", mode, name="vmode")
         u_res  = ctx.uniform("vec3", tuple(float(r) for r in self.resolution), name="vres")
 
         func_name = ctx.get_unique_name("sdf_voxel_field")
@@ -240,16 +270,34 @@ float {func_name}(vec3 p, vec3 sz, int mode, vec3 res) {{
     float outside_dist = length(d_box);
 
     vec3 uvw = (p + h) / max(sz, vec3(1e-6));
-    vec3 uvw_tex;
-    if (mode == 1) {{
-        // Nearest-neighbor sampling for blocky / voxel look
-        uvw_tex = (floor(uvw * (res - vec3(1.0)) + vec3(0.5)) + vec3(0.5)) / res;
+    // Texel units, node centres at i + 0.5 (node [0, 1] -> texel centres [0.5, res - 0.5]).
+    vec3 coord = uvw * (res - vec3(1.0)) + vec3(0.5);
+    float val;
+    if (mode == 2) {{
+        // Uniform cubic B-spline from 8 trilinear fetches (GPU Gems 2, ch. 20).
+        // Must equal map_coordinates(order=3, prefilter=False) -- VSS-003.
+        vec3 idx = floor(coord - vec3(0.5)) + vec3(0.5);
+        vec3 f = coord - idx, f2 = f * f, f3 = f2 * f, omf = vec3(1.0) - f;
+        vec3 w0 = omf * omf * omf / 6.0;
+        vec3 w1 = (3.0 * f3 - 6.0 * f2 + vec3(4.0)) / 6.0;
+        vec3 w3 = f3 / 6.0;
+        vec3 w2 = vec3(1.0) - w0 - w1 - w3;
+        vec3 g0 = w0 + w1, g1 = w2 + w3;
+        vec3 h0 = (idx - vec3(1.0) + w1 / g0) / res;
+        vec3 h1 = (idx + vec3(1.0) + w3 / g1) / res;
+        float t000 = texture({tex_name}, vec3(h0.x, h0.y, h0.z)).r, t100 = texture({tex_name}, vec3(h1.x, h0.y, h0.z)).r;
+        float t010 = texture({tex_name}, vec3(h0.x, h1.y, h0.z)).r, t110 = texture({tex_name}, vec3(h1.x, h1.y, h0.z)).r;
+        float t001 = texture({tex_name}, vec3(h0.x, h0.y, h1.z)).r, t101 = texture({tex_name}, vec3(h1.x, h0.y, h1.z)).r;
+        float t011 = texture({tex_name}, vec3(h0.x, h1.y, h1.z)).r, t111 = texture({tex_name}, vec3(h1.x, h1.y, h1.z)).r;
+        val = g0.z * (g0.y * (g0.x * t000 + g1.x * t100) + g1.y * (g0.x * t010 + g1.x * t110))
+            + g1.z * (g0.y * (g0.x * t001 + g1.x * t101) + g1.y * (g0.x * t011 + g1.x * t111));
     }} else {{
-        // Trilinear: map node [0, 1] to texel center [(0.5)/res, (res-0.5)/res]
-        uvw_tex = (uvw * (res - vec3(1.0)) + vec3(0.5)) / res;
+        // mode 1 nearest: (floor(coord) + 0.5) / res == the old
+        // (floor(uvw * (res - 1) + 0.5) + 0.5) / res, since coord is that sum; mode 0
+        // trilinear: coord / res == the old (uvw * (res - 1) + 0.5) / res.
+        vec3 uvw_tex = (mode == 1) ? (floor(coord) + vec3(0.5)) / res : coord / res;
+        val = texture({tex_name}, clamp(uvw_tex, vec3(0.5) / res, (res - vec3(0.5)) / res)).r;
     }}
-    vec3 clamped_uvw = clamp(uvw_tex, vec3(0.5) / res, (res - vec3(0.5)) / res);
-    float val = texture({tex_name}, clamped_uvw).r;
 
     if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) {{
         return max(val, 0.0) + outside_dist;

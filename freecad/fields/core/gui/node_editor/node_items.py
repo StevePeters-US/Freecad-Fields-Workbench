@@ -293,8 +293,6 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
         self.on_changed_cb = None
         self._radial_checkbox = None
         self._radial_socket_item = None
-        self._ignore_back_face_checkbox = None
-        self._ignore_back_face_socket_item = None
         self._proj_ctrl_dir_widget = None
         self._proj_ctrl_dir_socket_item = None
         self._proj_ctrl_roll_widget = None
@@ -308,7 +306,7 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
                 except Exception as exc:  # safe: setFlag may fail in mock/headless
                     fld_logger.debug_throttled("node_items:NodeCardItem.__init__", f"[node_items] setFlag failed: {exc}")
                     pass
-        self.WIDTH = 220.0 if node_type in ("custom_param", "projection_control") else 190.0
+        self.WIDTH = 220.0 if node_type in ("custom_param", "expression") else 190.0
         self._card_pos = QtCore.QPointF(0.0, 0.0)
         self._build_ui()
 
@@ -431,6 +429,18 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             combo.currentIndexChanged.connect(lambda _idx, c=combo: self._on_math_op_changed(c.currentText()))
             self._add_embedded_widget(combo, start_y, 24)
 
+        elif ntype == "vector_math":
+            combo = QtWidgets.QComboBox()
+            combo.setStyleSheet(dark_combo_style)
+            from freecad.fields.core.gui.node_editor.nodes import VectorMathNode
+            combo.addItems(list(VectorMathNode.OPS.keys()))
+            cur_op = self.params.get("op", "Dot")
+            idx = combo.findText(cur_op)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            combo.currentIndexChanged.connect(lambda _idx, c=combo: self._on_vector_math_op_changed(c.currentText()))
+            self._add_embedded_widget(combo, start_y, 24)
+
         elif ntype in ("trig", "min_max"):
             combo = QtWidgets.QComboBox()
             combo.setStyleSheet(dark_combo_style)
@@ -467,6 +477,24 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
             spin.setValue(float(self.params.get("val", 1.0)))
             spin.valueChanged.connect(self._on_const_changed)
             self._add_embedded_widget(spin, start_y, 24)
+
+        elif ntype == "expression":
+            expr_edit = QtWidgets.QLineEdit(str(self.params.get("expr", "a")))
+            expr_edit.setStyleSheet("""
+                QLineEdit {
+                    background-color: #0f172a;
+                    color: #f8fafc;
+                    border: 1px solid #334155;
+                    border-radius: 3px;
+                    padding: 1px 4px;
+                    font-size: 11px;
+                }
+            """)
+            # editingFinished only: committing per keystroke recompiles the scene
+            # shader for every half-typed formula.
+            expr_edit.editingFinished.connect(lambda e=expr_edit: self._on_expr_changed(e.text()))
+            self._expr_edit = expr_edit
+            self._add_embedded_widget(expr_edit, start_y, 24)
 
         elif ntype == "custom_param":
             container = QtWidgets.QWidget()
@@ -660,155 +688,6 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
 
             self._add_embedded_widget(container, start_y, 98)
 
-        elif ntype == "radial_projection":
-            container = QtWidgets.QWidget()
-            flag_trans = getattr(QtCore.Qt, "WA_TranslucentBackground", None)
-            if flag_trans is not None:
-                try:
-                    container.setAttribute(flag_trans, True)
-                except Exception as exc:  # safe: setAttribute may fail in mock/headless
-                    fld_logger.debug_throttled("node_items:_setup_internal_widgets", f"[node_items] radial setAttribute failed: {exc}")
-                    pass
-            c_layout = QtWidgets.QVBoxLayout(container)
-            c_layout.setContentsMargins(4, 2, 4, 2)
-            c_layout.setSpacing(4)
-
-            chk = QtWidgets.QCheckBox("Radial Mode")
-            chk.setStyleSheet("color: #f8fafc; font-size: 10px; font-weight: bold;")
-            chk.setChecked(bool(self.params.get("radial", True)))
-            chk.toggled.connect(lambda v: self._on_radial_toggled(v))
-            c_layout.addWidget(chk)
-
-            self._radial_checkbox = chk
-            self._radial_socket_item = next(
-                (s for s in self.input_sockets if s.socket_def.name == "Radial"), None
-            )
-            if self._radial_socket_item is not None:
-                # A wire already decides the value (NE-018); showing a checkbox
-                # that does nothing is what the user reported as a bug.
-                chk.setVisible(not self._radial_socket_item.wires)
-
-            btn = QtWidgets.QPushButton("Edit Subgraph ⤢")
-            btn.setStyleSheet(
-                "font-weight: bold; background-color: #334155; color: #38bdf8; "
-                "border: 1px solid #0284c7; border-radius: 4px; padding: 2px;"
-            )
-            btn.setToolTip(
-                rich_tooltip(
-                    "NodeCardItem",
-                    QT_TRANSLATE_NOOP(
-                        "NodeCardItem",
-                        "Opens the subgraph's own node network for editing. Double-clicking the node does the same.",
-                    ),
-                )
-            )
-            btn.clicked.connect(self._on_open_subgraph)
-            c_layout.addWidget(btn)
-
-            self._add_embedded_widget(container, start_y, 48)
-
-        elif ntype == "ignore_back_face":
-            container = QtWidgets.QWidget()
-            flag_trans = getattr(QtCore.Qt, "WA_TranslucentBackground", None)
-            if flag_trans is not None:
-                try:
-                    container.setAttribute(flag_trans, True)
-                except Exception as exc:  # safe: setAttribute may fail in mock/headless
-                    fld_logger.debug_throttled("node_items:_setup_internal_widgets", f"[node_items] ignore_back_face setAttribute failed: {exc}")
-                    pass
-            c_layout = QtWidgets.QVBoxLayout(container)
-            c_layout.setContentsMargins(4, 2, 4, 2)
-            c_layout.setSpacing(4)
-
-            chk = QtWidgets.QCheckBox("Ignore Back Face")
-            chk.setStyleSheet("color: #f8fafc; font-size: 10px; font-weight: bold;")
-            chk.setChecked(bool(self.params.get("ignore_back_face", True)))
-            chk.toggled.connect(lambda v: self._on_ignore_back_face_toggled(v))
-            c_layout.addWidget(chk)
-
-            self._ignore_back_face_checkbox = chk
-            self._ignore_back_face_socket_item = next(
-                (s for s in self.input_sockets if s.socket_def.name == "Ignore Back Face"), None
-            )
-            if self._ignore_back_face_socket_item is not None:
-                # Same rule NE-018 established for Radial Mode: a wire already
-                # decides the value, so a checkbox that does nothing is a bug.
-                chk.setVisible(not self._ignore_back_face_socket_item.wires)
-
-            self._add_embedded_widget(container, start_y, 26)
-
-        elif ntype == "projection_control":
-            container = QtWidgets.QWidget()
-            flag_trans = getattr(QtCore.Qt, "WA_TranslucentBackground", None)
-            if flag_trans is not None:
-                try:
-                    container.setAttribute(flag_trans, True)
-                except Exception as exc:
-                    fld_logger.debug_throttled("node_items:_setup_internal_widgets", f"[node_items] projection_control setAttribute failed: {exc}")
-                    pass
-            c_layout = QtWidgets.QFormLayout(container)
-            c_layout.setContentsMargins(2, 2, 2, 2)
-            c_layout.setSpacing(3)
-
-            dir_container = QtWidgets.QWidget()
-            dir_layout = QtWidgets.QHBoxLayout(dir_container)
-            dir_layout.setContentsMargins(0, 0, 0, 0)
-            dir_layout.setSpacing(2)
-
-            dx_spin = QtWidgets.QDoubleSpinBox()
-            dy_spin = QtWidgets.QDoubleSpinBox()
-            dz_spin = QtWidgets.QDoubleSpinBox()
-            cur_dir = self.params.get("direction", [0.0, 0.0, 1.0])
-            for sp, val in zip((dx_spin, dy_spin, dz_spin), cur_dir):
-                sp.setRange(-1000.0, 1000.0)
-                sp.setDecimals(2)
-                sp.setSingleStep(0.1)
-                sp.setMinimumWidth(38)
-                sp.setValue(float(val))
-                dir_layout.addWidget(sp)
-
-            def _on_dir_spin():
-                self.params["direction"] = [dx_spin.value(), dy_spin.value(), dz_spin.value()]
-                self._notify_changed()
-
-            dx_spin.valueChanged.connect(lambda _: _on_dir_spin())
-            dy_spin.valueChanged.connect(lambda _: _on_dir_spin())
-            dz_spin.valueChanged.connect(lambda _: _on_dir_spin())
-
-            c_layout.addRow("Dir:", dir_container)
-
-            roll_spin = QtWidgets.QDoubleSpinBox()
-            roll_spin.setRange(-360.0, 360.0)
-            roll_spin.setDecimals(1)
-            roll_spin.setSingleStep(5.0)
-            roll_spin.setValue(float(self.params.get("roll", 0.0)))
-            roll_spin.valueChanged.connect(self._on_proj_roll_changed)
-            c_layout.addRow("Roll:", roll_spin)
-
-            self._proj_ctrl_dir_widget = dir_container
-            self._proj_ctrl_dir_socket_item = next(
-                (s for s in self.input_sockets if s.socket_def.name == "Direction"), None
-            )
-            if self._proj_ctrl_dir_socket_item is not None:
-                vis = not self._proj_ctrl_dir_socket_item.wires
-                dir_container.setVisible(vis)
-                lbl = c_layout.labelForField(dir_container)
-                if lbl:
-                    lbl.setVisible(vis)
-
-            self._proj_ctrl_roll_widget = roll_spin
-            self._proj_ctrl_roll_socket_item = next(
-                (s for s in self.input_sockets if s.socket_def.name == "Roll"), None
-            )
-            if self._proj_ctrl_roll_socket_item is not None:
-                vis = not self._proj_ctrl_roll_socket_item.wires
-                roll_spin.setVisible(vis)
-                lbl = c_layout.labelForField(roll_spin)
-                if lbl:
-                    lbl.setVisible(vis)
-
-            self._add_embedded_widget(container, start_y, 52)
-
         elif getattr(self.node_instance, "is_subgraph", False):
             btn = QtWidgets.QPushButton("Edit Subgraph ⤢")
             btn.setStyleSheet(
@@ -831,10 +710,6 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
         self.params["radial"] = bool(val)
         self._notify_changed()
 
-    def _on_ignore_back_face_toggled(self, val):
-        self.params["ignore_back_face"] = bool(val)
-        self._notify_changed()
-
     def _on_proj_roll_changed(self, val):
         self.params["roll"] = float(val)
         self._notify_changed()
@@ -842,16 +717,12 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
     def on_socket_wire_changed(self, socket_item):
         """Live-updates widgets that mirror a socket's wired state.
 
-        Radial Projection's checkbox (and Ignore Back Face's, same pattern) is
-        built once in _build_ui, before any wire exists, so connecting/
-        disconnecting the input later needs this separate hook (called from
-        node_scene.py) to keep it in sync.
+        Radial Projection's checkbox (and other wired controls) is built once in
+        _build_ui, before any wire exists, so connecting/disconnecting the input
+        later needs this separate hook (called from node_scene.py) to keep it in sync.
         """
         if socket_item is self._radial_socket_item and self._radial_checkbox is not None:
             self._radial_checkbox.setVisible(not socket_item.wires)
-        if (socket_item is self._ignore_back_face_socket_item
-                and self._ignore_back_face_checkbox is not None):
-            self._ignore_back_face_checkbox.setVisible(not socket_item.wires)
         if socket_item is self._proj_ctrl_dir_socket_item and self._proj_ctrl_dir_widget is not None:
             vis = not socket_item.wires
             self._proj_ctrl_dir_widget.setVisible(vis)
@@ -898,6 +769,28 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
                 self.params["op"] = s.currentText()
         self._notify_changed()
 
+    def _on_vector_math_op_changed(self, val):
+        if isinstance(val, str):
+            self.params["op"] = val
+        elif hasattr(val, "currentText"):
+            self.params["op"] = val.currentText()
+        elif hasattr(self, "sender"):
+            s = self.sender()
+            if s and hasattr(s, "currentText"):
+                self.params["op"] = s.currentText()
+        # Update Out socket type according to op
+        if self.output_sockets:
+            s_item = self.output_sockets[0]
+            op = self.params.get("op", "Dot")
+            target_stype = SocketType.FLOAT if op in ("Dot", "Length") else SocketType.VEC3
+            s_item.socket_def.socket_type = target_stype
+            s_item.color = SOCKET_COLORS.get(target_stype, DEFAULT_SOCKET_COLOR)
+            stype_name = SOCKET_TYPE_NAMES.get(target_stype, target_stype)
+            s_item.setToolTip(rich_tooltip("NodeSocketItem", f"{s_item.socket_def.name} ({stype_name})"))
+            s_item.update()
+            self.update()
+        self._notify_changed()
+
     def _on_fn_changed(self, val):
         if isinstance(val, str):
             self.params["fn"] = val
@@ -911,6 +804,10 @@ class NodeCardItem(QtWidgets.QGraphicsItem):
 
     def _on_const_changed(self, val):
         self.params["val"] = val
+        self._notify_changed()
+
+    def _on_expr_changed(self, text):
+        self.params["expr"] = text.strip()
         self._notify_changed()
 
     def _on_custom_param_field(self, key, val):

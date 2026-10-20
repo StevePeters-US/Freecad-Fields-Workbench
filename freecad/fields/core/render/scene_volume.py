@@ -87,8 +87,8 @@ class SceneVolume:
         self._fit_res = 0
         self._fit_band_voxels = 0
         self._fit_slack_frac = -1.0
-        self._bake_cache = ComputeProgramCache(max_entries=256, dump_path="/tmp/fld_scene_bake_debug.glsl")
-        self._scan_cache = ComputeProgramCache(max_entries=256, dump_path="/tmp/fld_scene_scan_debug.glsl")
+        self._bake_cache = ComputeProgramCache(max_entries=256, dump_name="fld_scene_bake_debug.glsl")
+        self._scan_cache = ComputeProgramCache(max_entries=256, dump_name="fld_scene_scan_debug.glsl")
         self.active_fields = []
         self.active_data = []
 

@@ -61,11 +61,16 @@ def rebuild(r):
     _dirty_snapshot = set(r._registry.dirty_fields)
     visible_compiled, analytical_data, t_compile_total = r._registry.compile_visible(
         r._appearance,
-        bbox_checker=r._check_bbox_margin_safety
+        bbox_checker=r._check_bbox_margin_safety,
+        doc_name=r._scene_doc,
     )
 
     if not analytical_data:
         r._switch.whichChild = -1
+        # Nothing of the previous scene may outlive it: picking reads the old
+        # G-buffer, and the bake and outline read these.
+        r._last_analytical_data = None
+        r._active_uniforms = {}
         return
 
     r._hmap_cache.plan_bindings(analytical_data)

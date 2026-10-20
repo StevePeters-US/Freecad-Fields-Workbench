@@ -12,10 +12,13 @@ from .base import (
     BaseNode,
 )
 from .inputs import (
-    PositionNode,
+    PartNode,
     NoiseInputsNode,
     ConstantNode,
     CustomParamNode,
+    OriginNode,
+    SurfaceNormalNode,
+    FrontFaceNode,
 )
 from .math_nodes import (
     MathNode,
@@ -24,7 +27,7 @@ from .math_nodes import (
     ClampNode,
     MinMaxNode,
     SmoothstepNode,
-    IgnoreBackFaceNode,
+    ExpressionNode,
 )
 from .vector import (
     Combine2DNode,
@@ -34,19 +37,17 @@ from .vector import (
     Combine3DNode,
     Separate3DNode,
     Distance2DNode,
-    DomainWarp2DNode,
-)
-from .projection import (
-    RadialProjectionNode,
-    get_default_radial_projection_subgraph,
-    ProjectionControlNode,
+    VectorMathNode,
+    PolarNode,
 )
 from .generators import (
     WaveGeneratorNode,
     get_default_wave_gen_subgraph,
     SquareWaveNode,
     TriangleWaveNode,
-    RadialWaveNode,
+    EnvelopeNode,
+    FrequencyDecayNode,
+    WarpNode,
 )
 from .subgraph import (
     SubgraphInputsNode,
@@ -56,44 +57,52 @@ from .subgraph import (
 )
 from .displace import DisplaceNode
 from .patterns import PatternNode, PATTERN_NODES
-from .transform import OrientNode, AlignToDirectionNode, ToWorldLocalNode
+from .transform import OrientNode, DirectionTransformNode
 from .output import OutputNode
 from .compiler import (
     CompileResult,
     compile_graph,
 )
-from .templates import get_template_graph
+from .templates import (
+    get_template_graph,
+    template_names,
+    NOISE_TYPE_TEMPLATES,
+    NOISE_TYPE_NAMES,
+)
 
 NODE_CLASSES = [
-    PositionNode,
+    PartNode,
     Combine2DNode,
     Separate2DNode,
     Rotate2DNode,
     Distance2DNode,
-    DomainWarp2DNode,
     Combine3DNode,
     Separate3DNode,
+    VectorMathNode,
+    PolarNode,
     NoiseInputsNode,
     ConstantNode,
     CustomParamNode,
+    OriginNode,
+    SurfaceNormalNode,
+    FrontFaceNode,
     MathNode,
     TrigNode,
     MixNode,
     ClampNode,
     MinMaxNode,
     SmoothstepNode,
-    IgnoreBackFaceNode,
-    RadialProjectionNode,
-    ProjectionControlNode,
+    ExpressionNode,
     WaveGeneratorNode,
     SquareWaveNode,
     TriangleWaveNode,
-    RadialWaveNode,
+    EnvelopeNode,
+    FrequencyDecayNode,
+    WarpNode,
     SubgraphInputsNode,
     SubgraphOutputsNode,
     OrientNode,
-    AlignToDirectionNode,
-    ToWorldLocalNode,
+    DirectionTransformNode,
     DisplaceNode,
     OutputNode,
 ] + PATTERN_NODES
